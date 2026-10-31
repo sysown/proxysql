@@ -12,6 +12,7 @@ using json = nlohmann::json;
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Query_Processor.h"
 #include "Query_Processor_ParserSQL.h"
+#include "proxysql_gtid.h"
 
 extern MySQL_Threads_Handler *GloMTH;
 extern ProxySQL_Admin *GloAdmin;
@@ -94,7 +95,7 @@ MySQL_Rule_Text::MySQL_Rule_Text(const MySQL_Query_Processor_Rule_t* mqr) {
 
 	char buf[20];
 	if (mqr->digest) {
-		sprintf(buf, "0x%016llX", (long long unsigned int)mqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)mqr->digest);
 		pta[8] = strdup(buf);
 	}
 	else {
@@ -153,23 +154,17 @@ MySQL_Query_Processor::~MySQL_Query_Processor() {
 	for (int i = 0; i < MYSQL_COM_QUERY___NONE; i++) delete commands_counters[i];
 }
 
-enum MYSQL_COM_QUERY_command MySQL_Query_Processor::query_parser_command_type(SQP_par_t* qp) {
-	char* text = NULL; // this new variable is a pointer to either qp->digest_text , or to the query
-	if (qp->digest_text) {
-		text = qp->digest_text;
-	} else {
-		text = qp->query_prefix;
-	}
-
+/**
+ * @brief Legacy (tokenizer based) classifier of a MySQL text query.
+ *
+ * Inspects the first 1-3 space separated tokens of @p text (a digest text or a
+ * query prefix; NULL is allowed) and maps them to a MYSQL_COM_QUERY_command.
+ * This is the classifier used with mysql-query_processor_parser=0. With
+ * mysql-query_processor_parser=1 it is the fallback for statements ParserSQL
+ * classifies as UNKNOWN (see MySQL_Query_Processor::query_parser_command_type()).
+ */
+static enum MYSQL_COM_QUERY_command mysql_query_command_type_legacy(const char* text) {
 	enum MYSQL_COM_QUERY_command ret = MYSQL_COM_QUERY_UNKNOWN;
-
-	if (mysql_thread___query_processor_parser == 1) {
-		if (text) {
-			return parsersql_command_type_mysql(text, strlen(text)); // NOSONAR
-		}
-		return MYSQL_COM_QUERY_UNKNOWN;
-	}
-
 	char c1;
 
 	tokenizer_t tok;
@@ -559,6 +554,41 @@ __remove_paranthesis:
 
 __exit__query_parser_command_type:
 	free_tokenizer(&tok);
+	return ret;
+}
+
+enum MYSQL_COM_QUERY_command MySQL_Query_Processor::query_parser_command_type(SQP_par_t* qp) {
+	char* text = NULL; // this new variable is a pointer to either qp->digest_text , or to the query
+	if (qp->digest_text) {
+		text = qp->digest_text;
+	} else {
+		text = qp->query_prefix;
+	}
+
+	enum MYSQL_COM_QUERY_command ret = MYSQL_COM_QUERY_UNKNOWN;
+
+	if (mysql_thread___query_processor_parser == 1) {
+#ifndef PROXYSQL31
+		if (qp->parsersql_command_type >= 0) {
+			ret = static_cast<MYSQL_COM_QUERY_command>(qp->parsersql_command_type);
+		} else
+#endif
+		{
+			// Prefix-only callers have no digest parse to reuse.
+			if (text) {
+				ret = parsersql_command_type_mysql(text, strlen(text)); // NOSONAR
+			}
+		}
+	}
+	// ParserSQL has no statement type for several statements the legacy
+	// classifier recognizes (e.g. KILL, FLUSH, RELEASE SAVEPOINT, CHANGE MASTER)
+	// and reports them as UNKNOWN. Fall back to the legacy classifier so that
+	// commands intercepted by MySQL_Session (KILL) and the commands counters
+	// behave exactly as with mysql-query_processor_parser=0 (#6421).
+	if (ret == MYSQL_COM_QUERY_UNKNOWN) {
+		ret = mysql_query_command_type_legacy(text);
+	}
+
 	if (qp->query_prefix) {
 		free(qp->query_prefix);
 		qp->query_prefix = NULL;
@@ -566,22 +596,27 @@ __exit__query_parser_command_type:
 	return ret;
 }
 
-bool MySQL_Query_Processor::_is_valid_gtid(char* gtid, size_t gtid_len) {
-	if (gtid_len < 3) {
-		return false;
+bool MySQL_Query_Processor::_is_valid_gtid(const char* gtid, size_t gtid_len) {
+	// A min_gtid annotation is produced by clients that echo the tracked
+	// OWN_GTID value back (mysql-client_session_track_gtid), and that value is
+	// a GTID SET ('uuid:582-584', 'uuid:636:638'), not a single GTID. Accepting
+	// only the strict single-GTID grammar rejected exactly those annotations
+	// with 'Invalid min_gtid value' and routed the query unconstrained
+	// (issue #6415). Ranges and gap lists are accepted here.
+	//
+	// Multi-UUID values are intentionally ACCEPTED by validation as well:
+	// refusing them here would drop the annotation with 'Invalid min_gtid'
+	// and run the query UNCONSTRAINED, the opposite of #6415's fail-closed
+	// requirement. Validation only judges the GRAMMAR; the routing helper
+	// (parse_gtid_set_for_routing) fails closed on a multi-UUID set and keeps
+	// the query on an unsatisfiable predicate until the operator resolves it.
+	std::map<std::string, std::vector<TrxId_Interval>> parsed_set;
+	if (parse_gtid_set(gtid, gtid_len, &parsed_set)) {
+		return true;
 	}
-	char* sep_pos = index(gtid, ':');
-	if (sep_pos == NULL) {
-		return false;
-	}
-	size_t uuid_len = sep_pos - gtid;
-	if (uuid_len < 1) {
-		return false;
-	}
-	if (gtid_len < uuid_len + 2) {
-		return false;
-	}
-	return true;
+
+	ParsedGTID parsed;
+	return parse_gtid(gtid, gtid_len, &parsed);
 }
 
 void MySQL_Query_Processor::update_query_processor_stats() {
@@ -750,6 +785,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->sticky_conn = sticky_conn;
 	newQR->multiplex = multiplex;
 	newQR->gtid_from_hostgroup = gtid_from_hostgroup;
+	newQR->switch_to_fast_forward = false;
 	newQR->apply = apply;
 	newQR->attributes = (attributes ? strdup(attributes) : NULL);
 	newQR->comment = (comment ? strdup(comment) : NULL); // see issue #643
@@ -757,25 +793,21 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->regex_engine2 = NULL;
 	newQR->hits = 0;
 
-	newQR->client_addr_wildcard_position = -1; // not existing by default
 	newQR->client_addr = (client_addr ? strdup(client_addr) : NULL);
-	if (newQR->client_addr) {
-		char* pct = strchr(newQR->client_addr, '%');
-		if (pct) { // there is a wildcard . We assume Admin did already all the input validation
-			if (pct == newQR->client_addr) {
-				// client_addr == '%'
-				// % is at the end of the string, but also at the beginning
-				// becoming a catch all
-				newQR->client_addr_wildcard_position = 0;
-			}
-			else {
-				// this math is valid also if (pct == newQR->client_addr)
-				// but we separate it to clarify that client_addr_wildcard_position is a match all
-				newQR->client_addr_wildcard_position = strlen(newQR->client_addr) - strlen(pct);
-			}
-		}
+	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, QP_ADDR_FIELD_CLIENT) == false) {
+		// Admin rejects a malformed value before we get here, so this only
+		// fires on a rule that bypassed validation. Keep the address but leave
+		// the predicate inert rather than matching on a partial parse.
+		proxy_error("Query rule with rule_id %d has an invalid client_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (proxy_addr ? strdup(proxy_addr) : NULL);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		// Same reasoning as the client_addr case above: the predicate is left
+		// inert and the failure is reported, not silently ignored.
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = proxy_port;
 	newQR->log = log;
 	newQR->digest = 0;
@@ -794,6 +826,15 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(int rule_id,
 	if (newQR->attributes != NULL) {
 		if (strlen(newQR->attributes)) {
 			nlohmann::json j_attributes = nlohmann::json::parse(newQR->attributes);
+			auto ff = j_attributes.find("switch_to_fast_forward");
+			if (ff != j_attributes.end()) {
+				if (!ff->is_boolean()) {
+					proxy_error("Invalid switch_to_fast_forward value in attributes for MySQL query rule %d: expected JSON Boolean\n", newQR->rule_id);
+				}
+				else {
+					newQR->switch_to_fast_forward = ff->get<bool>();
+				}
+			}
 			if (j_attributes.find("flagOUTs") != j_attributes.end()) {
 				newQR->flagOUT_ids = new vector<int>;
 				newQR->flagOUT_weights = new vector<int>;
@@ -831,7 +872,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 
 	char buf[20];
 	if (mqr->digest) { // not 0
-		sprintf(buf, "0x%016llX", (long long unsigned int)mqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)mqr->digest);
 	}
 
 	std::string re_mod;
@@ -886,6 +927,7 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 	newQR->sticky_conn = mqr->sticky_conn;
 	newQR->multiplex = mqr->multiplex;
 	newQR->gtid_from_hostgroup = mqr->gtid_from_hostgroup;
+	newQR->switch_to_fast_forward = mqr->switch_to_fast_forward;
 	newQR->apply = mqr->apply;
 	newQR->attributes = (mqr->attributes ? strdup(mqr->attributes) : NULL);
 	newQR->comment = (mqr->comment ? strdup(mqr->comment) : NULL); // see issue #643
@@ -893,25 +935,16 @@ MySQL_Query_Processor_Rule_t* MySQL_Query_Processor::new_query_rule(const MySQL_
 	newQR->regex_engine2 = NULL;
 	newQR->hits = 0;
 
-	newQR->client_addr_wildcard_position = -1; // not existing by default
 	newQR->client_addr = (mqr->client_addr ? strdup(mqr->client_addr) : NULL);
-	if (newQR->client_addr) {
-		char* pct = strchr(newQR->client_addr, '%');
-		if (pct) { // there is a wildcard . We assume Admin did already all the input validation
-			if (pct == newQR->client_addr) {
-				// client_addr == '%'
-				// % is at the end of the string, but also at the beginning
-				// becoming a catch all
-				newQR->client_addr_wildcard_position = 0;
-			}
-			else {
-				// this math is valid also if (pct == newQR->client_addr)
-				// but we separate it to clarify that client_addr_wildcard_position is a match all
-				newQR->client_addr_wildcard_position = strlen(newQR->client_addr) - strlen(pct);
-			}
-		}
+	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, QP_ADDR_FIELD_CLIENT) == false) {
+		proxy_error("Query rule with rule_id %d has an invalid client_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (mqr->proxy_addr ? strdup(mqr->proxy_addr) : NULL);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = mqr->proxy_port;
 	newQR->log = mqr->log;
 	newQR->digest = 0;

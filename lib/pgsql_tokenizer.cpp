@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
+#include <limits.h>
 #include "c_tokenizer.h"
 
 extern __thread int  pgsql_thread___query_digests_max_query_length;
@@ -198,6 +199,13 @@ typedef struct shared_st {
 	int gl_c_offset;
 	/* @brief Maximum length of the resulting digest. */
 	int d_max_len;
+	/**
+	 * @brief Capacity of the result buffer, in bytes excluding the final null terminator.
+	 * @details Usually equal to 'd_max_len'. It is larger when 'keep_comment' is enabled:
+	 *   the kept comments are copied verbatim and a separator space is appended after each
+	 *   one, so the digest can be longer than the query (see 'get_result_buffer_len').
+	 */
+	int res_max_len;
 	/* @brief Pointer to current reading position of the supplied query. */
 	const char* q;
 	/* @brief Length of the supplied query. */
@@ -240,6 +248,14 @@ typedef struct cmnt_type_1_st {
 
 	/* @brief Nesting level for nested comments. */
 	int nest_level;
+
+	/**
+	 * @brief Number of separator spaces actually written after a kept comment.
+	 * @details The digest length limit is 'd_max_len' plus this count, so a separator is not
+	 *   mistaken for ordinary content, while a query with no kept comment is still capped at
+	 *   'd_max_len' (see 'digest_len_limit').
+	 */
+	int kept_sep_count;
 } cmnt_type_1_st;
 
 /**
@@ -361,6 +377,7 @@ void init_shared_st(struct shared_st* shared_st, const char* const q, int q_len,
 	shared_st->q = q;
 	shared_st->q_len = q_len;
 	shared_st->d_max_len = d_max_len;
+	shared_st->res_max_len = d_max_len;
 	// all position start with the beginning of the result buffer
 	shared_st->res_init_pos = res;
 	shared_st->res_it_init_pos = res;
@@ -385,6 +402,58 @@ static inline int get_digest_max_len(int len, int max_query_length) {
 	}
 
 	return digest_max_len;
+}
+
+/**
+ * @brief Capacity of the result buffer, in bytes excluding the final null terminator, needed
+ *   to digest a query of 'len' characters with the supplied options.
+ *
+ * @details 'd_max_len' bounds the part of the query that is read, but the digest can be longer
+ *   than that part: with 'keep_comment' every kept comment is copied verbatim and a separator
+ *   space is appended after it, so each comment adds one byte to the result. A terminated
+ *   block comment is at least four bytes ("/\* *\/"), so reserving 'len / 4' extra bytes plus
+ *   one covers every possible comment. Without 'keep_comment' comments are removed whole and
+ *   need no extra room.
+ */
+static inline int get_result_buffer_len(int len, const options* opts) {
+	int res_len = len;
+	if (opts->keep_comment) {
+		res_len += (len / 4) + 1;
+	}
+	return res_len;
+}
+
+/**
+ * @brief Result buffer size, in bytes including the final null terminator, that
+ *   'pgsql_query_digest_and_first_comment()' will write for a query of 'q_len' bytes with the
+ *   supplied options.
+ *
+ * @details Callers that pass their own buffer must provide at least this many bytes; a smaller
+ *   buffer would be written past its end with 'keep_comment' on. Together with the query length
+ *   and options this is enough: the size depends only on 'q_len', 'opts->max_query_length' and
+ *   'opts->keep_comment'.
+ */
+int pgsql_query_digest_buffer_size(int q_len, const options* opts) {
+	const int d_max_len = get_digest_max_len(q_len, opts->max_query_length);
+	return get_result_buffer_len(d_max_len, opts) + SIZECHAR;
+}
+
+/**
+ * @brief Logical length limit of the digest, in bytes excluding the final null terminator.
+ *
+ * @details 'd_max_len' caps the digest exactly as before 'keep_comment' existed: a query
+ *   without kept comments is still processed up to 'd_max_len' result bytes. Each kept-comment
+ *   separator space that is actually written extends the limit by one byte, so the separator
+ *   is not counted as ordinary content but the portion of the query that is read grows only by
+ *   the separators themselves. The limit never exceeds the buffer capacity 'res_max_len'.
+ */
+static __attribute__((always_inline)) inline
+int digest_len_limit(const shared_st* shared_st, const cmnt_type_1_st* c_t_1_st) {
+	int limit = shared_st->d_max_len + c_t_1_st->kept_sep_count;
+	if (limit > shared_st->res_max_len) {
+		limit = shared_st->res_max_len;
+	}
+	return limit;
 }
 
 static inline char* get_result_buffer(int len, char* buf) {
@@ -630,6 +699,94 @@ static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
 }
 
 /**
+ * @brief Allocates the first-comment buffer when the first byte of it is about to be stored.
+ * @details On allocation failure the first comment is not collected: 'fst_cmnt_end' is set,
+ *   so no later byte tries again, and the digest itself is unaffected.
+ * @return True when '*fst_cmnt' points to a buffer of FIRST_COMMENT_MAX_LENGTH bytes.
+ */
+static __attribute__((always_inline)) inline
+bool fst_cmnt_buf_ready(cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
+	if (*fst_cmnt == NULL) {
+		*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
+		if (*fst_cmnt == NULL) {
+			c_t_1_st->fst_cmnt_end = 1;
+			return false;
+		}
+		// set a final NULL terminator for safety
+		*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
+	}
+	return true;
+}
+
+/**
+ * @brief Records one character of a "/\* *\/" comment: into 'cur_cmd_cmnt' when comments are kept,
+ *   and into the first comment while that one is still being collected. Both are bounded.
+ */
+static __attribute__((always_inline)) inline
+void copy_cmnt_type_1_char(const options* opts, cmnt_type_1_st* c_t_1_st, char** fst_cmnt, char c) {
+	if (opts->keep_comment) {
+		// copy the char into 'cur_cmd_cmnt'
+		if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
+			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = c;
+			c_t_1_st->cur_cmd_cmnt_len++;
+		}
+	}
+
+	// first comment hasn't finished, we are yet copying it
+	if (c_t_1_st->fst_cmnt_end == 0 &&
+		c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1 &&
+		fst_cmnt_buf_ready(c_t_1_st, fst_cmnt)) {
+		char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+		*next_fst_cmnt_char = !is_space_char(c) ? c : ' ';
+		c_t_1_st->fst_cmnt_len++;
+	}
+}
+
+/**
+ * @brief Finishes a "/\* *\/" comment that is still open when the query ends.
+ * @details An unterminated comment must not leak any of its characters into the digest as
+ *   ordinary text -- the last byte of the query was being copied as such. The bytes collected
+ *   so far under 'keep_comment' are copied as the (unterminated) kept comment, and the rest of
+ *   the query is consumed.
+ *
+ * @param opts Options, only 'keep_comment' is used.
+ * @param shared_st Shared state used to continue the query processing.
+ * @param c_t_1_st The comment parsing state.
+ * @param fst_cmnt Pointer to the first-comment buffer, left unmodified when not tracked.
+ */
+static __attribute__((always_inline)) inline
+void finish_unterminated_cmnt(const options* opts, shared_st* shared_st,
+	cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
+	// Finalize first comment if we were tracking it
+	if (c_t_1_st->fst_cmnt_end == 0 && *fst_cmnt != NULL) {
+		char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
+		*c_end = 0;
+		c_t_1_st->fst_cmnt_end = 1;
+	}
+
+	// Keep the comment bytes collected so far when comments are preserved. No separator space
+	// is added: the comment ends the query, and 'final_stage' trims a trailing space anyway.
+	if (opts->keep_comment) {
+		char* res_final_pos = shared_st->res_init_pos + digest_len_limit(shared_st, c_t_1_st);
+		cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
+		int res_free_space = res_final_pos - shared_st->res_cur_pos;
+		int copy_length = res_free_space > c_t_1_st->cur_cmd_cmnt_len ?
+			c_t_1_st->cur_cmd_cmnt_len : res_free_space;
+		memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
+		shared_st->res_cur_pos += copy_length;
+		shared_st->prev_char = ' ';
+		c_t_1_st->cur_cmd_cmnt_len = 0;
+	}
+
+	// Consume the remaining query bytes so the parser does not treat the last one as text.
+	shared_st->q += (shared_st->q_len - shared_st->q_cur_pos);
+	shared_st->q_cur_pos = shared_st->q_len;
+
+	// reset nesting so parser isn't left in the middle of a comment
+	c_t_1_st->nest_level = 0;
+}
+
+/**
  * @brief Process a detected comment of type "/\* *\/". Determines when to exit the 'st_cmnt_type_1' state.
  * @details Function assumes that 'shared_st->q' is pointing to the initial mark '/' of the comment start, and
  *   that it's safe to look forward for '*'. State 'st_cmnt_type_1' doesn't copy any data to the result
@@ -646,11 +803,10 @@ static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
 static __attribute__((always_inline)) inline
 enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
 	enum p_st next_st = st_cmnt_type_1;
-	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
-	// initial mark "/*" detection
+	// initial mark "/*" detection, and a nested one right after it ("/*/*")
 	// comments are not copied by while processed, boundary checks should rely on 'q_cur_pos' and 'q_len'.
-	if (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
+	while (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
 
 		if (c_t_1_st->nest_level == 0) 
 			c_t_1_st->cur_cmd_cmnt_len = 0;
@@ -658,17 +814,21 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 		// Increment nesting level /*
 		c_t_1_st->nest_level++;
 
-		// copy the initial mark "/*" if comment preserving is enabled
+		// copy the initial mark "/*" if comment preserving is enabled. A nested "/*" can
+		// arrive after the kept comment already filled 'cur_cmd_cmnt', so each byte is
+		// bounded like every other byte of the comment: at most FIRST_COMMENT_MAX_LENGTH-1
+		// bytes, leaving room for the terminator written when the comment ends.
 		if (opts->keep_comment) {
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q);
-			c_t_1_st->cur_cmd_cmnt_len++;
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q + 1);
-			c_t_1_st->cur_cmd_cmnt_len++;
+			for (int i = 0; i < 2 && c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1; i++) {
+				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q + i);
+				c_t_1_st->cur_cmd_cmnt_len++;
+			}
 		}
 
 		if (c_t_1_st->fst_cmnt_end == 0 && c_t_1_st->nest_level > 1 &&
-			c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 2) {
-			assert(*fst_cmnt);
+			c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 2 &&
+			// "/*/*" opens the nested comment before any byte of the outer one was collected
+			fst_cmnt_buf_ready(c_t_1_st, fst_cmnt)) {
 			char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
 			*next_fst_cmnt_char = *(shared_st->q);
 			next_fst_cmnt_char++;
@@ -683,16 +843,12 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 
 		// v1_crashing_payload_04
 		if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
-			if (c_t_1_st->fst_cmnt_end == 0 && *fst_cmnt != NULL) {
-				// ensure there is a terminator at logical end
-				char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
-				*c_end = 0;
-				c_t_1_st->fst_cmnt_end = 1;
+			// Record the one byte that can still follow the opener before the query ends
+			// (into the kept comment and the first comment, when they are tracked).
+			if (shared_st->q_cur_pos < shared_st->q_len) {
+				copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *shared_st->q);
 			}
-			if (opts->keep_comment) {
-				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
-			}
-			c_t_1_st->nest_level = 0;
+			finish_unterminated_cmnt(opts, shared_st, c_t_1_st, fst_cmnt);
 			return st_no_mark_found;
 		}
 	}
@@ -702,36 +858,29 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 //  into the supplied 'fst_cmnt' memory? Or should they be considered for further processing?
 //  {
 
-	// we are parsing a "/*" comment
-	if (opts->keep_comment) {
-		// copy the char into 'cur_cmd_cmnt'
-		if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *shared_st->q;
-			c_t_1_st->cur_cmd_cmnt_len++;
-		}
-	}
+	// One character of the comment, or both of a "*/". As in PostgreSQL's lexer the comment is
+	// read from left to right in tokens: a "*/" is recognized at its '*' and consumed whole, and
+	// an "/*" is consumed whole above, so the '/' of a "*/" never opens a comment ("*/*/" closes
+	// twice) and the '*' of an "/*" never closes one ("/*/" stays open).
+	const bool closing = *shared_st->q == '*' && shared_st->q_cur_pos + 1 < shared_st->q_len &&
+		*(shared_st->q + 1) == '/';
+	copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *shared_st->q);
 
-	// first comment hasn't finished, we are yet copying it
-	if (c_t_1_st->fst_cmnt_end == 0 && 
-		c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1) {
-		if (*fst_cmnt == NULL) {
-			// initialize the 'first_comment' and set a final NULL terminator for safety
-			*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
-			*(*fst_cmnt + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
-		}
-		char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
-		*next_fst_cmnt_char = !is_space_char(*shared_st->q) ? *shared_st->q : ' ';
-		c_t_1_st->fst_cmnt_len++;
-	}
+	if (closing) {
+		// move onto the '/' of "*/"; it is consumed below, or by the caller while still nested
+		shared_st->q++;
+		shared_st->q_cur_pos++;
+		copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *shared_st->q);
 
-	if (shared_st->prev_char == '*' && *shared_st->q == '/') {
-		// Decrement nesting level when we encounter 
-		if (c_t_1_st->nest_level > 0) 
+		// Decrement nesting level when we encounter "*/"
+		if (c_t_1_st->nest_level > 0)
 			c_t_1_st->nest_level--;
 
 		// Only end the comment when we're back at nest level 0
 		if (c_t_1_st->nest_level == 0) {
 			if (opts->keep_comment) {
+				const char* res_final_pos =
+					shared_st->res_init_pos + digest_len_limit(shared_st, c_t_1_st);
 				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
 				int res_free_space = res_final_pos - shared_st->res_cur_pos;
 				int comment_size = c_t_1_st->cur_cmd_cmnt_len;
@@ -740,23 +889,35 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 				memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
 				shared_st->res_cur_pos += copy_length;
 
-				if (*(shared_st->res_cur_pos - 1) != ' ' && shared_st->res_cur_pos != res_final_pos) {
-					*shared_st->res_cur_pos++ = ' ';
+				// The separator space extends the digest length limit by one: count it, then
+				// write it only if the buffer has room. Counting it first keeps the separator
+				// from being taken for ordinary content.
+				if (*(shared_st->res_cur_pos - 1) != ' ') {
+					int next_limit = shared_st->d_max_len + c_t_1_st->kept_sep_count + 1;
+					if (next_limit > shared_st->res_max_len) next_limit = shared_st->res_max_len;
+					if (shared_st->res_cur_pos != shared_st->res_init_pos + next_limit) {
+						c_t_1_st->kept_sep_count++;
+						*shared_st->res_cur_pos++ = ' ';
+					}
 				}
 				// Re-initialize the comment state
 				c_t_1_st->cur_cmd_cmnt_len = 0;
 			}
 
-			if (shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
-			// if the prev copied char isn't a space comment wasn't space separated in the query:
-			// ```
-			// Q: `SELECT/*FOO*/1`
-			//          ^ no space char
-			// ```
-			// thus we impose an extra space in replace for the ommited comment
-			*(shared_st->res_cur_pos - 1) != ' '
-			) {
-				*shared_st->res_cur_pos++ = ' ';
+			{
+				const char* res_final_pos =
+					shared_st->res_init_pos + digest_len_limit(shared_st, c_t_1_st);
+				if (shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
+				// if the prev copied char isn't a space comment wasn't space separated in the query:
+				// ```
+				// Q: `SELECT/*FOO*/1`
+				//          ^ no space char
+				// ```
+				// thus we impose an extra space in replace for the ommited comment
+				*(shared_st->res_cur_pos - 1) != ' '
+				) {
+					*shared_st->res_cur_pos++ = ' ';
+				}
 			}
 
 			// back to main shared_st->query parsing state
@@ -783,18 +944,12 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 
 	// Check if we've reached the end of query
 	if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
-		// Finalize first comment if we were tracking it
-		if (c_t_1_st->fst_cmnt_end == 0 && *fst_cmnt != NULL) {
-			// ensure there is a terminator at logical end
-			char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
-			*c_end = 0;
-			c_t_1_st->fst_cmnt_end = 1;
+		if (next_st == st_cmnt_type_1) {
+			// Still open: the comment has no terminator and must not leak any character.
+			finish_unterminated_cmnt(opts, shared_st, c_t_1_st, fst_cmnt);
 		}
-		if (opts->keep_comment) {
-			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
-		}
-		// reset nesting so parser isn't left in the middle of a comment
-		c_t_1_st->nest_level = 0;
+		// A comment that closed right at the end is handled above; the outer loop may still
+		// have to process the final character normally.
 		return st_no_mark_found;
 	}
 
@@ -1867,7 +2022,6 @@ void end_compression_stage_it(shared_st* shared_st, char* digest_end, stage_1_st
 static __attribute__((always_inline)) inline
 void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options* opts, char** fst_cmnt) {
 	// state required between different iterations of special parsing states
-	char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len - 1;
 	cmnt_type_1_st* const cmnt_type_1_st = &stage_1_st->cmnt_type_1_st;
 	literal_string_st* const literal_str_st = &stage_1_st->literal_str_st;
 	literal_digit_st* const literal_dig_st = &stage_1_st->literal_dig_st;
@@ -1893,9 +2047,15 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 	}
 
 	// Stop when either:
-	//  1. There is no more room left the result buffer.
+	//  1. There is no more room left in the result buffer. The limit is 'd_max_len' plus one
+	//     byte for every kept-comment separator written, so a query with no kept comment is
+	//     still processed up to 'd_max_len' (see digest_len_limit()).
 	//  2. The final position of the received query has been reached.
-	while (shared_st->res_cur_pos <= res_final_pos && shared_st->q_cur_pos < shared_st->q_len) {
+	for (;;) {
+		char* res_final_pos = shared_st->res_init_pos + digest_len_limit(shared_st, cmnt_type_1_st) - 1;
+		if (shared_st->res_cur_pos > res_final_pos || shared_st->q_cur_pos >= shared_st->q_len) {
+			break;
+		}
 		if (cur_st == st_no_mark_found) {
 			// update the last position over the return buffer to be the current position
 			shared_st->res_pre_pos = shared_st->res_cur_pos;
@@ -2253,7 +2413,7 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 					new_cur_pos += 1;
 				}
 
-				while ((new_cur_pos < digest_end)) {
+				while (new_cur_pos < digest_end) {
 					if (*new_cur_pos == '?' && *(new_cur_pos+1) == ',') {
 						new_cur_pos += 2;
 					} else {
@@ -2610,7 +2770,7 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	//                                       ^ replaced literal
 	// ```
 	if (stage_1_st->literal_dig_st.start_pos != NULL) {
-		if (shared_st->d_max_len <= (shared_st->res_cur_pos - shared_st->res_init_pos)) {
+		if (digest_len_limit(shared_st, &stage_1_st->cmnt_type_1_st) <= (shared_st->res_cur_pos - shared_st->res_init_pos)) {
 			if (shared_st->st == st_literal_number && is_digit_char(*stage_1_st->literal_dig_st.start_pos)) {
 				*stage_1_st->literal_dig_st.start_pos++ = '?';
 				*stage_1_st->literal_dig_st.start_pos = '\0';
@@ -2632,11 +2792,16 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	// - Semicolons (';') marking the end of the query are also removed.
 	{
 		// v1_crashing_payload_06
-		char* f_char = shared_st->res_cur_pos - 1;
-		while (f_char > shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
+		char* f_char = shared_st->res_cur_pos;
+		// An empty result has nothing to trim, and 'res_cur_pos - 1' would point
+		// before the buffer. The first char is never trimmed (unchanged behaviour).
+		if (f_char > shared_st->res_init_pos) {
 			f_char--;
+			while (f_char > shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
+				f_char--;
+			}
+			f_char++;
 		}
-		f_char++;
 		*f_char = '\0';
 		// NOTE: Since this is the last operation this isn't really required. But it's left in case this block
 		// is moved in the future.
@@ -2663,24 +2828,25 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
  * @return A pointer to the start of the supplied buffer, or the allocated memory containing the digest.
  */
 char* pgsql_query_digest_and_first_comment(const char* const q, int q_len, char** const fst_cmnt, char* const buf, const options* opts) {
-#ifdef DEBUG
-	if (buf != NULL) {
-		memset(buf, 0, 127);
-	}
-#endif
+	// No DEBUG-only memset of the caller's buffer here: callers may pass a
+	// buffer of exactly pgsql_query_digest_buffer_size() bytes, which can be
+	// smaller than the 127 bytes a fixed-size clear would write (#6451).
 
 	/* buffer to store first comment. */
 	int d_max_len = get_digest_max_len(q_len, opts->max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
+	const int res_max_len = get_result_buffer_len(d_max_len, opts);
+	char* res = get_result_buffer(res_max_len, buf);
 
 #ifdef DEBUG
-	res[d_max_len] = 0;
+	res[res_max_len] = 0;
 #endif
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
 	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+	// With 'keep_comment' the digest can be longer than the query ('res_max_len' > 'd_max_len').
+	shared_st.res_max_len = res_max_len;
 
 	// individual states for stages
 	struct stage_1_st stage_1_st;
@@ -2721,7 +2887,7 @@ char* pgsql_query_digest_and_first_comment(const char* const q, int q_len, char*
 		shared_st.gl_c_offset = stage_1_st.pre_it_pos - shared_st.res_cur_pos;
 		if (
 			shared_st.q_cur_pos >= shared_st.q_len ||
-			d_max_len <= (shared_st.res_cur_pos - shared_st.res_init_pos) ||
+			digest_len_limit(&shared_st, &stage_1_st.cmnt_type_1_st) <= (shared_st.res_cur_pos - shared_st.res_init_pos) ||
 			shared_st.gl_c_offset == 0
 		) {
 			min_digest_size = 1;
@@ -3059,17 +3225,21 @@ char* pgsql_query_strip_comments(char *s, int _len, bool lowercase) {
 
 char* pgsql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
 	/* buffer to store first comment. */
-	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
-
 	// global options
 	options opts;
 	get_pgsql_options(&opts);
+
+	int d_max_len = get_digest_max_len(q_len, opts.max_query_length);
+	// Sized as in pgsql_query_digest_and_first_comment(): with 'keep_comment' the digest
+	// can be longer than the query, so the separator spaces need room too.
+	const int res_max_len = get_result_buffer_len(d_max_len, &opts);
+	char* res = get_result_buffer(res_max_len, buf);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
 	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+	shared_st.res_max_len = res_max_len;
 
 	struct stage_1_st stage_1_st;
 	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
@@ -3085,17 +3255,21 @@ char* pgsql_query_digest_first_stage(const char* const q, int q_len, char** cons
 
 char* pgsql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
 	/* buffer to store first comment. */
-	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
-
 	// global options
 	options opts;
 	get_pgsql_options(&opts);
+
+	int d_max_len = get_digest_max_len(q_len, opts.max_query_length);
+	// Sized as in pgsql_query_digest_and_first_comment(): with 'keep_comment' the digest
+	// can be longer than the query, so the separator spaces need room too.
+	const int res_max_len = get_result_buffer_len(d_max_len, &opts);
+	char* res = get_result_buffer(res_max_len, buf);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
 	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+	shared_st.res_max_len = res_max_len;
 
 	struct stage_1_st stage_1_st;
 	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
@@ -3122,18 +3296,19 @@ char* pgsql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 }
 
 char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst_cmnt, char* buf) {
-#ifdef DEBUG
-	if (buf != NULL) {
-		memset(buf, 0, 127);
-	}
-#endif
-
-	int d_max_len = get_digest_max_len(q_len, pgsql_thread___query_digests_max_query_length);
-	char* res = get_result_buffer(d_max_len, buf);
+	// No DEBUG-only memset of the caller's buffer here: callers may pass a
+	// buffer of exactly pgsql_query_digest_buffer_size() bytes, which can be
+	// smaller than the 127 bytes a fixed-size clear would write (#6451).
 
 	// global options
 	options opts;
 	get_pgsql_options(&opts);
+
+	int d_max_len = get_digest_max_len(q_len, opts.max_query_length);
+	// Sized as in pgsql_query_digest_and_first_comment(): with 'keep_comment' the digest
+	// can be longer than the query, so the separator spaces need room too.
+	const int res_max_len = get_result_buffer_len(d_max_len, &opts);
+	char* res = get_result_buffer(res_max_len, buf);
 
 	// state shared between all the parsing states
 	struct shared_st shared_st;
@@ -3141,6 +3316,7 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	shared_st.q = q;
 	shared_st.q_len = q_len;
 	shared_st.d_max_len = d_max_len;
+	shared_st.res_max_len = res_max_len;
 	shared_st.res_init_pos = res;
 	shared_st.res_it_init_pos = res;
 	shared_st.res_cur_pos = res;
@@ -3338,4 +3514,139 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	*shared_st.res_cur_pos = 0;
 
 	return res;
+}
+
+bool pgsql_stmt_first_keyword_is(const char* text, const char* keyword) {
+	if (text == NULL || keyword == NULL) return false;
+	const size_t klen = strlen(keyword);
+	if (klen == 0) return false;
+	if (strncasecmp(text, keyword, klen) != 0) return false;
+	const char c = text[klen];
+	return !(isalnum((unsigned char)c) || c == '_' || c == '$');
+}
+
+// `p` points at "/*". Returns what follows the matching "*/", or NULL when there is none.
+// PostgreSQL nests block comments, so the depth is tracked.
+static const char* pgsql_skip_block_comment(const char* p) {
+	int depth = 1;
+	p += 2;
+	while (depth > 0 && *p != '\0') {
+		if (p[0] == '/' && p[1] == '*') { depth++; p += 2; }
+		else if (p[0] == '*' && p[1] == '/') { depth--; p += 2; }
+		else p++;
+	}
+	return (depth > 0) ? NULL : p;
+}
+
+const char* pgsql_stmt_skip_lead(const char* text, const char** lost) {
+	if (lost != NULL) *lost = NULL;
+	if (text == NULL) return NULL;
+	const char* p = text;
+	for (;;) {
+		while (isspace((unsigned char)*p)) p++;
+		if (p[0] == '/' && p[1] == '*') {
+			const char* end = pgsql_skip_block_comment(p);
+			if (end == NULL) {
+				if (lost != NULL) *lost = p;
+				return NULL;
+			}
+			p = end;
+		} else if (p[0] == '-' && p[1] == '-') {
+			p = strchr(p, '\n');
+			if (p == NULL) return NULL;
+		} else {
+			return (*p != '\0') ? p : NULL;
+		}
+	}
+}
+
+const char* pgsql_digest_next_stmt(const char* stmt, const char** lost) {
+	if (lost != NULL) *lost = NULL;
+	if (stmt == NULL) return NULL;
+	const char* p = stmt;
+	while ((p = strpbrk(p, ";\"'/")) != NULL) {
+		const char c = *p;
+		if (c == ';') {
+			return pgsql_stmt_skip_lead(p + 1, lost);
+		}
+		const char* end = NULL;
+		if (c == '/') {
+			// Only a block comment hides a ';', and only with query_digests_keep_comment.
+			if (p[1] != '*') { p++; continue; }
+			end = pgsql_skip_block_comment(p);
+		} else {
+			// A quoted identifier (kept by the digest) or a literal: a doubled quote inside
+			// it simply closes it and opens another, which the next round skips the same way.
+			end = strchr(p + 1, c);
+			if (end != NULL) end++;
+		}
+		if (end == NULL) {
+			if (lost != NULL) *lost = p;
+			return NULL;
+		}
+		p = end;
+	}
+	return NULL;
+}
+
+bool pgsql_text_has_word(const char* text, const char* keyword) {
+	if (text == NULL) return false;
+	for (const char* p = text; *p != '\0'; p++) {
+		if (p != text) {
+			const char b = p[-1];
+			if (isalnum((unsigned char)b) || b == '_' || b == '$') continue;
+		}
+		if (pgsql_stmt_first_keyword_is(p, keyword)) return true;
+	}
+	return false;
+}
+
+bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword) {
+	const char* lost = NULL;
+	for (const char* s = pgsql_stmt_skip_lead(digest, &lost); s != NULL; s = pgsql_digest_next_stmt(s, &lost)) {
+		if (pgsql_stmt_first_keyword_is(s, keyword)) return true;
+	}
+	// From an unterminated comment or quote on, the statements cannot be told apart, so the
+	// keyword counts wherever it stands as a word -- inside that comment's own kept text as
+	// well, since `lost` points at its opening "/*". Refusing or pinning a query that only
+	// mentions it is the safe side of being wrong.
+	return pgsql_text_has_word(lost, keyword);
+}
+
+char* pgsql_query_full_digest(const char* query) {
+	if (query == NULL) return NULL;
+	const size_t len = strlen(query);
+	if (len > INT_MAX) return NULL;
+	options opts;
+	get_pgsql_options(&opts);
+	// As long as the query: nothing is cut. Comments are not needed to find statements.
+	opts.max_query_length = (int)len;
+	opts.keep_comment = false;
+	char* fst_cmnt = NULL;
+	char* digest = pgsql_query_digest_and_first_comment(query, (int)len, &fst_cmnt, NULL, &opts);
+	free(fst_cmnt);
+	return digest;
+}
+
+bool pgsql_query_has_stmt_keyword(const char* digest, const char* query, const char* keyword) {
+	if (digest != NULL && *digest != '\0') {
+		// The digest buffer is as long as the query up to query_digests_max_query_length, so
+		// only the digest of a longer query can have been cut short.
+		if (query == NULL || strnlen(query, (size_t)pgsql_thread___query_digests_max_query_length + 1) <=
+			(size_t)pgsql_thread___query_digests_max_query_length) {
+			return pgsql_digest_has_stmt_keyword(digest, keyword);
+		}
+	}
+	// No digest, or one that may miss trailing statements. Only a query holding the word at
+	// all is digested in full, so the common case costs one scan of the text.
+	if (pgsql_text_has_word(query, keyword) == false) return false;
+	// The first statement is also read from the text itself, by pgsql_stmt_skip_lead(), so the
+	// gate does not rest on the digest tokenizer alone for it. Before the tokenizer read
+	// nested comments the way PostgreSQL does, "/*/*n*/*/LISTEN ch" digested to nothing.
+	if (pgsql_stmt_first_keyword_is(pgsql_stmt_skip_lead(query, NULL), keyword)) return true;
+	char* full = pgsql_query_full_digest(query);
+	if (full == NULL) return true; // cannot be told apart: fail closed
+	const bool found = pgsql_digest_has_stmt_keyword(full, keyword);
+	free(full);
+	return found;
 }

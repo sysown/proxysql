@@ -74,17 +74,22 @@ int main() {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 			return -1;
 		}
-		char *query = (char *) malloc(strlen(queries[0]) + it->length() + 8);
 		for (std::vector<const char *>::iterator it2 = queries.begin(); it2 != queries.end(); it2++) {
-			sprintf(query,*it2, it->c_str());
-			diag("Running query: %s", query);
-			MYSQL_QUERY(proxysql_admin, query);
+			std::string query(*it2);
+			const size_t placeholder = query.find("%s");
+			if (placeholder == std::string::npos) {
+				fprintf(stderr, "Query template is missing its table placeholder\n");
+				mysql_close(proxysql_admin);
+				return -1;
+			}
+			query.replace(placeholder, 2, *it);
+			diag("Running query: %s", query.c_str());
+			MYSQL_QUERY(proxysql_admin, query.c_str());
 			MYSQL_RES* proxy_res = mysql_store_result(proxysql_admin);
 			unsigned long rows = proxy_res->row_count;
 			ok(rows > 0 , "Number of rows in %s = %lu", it->c_str(), rows);
 			mysql_free_result(proxy_res);
 		}
-		free(query);
 		mysql_close(proxysql_admin);
 	}
 

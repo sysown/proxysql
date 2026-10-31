@@ -48,6 +48,14 @@ void MySrvConnList::drop_all_connections() {
 	}
 }
 
+void MySrvConnList::mark_connections_unhealthy() {
+	for (unsigned int i = 0; i < conns_length(); i++) {
+		MySQL_Connection *conn = index(i);
+		conn->healthy=false;
+		conn->reusable=false;
+	}
+}
+
 unsigned int calculate_eviction_count(unsigned int conns_free, unsigned int conns_used, unsigned int max_connections) {
 	if (conns_free < 1) return 0;
 	unsigned int pct_max_connections = (3 * max_connections) / 4;
@@ -107,19 +115,21 @@ ConnectionPoolDecision evaluate_pool_state(
 	return decision;
 }
 
-void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn) {
+void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn, MySQLBackendAuthType requested_type) {
 	char *schema = client_conn->userinfo->schemaname;
 	MySQL_Connection * conn=NULL;
 	unsigned int k;
 	for (k = start;  k < end; k++) {
 		conn = (MySQL_Connection *)conns->index(k);
+		// Established connections remain authenticated across policy changes.
+		// Candidates needing CHANGE_USER use the requesting user's policy on reset.
 		if (conn->match_tracked_options(client_conn)) {
 			if (connection_quality_level == 0) {
 				// this is our best candidate so far
 				connection_quality_level = 1;
 				conn_found_idx = k;
 			}
-			if (conn->requires_CHANGE_USER(client_conn)==false) {
+			if (conn->requires_CHANGE_USER(client_conn, requested_type)==false) {
 				if (connection_quality_level == 1) {
 					// this is our best candidate so far
 					connection_quality_level = 2;
@@ -172,7 +182,9 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 
 
 
-MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
+MySQL_Connection * MySrvConnList::get_random_MyConn(
+	MySQL_Session *sess, bool ff, MySQLBackendAuthType requested_type)
+{
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int conn_found_idx = 0;
@@ -205,9 +217,9 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		i=rand_fast()%l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 			MySQL_Connection * client_conn = sess->client_myds->myconn;
-			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
+			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn, requested_type);
 			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
-				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
+				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn, requested_type);
 			}
 			// Evaluate pool state to determine create-vs-reuse and eviction (warming already handled above)
 			ConnectionPoolDecision decision = evaluate_pool_state(
@@ -303,4 +315,3 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 	}
 	return NULL; // never reach here
 }
-

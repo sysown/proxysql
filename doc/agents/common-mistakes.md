@@ -12,6 +12,8 @@ Apply to every push:
 4. **Failing tests investigated, not dismissed.** No "flaky" / "baseline" / "pre-existing" labels without a deterministic mechanism attached. (§11)
 5. **Comprehensive claims backed by exhaustive probes.** When the fix is "comprehensive" / "all at once" / "one bump", the catalogue of inputs that were probed must exist *before* the fix list. (§12)
 6. **CI red lights diagnosed before reacting.** Real test failure vs status-reporter / cache-race / auth blip. The PR-status column hides which step actually failed. (§13)
+7. **Invariants checked.** The change does not break, weaken or add a way to violate anything in `doc/agents/invariants.md`. If it touches one, it is a design change: stop and ask. (§19)
+8. **Every new mechanism has an in-tree caller.** A new hook, flag, ABI slot, transaction, protocol or "for future use" parameter must name the shipped code that uses it. (§18)
 
 ---
 
@@ -74,15 +76,23 @@ Apply to every push:
 
 ---
 
-## 5. Merged Instead of Rebased
+## 5. Incorporated Upstream Without Checking the Result
 
-**Symptom:** PR diff includes dozens of unrelated files because the agent ran `git merge <upstream>` into its branch.
+**Symptom:** A merge or rebase drops feature changes, loses upstream changes, or
+leaves the PR conflicted.
 
-**Root cause:** Agent's default strategy for incorporating upstream changes is merge. This creates a merge commit that brings all upstream changes into the PR diff.
+**Root cause:** The agent treats the Git operation itself as conflict resolution
+and does not review the semantic result. Both merging and rebasing can produce
+incorrect resolutions even when Git reports success.
 
-**Prevention:** Explicit instruction: "Use `git rebase`, NOT `git merge`."
+**Prevention:** Merge and rebase are both acceptable. Follow the PR owner's
+preference, inspect every conflict, preserve the intended changes from both
+sides, and verify the final diff and mergeability. Prefer merge on a published
+branch when avoiding history rewrites is useful; use rebase when linear history
+is explicitly desired.
 
-**Detection:** `git log --merges <branch> --not <base>` — any merge commits indicate merging.
+**Detection:** Check `git diff <base>...HEAD`, `git diff --diff-filter=U`, and the
+PR mergeability state. A merge commit alone is not a defect.
 
 ---
 
@@ -266,9 +276,96 @@ gh pr diff <PR> | grep "^+static.*calculate_\|^+static.*evaluate_\|^+static.*sho
 # Manual TAP stubs?
 gh pr diff <PR> | grep "^+.*noise_failures\|^+.*stop_noise_tools"
 
-# Merge commits?
-gh pr view <PR> --json commits --jq '.commits[].messageHeadline' | grep -i merge
+# Unexpected unresolved conflicts?
+git diff --name-only --diff-filter=U
 
 # Unrelated files changed?
 gh pr diff <PR> | grep "^+++ b/" | grep -v "<expected_files_pattern>"
 ```
+
+---
+
+## 16. TAP-Infra Build/Deploy Hazards (debug-only, bind-mounted binary, shared object dir)
+
+**Symptoms** (each observed live, 2026-07): every TAP test fails at `LOAD DEBUG FROM DISK`; the proxysql binary fails to link with `undefined reference to ...run_tests()`; a mid-run test suite aborts with the admin connection dropping for no visible reason; a test run silently exercises last week's code.
+
+**Root causes — four independent traps that compound:**
+
+1. **The TAP harness requires a DEBUG build.** `admin-debug`, `debug_levels`, and `LOAD DEBUG` are `#ifdef DEBUG`-gated; a release binary fails every test at harness init. Build with `make debug -j$(nproc)` (the lib/src sub-makes do NOT inherit parallelism from plain `make debug`).
+2. **`lib/obj/*.oo` is shared between release and debug flavors.** Switching flavors without `make clean` produces a mixed archive that fails at link (missing DEBUG-only symbols) or worse. One flavor per checkout; `make clean` when switching — and note `make clean` also deletes every TAP test binary (`make build_tap_test_debug` to restore).
+3. **The proxysql container FILE-bind-mounts `$WORKSPACE/src/proxysql`.** Two consequences: (a) after any rebuild you must `docker restart proxysql.<INFRA_ID>` or tests exercise the stale in-memory binary; (b) NEVER rebuild while a test run is live — the linker truncates the mapped inode in place and corrupts the running server's text pages (manifests as inexplicable mid-run connection loss).
+4. **Header-touching rebuilds have no dependency tracking.** After editing a widely-included header (enum/struct changes), stale objects can misbehave at runtime rather than fail to build (e.g. a renumbered enum crashing via a stale lookup table). If symptoms look impossible, `make clean` and rebuild before debugging further.
+
+**Prevention:** one build flavor per checkout (use a separate worktree for the other flavor); rebuild → `docker restart` → then test, never overlapping; treat "impossible" runtime behavior after header edits as a stale-object signal first.
+
+---
+
+## 17. Shared/Misprovisioned Test Infra (INFRA_ID collisions, INFRA type-vs-id, stale containers)
+
+**Symptoms:** tests fail with `Unknown global variable` for a variable your branch definitely has; `FATAL: User not found` on every pgsql connection; backend hostname `pgsql1.<something>` unresolvable; another session's binary appears in your container.
+
+**Root causes:**
+
+1. **`INFRA_ID` is a shared namespace.** The conventional `INFRA_ID=dev-$USER` collides across worktrees/sessions of the same user: `ensure-infras.bash` reuses a running `proxysql.<INFRA_ID>` container even if it is bind-mounted from a *different worktree*. Use a per-effort id (e.g. `dev-$USER-<feature>`).
+2. **`INFRA` is the infra TYPE, not the infra id.** Scripts like `docker-pgsql16-single/bin/docker-proxy-post.bash` build the backend hostname as `pgsql1.${INFRA}` — the resolvable compose alias is `pgsql1.docker-pgsql16-single`. Hand-exporting `INFRA=<your INFRA_ID>` writes an unresolvable hostname into the persisted admin DB, which then survives container recreation.
+3. **`docker start` on an exited proxysql container skips provisioning.** The users/servers config is applied by the post scripts, not baked into the container; recreate via `ensure-infras.bash` / `start-proxysql-isolated.bash`, never bare `docker start`.
+4. Hand-running post scripts needs the full env: `COMPOSE_PROJECT`, `INFRA` (type), `ROOT_PASSWORD=$(echo -n "$INFRA_ID" | sha256sum | head -c 10)`, run from the infra directory (they source `./constants`).
+
+**Detection:** `docker inspect proxysql.<INFRA_ID> --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}'` shows whose worktree the binary comes from; `SELECT hostname FROM pgsql_servers` via admin shows a poisoned backend hostname.
+
+**Useful:** `TEST_PY_TAP_INCL=<regex>` runs a subset through `run-tests-isolated.bash` without the full group.
+
+---
+
+## 18. Building a Mechanism With No In-Tree User
+
+**Symptom:** A PR adds generic machinery (a hook, a veto, a transaction or prepare/commit protocol, a generation counter, an ABI slot, a result side channel) "so that plugins/modules can ...". Nothing that ships uses it. Its only callers are test fakes. Later PRs fix bugs in it, add reporting for it, and build more code on it.
+
+**Root cause:** For an agent, writing generality costs nothing, and it looks like good design. Its cost only appears later: every subsequent change must keep the unused paths "correct", and every bug in them is real even though the feature isn't.
+
+#6448 is the reference case:
+- `1ed576b9d` wrapped every `LOAD ... SERVERS TO RUNTIME` in an install transaction with a mutex, a generation counter and a module veto, compiled on every tier. No shipped plugin registers a server module.
+- That caused five follow-up commits in eight weeks, three more defects in review, one commit that made every successful LOAD return ERROR and broke all cluster CI, and finally an issue to delete all of it.
+- The server-module machinery was then removed entirely (module tables, their Cluster sync and `*_servers_v2` checksum folding, module hostgroup claims); only the ABI-14 `register_server_module` slot remains, as a reserved stub that always rejects.
+
+**Prevention:**
+- A new mechanism must name its **shipped** caller in the PR description, by file and function. Test fakes do not count. Neither does "a future plugin" or "an out-of-tree plugin might".
+- If the caller does not exist yet, the mechanism lands **in the same PR as its first real user**, or not at all.
+- If a plugin needs to *observe* core state, give it a notification after the fact. Do not give it a way to *participate in or reject* a core operation (see `invariants.md` I-3).
+
+**Detection:**
+- For every new function pointer, hook struct field, ABI slot or public member in the diff, grep for callers outside `test/` and outside the file that defines it. Zero callers means a red flag.
+- A test file whose only purpose is to drive a fake plugin through a new core hook is a strong hint that the hook has no user.
+
+---
+
+## 19. Changing a Contract Under a `fix(...)` Label
+
+**Symptom:** A commit titled `fix(...)` changes what a user-visible operation does: it can now fail when it could not before, it replies differently, it becomes conditional on plugin state, or it behaves differently on the Stable tier. Reviewers apply fix-level scrutiny, and the change ships.
+
+**Root cause:** The agent is solving a local problem ("make installs transactional") and does not see that the local solution changes a product contract. The contracts were never written down, so nothing told it otherwise.
+
+**Prevention:**
+- Read `doc/agents/invariants.md` before changing any admin command, LOAD/SAVE path, auth path, session-state handling, or hot-path locking.
+- If the change touches an invariant, **stop**. Do not implement it. Write up the trade-off and ask for a maintainer decision. A contract change ships only with that decision cited in the commit message, and is labelled `feat(...)` or `change(...)`, never `fix(...)`.
+- Changing a function from `void` to `bool` (or adding an error return) on an operation that could not fail before is a contract change by definition.
+
+**Detection:**
+- In a `fix(...)` commit, a new `return false` / error path in `load_*_to_runtime`, `save_*`, `flush_*`, `Admin_Handler.cpp` command branches, or auth code.
+- In a `fix(...)` commit, any `void` → `bool` signature change on those paths.
+
+---
+
+## 20. Fix-on-Fix: Patching a Mechanism for the Third Time
+
+**Symptom:** The same mechanism gets fix after fix. Each one addresses the newest symptom: missing reason, wrong flag, flag not reset, flag read after unlock. Each fix adds state, and the blast radius grows.
+
+**Root cause:** Each agent session accepts the existing design as a given and patches the reported symptom. Nobody in the loop owns the question "should this exist?". Review bots add more symptoms to fix.
+
+**Prevention:**
+- **The third fix to the same mechanism within a release cycle is a stop sign.** Do not write it. Report the chain to the maintainer: the commits, what each one patched, and what the mechanism is for. Propose reverting or redesigning it.
+- Before fixing a bug in code added during the current cycle, check `git log` for that code. If it is already a fix of a fix, the right fix is usually deletion.
+
+**Detection:**
+- `git log -p --format='%h %ad %s' --date=short v<last-release>..HEAD -- <file>` lists the candidate commits. Read the diffs: count only fixes that modify the same function, flag or mechanism. Three or more is the stop sign.
+- Commit messages that describe fixing "the previous round" or "the previous fix".

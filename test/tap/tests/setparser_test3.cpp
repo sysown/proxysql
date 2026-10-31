@@ -29,9 +29,9 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
     printMap("expected", data);
 	cout << endl;
 
-    CHECK_EQ(result.size(), data.size());
+    check_equal(result.size(), data.size(), __FILE__, __LINE__);
 	ok(result.size() == data.size() , "Sizes match: %lu, %lu" , result.size() , data.size());
-    CHECK(std::equal(std::begin(result), std::end(result), std::begin(data)));
+    check(std::equal(std::begin(result), std::end(result), std::begin(data)), "maps are equal", __FILE__, __LINE__);
 	ok(std::equal(std::begin(result), std::end(result), std::begin(data)) == true, "Elements match");
   }
 }
@@ -39,26 +39,26 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
 
 int main(int argc, char** argv) {
 	unsigned int p = 0;
-	p += arraysize(sql_mode);
-	p += arraysize(time_zone);
-	p += arraysize(session_track_gtids);
-	p += arraysize(character_set_results);
-	p += arraysize(names);
-	p += arraysize(various);
-	p += arraysize(multiple);
-	p += arraysize(Set1_v2);
-	p += arraysize(syntax_errors);
+	p += std::size(sql_mode);
+	p += std::size(time_zone);
+	p += std::size(session_track_gtids);
+	p += std::size(character_set_results);
+	p += std::size(names);
+	p += std::size(various);
+	p += std::size(multiple);
+	p += std::size(Set1_v2);
+	p += std::size(syntax_errors);
 	p *= 2;
 	plan(p);
 	parser = new MySQL_Set_Stmt_Parser("", 1);
-	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
-	TestParse(time_zone, arraysize(time_zone), "time_zone");
-	TestParse(session_track_gtids, arraysize(session_track_gtids), "session_track_gtids");
-	TestParse(character_set_results, arraysize(character_set_results), "character_set_results");
-	TestParse(names, arraysize(names), "names");
-	TestParse(various, arraysize(various), "various");
-	TestParse(multiple, arraysize(multiple), "multiple");
-	TestParse(Set1_v2, arraysize(Set1_v2), "Set1_v2");
-	TestParse(syntax_errors, arraysize(syntax_errors), "syntax_errors");
+	TestParse(sql_mode, std::size(sql_mode), "sql_mode");
+	TestParse(time_zone, std::size(time_zone), "time_zone");
+	TestParse(session_track_gtids, std::size(session_track_gtids), "session_track_gtids");
+	TestParse(character_set_results, std::size(character_set_results), "character_set_results");
+	TestParse(names, std::size(names), "names");
+	TestParse(various, std::size(various), "various");
+	TestParse(multiple, std::size(multiple), "multiple");
+	TestParse(Set1_v2, std::size(Set1_v2), "Set1_v2");
+	TestParse(syntax_errors, std::size(syntax_errors), "syntax_errors");
 	return exit_status();
 }

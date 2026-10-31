@@ -1,11 +1,23 @@
+#include <algorithm>
 #include <cerrno>
 #include <cctype>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <sstream>
+#include <set>
+#include <map>
+#include <vector>
 
 #include "proxysql_gtid.h"
+
+// Input cap for a tracked OWN_GTID set (issue #6415): the session only
+// accumulates its own transactions, so anything near this bound is already a
+// corrupted payload. Failing closed here keeps parse_gtid_set() linear.
+static constexpr size_t PARSE_GTID_SET_MAX_LEN = (1 << 12);
+
 
 // Initializes a trxid interval from a range.
 TrxId_Interval::TrxId_Interval(const trxid_t _start, const trxid_t _end) {
@@ -177,12 +189,14 @@ GTID_Set::GTID_Set() {}
 GTID_Set GTID_Set::copy() {
 	GTID_Set cp;
 	cp.map = map;
+	cp.last_server_id = last_server_id;
 	return cp;
 }
 
 // Clears all GTID set entries.
 void GTID_Set::clear() {
 	map.clear();
+	last_server_id.clear();
 }
 
 // Adds a new trxid interval for a given UUID. Returns true if the set was modified, false otherwise.
@@ -275,6 +289,18 @@ const bool GTID_Set::has_gtid(const std::string& uuid, const trxid_t trxid) {
 	return false;
 }
 
+void GTID_Set::set_server_id(const std::string& id, uint32_t server_id) {
+	last_server_id[id] = server_id;
+}
+
+uint32_t GTID_Set::get_server_id(const std::string& id) const {
+	auto it = last_server_id.find(id);
+	if (it == last_server_id.end()) {
+		return 0;
+	}
+	return it->second;
+}
+
 // Yields a string representation for a GTID set.
 const std::string GTID_Set::to_string(void) {
 	std::stringstream out;
@@ -284,10 +310,12 @@ const std::string GTID_Set::to_string(void) {
 			out << ",";
 		}
 		std::string uuid = it->first;
-		uuid.insert(8,"-");
-		uuid.insert(13,"-");
-		uuid.insert(18,"-");
-		uuid.insert(23,"-");
+		if (uuid.size() == 32) {
+			uuid.insert(8,"-");
+			uuid.insert(13,"-");
+			uuid.insert(18,"-");
+			uuid.insert(23,"-");
+		}
 		out << uuid;
 		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
 			out << ":" << itr->to_string();
@@ -296,4 +324,491 @@ const std::string GTID_Set::to_string(void) {
 	}
 
 	return out.str();
+}
+
+const std::string GTID_Set::to_display_string(void) {
+	std::stringstream out;
+	bool first = true;
+	for (auto it = map.begin(); it != map.end(); ++it) {
+		if (!first) {
+			out << ",";
+		}
+		std::string uuid = it->first;
+		if (uuid.size() == 32) {
+			uuid.insert(8,"-");
+			uuid.insert(13,"-");
+			uuid.insert(18,"-");
+			uuid.insert(23,"-");
+			out << uuid;
+			for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
+				out << ":" << itr->to_string();
+			}
+		} else {
+			// The native MariaDB `domain-server-seq` form is used only when it is
+			// exact: one interval starting at 1 and a known server id. The binlog
+			// reader sends no server id, and a gap must not be hidden behind the
+			// highest sequence, so otherwise the intervals are listed as for
+			// MySQL, e.g. `0:1-77:80` (issue #6336).
+			const auto server_id = last_server_id.find(uuid);
+			if (it->second.size() == 1 && it->second.front().start == 1 &&
+					server_id != last_server_id.end()) {
+				out << uuid << "-" << server_id->second << "-" << it->second.front().end;
+			} else {
+				out << uuid;
+				for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
+					out << ":" << itr->to_string();
+				}
+			}
+		}
+		first = false;
+	}
+
+	return out.str();
+}
+
+static bool parse_uint_no_leading_zeros(const char*& p, unsigned long long& out) {
+	if (p == nullptr || !gtid_is_digit(static_cast<unsigned char>(*p))) {
+		return false;
+	}
+	if (*p == '0' && gtid_is_digit(static_cast<unsigned char>(p[1]))) {
+		return false;
+	}
+
+	errno = 0;
+	char* end = nullptr;
+	unsigned long long parsed = strtoull(p, &end, 10);
+	if (end == p || errno == ERANGE) {
+		return false;
+	}
+
+	out = parsed;
+	p = end;
+	return true;
+}
+
+static bool normalize_mysql_uuid(const char* start, size_t len, std::string& id) {
+	if (start == nullptr) {
+		return false;
+	}
+
+	std::string uuid;
+	uuid.reserve(32);
+	for (size_t i = 0; i < len; i++) {
+		unsigned char c = static_cast<unsigned char>(start[i]);
+		if (c == '-') {
+			continue;
+		}
+		if (!gtid_is_hex_digit(c)) {
+			return false;
+		}
+		if (c >= 'A' && c <= 'F') {
+			c = static_cast<unsigned char>(c - 'A' + 'a');
+		}
+		uuid.push_back(static_cast<char>(c));
+	}
+	if (uuid.size() != 32) {
+		return false;
+	}
+
+	id = std::move(uuid);
+	return true;
+}
+
+static bool parse_mysql_gtid(const char* s, ParsedGTID& out) {
+	const char* colon = strrchr(s, ':');
+	if (colon == nullptr || colon == s || colon[1] == '\0') {
+		return false;
+	}
+
+	ParsedGTID tmp;
+	if (!normalize_mysql_uuid(s, static_cast<size_t>(colon - s), tmp.id)) {
+		return false;
+	}
+
+	if (!gtid_is_digit(static_cast<unsigned char>(colon[1]))) {
+		return false;
+	}
+
+	errno = 0;
+	char* end = nullptr;
+	unsigned long long parsed = strtoull(colon + 1, &end, 10);
+	if (errno == ERANGE || end == colon + 1 || *end != '\0' || parsed == 0 ||
+			parsed > static_cast<unsigned long long>(LLONG_MAX)) {
+		return false;
+	}
+
+	tmp.trxid = static_cast<trxid_t>(parsed);
+	tmp.server_id = 0;
+	tmp.mariadb = false;
+	out = tmp;
+	return true;
+}
+
+static bool parse_mariadb_gtid(const char* s, ParsedGTID& out) {
+	const char* p = s;
+	const char* domain_start = p;
+	unsigned long long domain = 0;
+	unsigned long long server = 0;
+	unsigned long long seq = 0;
+
+	if (!parse_uint_no_leading_zeros(p, domain)) {
+		return false;
+	}
+	if (!is_canonical_mariadb_domain_id(domain_start,
+	                                    static_cast<size_t>(p - domain_start))) {
+		return false;
+	}
+	if (*p != '-') {
+		return false;
+	}
+	p++;
+	if (!parse_uint_no_leading_zeros(p, server)) {
+		return false;
+	}
+	if (*p != '-') {
+		return false;
+	}
+	p++;
+	if (!parse_uint_no_leading_zeros(p, seq)) {
+		return false;
+	}
+	if (*p != '\0' || seq == 0 || server > UINT32_MAX ||
+			seq > static_cast<unsigned long long>(LLONG_MAX)) {
+		return false;
+	}
+
+	ParsedGTID tmp;
+	tmp.id = std::to_string(domain);
+	tmp.trxid = static_cast<trxid_t>(seq);
+	tmp.server_id = static_cast<uint32_t>(server);
+	tmp.mariadb = true;
+	out = tmp;
+	return true;
+}
+
+bool parse_gtid(const char* s, ParsedGTID* out) {
+	if (s == nullptr || out == nullptr) {
+		return false;
+	}
+
+	ParsedGTID tmp;
+	if (strchr(s, ':') != nullptr) {
+		if (!parse_mysql_gtid(s, tmp)) {
+			return false;
+		}
+	} else if (!parse_mariadb_gtid(s, tmp)) {
+		return false;
+	}
+
+	*out = tmp;
+	return true;
+}
+
+bool parse_gtid(const char* s, size_t len, ParsedGTID* out) {
+	if (s == nullptr || out == nullptr || len == 0) {
+		return false;
+	}
+
+	std::string bounded(s, len);
+	if (bounded.find('\0') != std::string::npos) {
+		return false;
+	}
+	return parse_gtid(bounded.c_str(), out);
+}
+
+// Parses one UUID block of a MySQL GTID SET: the first ':' component must
+// normalize to a 32-hex UUID, every later component must be a strictly valid
+// interval. Returns the normalized UUID and the intervals, taking the highest
+// seen interval end; interval ends are tracked globally for the caller.
+static bool parse_mysql_gtid_set_block(const char* block, size_t block_len,
+                                       std::string* uuid,
+                                       std::vector<TrxId_Interval>* intervals,
+                                       uint64_t* max_end) {
+	if (block == nullptr || intervals == nullptr || uuid == nullptr ||
+			max_end == nullptr) {
+		return false;
+	}
+	std::string tmp(block, block_len);
+	if (tmp.find('\0') != std::string::npos) {
+		return false;
+	}
+
+	const char* colon = static_cast<const char*>(memchr(tmp.c_str(), ':', tmp.size()));
+	if (colon == nullptr) {
+		return false;
+	}
+	const size_t uuid_len = colon - tmp.c_str();
+	if (!normalize_mysql_uuid(tmp.c_str(), uuid_len, *uuid)) {
+		return false;
+	}
+
+	const char* p = colon + 1;
+	const char* end = tmp.c_str() + tmp.size();
+	while (p < end) {
+		const char* sep = static_cast<const char*>(memchr(p, ':', end - p));
+		const size_t component_len = (sep != nullptr ? sep : end) - p;
+		std::string component(p, component_len);
+		TrxId_Interval iv(trxid_t(0));
+		if (!TrxId_Interval::parse(component.c_str(), &iv)) {
+			return false;
+		}
+		if (iv.start == 0 || iv.end == 0 || iv.end < iv.start) {
+			return false;
+		}
+		intervals->push_back(iv);
+		if (static_cast<uint64_t>(iv.end) > *max_end) {
+			*max_end = static_cast<uint64_t>(iv.end);
+		}
+		p = (sep != nullptr ? sep + 1 : end);
+	}
+	return !intervals->empty();
+}
+
+static inline bool gtid_set_is_space(char c) {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+bool parse_gtid_set(const char* s, size_t len,
+                    std::map<std::string, std::vector<TrxId_Interval>>* out) {
+	if (s == nullptr || out == nullptr || len == 0 ||
+			len > PARSE_GTID_SET_MAX_LEN) {
+		return false;
+	}
+	// OWN_GTID values reach here straight from wire tracking: reject anything
+	// carrying an embedded NUL instead of truncating the set silently.
+	if (memchr(s, '\0', len) != nullptr) {
+		return false;
+	}
+
+	std::map<std::string, std::vector<TrxId_Interval>> parsed;
+	std::set<std::string> seen_uuids;
+	// MySQL's Gtid_set::to_string separates UUID blocks with ",\n", and a
+	// min_gtid annotation echoing that value arrives as ", " because the
+	// query comment parser folds the newline into a space (remove_spaces()).
+	// A separator is therefore ',' with optional whitespace around it, or a
+	// bare newline; whitespace around the whole value is ignored (#6415).
+	// Whitespace anywhere else, and an empty block ('', ',,', a leading or
+	// trailing ','), is rejected: the server never emits those.
+	size_t i = 0;
+	while (i < len && gtid_set_is_space(s[i])) {
+		++i;
+	}
+	while (i < len) {
+		const size_t block_start = i;
+		while (i < len && s[i] != ',' && !gtid_set_is_space(s[i])) {
+			++i;
+		}
+		const size_t block_len = i - block_start;
+		if (block_len == 0) {
+			return false;
+		}
+		std::string uuid;
+		std::vector<TrxId_Interval> intervals;
+		uint64_t max_end = 0;
+		if (!parse_mysql_gtid_set_block(s + block_start, block_len, &uuid,
+				&intervals, &max_end)) {
+			return false;
+		}
+		if (seen_uuids.find(uuid) != seen_uuids.end()) {
+			return false;
+		}
+		seen_uuids.insert(uuid);
+		parsed.emplace(std::move(uuid), std::move(intervals));
+
+		bool newline = false;
+		while (i < len && gtid_set_is_space(s[i])) {
+			newline |= (s[i] == '\n');
+			++i;
+		}
+		if (i == len) {
+			break;
+		}
+		if (s[i] == ',') {
+			++i;
+			while (i < len && gtid_set_is_space(s[i])) {
+				++i;
+			}
+			if (i == len) {
+				return false;
+			}
+		} else if (!newline) {
+			// Two blocks separated only by blanks, or a blank inside a block.
+			return false;
+		}
+	}
+
+	if (parsed.empty()) {
+		return false;
+	}
+	*out = std::move(parsed);
+	return true;
+}
+
+bool parse_gtid_set_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
+                                uint64_t* trxid) {
+	if (gtid == nullptr || id_buf == nullptr || id_buf_len == 0 || trxid == nullptr) {
+		return false;
+	}
+
+	// MariaDB's tracked 'last_gtid' (and every single-GTID value, MySQL
+	// included) is not a set: the strict parser owns it. Teaching the set
+	// grammar to routing without this branch would regress MariaDB causal
+	// reads ('0-33-583' has no ':' and the block parser would reject it).
+	ParsedGTID parsed;
+	if (parse_gtid(gtid, &parsed) && parsed.id.size() < id_buf_len) {
+		memcpy(id_buf, parsed.id.c_str(), parsed.id.size() + 1);
+		*trxid = static_cast<uint64_t>(parsed.trxid);
+		return true;
+	}
+
+	std::map<std::string, std::vector<TrxId_Interval>> parsed_set;
+	if (!parse_gtid_set(gtid, strlen(gtid), &parsed_set)) {
+		return false;
+	}
+	if (parsed_set.size() != 1) {
+		// More than one UUID reaches routing only through a manual
+		// gtid_next/@@session.gtid_next lists: the hostgroup filter accepts a
+		// single (uuid, trxid), so honouring the first block would silently
+		// drop the constraint on the others. Fail closed instead (#6415).
+		return false;
+	}
+
+	// Route on the highest trxid of the set: the gaps and lower intervals are
+	// not checked one by one. Intentional and final (#6415): see the
+	// declaration in proxysql_gtid.h for why full-set containment is not done.
+	const auto& entry = *parsed_set.begin();
+	uint64_t max_end = 0;
+	for (const auto& iv : entry.second) {
+		const uint64_t end = static_cast<uint64_t>(iv.end);
+		if (end > max_end) {
+			max_end = end;
+		}
+	}
+	if (max_end == 0 || entry.first.size() >= id_buf_len) {
+		return false;
+	}
+	memcpy(id_buf, entry.first.c_str(), entry.first.size() + 1);
+	*trxid = max_end;
+	return true;
+}
+
+bool parse_gtid_for_routing(const char* gtid, char* id_buf, size_t id_buf_len,
+                            uint64_t* trxid) {
+	if (gtid == nullptr || id_buf == nullptr || id_buf_len == 0 || trxid == nullptr) {
+		return false;
+	}
+
+	ParsedGTID parsed;
+	if (!parse_gtid(gtid, &parsed) || parsed.id.size() >= id_buf_len) {
+		return false;
+	}
+
+	memcpy(id_buf, parsed.id.c_str(), parsed.id.size() + 1);
+	*trxid = static_cast<uint64_t>(parsed.trxid);
+	return true;
+}
+
+bool reduce_gtid_set_to_highest(const char* set, size_t set_len,
+                                char* buf, size_t buf_len) {
+	if (set == nullptr || buf == nullptr || buf_len == 0) {
+		return false;
+	}
+	std::map<std::string, std::vector<TrxId_Interval>> parsed;
+	if (!parse_gtid_set(set, set_len, &parsed) || parsed.size() != 1) {
+		return false;
+	}
+	const auto& entry = *parsed.begin();
+	uint64_t max_end = 0;
+	for (const auto& iv : entry.second) {
+		max_end = std::max(max_end, static_cast<uint64_t>(iv.end));
+	}
+	const std::string& u = entry.first; // 32 lowercase hex digits
+	if (max_end == 0 || u.size() != 32) {
+		return false;
+	}
+	const int n = snprintf(buf, buf_len, "%.8s-%.4s-%.4s-%.4s-%.12s:%llu",
+		u.c_str(), u.c_str() + 8, u.c_str() + 12, u.c_str() + 16, u.c_str() + 20,
+		static_cast<unsigned long long>(max_end));
+	if (n < 0 || static_cast<size_t>(n) >= buf_len) {
+		buf[0] = '\0';
+		return false;
+	}
+	return true;
+}
+
+bool select_session_gtid(
+	const char* session_track_gtids, size_t gtids_len,
+	const char* last_gtid, size_t last_gtid_len,
+	char* buf, size_t buf_len) {
+	if (buf == nullptr || buf_len == 0) {
+		return false;
+	}
+
+	const char* selected = nullptr;
+	size_t selected_len = 0;
+	if (gtids_len > 0) {
+		selected = session_track_gtids;
+		selected_len = gtids_len;
+	} else {
+		// MariaDB reports the GTID of the session's own last transaction as the
+		// tracked system variable 'last_gtid', the equivalent of MySQL's OWN_GTID.
+		// It is a single GTID: a list can only be a global position, which would
+		// break causal routing (issue #6335).
+		selected = last_gtid;
+		selected_len = last_gtid_len;
+		if (selected != nullptr && memchr(selected, ',', selected_len) != nullptr) {
+			return false;
+		}
+	}
+
+	if (selected == nullptr || selected_len == 0) {
+		return false;
+	}
+	// A value that does not fit the tracking buffer must not leave the
+	// previous GTID in place: the session would keep routing causal reads on
+	// a GTID older than its last write (#6465). Routing only uses the highest
+	// transaction of a single-UUID set (#6415), so store exactly that; a value
+	// that cannot be reduced is replaced by SESSION_GTID_UNTRACKABLE, which
+	// every GTID parser rejects, so routing fails closed on it.
+	char reduced[SESSION_GTID_REDUCED_MAX_LEN];
+	if (selected_len >= buf_len) {
+		if (reduce_gtid_set_to_highest(selected, selected_len, reduced, sizeof(reduced))
+				&& strlen(reduced) < buf_len) {
+			selected = reduced;
+		} else {
+			selected = SESSION_GTID_UNTRACKABLE;
+		}
+		selected_len = strlen(selected);
+		if (selected_len >= buf_len) {
+			// Only reachable with a buffer shorter than the marker.
+			return false;
+		}
+	}
+	if (strncmp(selected, buf, selected_len) == 0 && buf[selected_len] == '\0') {
+		return false;
+	}
+
+	memcpy(buf, selected, selected_len);
+	buf[selected_len] = '\0';
+	return true;
+}
+
+bool is_canonical_mariadb_domain_id(const char* id, size_t len) {
+	if (id == nullptr || len == 0) {
+		return false;
+	}
+	if (id[0] == '0') {
+		return len == 1;
+	}
+	unsigned long long value = 0;
+	for (size_t i = 0; i < len; i++) {
+		if (!gtid_is_digit(static_cast<unsigned char>(id[i]))) {
+			return false;
+		}
+		value = value * 10 + static_cast<unsigned long long>(id[i] - '0');
+		if (value > UINT32_MAX) {
+			return false;
+		}
+	}
+	return true;
 }

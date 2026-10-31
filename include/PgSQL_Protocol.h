@@ -33,8 +33,16 @@
 #define AUTH_PAM        111
 #define AUTH_SCRAM_SHA_256      112
 
-#define PG_PKT_STARTUP_V2  0x20000
 #define PG_PKT_STARTUP     0x30000
+
+/* Newest protocol version we implement, in the wire's major<<16|minor form. PostgreSQL puts this
+ * whole number in NegotiateProtocolVersion rather than the minor alone, and libpq compares it as a
+ * whole number, so it has to be sent that way. */
+#define PG_PROTOCOL_LATEST 0x30000
+
+/* A startup packet asking for a protocol version we do not implement, version 2 included. Not a
+ * wire value: it tells the startup handler to name the version in an error message. */
+#define PG_PKT_STARTUP_UNSUPPORTED 0xFFFFFFFF
 #define PG_PKT_CANCEL      80877102
 #define PG_PKT_SSLREQ      80877103
 #define PG_PKT_GSSENCREQ   80877104
@@ -53,6 +61,12 @@ class ProxySQL_Admin;
 struct PgCredentials;
 struct ScramState;
 
+// Auth-method selection: map the floor (pgsql-authentication_method;
+// 1=cleartext, 2=md5, 3=scram) + the user's stored secret type (a PasswordType, as int) to the
+// AUTHENTICATION_METHOD to challenge with (as int); *reject=true when the stored secret is too weak
+// for the floor (caller runs the generic mock-fail). Defined in PgSQL_Protocol.cpp.
+int pgsql_reconcile_auth_method(int floor, int stored, bool* reject);
+
 enum class EXECUTION_STATE {
 	FAILED = 0,
 	SUCCESSFUL,
@@ -63,6 +77,9 @@ struct pgsql_hdr {
 	uint32_t type;
 	uint32_t len;
 	PtrSize_t data;
+	/* Protocol version the client asked for, on a startup packet only. Zero on every other
+	 * packet. Kept so the startup handler can answer a version it does not speak. */
+	uint32_t version;
 };
 
 class PG_pkt 
@@ -218,6 +235,14 @@ public:
 	void write_AuthenticationRequest(uint32_t auth_type, const uint8_t* data, int len) {
 		write_generic('R', "ib", auth_type, data, len);
 	}
+	void write_NegotiateProtocolVersion(uint32_t latest_version, const std::vector<std::string>& unsupported_options) {
+		start_packet('v');
+		put_uint32(latest_version);
+		put_uint32(unsupported_options.size());
+		for (const std::string& opt : unsupported_options)
+			put_string(opt.c_str());
+		finish_packet();
+	}
 	void write_ReadyForQuery(char txn_state = 'I') {
 		write_generic('Z', "c", txn_state);
 	}
@@ -304,6 +329,15 @@ struct ColumnMetadata {
 #define PGSQL_QUERY_RESULT_EMPTY	0x10
 #define PGSQL_QUERY_RESULT_COPY_OUT	0x20
 #define PGSQL_QUERY_RESULT_NOTICE	0x40
+// Set for a bare per-step acknowledgement that carries no other content:
+// ParseComplete ('1'), NoData ('n'), PortalSuspended ('s'). These terminate a
+// Flush-terminated native stmt-step (mid-frame extended query, e.g. a single
+// PQsendQueryParams round trip) on their own, with no 'T'/'D'/'C'/'Z' message
+// alongside them to otherwise mark the result non-empty. Without this flag,
+// PgSQL_Result_to_PgSQL_wire() sees result_packet_type == PGSQL_QUERY_RESULT_NO_DATA
+// and mistakes a successful bare-ack step for "no result, must be a connection
+// error", tripping its assert.
+#define PGSQL_QUERY_RESULT_ACK	0x80
 
 class PgSQL_Query_Result {
 public:
@@ -449,6 +483,27 @@ public:
 	 */
 	unsigned int add_ready_status(PGTransactionStatusType txn_status);
 
+	/**
+	 * @brief Stream a raw native backend message into the query result.
+	 *
+	 * Native backend protocol path (Task 1.6c / Phase 2). The backend→frontend
+	 * messages 'T'/'D'/'C'/'I'/'E'/'N'/'S'/'Z'/'A' (and COPY) are byte-for-byte
+	 * the same wire messages ProxySQL forwards to the client, so this method
+	 * reconstructs the raw message (type byte + big-endian int32 length + payload)
+	 * and appends it directly to the result buffer — no intermediate PGresult.
+	 *
+	 * It also updates the result flags/counters and the owning connection's
+	 * side-effect state (error_info, native_txn_status, native_params) per the
+	 * message type, mirroring the libpq add_* helpers.
+	 *
+	 * @param type        The backend message type byte.
+	 * @param payload     The message body (everything AFTER the 4-byte length).
+	 * @param payload_len The length of @p payload in bytes.
+	 *
+	 * @return The number of bytes appended to the query result.
+	 */
+	unsigned int add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len);
+
     /**
      * @brief Adds the start of a COPY OUT response to the packet.
      *
@@ -581,6 +636,8 @@ public:
 	inline unsigned long long get_num_rows() const { return num_rows; }
 	inline unsigned long long get_affected_rows() const { return affected_rows; }
 	inline unsigned int get_num_fields() const { return num_fields; }
+	// More than one CommandComplete/EmptyQueryResponse: a multi-statement query's replies.
+	inline bool has_multiple_results() const { return native_command_count > 1; }
 	inline unsigned long long get_resultset_size() const { return resultset_size; }
 	inline uint8_t get_result_packet_type() const { return result_packet_type; }
 
@@ -651,12 +708,18 @@ private:
 	unsigned long long pkt_count;
 	unsigned long long affected_rows;
 	unsigned int num_fields;
+	unsigned int native_command_count = 0;
 	unsigned int buffer_used;
 	unsigned char* buffer;
 	PgSQL_Protocol* proto;
 	PgSQL_Data_Stream* myds;
 	PgSQL_Connection* conn;
 	bool transfer_started;
+	// Native path only: true once the CURRENT statement has produced a RowDescription
+	// or DataRow, cleared when it ends ('C'/'I'/'E'/'Z'). A native simple query keeps
+	// one result for the whole multi-statement batch, so the result-wide TUPLE flag
+	// cannot tell whether the 'C' being parsed belongs to a row-returning statement.
+	bool stmt_had_tuple;
 	uint8_t result_packet_type;
 
 	friend class PgSQL_Protocol;
@@ -751,9 +814,11 @@ public:
 	 * messages and a ready-for-query message.
 	 *
 	 * @note This function updates the output buffer with the welcome message
-	 *       data. It also sets the session state to `STATE_CLIENT_AUTH_OK`.
+	 *       data. The caller updates the session state after a successful return.
+	 * @return true when the complete message was queued, false if generating the
+	 *         cancel key failed.
 	 */
-	void welcome_client();
+	bool welcome_client();
 
 	/**
 	 * @brief Generates an error packet for the PostgreSQL protocol.
@@ -772,12 +837,18 @@ public:
 	 * @param track A boolean flag to control whether to track the error count.
 	 * @param _ptr A pointer to a `PtrSize_t` structure (if `send` is false)
 	 *            where the generated packet data will be stored.
+	 * @param txn_state The transaction status reported by the ReadyForQuery
+	 *            that follows the error ('I' or 'E'). Inside a transaction
+	 *            block an error leaves the transaction aborted, so a session
+	 *            in one must pass 'E'; see
+	 *            PgSQL_Session::txn_state_for_local_error().
 	 *
 	 * @note This function updates the output buffer with the generated error
 	 *       packet. It also updates the data stream state to `STATE_ERR` if
 	 *       necessary.
 	 */
-	void generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track = false, PtrSize_t* _ptr = NULL);
+	void generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track = false, PtrSize_t* _ptr = NULL,
+		char txn_state = 'I');
 
 	/**
 	 * @brief Generates an "OK" packet for the PostgreSQL protocol.
@@ -1083,10 +1154,8 @@ public:
 	 * @return The number of bytes copied to the `PgSQL_Query_Result` object.
 	 *
 	 */
-	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
+	unsigned int copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result,
 		const PGresult* result, uint8_t stmt_type);
-
-private:
 
 	/**
 	 * @brief Extracts the header information from a PostgreSQL packet.
@@ -1104,8 +1173,18 @@ private:
 	 *
 	 * @note This function performs basic validation on the packet length and
 	 *       header fields to ensure that the packet is valid.
+	 *
+	 * Public (not private, unlike most of this class's parsing helpers):
+	 * any plugin session handler that serves the PG protocol -- core's own
+	 * admin_session_handler, and plugins/duckdb's duckdb_session_handler --
+	 * needs this to extract the SQL text from a simple-query packet before
+	 * core's dispatch has populated anything richer (e.g. CurrentQuery) to
+	 * read it from instead. It is a stateless parse helper guarding no
+	 * class invariant, so exposing it costs no encapsulation.
 	 */
 	bool get_header(unsigned char* pkt, unsigned int len, pgsql_hdr* hdr);
+
+private:
 
 	/**
 	 * @brief Loads the connection parameters from a PostgreSQL startup packet.

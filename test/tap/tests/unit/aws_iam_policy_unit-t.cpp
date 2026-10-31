@@ -1,0 +1,233 @@
+#include "tap.h"
+#include "test_globals.h"
+#include "test_init.h"
+
+#include "MySQL_Authentication.hpp"
+#include "MySQL_Backend_Auth.h"
+
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <unistd.h>
+
+extern MySQL_Authentication *GloMyAuth;
+
+static bool add_backend_user(const char *username, const char *password,
+	const char *attributes) {
+	std::string owned_username(username ? username : "");
+	std::string owned_password(password ? password : "");
+	std::string empty_attributes = "";
+	std::string owned_attributes(attributes ? attributes : "");
+	return GloMyAuth->add(
+		&owned_username[0], &owned_password[0], USERNAME_BACKEND,
+		false, 0, &empty_attributes[0], false, false, false, 100,
+		&owned_attributes[0], &empty_attributes[0]);
+}
+
+static bool add_backend_user_capturing_stderr(const char *username, const char *password,
+	const char *attributes, std::string& log) {
+	FILE *captured = tmpfile();
+	if (captured == nullptr) {
+		return false;
+	}
+
+	fflush(stderr);
+	const int saved_stderr = dup(STDERR_FILENO);
+	if (saved_stderr < 0 || dup2(fileno(captured), STDERR_FILENO) < 0) {
+		if (saved_stderr >= 0) {
+			close(saved_stderr);
+		}
+		fclose(captured);
+		return false;
+	}
+
+	const bool added = add_backend_user(username, password, attributes);
+	fflush(stderr);
+	dup2(saved_stderr, STDERR_FILENO);
+	close(saved_stderr);
+
+	char buffer[256];
+	rewind(captured);
+	while (fgets(buffer, sizeof(buffer), captured) != nullptr) {
+		log += buffer;
+	}
+	fclose(captured);
+	return added;
+}
+
+static void test_password_defaults() {
+	ok(parse_mysql_backend_auth_policy("db_user", "", false).type == MySQLBackendAuthType::PASSWORD,
+		"empty attributes use password authentication");
+	ok(parse_mysql_backend_auth_policy("db_user", "{}", false).type == MySQLBackendAuthType::PASSWORD,
+		"empty attributes object uses password authentication");
+}
+
+static void test_aws_iam_policy() {
+	const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
+		"iam_user", "{\"backend_auth\":{\"type\":\"aws_iam\"}}", false);
+	ok(policy.type == MySQLBackendAuthType::AWS_IAM,
+		"aws_iam backend_auth type selects IAM authentication");
+	ok(policy.database_user == "iam_user",
+		"policy preserves the mapped backend username");
+	ok(!policy.ignored_password,
+		"IAM policy with an empty password does not mark a password ignored");
+
+	const MySQLBackendAuthPolicy with_password = parse_mysql_backend_auth_policy(
+		"iam_user", "{\"backend_auth\":{\"type\":\"aws_iam\"}}", true);
+	ok(with_password.type == MySQLBackendAuthType::AWS_IAM && with_password.ignored_password,
+		"IAM policy marks a configured backend password as ignored");
+}
+
+static void test_invalid_attribute_shapes() {
+	// 'mysql_users.attributes' only has to satisfy JSON_VALID(attributes) OR
+	// attributes='', so valid-but-non-object values ('"value"', '[]') are
+	// storable and were harmless before this policy existed. They must keep
+	// working after an upgrade, so they select plain password authentication.
+	const MySQLBackendAuthPolicy scalar = parse_mysql_backend_auth_policy("db_user", "\"value\"", false);
+	ok(scalar.type == MySQLBackendAuthType::PASSWORD && scalar.failure_code.empty(),
+		"scalar attributes fall back to password authentication");
+	const MySQLBackendAuthPolicy array = parse_mysql_backend_auth_policy("db_user", "[]", false);
+	ok(array.type == MySQLBackendAuthType::PASSWORD && array.failure_code.empty(),
+		"array attributes fall back to password authentication");
+	// A non-object value that actually mentions backend_auth is still rejected:
+	// it cannot silently degrade into password authentication.
+	const MySQLBackendAuthPolicy scalar_iam = parse_mysql_backend_auth_policy(
+		"db_user", "\"backend_auth\"", false);
+	ok(scalar_iam.type == MySQLBackendAuthType::INVALID && scalar_iam.failure_code == "attributes_not_object",
+		"non-object attributes mentioning backend_auth are rejected");
+	const MySQLBackendAuthPolicy malformed = parse_mysql_backend_auth_policy(
+		"db_user", "{\"backend_auth\":FAKE_AWS_SECRET}", false);
+	ok(malformed.type == MySQLBackendAuthType::INVALID && malformed.failure_code == "attributes_not_object",
+		"malformed attributes are rejected without exposing their contents");
+}
+
+static void test_invalid_backend_auth_shapes() {
+	const char *invalid_values[] = { "\"aws_iam\"", "[]", "null" };
+	for (const char *value : invalid_values) {
+		const std::string attributes = std::string("{\"backend_auth\":") + value + "}";
+		const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy("db_user", attributes, false);
+		ok(policy.type == MySQLBackendAuthType::INVALID && policy.failure_code == "backend_auth_not_object",
+			"non-object backend_auth is rejected");
+	}
+}
+
+static void test_invalid_type_values() {
+	const MySQLBackendAuthPolicy missing = parse_mysql_backend_auth_policy("db_user", "{\"backend_auth\":{}}", false);
+	ok(missing.type == MySQLBackendAuthType::INVALID && missing.failure_code == "type_missing",
+		"backend_auth without type is rejected");
+	const MySQLBackendAuthPolicy non_string = parse_mysql_backend_auth_policy(
+		"db_user", "{\"backend_auth\":{\"type\":1}}", false);
+	ok(non_string.type == MySQLBackendAuthType::INVALID && non_string.failure_code == "type_not_string",
+		"non-string backend_auth type is rejected");
+	const MySQLBackendAuthPolicy unknown = parse_mysql_backend_auth_policy(
+		"db_user", "{\"backend_auth\":{\"type\":\"kerberos\"}}", false);
+	ok(unknown.type == MySQLBackendAuthType::INVALID && unknown.failure_code == "type_unsupported",
+		"unknown backend_auth type is rejected");
+	const MySQLBackendAuthPolicy differently_cased = parse_mysql_backend_auth_policy(
+		"db_user", "{\"backend_auth\":{\"type\":\"AWS_IAM\"}}", false);
+	ok(differently_cased.type == MySQLBackendAuthType::INVALID && differently_cased.failure_code == "type_unsupported",
+		"differently-cased backend_auth type is rejected");
+}
+
+static void test_diagnostics_do_not_leak_attributes() {
+	const MySQLBackendAuthPolicy policy = parse_mysql_backend_auth_policy(
+		"db_user", "{\"backend_auth\":FAKE_AWS_SECRET,\"token\":\"FAKE_SESSION_TOKEN\"}", false);
+	ok(policy.failure_code.find("FAKE_AWS_SECRET") == std::string::npos,
+		"diagnostics do not expose fake AWS secrets");
+	ok(policy.failure_code.find("FAKE_SESSION_TOKEN") == std::string::npos,
+		"diagnostics do not expose fake session tokens");
+	ok(policy.failure_code.find("backend_auth") == std::string::npos,
+		"diagnostics do not expose raw malformed JSON");
+}
+
+static void test_resolver_uses_backend_account_only() {
+	ok(add_backend_user("iam_backend", "unused-password",
+		"{\"backend_auth\":{\"type\":\"aws_iam\"}}"),
+		"backend IAM user is added to the real authentication store");
+	const MySQLBackendAuthPolicy policy = resolve_mysql_backend_auth_policy(*GloMyAuth, "iam_backend");
+	ok(policy.type == MySQLBackendAuthType::AWS_IAM,
+		"resolver reads IAM policy from the backend account");
+	ok(policy.database_user == "iam_backend" && policy.ignored_password,
+		"resolver preserves username and ignores the backend password for IAM");
+}
+
+static void test_resolver_falls_back_to_password_for_rowless_backend_account() {
+	// A '{frontend=1, backend=0}' row is the documented way to express "this
+	// user authenticates to ProxySQL". Before the backend_auth policy existed
+	// this path never consulted 'creds_backends' and connected with the
+	// credentials captured at frontend authentication, so the absence of a
+	// backend row must select PASSWORD, not INVALID. Reporting INVALID here
+	// made every query fail with ERROR 9002 for ordinary split-row users.
+	const MySQLBackendAuthPolicy missing = resolve_mysql_backend_auth_policy(*GloMyAuth, "missing_backend");
+	ok(missing.type == MySQLBackendAuthType::PASSWORD && missing.failure_code.empty(),
+		"resolver selects plain password authentication for a user without a backend row");
+
+	ok(add_backend_user("inactive_backend", "password", ""),
+		"inactive backend fixture is added");
+	GloMyAuth->set_all_inactive(USERNAME_BACKEND);
+	GloMyAuth->remove_inactives(USERNAME_BACKEND);
+	const MySQLBackendAuthPolicy inactive = resolve_mysql_backend_auth_policy(*GloMyAuth, "inactive_backend");
+	ok(inactive.type == MySQLBackendAuthType::PASSWORD && inactive.failure_code.empty(),
+		"resolver selects plain password authentication after runtime removal");
+}
+
+// Issue #6413: a malformed backend_auth stays fail-closed, but is reported
+// when the row is loaded rather than only at the first failing query.
+static void test_malformed_backend_auth_is_reported_at_load() {
+	std::string log;
+	ok(add_backend_user_capturing_stderr("unsupported_backend_auth", "pw",
+		"{\"backend_auth\":{\"type\":\"kerberos\"}}", log) &&
+		log.find("mysql_users backend entry for 'unsupported_backend_auth' has an invalid 'backend_auth'") != std::string::npos &&
+		log.find("type_unsupported") != std::string::npos,
+		"loading a backend row with an unsupported backend_auth type logs a warning naming the user");
+	log.clear();
+	ok(add_backend_user_capturing_stderr("plain_backend", "pw", "{\"foo\":1}", log) &&
+		log.find("invalid 'backend_auth'") == std::string::npos,
+		"loading a backend row without backend_auth logs no such warning");
+}
+
+static void test_resolver_rejects_malformed_loaded_backend_attributes() {
+	ok(add_backend_user("malformed_backend", "configured-password",
+		"{\"backend_auth\":FAKE_AWS_SECRET,\"token\":\"FAKE_SESSION_TOKEN\"}"),
+		"malformed backend user is loaded into the real authentication store");
+	const MySQLBackendAuthPolicy policy = resolve_mysql_backend_auth_policy(*GloMyAuth, "malformed_backend");
+	ok(policy.type == MySQLBackendAuthType::INVALID && policy.failure_code == "attributes_not_object",
+		"resolver fails closed when loaded backend attributes are malformed");
+}
+
+static void test_rejected_backend_policy_does_not_emit_iam_password_warning() {
+	ok(add_backend_user("normalized_backend", "configured-password", ""),
+		"backend user exists before its runtime attributes are updated");
+
+	std::string log;
+	ok(add_backend_user_capturing_stderr("normalized_backend", "configured-password",
+		"{\"backend_auth\":{\"type\":\"aws_iam\"},\"default-transaction_isolation\":1}", log),
+		"backend user reload with invalid default transaction isolation completes");
+	const MySQLBackendAuthPolicy policy = resolve_mysql_backend_auth_policy(*GloMyAuth, "normalized_backend");
+	ok(policy.type == MySQLBackendAuthType::INVALID && policy.failure_code == "attributes_not_object",
+		"post-validation backend policy is invalid");
+	ok(log.find("clear the unused backend password") == std::string::npos,
+		"invalid post-validation backend policy does not emit an IAM password warning");
+}
+
+int main() {
+	plan(34);
+	test_init_minimal();
+	test_init_auth();
+
+	test_password_defaults();
+	test_aws_iam_policy();
+	test_invalid_attribute_shapes();
+	test_invalid_backend_auth_shapes();
+	test_invalid_type_values();
+	test_diagnostics_do_not_leak_attributes();
+	test_resolver_uses_backend_account_only();
+	test_resolver_falls_back_to_password_for_rowless_backend_account();
+	test_malformed_backend_auth_is_reported_at_load();
+	test_resolver_rejects_malformed_loaded_backend_attributes();
+	test_rejected_backend_policy_does_not_emit_iam_password_warning();
+
+	test_cleanup_auth();
+	test_cleanup_minimal();
+	return exit_status();
+}

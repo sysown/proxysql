@@ -26,6 +26,7 @@ using json = nlohmann::json;
 
 #include "MCP_Thread.h"
 #include "Stats_Tool_Handler.h"
+#include "proxysql_admin_global_sql_lock.h"
 
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Logger *GloMyLogger;
@@ -347,37 +348,20 @@ std::string Stats_Tool_Handler::execute_admin_query(const char* sql, SQLite3_res
 	*resultset = NULL;
 	*cols = 0;
 
-	int lock_rc = pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
-	if (lock_rc != 0) {
-		return std::string("Failed to lock sql_query_global_mutex: ") + std::strerror(lock_rc);
-	}
-
-	if (refresh_before_query) {
-		GloAdmin->GenericRefreshStatistics(sql, static_cast<unsigned int>(strlen(sql)), false);
-	}
-
 	char* error = NULL;
-	int affected_rows = 0;
-	GloAdmin->admindb->execute_statement(sql, &error, cols, &affected_rows, resultset);
+	{
+		// Enter through the shared re-entrancy protocol: the stats refresh below
+		// opens release windows (stats___proxysql_servers_*) that must see and
+		// restore this thread's ownership, and a raw lock would leave this MCP
+		// thread with a stale depth afterwards.
+		proxysql_admin_global_sql_guard admin_lock(GloAdmin->sql_query_global_mutex);
 
-	int unlock_rc = pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
-	if (unlock_rc != 0) {
-		if (error) {
-			std::string err_msg(error);
-			free(error);
-			if (*resultset) {
-				delete *resultset;
-				*resultset = NULL;
-			}
-			return "Admin query error: " + err_msg +
-				"; also failed to unlock sql_query_global_mutex: " + std::string(std::strerror(unlock_rc));
+		if (refresh_before_query) {
+			GloAdmin->GenericRefreshStatistics(sql, static_cast<unsigned int>(strlen(sql)), false);
 		}
-		if (*resultset) {
-			delete *resultset;
-			*resultset = NULL;
-		}
-		*cols = 0;
-		return std::string("Failed to unlock sql_query_global_mutex: ") + std::strerror(unlock_rc);
+
+		int affected_rows = 0;
+		GloAdmin->admindb->execute_statement(sql, &error, cols, &affected_rows, resultset);
 	}
 
 	if (error) {
@@ -1495,15 +1479,15 @@ json Stats_Tool_Handler::handle_show_processlist(const json& arguments) {
 	processlist_config_t base_cfg {};
 #ifdef IDLE_THREADS
 	base_cfg.show_idle_session = is_pgsql
-		? GloPTH->variables.session_idle_show_processlist
-		: GloMTH->variables.session_idle_show_processlist;
+		? GloPTH->get_variable_int("session_idle_show_processlist")
+		: GloMTH->get_variable_int("session_idle_show_processlist");
 #endif
 	base_cfg.show_extended = is_pgsql
-		? GloPTH->variables.show_processlist_extended
-		: GloMTH->variables.show_processlist_extended;
+		? GloPTH->get_variable_int("show_processlist_extended")
+		: GloMTH->get_variable_int("show_processlist_extended");
 	base_cfg.max_query_length = is_pgsql
-		? GloPTH->variables.processlist_max_query_length
-		: GloMTH->variables.processlist_max_query_length;
+		? GloPTH->get_variable_int("processlist_max_query_length")
+		: GloMTH->get_variable_int("processlist_max_query_length");
 	base_cfg.query_options = query_opts;
 
 	/**

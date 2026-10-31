@@ -1,0 +1,225 @@
+# Vendored OpenSSL maintenance
+
+ProxySQL builds against the OpenSSL version pinned by its mandatory vendored
+OpenSSL 3.5 LTS source archive.
+The current pin is OpenSSL 3.5.7. OpenSSL 3.5 is supported upstream through
+8 April 2030; moving to another release series requires a separately reviewed
+design rather than an incidental dependency update.
+
+This document is the supported maintenance procedure for
+[issue #6115](https://github.com/sysown/proxysql/issues/6115).
+
+## Build selection and version checks
+
+`DEPS_MODE=auto` can restore a verified ProxySQL-produced build of that exact
+vendored dependency; `DEPS_MODE=source` uses source-origin outputs and
+`DEPS_MODE=prebuilt` requires a registered matching artifact. This preserves the
+fixed headers/static-library paths and version checks below. Follow
+[compiled dependency reuse](dependency-artifacts.md) to publish and register new
+artifacts after a pin, recipe, or toolchain change. The focused source recipe is
+`deps/libssl/build.mk`.
+
+Host- or environment-selected `OPENSSL_ROOT_DIR` is forbidden: do not export
+it or use it to select a system OpenSSL installation. CMake dependency builds
+must instead receive the fixed internal hint `OPENSSL_ROOT_DIR=$(SSL_PATH)`,
+which points only at ProxySQL's extracted vendored source tree. The CMake hint
+is required alongside the vendored include and exact static-library paths; it
+is not an operator override.
+
+The focused version test verifies three separate contracts for this pin:
+
+1. the OpenSSL header string is exactly `3.5.7`;
+2. the runtime version string has the prefix `OpenSSL 3.5.7`; and
+3. the runtime numeric version encodes major/minor/patch `3/5/7`.
+
+## Verify a checkout
+
+The OpenSSL source archive is vendored directly in git — no Git LFS, no
+extra fetch step. A plain `git clone` contains the full archive. Verify it
+before building:
+
+```bash
+deps/libssl/verify-source.bash
+```
+
+`verify-source.bash` rejects a checksum mismatch, invalid gzip data, unsafe
+paths, and an unexpected archive layout before the build extracts anything.
+
+## Authenticate a proposed patch release
+
+Start in a new temporary directory. Replace `3.5.x` only after selecting a
+published 3.5 LTS patch release from the
+[official OpenSSL downloads page](https://www.openssl.org/source/).
+
+```bash
+openssl_update_dir=$(mktemp -d)
+cd "$openssl_update_dir"
+new_version=3.5.x
+release_base="https://github.com/openssl/openssl/releases/download/openssl-${new_version}"
+
+curl -fLO "${release_base}/openssl-${new_version}.tar.gz"
+curl -fLO "${release_base}/openssl-${new_version}.tar.gz.asc"
+curl -fLO "${release_base}/openssl-${new_version}.tar.gz.sha256"
+curl -fL https://mirror.openssl-library.org/source/pubkeys.asc \
+  -o openssl-pubkeys.asc
+
+gpg --import openssl-pubkeys.asc
+gpg --fingerprint B146647E45A7B33947AB226B2A2C87D161692D40
+gpg --verify "openssl-${new_version}.tar.gz.asc" \
+  "openssl-${new_version}.tar.gz"
+sha256sum -c "openssl-${new_version}.tar.gz.sha256"
+```
+
+On macOS, use `shasum -a 256 -c` if `sha256sum` is unavailable. Before trusting
+the downloaded key, manually compare its full fingerprint with the current
+[OpenSSL artifact-signing policy](https://openssl-library.org/policies/general/artifact-signing-policy/).
+The fingerprint above is the current primary release-signing fingerprint; a
+future signing-policy change must be reviewed, not silently copied from the
+downloaded key bundle.
+
+Run the upstream tests in this separate temporary source tree before accepting
+the release:
+
+```bash
+tar -xzf "openssl-${new_version}.tar.gz"
+cd "openssl-${new_version}"
+./Configure
+make -j4
+make test
+```
+
+Do not reuse ProxySQL's extracted dependency tree for this test. The production
+dependency is configured with `no-shared no-tests -fPIC`, so a separate build is
+required to exercise the upstream test suite.
+
+## Update the repository atomically
+
+Make all version-dependent changes in one commit:
+
+1. Replace `deps/libssl/openssl-<old>.tar.gz` with the authenticated archive,
+   committed directly to git (no Git LFS — LFS bandwidth is metered and
+   was the reason LFS was removed).
+2. Replace the checksum file with `openssl-<new>.tar.gz.sha256`; retain the
+   official digest and archive basename.
+3. Change `deps/libssl/openssl` to point to the new versioned directory.
+4. Change `OPENSSL_VERSION` in `common_mk/openssl_flags.mk`.
+5. Update the version, archive path, and expected archive root
+   in `deps/libssl/verify-source.bash`.
+6. Update version-specific expectations and fixtures in
+   `test/infra/control/test-vendored-openssl-source.bash`,
+   `test/infra/control/test-vendored-openssl-build-contract.bash`, and
+   `test/tap/tests/unit/vendored_openssl_version_unit-t.cpp`.
+7. Update the current version and digest in this guide,
+   `deps/libssl/README.md`, and the top-level `README.md`.
+
+Search for stale references before committing:
+
+```bash
+old_version=3.5.7
+rg -n "$old_version|openssl-$old_version" \
+  README.md common_mk deps doc test
+deps/libssl/verify-source.bash
+```
+
+Review `git diff --cached` and commit the archive, digest, pin, symlink,
+verifier, tests, and documentation together.
+
+## ProxySQL acceptance checks
+
+Run every static contract check:
+
+```bash
+test/infra/control/test-vendored-openssl-source.bash
+test/infra/control/test-vendored-openssl-build-contract.bash
+test/infra/control/test-vendored-openssl-consumers.bash
+test/infra/control/test-openssl-linkage-check.bash
+test/infra/control/test-no-system-openssl-links.bash
+test/infra/control/test-no-system-openssl-links-regressions.bash
+test/infra/control/test-openssl-package-contract.bash
+test/infra/control/validate-openssl-checkout-workflows.bash
+test/infra/control/test-re2-platform-link.bash
+test/infra/control/test-libusual-incremental.bash
+python3 test/infra/control/test_router_openssl_build.py
+```
+
+Then perform clean Stable 3.0, Innovative 3.1, and Chassis 4.0 builds. Check the
+executable and, for 4.0, both shared plugins:
+
+```bash
+test/infra/control/check-openssl-linkage.bash \
+  src/proxysql \
+  plugins/mysqlx/ProxySQL_MySQLX_Plugin.so \
+  plugins/genai/ProxySQL_GenAI_Plugin.so
+src/proxysql --version
+test/infra/control/test-libusual-static-openssl.bash
+test/infra/control/test-mariadb-default-trust-store.bash
+```
+
+The libusual coexistence check needs the built libusual and vendored OpenSSL
+archives. It compiles and runs both public-header include orders, checking that
+the APIs coexist in the same executable. It is a post-build check, not a
+dependency-free lint check.
+
+The MariaDB check builds the patched connector in a temporary directory and
+tests explicit and default CA isolation, file rotation, failed-load retries,
+cache hits, CRL-option isolation, repeated thread cleanup, and release of the
+per-thread cache when a thread exits without calling `mysql_thread_end()`,
+using generated certificate fixtures. To additionally exercise the real connector with the
+host's installed default CA bundle, set `CA_CACHE_TEST_SYSTEM_DEFAULTS=1`:
+
+```bash
+CA_CACHE_TEST_SYSTEM_DEFAULTS=1 \
+  test/infra/control/test-mariadb-default-trust-store.bash
+```
+
+This mode requires a readable system bundle at one of the supported discovery
+paths. It checks store reuse across connections, CRL-option isolation, and live
+store lifetime after thread-cache cleanup. The `CI-macos-unit-smoke` pull-request
+workflow enables it after building ProxySQL and also runs when the MariaDB test
+script or fixtures change.
+
+The integration mode can be combined with AddressSanitizer instrumentation of
+the connector and test fixtures:
+
+```bash
+CA_CACHE_TEST_SYSTEM_DEFAULTS=1 \
+CA_CACHE_SANITIZER_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
+  test/infra/control/test-mariadb-default-trust-store.bash
+```
+
+The executable must report the new embedded OpenSSL version and must not depend
+on a host `libssl` or `libcrypto`. Plugins must import the executable-owned
+OpenSSL core; they must not embed or dynamically link another core.
+
+Run the focused OpenSSL version, RSA authentication, MySQLX TLS, and plugin-load
+unit tests. Also run the existing MySQL and PostgreSQL TLS, SCRAM, certificate,
+and OpenSSL error-queue TAP groups. The release matrix must cover:
+
+- Linux amd64 with GCC and Clang, and Linux arm64;
+- Debian packages, RHEL-family and SUSE RPMs, and the generic tarball;
+- macOS Intel and Apple Silicon, and FreeBSD;
+- release, debug, ASAN, TSAN, coverage, and cluster-simulator jobs; and
+- Stable 3.0, Innovative 3.1, and Chassis 4.0.
+
+Inspect each produced executable and plugin with the linkage checker or the
+platform-equivalent `readelf`, `ldd`, or `otool` evidence. Install packages in
+clean representative containers and verify that they run without a system
+OpenSSL runtime.
+
+## FIPS boundary
+
+Static OpenSSL vendoring is not a FIPS claim and this dependency must not ship,
+configure, or load `fips.so`. Future FIPS module work is tracked separately by
+[issue #6116](https://github.com/sysown/proxysql/issues/6116).
+
+OpenSSL's same-major provider compatibility is a technical interface promise;
+it is not ProxySQL's support policy and does not establish FIPS compliance. A
+future supported FIPS configuration must qualify an exact combination of the
+validated provider source or artifact, OpenSSL core, target platform, build
+recipe, configuration, and per-machine `fipsinstall` output required by that
+module's security policy. Loading whatever `fips.so` happens to be installed on
+the host is therefore outside the supported design.
+
+Review the current [OpenSSL release strategy](https://www.openssl-library.org/policies/releasestrat/)
+and the validated module's security policy whenever #6116 is implemented or
+the vendored release series changes.

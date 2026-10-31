@@ -133,6 +133,7 @@ struct admin_metrics_map_idx {
 	};
 };
 
+#ifndef PROXYSQL40
 /**
  * @brief Holds the retrieved info from the bootstrapping server.
  * @details Used during ProxySQL_Admin initialization.
@@ -148,6 +149,15 @@ struct bootstrap_info_t {
 
 	~bootstrap_info_t();
 };
+#else
+struct bootstrap_info_t {};
+#endif /* PROXYSQL40 */
+
+/**
+ * Atomically replaces mysql_users with users returned by the bootstrap query.
+ * MySQL field lengths are preserved when binding values to SQLite.
+ */
+bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, std::string& error);
 
 // ProxySQL_Admin shared variables
 extern int admin__web_verbosity;
@@ -160,10 +170,11 @@ struct incoming_servers_t {
 	SQLite3_result* incoming_aurora_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
 	SQLite3_result* incoming_mysql_servers_ssl_params = NULL;
+	SQLite3_result* incoming_aws_rds_bgd_hostgroups = NULL;
 	SQLite3_result* runtime_mysql_servers = NULL;
 
 	incoming_servers_t();
-	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
 // Separate structs for runtime mysql server and mysql server v2 to avoid human error
@@ -191,6 +202,11 @@ struct peer_runtime_mysql_servers_t {
 	peer_runtime_mysql_servers_t();
 	peer_runtime_mysql_servers_t(SQLite3_result*, const runtime_mysql_servers_checksum_t&);
 };
+
+#ifdef PROXYSQL40
+struct ProxySQL_PluginMysqlConfigPlan;
+struct ProxySQL_PluginMysqlConfigResult;
+#endif
 
 struct peer_mysql_servers_v2_t {
 	SQLite3_result* resultset { nullptr };
@@ -333,6 +349,7 @@ class ProxySQL_Admin {
 	int main_poll_nfds;
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
+	bool admin_threads_shutdown;
 
 	bool registered_prometheus_collectable;
 
@@ -466,9 +483,13 @@ class ProxySQL_Admin {
 	ProxySQL_External_Scheduler *scheduler;
 
 	void dump_mysql_collations();
+	void dump_ssl_ciphers();
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
-	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
+	bool check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
+#ifdef PROXYSQL40
+	bool restore_plugin_config_runtime_state();
+#endif
 
 #ifdef DEBUG
 	void flush_debug_levels_runtime_to_database(SQLite3DB *db, bool replace);
@@ -514,7 +535,13 @@ class ProxySQL_Admin {
 	void __delete_inactive_users(enum cred_username_type usertype);
 	template<enum SERVER_TYPE>
 	void add_admin_users();
-	void __refresh_users(std::unique_ptr<SQLite3_result>&& all_users = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	bool __refresh_users(std::unique_ptr<SQLite3_result>&& all_users = nullptr,
+		const std::string& checksum = "", const time_t epoch = 0,
+		std::string* atomic_error = nullptr
+#ifdef PROXYSQL40
+		, const ProxySQL_PluginMysqlUsersChecksumSnapshot* exact_checksum = nullptr
+#endif
+	);
 	void __add_active_users_ldap();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);
@@ -522,6 +549,11 @@ class ProxySQL_Admin {
 
 	void flush_GENERIC_variables__checksum__database_to_runtime(const std::string& modname, const std::string& checksum, const time_t epoch);
 	bool flush_GENERIC_variables__retrieve__database_to_runtime(const std::string& modname, char* &error, int& cols, int& affected_rows, SQLite3_result* &resultset);
+	void flush_mysql_variables___runtime_to_database_unlocked(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime);
+	/**
+	 * @brief Apply generic variables from a result set and report per-row statistics.
+	 * @param accepted_variables Optional output containing only names successfully applied by this generic pass.
+	 */
 	FlushVariableStats flush_GENERIC_variables__process__database_to_runtime(
 		const std::string& modname, SQLite3DB *db, SQLite3_result* resultset,
 		const bool& lock, const bool& replace,
@@ -529,7 +561,8 @@ class ProxySQL_Admin {
 		const std::unordered_set<std::string>& variables_to_delete_silently,
 		const std::unordered_set<std::string>& variables_deprecated,
 		const std::unordered_set<std::string>& variables_special_values,
-		std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action = nullptr
+		std::function<void(const std::string&, const char *, SQLite3DB *)> special_variable_action = nullptr,
+		std::unordered_set<std::string>* accepted_variables = nullptr
 	);
 
 	char **get_variables_list();
@@ -566,6 +599,8 @@ class ProxySQL_Admin {
 
 	// PostgreSQL
 	void __refresh_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void __refresh_pgsql_users(std::unique_ptr<SQLite3_result>&&, const std::string&, time_t,
+		bool local_snapshot);
 	//void __add_active_pgsql_users(char* user = NULL);
 	//void __delete_inactive_pgsql_users();
 	void flush_pgsql_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
@@ -610,13 +645,15 @@ class ProxySQL_Admin {
 	bool all_modules_started;
 	ProxySQL_Admin();
 	~ProxySQL_Admin();
-	SQLite3DB *admindb;	// in memory
-	SQLite3DB *statsdb;	// in memory
-	SQLite3DB *configdb; // on disk
-	SQLite3DB *monitordb;	// in memory
-	SQLite3DB *statsdb_disk; // on disk
+	// Null until init(): callers such as get_mysql_servers_v2() test
+	// `GloAdmin->admindb` before use, which requires a defined value.
+	SQLite3DB *admindb {nullptr};	// in memory
+	SQLite3DB *statsdb {nullptr};	// in memory
+	SQLite3DB *configdb {nullptr}; // on disk
+	SQLite3DB *monitordb {nullptr};	// in memory
+	SQLite3DB *statsdb_disk {nullptr}; // on disk
 #ifdef DEBUG
-	SQLite3DB *debugdb_disk; // on disk for debug
+	SQLite3DB *debugdb_disk {nullptr}; // on disk for debug
 	int debug_output;
 #endif
 	int pipefd[2];
@@ -646,6 +683,23 @@ class ProxySQL_Admin {
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool has_variable(const char *name);
 	void init_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+#ifdef PROXYSQL40
+	bool init_users_under_lock(std::unique_ptr<SQLite3_result>&& mysql_users_resultset, std::string& error,
+		const ProxySQL_PluginMysqlUsersChecksumSnapshot* exact_checksum = nullptr);
+	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config(const ProxySQL_PluginMysqlConfigPlan& plan);
+	ProxySQL_PluginMysqlConfigResult apply_plugin_mysql_config_v2(const ProxySQL_PluginMysqlConfigPlanV2& plan);
+	/** Apply a validated operational variable under the caller's configuration lock. */
+	bool set_managed_variable_locked(const std::string& name, const std::string& value);
+	bool commit_managed_admin_variables_locked(std::string& error);
+	/** @brief Refresh the engine half of the managed activation: rebuild the
+	 *  'runtime_global_variables' projection and the '<engine>_variables'
+	 *  checksum from live values. Without this a managed node looks in-sync to
+	 *  its Cluster peers while silently diverging, and no pull is triggered. */
+	void commit_managed_engine_variables_projection(bool pgsql);
+	SQLite3_result* get_mysql_users_snapshot();
+	SQLite3_result* get_mysql_servers_snapshot();
+	SQLite3_result* get_mysql_group_replication_hostgroups_snapshot();
+#endif
 	void init_mysql_servers();
 	void init_mysql_query_rules();
 	void init_mysql_firewall();
@@ -676,7 +730,15 @@ class ProxySQL_Admin {
 	 *   ```
 	 */
 	void save_mysql_servers_runtime_to_database(bool _runtime);
+	bool save_mysql_servers_runtime_to_database_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	bool save_mysql_servers_memory_to_disk_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	size_t drain_server_discovery_updates();
+	void shutdown_server_discovery_updates();
+	void close_server_discovery_wake_pipe();
 	void admin_shutdown();
+	void shutdown_threads();
 	bool is_command(std::string);
 
 	template <typename S>
@@ -707,8 +769,17 @@ class ProxySQL_Admin {
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
 	void flush_pgsql_variables__from_memory_to_disk();
+	/**
+	 * @brief Installs the MySQL server tables in the Hostgroups Manager. Caller holds mysql_servers_wrlock().
+	 * @details Never fails and is never partially rejected: an SQLite error on a table is logged and
+	 *   that table is skipped. With PROXYSQL40, discovery controllers are notified
+	 *   after the installation ('emit_runtime_install') and cannot reject it. With PROXYSQL40 and
+	 *   'emit_runtime_install', this function also takes ProxySQL_ServerRuntimeInstallLock itself
+	 *   (reentrant per thread); lock order: Admin servers lock -> runtime install -> HGM.
+	 */
 	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
-		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {});
+		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {}, bool hgm_acquire_lock = true,
+		bool emit_runtime_install = true);
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
@@ -734,7 +805,13 @@ class ProxySQL_Admin {
 	 *
 	 * @return Error message in case of not being able to perform the operation, 'NULL' otherwise.
 	 */
-	char* load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset=NULL, SQLite3_result* SQLite3_query_rules_fast_routing_resultset=NULL, const std::string& checksum = "", const time_t epoch = 0);
+	/**
+	 * @brief If non-NULL, receives a summary of the rules skipped during the
+	 *   load because of an invalid client_addr/proxy_addr (issue #6426). The
+	 *   load itself still succeeds; the caller shows the summary as the OK
+	 *   packet's warning message.
+	 */
+	char* load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset=NULL, SQLite3_result* SQLite3_query_rules_fast_routing_resultset=NULL, const std::string& checksum = "", const time_t epoch = 0, bool acquire_lock = true, std::string* skipped_rules_warning = nullptr);
 	void save_mysql_query_rules_from_runtime(bool);
 	void save_mysql_query_rules_fast_routing_from_runtime(bool);
 	char* load_mysql_firewall_to_runtime();
@@ -781,6 +858,9 @@ class ProxySQL_Admin {
 	void stats___mysql_processlist();
 	void stats___mysql_free_connections();
 	void stats___mysql_connection_pool(bool _reset);
+#ifdef PROXYSQL31
+	void stats___mysql_hostgroup_connection_pool(bool reset);
+#endif
 	void stats___mysql_errors(bool reset);
 	void stats___memory_metrics();
 	void stats___mysql_global();
@@ -793,6 +873,9 @@ class ProxySQL_Admin {
 	void stats___pgsql_users();
 	void stats___pgsql_free_connections();
 	void stats___pgsql_connection_pool(bool _reset);
+#ifdef PROXYSQL31
+	void stats___pgsql_hostgroup_connection_pool(bool reset);
+#endif
 	void stats___pgsql_processlist();
 	void stats___pgsql_errors(bool reset);
 	void stats___pgsql_client_host_cache(bool reset);
@@ -810,6 +893,8 @@ class ProxySQL_Admin {
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 	void stats___mysql_client_host_cache(bool reset);
+	void stats___mysql_passthrough_auth_cache();
+	void stats___mysql_passthrough_auth_metrics();
 	void stats___tls_certificates();
 	void stats___proxysql_global();
 
@@ -837,6 +922,8 @@ class ProxySQL_Admin {
 	unsigned long long scheduler_run_once() { return scheduler->run_once(); }
 
 	void flush_configdb(); // 923
+	// Admin command dispatch already holds sql_query_global_mutex.
+	void flush_configdb_locked();
 
 	// Cluster
 	void load_proxysql_servers_to_runtime(bool _lock=true, const std::string& checksum = "", const time_t epoch = 0);
@@ -878,18 +965,26 @@ class ProxySQL_Admin {
 	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
 
 	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& pgsql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+#ifdef PROXYSQL40
+	bool init_pgsql_users_under_lock(std::unique_ptr<SQLite3_result>&&, std::string& error);
+#endif
 	void flush_pgsql_users__from_memory_to_disk();
 	void flush_pgsql_users__from_disk_to_memory();
 
 	void save_pgsql_users_runtime_to_database(bool _runtime);
 
+	/** @brief PostgreSQL counterpart of load_mysql_servers_to_runtime(); never fails. */
 	void load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers = {}, const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server = {},
-		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {});
+		const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2 = {}, bool emit_runtime_install = true);
 
 	char* load_pgsql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset = NULL, 
-		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0);
+		SQLite3_result* SQLite3_query_rules_fast_routing_resultset = NULL, const std::string& checksum = "", const time_t epoch = 0, std::string* skipped_rules_warning = nullptr);
 
 	void save_pgsql_servers_runtime_to_database(bool _runtime);
+	bool save_pgsql_servers_runtime_to_database_scoped(
+		const std::vector<uint32_t>& hostgroups);
+	bool save_pgsql_servers_memory_to_disk_scoped(
+		const std::vector<uint32_t>& hostgroups);
 	void save_pgsql_firewall_from_runtime(bool);
 	void save_pgsql_query_rules_from_runtime(bool);
 	void save_pgsql_query_rules_fast_routing_from_runtime(bool);

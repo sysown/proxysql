@@ -1,0 +1,14 @@
+{
+  "name": "pg-compat-behaviors-prisma",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Prisma ORM behavior CLI for the pg-compat driver matrix harness (SP3-Task 5).",
+  "type": "module",
+  "main": "behaviors.mjs",
+  "dependencies": {
+    "@prisma/client": "5.22.0"
+  },
+  "devDependencies": {
+    "prisma": "5.22.0"
+  }
+}

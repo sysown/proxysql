@@ -1,9 +1,14 @@
 #include "ProxySQL_Plugin.h"
+#include "sqlite3db.h"
 
 #include <cstdio>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 // Two builds of this source produce two distinct .so files used together
 // in multi-plugin tests:
@@ -21,6 +26,14 @@
 namespace {
 
 ProxySQL_PluginServices* fake_services = nullptr;
+#ifdef PROXYSQL40
+proxysql_plugin_post_server_desired_set_cb fake_post_server_desired_set = nullptr;
+proxysql_plugin_uninstall_server_discovery_controller_cb
+	fake_uninstall_server_discovery_controller = nullptr;
+std::atomic<unsigned int> retained_fixture_controller_calls {0};
+#endif
+
+void fake_log_event(const char *event);
 
 ProxySQL_PluginCommandResult fake_command(const ProxySQL_PluginCommandContext&, const char*) {
 	return {0, 1, "fake command executed"};
@@ -41,6 +54,18 @@ ProxySQL_PluginQueryHookResult fake_query_hook(const ProxySQL_PluginQueryHookPay
 	}
 	return {ProxySQL_PluginQueryHookAction::allow, msg};
 }
+
+bool fake_register_cli_options(ProxySQL_PluginCLIRegistry* registry) {
+	if (registry == nullptr || registry->add == nullptr) return false;
+	const ProxySQL_PluginCLIOptionDef option {
+		"", "--fake-plugin-action", 1, false, "Fake plugin early action"
+	};
+	const char* error = nullptr;
+	const bool registered = registry->add(registry->opaque, option, &error);
+	if (registered) fake_log_event("register_cli");
+	return registered;
+}
+
 #endif /* PROXYSQL40 */
 
 const char* env(const char* suffix) {
@@ -65,11 +90,106 @@ void fake_log_event(const char *event) {
 }
 
 #ifdef PROXYSQL40
+void fake_log_generation(const char* event, uint64_t generation) {
+	char value[128];
+	std::snprintf(value, sizeof(value), "%s=%llu", event,
+		static_cast<unsigned long long>(generation));
+	fake_log_event(value);
+}
+
+// dladdr() anchor: any function defined in this DSO.
+void fake_dso_anchor() {}
+
+void *retain_fake_module() {
+	Dl_info info {};
+	if (dladdr(reinterpret_cast<void *>(&fake_dso_anchor), &info) == 0 ||
+		info.dli_fname == nullptr) {
+		return nullptr;
+	}
+	return dlopen(info.dli_fname, RTLD_NOW | RTLD_LOCAL);
+}
+
+// Server modules are no longer supported: register_server_module is a
+// reserved ABI-14 slot whose core stub always rejects. Call it the way an old
+// ABI-14 plugin did, with a pointer core must never dereference and a destroy
+// callback core must never call.
+int fake_server_module_placeholder = 0;
+void fake_destroy_server_module(ProxySQL_ServerModuleHooks *) {
+	fake_log_event("server_module_destroyed");
+}
+
+bool fake_register_server_module(ProxySQL_PluginServices *services) {
+	if (services == nullptr || services->register_server_module == nullptr) return false;
+	void *module = retain_fake_module();
+	if (module == nullptr) return false;
+	if (!services->register_server_module(
+		reinterpret_cast<ProxySQL_ServerModuleHooks *>(&fake_server_module_placeholder),
+		&fake_destroy_server_module, module)) {
+		dlclose(module);
+		return false;
+	}
+	return true;
+}
+
+class FakeServerDiscoveryController final : public ProxySQL_ServerDiscoveryController {
+public:
+	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot snapshot) override {
+		fake_log_event("server_controller_runtime");
+		fake_log_generation("runtime_controller_generation", snapshot.generation);
+		fake_log_generation("runtime_controller_topology_count",
+			snapshot.topology_hostgroups.size());
+	}
+	void desired_set_applied(uint64_t, bool) override {
+		fake_log_event("server_controller_desired_set");
+	}
+	void shutdown() override {
+		fake_log_event("server_controller_shutdown");
+	}
+};
+
+class RetainedFixtureController final : public ProxySQL_ServerDiscoveryController {
+public:
+	void runtime_configuration_installed(ProxySQL_ServerRuntimeSnapshot) override {
+		retained_fixture_controller_calls.fetch_add(1);
+	}
+	void desired_set_applied(uint64_t, bool) override {}
+	void shutdown() override { fake_log_event("retained_fixture_controller_shutdown"); }
+};
+
+void retained_fixture_destroy_controller(ProxySQL_ServerDiscoveryController *controller) {
+	fake_log_event("retained_fixture_controller_destroyed");
+	delete controller;
+}
+
+void fake_destroy_server_discovery_controller(ProxySQL_ServerDiscoveryController *controller) {
+	fake_log_event("server_controller_destroyed");
+	delete controller;
+}
+
+bool fake_install_server_discovery_controller(ProxySQL_PluginServices *services,
+	ProxySQL_ServerProtocol protocol = ProxySQL_ServerProtocol::mysql) {
+	if (services == nullptr || services->install_server_discovery_controller == nullptr) return false;
+	void *module = retain_fake_module();
+	if (module == nullptr) return false;
+	auto *controller = new FakeServerDiscoveryController();
+	if (!services->install_server_discovery_controller(protocol,
+		controller, &fake_destroy_server_discovery_controller, module)) {
+		delete controller;
+		dlclose(module);
+		return false;
+	}
+	return true;
+}
+#endif /* PROXYSQL40 */
+
+#ifdef PROXYSQL40
 // Phase-B callback (Step 2 chassis ABI extension).  Only wired into the
 // descriptor when PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B (or the plugin2
 // variant) is set.  Toggles via env vars:
 //   _PHASE_B_FAIL         -> return false
 //   _PHASE_B_REGISTER_TABLE -> register a per-plugin admin table (Phase B)
+//   _PHASE_B_REGISTER_MISMATCHED_TWINS -> register same-name admin/config
+//                              tables with incompatible definitions
 //   _PHASE_B_TOUCH_HANDLES  -> try to call DB handle getters; if they come
 //                              back null we log "phase_b_handles_null",
 //                              otherwise "phase_b_handles_live" (the
@@ -118,6 +238,17 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 			}
 		}
 	}
+	if (env("PHASE_B_TEST_SECRETS") != nullptr && services != nullptr) {
+		std::vector<uint8_t> output { 0x7f };
+		const uint8_t byte = 0x42;
+		const bool unavailable = services->put_secret != nullptr &&
+			services->get_secret != nullptr && services->erase_secret != nullptr &&
+			services->put_secret("fake_plugin", "phase_b", &byte, 1) == ProxySQL_PluginSecretResult::not_available &&
+			services->get_secret("fake_plugin", "phase_b", output) == ProxySQL_PluginSecretResult::not_available &&
+			services->erase_secret("fake_plugin", "phase_b") == ProxySQL_PluginSecretResult::not_available &&
+			output.empty();
+		fake_log_event(unavailable ? "phase_b_secrets_not_available" : "phase_b_secrets_available");
+	}
 	if (env("PHASE_B_REGISTER_TABLE") != nullptr &&
 	    services != nullptr &&
 	    services->register_table != nullptr) {
@@ -128,8 +259,71 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 		};
 		services->register_table(table);
 	}
+	if (env("PHASE_B_SERVER_DISCOVERY") != nullptr && services != nullptr) {
+		if (services->register_server_module != nullptr &&
+			services->install_server_discovery_controller == nullptr &&
+			services->uninstall_server_discovery_controller == nullptr &&
+			services->post_server_desired_set == nullptr) {
+			fake_log_event("phase_b_server_discovery_availability");
+		}
+		if (fake_register_server_module(services)) {
+			fake_log_event("phase_b_server_module_registered");
+		} else {
+			fake_log_event("phase_b_server_module_rejected");
+		}
+	}
+	if (env("PHASE_B_REGISTER_CONFIG_ONLY") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef table {
+			ProxySQL_PluginDBKind::config_db,
+			FAKE_PLUGIN_NAME "_orphan_config",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_orphan_config (id INTEGER)"
+		};
+		services->register_table(table);
+	}
+	if (env("PHASE_B_REGISTER_MISMATCHED_TWINS") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef admin_table {
+			ProxySQL_PluginDBKind::admin_db,
+			FAKE_PLUGIN_NAME "_mismatched_twins",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_mismatched_twins (id INTEGER)"
+		};
+		const ProxySQL_PluginTableDef config_table {
+			ProxySQL_PluginDBKind::config_db,
+			FAKE_PLUGIN_NAME "_mismatched_twins",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_mismatched_twins (id INTEGER, extra TEXT)"
+		};
+		services->register_table(admin_table);
+		services->register_table(config_table);
+	}
 	fake_log_event("phase_b");
 	return true;
+}
+
+ProxySQL_PluginEarlyActionResult fake_early_action(
+	const ProxySQL_PluginEarlyActionContext& context) {
+	if (context.services == nullptr || context.services->get_admindb == nullptr ||
+		context.services->get_admindb() == nullptr || context.is_set == nullptr ||
+		context.get_string == nullptr || !context.is_set(context.option_context,
+		"--fake-plugin-action")) {
+		return ProxySQL_PluginEarlyActionResult::exit_failure;
+	}
+	std::string action;
+	if (!context.get_string(context.option_context, "--fake-plugin-action", action)) {
+		return ProxySQL_PluginEarlyActionResult::exit_failure;
+	}
+	fake_log_event("early_action");
+	if (action == "exit_success") {
+		return ProxySQL_PluginEarlyActionResult::exit_success;
+	}
+	if (action == "exit_failure") {
+		return ProxySQL_PluginEarlyActionResult::exit_failure;
+	}
+	if (action == "throw") throw 1;
+	if (action != "continue") return ProxySQL_PluginEarlyActionResult::not_requested;
+	return ProxySQL_PluginEarlyActionResult::continue_startup;
 }
 #endif /* PROXYSQL40 */
 
@@ -156,6 +350,31 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		services->register_command(sql != nullptr ? sql : "PLUGIN FAKE NOOP", &fake_command);
 	}
 #ifdef PROXYSQL40
+	if (env("CHECK_SERVER_DISCOVERY_INIT") != nullptr && services != nullptr) {
+		if (services->register_server_module != nullptr &&
+			services->install_server_discovery_controller != nullptr &&
+			services->uninstall_server_discovery_controller != nullptr &&
+			services->post_server_desired_set != nullptr) {
+			fake_log_event("init_server_discovery_live");
+		} else {
+			fake_log_event("init_server_discovery_unavailable");
+		}
+	}
+	if (services != nullptr) {
+		fake_post_server_desired_set = services->post_server_desired_set;
+		fake_uninstall_server_discovery_controller =
+			services->uninstall_server_discovery_controller;
+	}
+	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+		const bool installed = fake_install_server_discovery_controller(services) &&
+			(env("SERVER_DISCOVERY_BOTH_PROTOCOLS") == nullptr ||
+			 fake_install_server_discovery_controller(services, ProxySQL_ServerProtocol::pgsql));
+		if (installed) {
+			fake_log_event("init_server_controller_installed");
+		} else {
+			fake_log_event("init_server_controller_rejected");
+		}
+	}
 	if (env("REGISTER_COMMAND_ALIAS") != nullptr &&
 	    services != nullptr &&
 	    services->register_command_alias != nullptr) {
@@ -173,6 +392,16 @@ bool fake_init(ProxySQL_PluginServices *services) {
 			ProxySQL_PluginDBKind::admin_db,
 			FAKE_PLUGIN_NAME "_table",
 			"CREATE TABLE " FAKE_PLUGIN_NAME "_table (id INTEGER)"
+		};
+		services->register_table(table);
+	}
+	if (env("REGISTER_CONFIG_TABLE") != nullptr &&
+	    services != nullptr &&
+	    services->register_table != nullptr) {
+		const ProxySQL_PluginTableDef table {
+			ProxySQL_PluginDBKind::config_db,
+			FAKE_PLUGIN_NAME "_late_config_table",
+			"CREATE TABLE " FAKE_PLUGIN_NAME "_late_config_table (id INTEGER)"
 		};
 		services->register_table(table);
 	}
@@ -206,11 +435,87 @@ bool fake_start() {
 	    fake_services->get_statsdb() == nullptr) {
 		return false;
 	}
+#ifdef PROXYSQL40
+	if (env("START_REGISTER_SERVER_MODULE") != nullptr) {
+		if (fake_register_server_module(fake_services)) {
+			fake_log_event("start_server_module_registered");
+		} else {
+			fake_log_event("start_server_module_rejected");
+		}
+	}
+	if (env("START_POST_SERVER_DESIRED_SET") != nullptr) {
+		const ProxySQL_ServerDesiredSet desired {
+			ProxySQL_ServerProtocol::mysql, 42, {}, {}, ProxySQL_ServerPersistence::runtime_only
+		};
+		if (fake_services != nullptr && fake_services->post_server_desired_set != nullptr &&
+			fake_services->post_server_desired_set(desired)) {
+			fake_log_event("start_server_desired_set_posted");
+		} else {
+			fake_log_event("start_server_desired_set_rejected");
+		}
+	}
+#endif /* PROXYSQL40 */
 	fake_log_event("start");
 	return true;
 }
 
+#ifdef PROXYSQL40
+bool fake_runtime_ready(ProxySQL_PluginRuntimeContext* context) {
+	if (context == nullptr || context->services == nullptr ||
+		context->services->set_listener_gate == nullptr) {
+		return false;
+	}
+	if (env("RUNTIME_READY_MUTATE_CONTEXT") != nullptr) {
+		context->services = nullptr;
+		context->startup_monotonic_us = 0;
+		fake_log_event("runtime_ready_mutated_context");
+		return true;
+	}
+	const ProxySQL_PluginListenerGate listener_gate {
+		FAKE_PLUGIN_NAME, "127.0.0.1", 6450,
+		env("RUNTIME_READY_INSTALL_READY") != nullptr
+			? ProxySQL_PluginListenerState::ready : ProxySQL_PluginListenerState::closed,
+		"fake plugin has not reconciled"
+	};
+	if (!context->services->set_listener_gate(listener_gate)) return false;
+	if (env("RUNTIME_READY_THROW") != nullptr) {
+		fake_log_event("runtime_ready_throw");
+		throw std::runtime_error("fake runtime readiness exception");
+	}
+	if (env("RUNTIME_READY_FAIL") != nullptr) {
+		fake_log_event("runtime_ready_fail");
+		return false;
+	}
+	fake_log_event("runtime_ready");
+	return true;
+}
+#endif /* PROXYSQL40 */
+
 bool fake_stop() {
+#ifdef PROXYSQL40
+	if (env("STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+		const bool uninstalled = fake_uninstall_server_discovery_controller != nullptr &&
+			fake_uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
+		fake_log_event(uninstalled ? "stop_server_controller_uninstalled" :
+			"stop_server_controller_uninstall_rejected");
+	}
+	if (env("STOP_CHECK_SERVER_DISCOVERY_PHASE") != nullptr) {
+		fake_log_event(fake_install_server_discovery_controller(fake_services)
+			? "stop_server_controller_installed" : "stop_server_controller_install_rejected");
+		fake_log_event(fake_register_server_module(fake_services)
+			? "stop_server_module_registered" : "stop_server_module_register_rejected");
+		const ProxySQL_ServerDesiredSet desired {
+			ProxySQL_ServerProtocol::mysql, 44, {}, {}, ProxySQL_ServerPersistence::runtime_only
+		};
+		fake_log_event(fake_post_server_desired_set != nullptr &&
+			fake_post_server_desired_set(desired)
+			? "stop_server_desired_set_posted" : "stop_server_desired_set_rejected");
+	}
+#endif /* PROXYSQL40 */
+	if (env("STOP_THROW") != nullptr) {
+		fake_log_event("stop_throw");
+		throw std::runtime_error("injected plugin stop failure");
+	}
 	if (env("STOP_FAIL") != nullptr) {
 		fake_log_event("stop_fail");
 		return false;
@@ -223,6 +528,27 @@ const char *fake_status_json() {
 	return "{\"name\":\"" FAKE_PLUGIN_NAME "\",\"state\":\"running\"}";
 }
 
+// abi_version literals below hardcode the ABI *layout* number (see
+// ProxySQL_Plugin.h) to pin down exactly which descriptor shape each fake
+// plugin represents, independent of PROXYSQL_PLUGIN_ABI_VERSION's current
+// value. They still must carry PROXYSQL_PLUGIN_ABI_DEBUG_BIT whenever this
+// .so is itself built with -DDEBUG, or the loader's DEBUG-tag check (see
+// ProxySQL_Plugin.h / ProxySQL_PluginManager.cpp) would refuse to load them
+// whenever the core/test binary under test is a debug build -- these fake
+// descriptors exist to test the layout-version compatibility path, not the
+// DEBUG-tag path.
+#if defined(PROXYSQL_FAKE_PLUGIN_FORCE_DEBUG_MISMATCH)
+#ifdef DEBUG
+constexpr uint32_t kFakeAbiDebugBit = 0u;
+#else
+constexpr uint32_t kFakeAbiDebugBit = PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#endif
+#elif defined(DEBUG)
+constexpr uint32_t kFakeAbiDebugBit = PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
+#else
+constexpr uint32_t kFakeAbiDebugBit = 0u;
+#endif
+
 // Pre-Step-2.2 descriptor layout (six fields).  Used when the plugin is
 // NOT opting into Phase B -- register_schemas is implicitly null because
 // the field is absent.  Leaves us testing that plugins built against the
@@ -231,7 +557,7 @@ const char *fake_status_json() {
 // represents the "legacy plugin" shape the v4 loader has to accept.
 const ProxySQL_PluginDescriptor fake_descriptor = {
 	FAKE_PLUGIN_NAME,
-	1,
+	1u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
@@ -244,12 +570,114 @@ const ProxySQL_PluginDescriptor fake_descriptor = {
 // abi_version 2 tells the loader this descriptor has the seventh field.
 const ProxySQL_PluginDescriptor fake_descriptor_with_phase_b = {
 	FAKE_PLUGIN_NAME,
-	2,
+	2u | kFakeAbiDebugBit,
 	&fake_init,
 	&fake_start,
 	&fake_stop,
 	&fake_status_json,
 	&fake_register_schemas,
+};
+
+// ABI 6 descriptor used by the CLI registration tests. The callback is a
+// descriptor tail field, so the manager must read it only for ABI >= 6.
+const ProxySQL_PluginDescriptor fake_descriptor_with_cli = {
+	FAKE_PLUGIN_NAME,
+	6u | kFakeAbiDebugBit,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+	&fake_register_cli_options,
+	nullptr,
+};
+
+const ProxySQL_PluginDescriptor fake_descriptor_with_early_action = {
+	FAKE_PLUGIN_NAME,
+	6u | kFakeAbiDebugBit,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	&fake_register_schemas,
+	&fake_register_cli_options,
+	&fake_early_action,
+};
+
+const ProxySQL_PluginDescriptor fake_descriptor_with_runtime_ready = {
+	FAKE_PLUGIN_NAME,
+	8u | kFakeAbiDebugBit,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+	nullptr,
+	nullptr,
+	&fake_runtime_ready,
+};
+
+const ProxySQL_PluginDescriptor fake_descriptor_with_server_discovery = {
+	FAKE_PLUGIN_NAME,
+	PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | kFakeAbiDebugBit,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+	nullptr,
+	nullptr,
+	nullptr,
+	nullptr,
+};
+
+// This object intentionally uses the ABI-5 descriptor shape. It has no ABI-6
+// tail field. Returning it through the current descriptor pointer type models
+// a plugin compiled before register_cli_options existed; the manager must not
+// inspect beyond register_schemas when abi_version is 5.
+struct fake_descriptor_v5_layout {
+	const char* name;
+	uint32_t abi_version;
+	proxysql_plugin_init_cb init;
+	proxysql_plugin_start_cb start;
+	proxysql_plugin_stop_cb stop;
+	proxysql_plugin_status_json_cb status_json;
+	proxysql_plugin_register_schemas_cb register_schemas;
+};
+const fake_descriptor_v5_layout fake_descriptor_abi5 = {
+	FAKE_PLUGIN_NAME,
+	5u | kFakeAbiDebugBit,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+};
+
+// ABI 7 has the complete pre-runtime-ready descriptor prefix but no ABI-8
+// tail. Returning this shorter layout verifies the loader never reads the
+// runtime_ready member for secret-service-era plugins.
+struct fake_descriptor_v7_layout {
+	const char* name;
+	uint32_t abi_version;
+	proxysql_plugin_init_cb init;
+	proxysql_plugin_start_cb start;
+	proxysql_plugin_stop_cb stop;
+	proxysql_plugin_status_json_cb status_json;
+	proxysql_plugin_register_schemas_cb register_schemas;
+	proxysql_plugin_register_cli_options_cb register_cli_options;
+	proxysql_plugin_early_action_cb early_action;
+};
+const fake_descriptor_v7_layout fake_descriptor_abi7 = {
+	FAKE_PLUGIN_NAME,
+	7u | kFakeAbiDebugBit,
+	&fake_init,
+	&fake_start,
+	&fake_stop,
+	&fake_status_json,
+	nullptr,
+	nullptr,
+	nullptr,
 };
 #endif /* PROXYSQL40 */
 
@@ -272,9 +700,71 @@ extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 		return &fake_descriptor_bogus_abi;
 	}
 #ifdef PROXYSQL40
+	if (env("ENABLE_ABI5_TAIL_GUARD") != nullptr) {
+		return reinterpret_cast<const ProxySQL_PluginDescriptor*>(&fake_descriptor_abi5);
+	}
+	if (env("ENABLE_ABI7_TAIL_GUARD") != nullptr) {
+		return reinterpret_cast<const ProxySQL_PluginDescriptor*>(&fake_descriptor_abi7);
+	}
+	if (env("ENABLE_CLI") != nullptr) {
+		return &fake_descriptor_with_cli;
+	}
+	if (env("ENABLE_EARLY_ACTION") != nullptr) {
+		return &fake_descriptor_with_early_action;
+	}
+	if (env("ENABLE_RUNTIME_READY") != nullptr) {
+		return &fake_descriptor_with_runtime_ready;
+	}
+	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+		return &fake_descriptor_with_server_discovery;
+	}
 	if (env("ENABLE_PHASE_B") != nullptr) {
 		return &fake_descriptor_with_phase_b;
 	}
 #endif /* PROXYSQL40 */
 	return &fake_descriptor;
 }
+
+#ifdef PROXYSQL40
+// This intentionally retains only the service function pointer, never the
+// transient services table.  Unit tests keep this DSO separately loaded and
+// invoke it after manager unpublication to prove the callback fails closed.
+extern "C" bool proxysql_fake_post_server_desired_set_for_test() {
+	if (fake_post_server_desired_set == nullptr) return false;
+	const ProxySQL_ServerDesiredSet desired {
+		ProxySQL_ServerProtocol::mysql, 43, {}, {}, ProxySQL_ServerPersistence::runtime_only
+	};
+	return fake_post_server_desired_set(desired);
+}
+
+extern "C" proxysql_plugin_post_server_desired_set_cb
+proxysql_fake_post_server_desired_set_callback_for_test() {
+	return fake_post_server_desired_set;
+}
+
+extern "C" bool proxysql_fake_uninstall_server_discovery_controller_for_test() {
+	return fake_uninstall_server_discovery_controller != nullptr &&
+		fake_uninstall_server_discovery_controller(ProxySQL_ServerProtocol::mysql);
+}
+
+// These factories, callbacks, and destroy functions are intentionally
+// exported from the fixture DSO.  The lease tests pass their addresses into
+// the manager, so its retained dlopen reference protects code it really
+// invokes (rather than only an unrelated fixture handle).
+extern "C" ProxySQL_ServerDiscoveryController *proxysql_fake_retained_controller_create() {
+	return new RetainedFixtureController();
+}
+
+extern "C" void proxysql_fake_retained_controller_destroy(
+	ProxySQL_ServerDiscoveryController *controller) {
+	retained_fixture_destroy_controller(controller);
+}
+
+extern "C" void proxysql_fake_retained_fixture_reset() {
+	retained_fixture_controller_calls.store(0);
+}
+
+extern "C" unsigned int proxysql_fake_retained_fixture_controller_calls() {
+	return retained_fixture_controller_calls.load();
+}
+#endif /* PROXYSQL40 */

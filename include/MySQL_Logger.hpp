@@ -554,6 +554,33 @@ public:
 	void log_audit_entry(log_event_type _et, MySQL_Session* sess, MySQL_Data_Stream* myds, char* xi = NULL);
 
 	/**
+	 * @brief Emit an audit entry tagged with a hostgroup id.
+	 *
+	 * Spec §7.4 for pass-through auth requires the audit entry to include
+	 * "username, source IP, hostgroup probed, outcome". The username and
+	 * source IP fields are already populated automatically from
+	 * @p sess->client_myds. This overload threads the hostgroup that was
+	 * probed (or that drove a denied attempt) onto the underlying
+	 * MySQL_Event::hid field, which @ref MySQL_Event::write_auth then
+	 * emits as the JSON @c hostgroup field. The existing
+	 * single-parameter form continues to be used by every non-pass-through
+	 * caller and leaves @c hid as @c UINT64_MAX (omitted from the JSON).
+	 *
+	 * @param _et       Event type (PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK or _FAIL).
+	 * @param sess      Originating session (provides user / IP).
+	 * @param myds      Backend data stream, if any. NULL for the pass-through
+	 *                  probe path because the probe is a one-shot
+	 *                  libmariadbclient connection that never becomes a
+	 *                  MySQL_Data_Stream.
+	 * @param xi        Optional extra-info string, written verbatim into the
+	 *                  JSON @c extra_info field.
+	 * @param hostgroup Hostgroup id that was probed (>= 0). Use the helper
+	 *                  via this overload only when the value is meaningful;
+	 *                  pass @c -1 to fall back to the non-hostgroup form.
+	 */
+	void log_audit_entry(log_event_type _et, MySQL_Session* sess, MySQL_Data_Stream* myds, char* xi, int hostgroup);
+
+	/**
 	 * @brief Flushes the log files.
 	 */
 	void flush(bool force = false);

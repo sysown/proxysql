@@ -18,6 +18,7 @@
 #include <vector>
 #include <string>
 #include <stdio.h>
+#include <sys/socket.h>
 #include <utility>
 
 #include "mysql.h"
@@ -210,19 +211,32 @@ void check_execute(MYSQL* proxy, const vector<stmt_params_t>& stmts, bool exp_sc
 				exec_count, strerror(errno)
 			);
 
-			char res_buf[200] { 0 }; // OK ~= 11 bytes || ERR ~= 50 bytes
-			rc = read(proxy->net.fd, &res_buf, sizeof(res_buf));
+			unsigned char res_buf[200] { 0 }; // OK ~= 11 bytes || ERR ~= 50 bytes
+			rc = recv(proxy->net.fd, res_buf, 4, MSG_WAITALL);
+			const size_t payload_size = res_buf[0] | (size_t(res_buf[1]) << 8) | (size_t(res_buf[2]) << 16);
+			bool complete = rc == 4 && payload_size >= 1 && payload_size <= sizeof(res_buf) - 4;
+			if (complete) {
+				rc = recv(proxy->net.fd, res_buf + 4, payload_size, MSG_WAITALL);
+				complete = rc == ssize_t(payload_size);
+			}
 			ok (
-				rc > 0,
-				"%ld - Fake EXECUTE response read   error=\"%s\" packet_str=\"%s\"",
-				exec_count, strerror(errno), res_buf + 7
+				complete,
+				"%ld - Complete Fake EXECUTE response read   error=\"%s\" payload_size=%zu",
+				exec_count, strerror(errno), payload_size
 			);
+			if (!complete) BAIL_OUT("Incomplete or oversized Fake EXECUTE response");
 
-			bool act_scs = strncasecmp(res_buf + 7, "#28000", strlen("#28000")) != 0;
+			// An unexpected ERR must never count as success. Check actual packet
+			// types, and require the malformed-execute code and SQLSTATE on error.
+			const bool is_ok = payload_size >= 7 && res_buf[4] == 0x00;
+			const bool is_err = payload_size >= 9 && res_buf[4] == 0xff;
+			const unsigned int error_code = is_err ? res_buf[5] | (unsigned(res_buf[6]) << 8) : 0;
+			const bool malformed_error = is_err && error_code == 1210 &&
+				memcmp(res_buf + 7, "#HY000", 6) == 0;
 			ok(
-				act_scs == exp_scs,
-				"%ld - Fake EXECUTE success should match expected   exp_scs=%d act_scs=%d",
-				exec_count, exp_scs, act_scs
+				exp_scs ? is_ok : malformed_error,
+				"%ld - Fake EXECUTE returns %s   packet_type=0x%02x error_code=%u",
+				exec_count, exp_scs ? "OK" : "ERR 1210/HY000", res_buf[4], error_code
 			);
 			exec_count += 1;
 		}
@@ -276,9 +290,6 @@ int main(int argc, char** argv) {
 
 	MYSQL_QUERY_T(proxy_1, "CREATE DATABASE IF NOT EXISTS test");
 
-	diag("Start_Ting trx in new connection; required for 'max_allowed_packet'   conn=%p", proxy_1);
-	MYSQL_QUERY_T(proxy_1, "/* create_new_connection=1 */ BEGIN");
-
 	MYSQL_QUERY_T(proxy_2, "USE test");
 	diag("Start_Ting trx in new connection; required for 'max_allowed_packet'   conn=%p", proxy_2);
 	MYSQL_QUERY_T(proxy_2, "/* create_new_connection=1 */ BEGIN");
@@ -297,6 +308,11 @@ int main(int argc, char** argv) {
 			"data_int INT"
 		")"
 	);
+	// DDL implicitly commits. Pin a fresh backend only after table creation,
+	// otherwise PREPARE can reuse the connection that changed the global limit
+	// while still retaining its old session max_allowed_packet.
+	diag("Starting trx in new connection after DDL; required for 'max_allowed_packet'   conn=%p", proxy_1);
+	MYSQL_QUERY_T(proxy_1, "/* create_new_connection=1 */ BEGIN");
 
 	const char* q1 { "INSERT INTO test.test_stmt_inv__large_col_1 (data_column) VALUES (?)" };
 	const char* q2 { "INSERT INTO test.test_stmt_inv__large_col_2 (data_column,data_int) VALUES (?,?)" };

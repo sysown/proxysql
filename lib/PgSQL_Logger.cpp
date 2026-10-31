@@ -387,7 +387,7 @@ void PgSQL_Event::write_auth(LogBuffer *f, PgSQL_Session *sess) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
+			snprintf(buffer2, sizeof(buffer2), "%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -467,13 +467,13 @@ void PgSQL_Event::write_auth(LogBuffer *f, PgSQL_Session *sess) {
 				uint64_t curtime_mono=sess->thread->curtime;
 				uint64_t timediff = curtime_mono - sess->start_time;
 				uint64_t orig_time = curtime_real - timediff;
-				time_t timer= (orig_time)/1000/1000;
+				time_t timer= orig_time/1000/1000;
 				struct tm tm_info;
 				char buffer1[36];
 				char buffer2[64];
 				if (localtime_r(&timer, &tm_info)) {
  					strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 					sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
+					snprintf(buffer2, sizeof(buffer2), "%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
  				} else {
  					snprintf(buffer2, sizeof(buffer2), "invalid_date");
  				}
@@ -482,7 +482,7 @@ void PgSQL_Event::write_auth(LogBuffer *f, PgSQL_Session *sess) {
 				//life/=1000;
 				float f = timediff;
 				f /= 1000;
-				sprintf(buffer1, "%.3fms", f);
+				snprintf(buffer1, sizeof(buffer1), "%.3fms", f);
 				j["duration"] = buffer1;
 			}
 			break;
@@ -672,7 +672,7 @@ uint64_t PgSQL_Event::write_query_format_2_json(LogBuffer *f) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(start_time%1000000));
+			snprintf(buffer2, sizeof(buffer2), "%s.%06u", buffer1, (unsigned)(start_time%1000000));
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -686,7 +686,7 @@ uint64_t PgSQL_Event::write_query_format_2_json(LogBuffer *f) {
 		char buffer2[64];
 		if (localtime_r(&timer, &tm_info)) {
  			strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", &tm_info);
- 			sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(end_time%1000000));
+			snprintf(buffer2, sizeof(buffer2), "%s.%06u", buffer1, (unsigned)(end_time%1000000));
  		} else {
  			snprintf(buffer2, sizeof(buffer2), "invalid_date");
  		}
@@ -694,7 +694,7 @@ uint64_t PgSQL_Event::write_query_format_2_json(LogBuffer *f) {
 	}
 	j["duration_us"] = end_time-start_time;
 	char digest_hex[20];
-	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
+	snprintf(digest_hex, sizeof(digest_hex), "0x%016llX", (long long unsigned int)query_digest);
 	j["digest"] = digest_hex;
 
 	if (et == PGSQL_LOG_EVENT_TYPE::STMT_PREPARE || et == PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE || et == PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE) {
@@ -865,11 +865,13 @@ void PgSQL_Logger::events_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (events.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(events.base_filename)+11);
-		sprintf(filen,"%s.%08d",events.base_filename,events.log_file_id);
+		const size_t filen_size = strlen(events.base_filename)+13;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s.%08d",events.base_filename,events.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(events.datadir)+strlen(events.base_filename)+11);
-		sprintf(filen,"%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
+		const size_t filen_size = strlen(events.datadir)+strlen(events.base_filename)+14;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
 	}
 	events.logfile=new std::fstream();
 	events.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
@@ -898,11 +900,13 @@ void PgSQL_Logger::audit_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (audit.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(audit.base_filename)+11);
-		sprintf(filen,"%s.%08d",audit.base_filename,audit.log_file_id);
+		const size_t filen_size = strlen(audit.base_filename)+13;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s.%08d",audit.base_filename,audit.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(audit.datadir)+strlen(audit.base_filename)+11);
-		sprintf(filen,"%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
+		const size_t filen_size = strlen(audit.datadir)+strlen(audit.base_filename)+14;
+		filen=(char *)malloc(filen_size);
+		snprintf(filen, filen_size, "%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
 	}
 	audit.logfile=new std::fstream();
 	audit.logfile->exceptions ( std::ofstream::failbit | std::ofstream::badbit );
@@ -934,9 +938,15 @@ void PgSQL_Logger::events_set_base_filename() {
 	events_close_log_unlocked();
 	// set file id to 0 , so that find_next_id() will be called
 	events.log_file_id=0;
+	char *base_filename=strdup(pgsql_thread___eventslog_filename);
+	if (base_filename==NULL) {
+		events.enabled=false;
+		wrunlock();
+		return;
+	}
 	free(events.base_filename);
-	events.base_filename=strdup(pgsql_thread___eventslog_filename);
-	if (strlen(events.base_filename)) {
+	events.base_filename=base_filename;
+	if (strlen(base_filename)) {
 		events.enabled=true;
 		events_open_log_unlocked();
 	} else {
@@ -964,9 +974,15 @@ void PgSQL_Logger::audit_set_base_filename() {
 	audit_close_log_unlocked();
 	// set file id to 0 , so that find_next_id() will be called
 	audit.log_file_id=0;
+	char *base_filename=strdup(pgsql_thread___auditlog_filename);
+	if (base_filename==NULL) {
+		audit.enabled=false;
+		wrunlock();
+		return;
+	}
 	free(audit.base_filename);
-	audit.base_filename=strdup(pgsql_thread___auditlog_filename);
-	if (strlen(audit.base_filename)) {
+	audit.base_filename=base_filename;
+	if (strlen(base_filename)) {
 		audit.enabled=true;
 		audit_open_log_unlocked();
 	} else {
@@ -1008,11 +1024,15 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+9);
-		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+		const size_t ca_size = cl+9;
+		ca=(char *)malloc(ca_size);
+		snprintf(ca, ca_size, "%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
 	PGSQL_LOG_EVENT_TYPE let = PGSQL_LOG_EVENT_TYPE::SIMPLE_QUERY; // default
+	// Named-portal Close (PROCESSING_STMT_CLOSE) has no query text; when true the query
+	// branch below logs an empty query instead of a stale CurrentQuery.QueryPointer.
+	bool c_stmt_close_no_query = false;
 	switch (sess->status) {
 		case PROCESSING_STMT_EXECUTE:
 			let = PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE;
@@ -1022,6 +1042,24 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 			break;
 		case PROCESSING_STMT_DESCRIBE:
 			let = PGSQL_LOG_EVENT_TYPE::STMT_DESCRIBE;
+			break;
+		case PROCESSING_STMT_BIND:
+			// Named-portal Bind took the backend round-trip path (Task P1/P2). There is
+			// no dedicated BIND eventslog type; classify it as STMT_EXECUTE so the digest
+			// and query text are sourced from the RESOLVED global statement
+			// (extended_query_info.stmt_info, always valid for a Bind) exactly like
+			// DESCRIBE/EXECUTE — NOT from the stale CurrentQuery.QueryPointer left over
+			// on the statement-reuse path (a Bind carries no query text of its own; the
+			// old SIMPLE_QUERY default read that stale/garbage pointer, a UAF risk).
+			let = PGSQL_LOG_EVENT_TYPE::STMT_EXECUTE;
+			break;
+		case PROCESSING_STMT_CLOSE:
+			// Named-portal Close round-trip (Task P2): a Close carries no query text and
+			// its extended_query_info.stmt_info may be null in some paths — keep the
+			// SIMPLE_QUERY default but log an empty query (guarded below) rather than a
+			// stale QueryPointer. Do NOT classify as STMT_EXECUTE (that path dereferences
+			// stmt_info unconditionally).
+			c_stmt_close_no_query = true;
 			break;
 		case WAITING_CLIENT_DATA:
 		case PROCESSING_EXTENDED_QUERY_SYNC:
@@ -1071,8 +1109,8 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 			break;
 		case PGSQL_LOG_EVENT_TYPE::STMT_PREPARE:
 		default:
-			c = (char *)sess->CurrentQuery.QueryPointer;
-			ql = sess->CurrentQuery.QueryLength;
+			c = c_stmt_close_no_query ? NULL : (char *)sess->CurrentQuery.QueryPointer;
+			ql = c_stmt_close_no_query ? 0 : sess->CurrentQuery.QueryLength;
 			// NOTE: This needs to be located in the 'default' case because otherwise will miss state
 			// 'WAITING_CLIENT_DATA'. This state is possible when the prepared statement is found in the
 			// global cache and due to that we immediately reply to the client and session doesn't reach
@@ -1104,8 +1142,9 @@ void PgSQL_Logger::log_request(PgSQL_Session *sess, PgSQL_Data_Stream *myds) {
 	}
 	sl+=strlen(sa);
 	if (sl && myds->myconn->parent->port) {
-		sa=(char *)malloc(sl+9);
-		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
+		const size_t sa_size = sl+9;
+		sa=(char *)malloc(sa_size);
+		snprintf(sa, sa_size, "%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
 	if (sl) {
@@ -1226,8 +1265,9 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+9);
-		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+		const size_t ca_size = cl+9;
+		ca=(char *)malloc(ca_size);
+		snprintf(ca, ca_size, "%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
 
@@ -1263,8 +1303,9 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 	}
 	sl+=strlen(sa);
 	if (sl && myds->myconn->parent->port) {
-		sa=(char *)malloc(sl+9);
-		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
+		const size_t sa_size = sl+9;
+		sa=(char *)malloc(sa_size);
+		snprintf(sa, sa_size, "%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
 
@@ -1298,6 +1339,11 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 }
 
 void PgSQL_Logger::flush(bool force) {
+	// Every worker calls this on every loop pass. With no log file open there is nothing to write, so
+	// return before reading the clock and taking the lock that all workers share.
+	if (!force && !is_events_logfile_open() && !is_audit_logfile_open()) {
+		return;
+	}
 	const uint64_t current_time = monotonic_time();
 
 	if (force) {
@@ -1573,7 +1619,7 @@ void PgSQL_Logger::insertPgSQLEventsIntoDb(SQLite3DB* db, const std::string& tab
 		bind_text_or_null(stmt, base + 3, event->schemaname);
 		rc = (*proxy_sqlite3_bind_int64)(stmt, base + 4, event->start_time); ASSERT_SQLITE_OK(rc, db);
 		rc = (*proxy_sqlite3_bind_int64)(stmt, base + 5, event->end_time); ASSERT_SQLITE_OK(rc, db);
-		sprintf(digest_hex_str, "0x%016llX", (long long unsigned int)event->query_digest);
+		snprintf(digest_hex_str, sizeof(digest_hex_str), "0x%016llX", (long long unsigned int)event->query_digest);
 		bind_text_or_null(stmt, base + 6, digest_hex_str);
 		bind_text_or_null(stmt, base + 7, event->query_ptr);
 		bind_text_or_null(stmt, base + 8, event->server);

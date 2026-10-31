@@ -8,6 +8,9 @@
 #define SPOOKYV2
 #endif
 
+#include "c_tokenizer.h"
+
+#include <cstring>
 #include <sstream>
 
 pgsql_verify_var PgSQL_Variables::verifiers[PGSQL_NAME_LAST_HIGH_WM];
@@ -67,6 +70,50 @@ PgSQL_Variables::PgSQL_Variables() {
 }
 
 PgSQL_Variables::~PgSQL_Variables() {}
+
+std::string PgSQL_Variables::build_set_tracked_vars_regexp(const std::string& vars_regexp) {
+	return "^SET(?: +)(|SESSION +)`?(" + vars_regexp + ")`?(?:$|[\\s=])";
+}
+
+// After a word of 'SET [LOCAL|SESSION] TRANSACTION': PostgreSQL ends a keyword at whitespace
+// or at the start of a comment. Anything else ('_', '.', '=', a quote, ...) makes it part of
+// another token, such as the custom setting 'transaction.foo'.
+static bool pgsql_set_trx_word_ends(const char* p) {
+	return isspace((unsigned char)*p) || (p[0] == '/' && p[1] == '*') || (p[0] == '-' && p[1] == '-');
+}
+
+bool PgSQL_Variables::is_set_transaction_stmt(const char* text) {
+	// pgsql_stmt_skip_lead() skips whitespace, line comments and nested block comments, and
+	// returns NULL at the end of the text or on a block comment with no terminator.
+	const char* p = pgsql_stmt_skip_lead(text, NULL);
+	if (!pgsql_stmt_first_keyword_is(p, "SET")) return false;
+	p += 3;
+	if (!pgsql_set_trx_word_ends(p)) return false;
+	p = pgsql_stmt_skip_lead(p, NULL);
+	for (const char* scope : { "LOCAL", "SESSION" }) {
+		if (pgsql_stmt_first_keyword_is(p, scope)) {
+			p += strlen(scope);
+			if (!pgsql_set_trx_word_ends(p)) return false;
+			p = pgsql_stmt_skip_lead(p, NULL);
+			break;
+		}
+	}
+	if (!pgsql_stmt_first_keyword_is(p, "TRANSACTION")) return false;
+	p += 11;
+	if (*p != '\0' && *p != ';' && !pgsql_set_trx_word_ends(p)) return false;
+	// One statement only: whatever follows a ';' must be whitespace or comments. Quotes are
+	// deliberately not read, so no quoting form (E'', $$, ...) can hide a second statement;
+	// a ';' inside a literal or a comment only costs the lock-free path.
+	for (const char* q = strchr(p, ';'); q != NULL; q = strchr(q + 1, ';')) {
+		const char* lost = NULL;
+		if (pgsql_stmt_skip_lead(q + 1, &lost) != NULL || lost != NULL) return false;
+	}
+	return true;
+}
+
+bool PgSQL_Variables::is_set_transaction(const char* digest, const char* query) {
+	return is_set_transaction_stmt(digest) && is_set_transaction_stmt(query);
+}
 
 bool PgSQL_Variables::client_set_hash_and_value(PgSQL_Session* session, int idx, const std::string& value, uint32_t hash) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
@@ -264,6 +311,9 @@ inline bool verify_server_variable(PgSQL_Session* session, int idx, uint32_t cli
 			case PROCESSING_STMT_PREPARE:
 			case PROCESSING_STMT_DESCRIBE:
 			case PROCESSING_STMT_EXECUTE:
+			case PROCESSING_STMT_BIND:
+			case PROCESSING_STMT_CLOSE:
+			case PROCESSING_EXTQ_BATCH:
 				session->previous_status.push(session->status);
 				break;
 			default:

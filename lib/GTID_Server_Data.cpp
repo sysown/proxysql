@@ -1,6 +1,11 @@
 #include "GTID_Server_Data.h"
 #include "MySQL_HostGroups_Manager.h"
 
+#include <algorithm>
+#include <cctype>
+#include <cerrno>
+#include <climits>
+#include <cstring>
 #include "ev.h"
 #include <iterator>
 
@@ -141,6 +146,10 @@ void connect_cb(EV_P_ ev_io *w, int revents) {
 			proxy_warning("GTID: failed to connect to ProxySQL binlog reader on port %d for server %s:%d\n", sd->port, sd->address, sd->mysql_port);
 			close(fd);
 		} else {
+			// A new connection may reach a different reader, even one serving the
+			// other GTID flavor: start from its bootstrap, not from what the
+			// previous connection established (issue #6334).
+			sd->reset_reader_stream();
 			struct ev_io *read_watcher = (struct ev_io *) malloc(sizeof(struct ev_io));
 			read_watcher->data = sd;
 			sd->w = read_watcher;
@@ -156,7 +165,6 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 
 	if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
 		perror("socket");
-		close(s);
 		return NULL;
 	}
 
@@ -170,11 +178,14 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 	hints.ai_socktype= SOCK_STREAM;
 
 	char str_port[NI_MAXSERV+1];
-	sprintf(str_port,"%d", gtid_port);
+	snprintf(str_port, sizeof(str_port), "%d", gtid_port);
 
 	int gai_rc = getaddrinfo(address, str_port, &hints, &res);
-	if (gai_rc) {
-		freeaddrinfo(res);
+	if (gai_rc || res == NULL) {
+		if (res != NULL) {
+			freeaddrinfo(res);
+		}
+		close(s);
 		//exit here
 		return NULL;
 	}
@@ -192,11 +203,13 @@ struct ev_io * new_connect_watcher(char *address, uint16_t gtid_port, uint16_t m
 		}
 		/* else error */
 	}
+	close(s);
 	return NULL;
 }
 
 GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _port, uint16_t _mysql_port) {
 	active = true;
+	gtid_flavor = GTID_ID_FLAVOR_UNKNOWN;
 	w = _w;
 	size = 1024; // 1KB buffer
 	data = (char *)malloc(size);
@@ -207,6 +220,7 @@ GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _p
 	port = _port;
 	mysql_port = _mysql_port;
 	events_read = 0;
+	pthread_rwlock_init(&executed_rwlock, nullptr);
 }
 
 void GTID_Server_Data::resize(size_t _s) {
@@ -218,6 +232,7 @@ void GTID_Server_Data::resize(size_t _s) {
 }
 
 GTID_Server_Data::~GTID_Server_Data() {
+	pthread_rwlock_destroy(&executed_rwlock);
 	free(address);
 	free(data);
 }
@@ -269,8 +284,78 @@ bool GTID_Server_Data::readall() {
 }
 
 
+void GTID_Server_Data::reset_reader_stream() {
+	pthread_rwlock_wrlock(&executed_rwlock);
+	gtid_flavor = GTID_ID_FLAVOR_UNKNOWN;
+	memset(uuid_server, 0, sizeof(uuid_server));
+	pos = 0;
+	len = 0;
+	// The new connection is not known to reach the same server (failover,
+	// address reassigned, server restored from a backup): keeping the old set
+	// could route a causal read to a server that lacks the GTID. Until the
+	// bootstrap re-sends the set, GTID-routed reads skip this server.
+	gtid_executed.clear();
+	pthread_rwlock_unlock(&executed_rwlock);
+}
+
 bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
-	return gtid_executed.has_gtid((std::string)gtid_uuid, gtid_trxid);
+	pthread_rwlock_rdlock(&executed_rwlock);
+	bool found = gtid_executed.has_gtid((std::string)gtid_uuid, gtid_trxid);
+	pthread_rwlock_unlock(&executed_rwlock);
+	return found;
+}
+
+bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
+	if (gtid == nullptr) {
+		return false;
+	}
+
+	// A single GTID covers the common case: MariaDB's 'last_gtid' (d-s-n) and
+	// MySQL's tracked OWN_GTID value when exactly one transaction was committed.
+	ParsedGTID parsed;
+	if (!parse_gtid(gtid, &parsed)) {
+		// A session that committed several transactions delivers a GTID SET
+		// ('uuid:582-584', 'uuid:636:638'): record every interval instead of
+		// rejecting it, otherwise the server advertises less than the session
+		// actually wrote and causal reads wait forever (issue #6415,
+		// pre-existing at v3.0.11 but closed here while the grammar is being
+		// taught to the routing paths).
+		std::map<std::string, std::vector<TrxId_Interval>> intervals;
+		if (!parse_gtid_set(gtid, strlen(gtid), &intervals)) {
+			return false;
+		}
+		bool updated = false;
+		pthread_rwlock_wrlock(&executed_rwlock);
+		for (const auto& entry : intervals) {
+			for (const auto& iv : entry.second) {
+				updated |= gtid_executed.add(entry.first, iv);
+			}
+		}
+		pthread_rwlock_unlock(&executed_rwlock);
+		return updated;
+	}
+
+	pthread_rwlock_wrlock(&executed_rwlock);
+	bool updated;
+	if (parsed.mariadb) {
+		updated = gtid_executed.add(parsed.id, trxid_t(1), parsed.trxid);
+		gtid_executed.set_server_id(parsed.id, parsed.server_id);
+	} else {
+		updated = gtid_executed.add(parsed.id, parsed.trxid);
+	}
+	pthread_rwlock_unlock(&executed_rwlock);
+	return updated;
+}
+
+std::string GTID_Server_Data::gtid_executed_to_string() {
+	return get_gtid_executed_snapshot().gtid_executed;
+}
+
+GTID_Executed_Snapshot GTID_Server_Data::get_gtid_executed_snapshot() {
+	pthread_rwlock_rdlock(&executed_rwlock);
+	GTID_Executed_Snapshot snapshot { gtid_executed.to_display_string(), events_read };
+	pthread_rwlock_unlock(&executed_rwlock);
+	return snapshot;
 }
 
 void GTID_Server_Data::read_all_gtids() {
@@ -316,14 +401,112 @@ bool GTID_Server_Data::writeout() {
  * I2=<trxid>                                                   : Latest seen single trxid, reusing UUID from previous I1/I3 message.
  * I3=<uuid>:<trxid_start>-<trxid_end>                         : Latest seen trxid range for a given UUID.
  * I4=<trxid_start>-<trxid_end>                                : Latest seen trxid range, reusing UUID from previous I1/I3 message.
+ *
+ * The id field is either a MySQL UUID (32 hexadecimal digits, dashes optional)
+ * or a MariaDB domain id (decimal). An endpoint uses one flavor only: the
+ * first id-bearing message fixes it and every later id must match, otherwise
+ * the message is invalid and the reader is disconnected.
  */
+
+// Classifies an id field. Returns GTID_ID_FLAVOR_UNKNOWN for anything that is
+// neither a 32 hex digit MySQL UUID nor a canonical decimal MariaDB domain id.
+//
+// A 32 character dash-free id is a UUID even when every one of its characters
+// is a decimal digit: a MariaDB domain id is a canonical uint32, so it spans
+// 0..UINT32_MAX and any longer decimal spelling is out of range. The shape must
+// be tested before the decimal spelling, because the reader sends a UUID dashed
+// in ST= and stripped in I1/I3, and taking the stripped all-decimal form for a
+// domain would make the same endpoint a UUID at ST= and a domain at I1=.
+static int detect_id_flavor(const char *id, size_t len) {
+	if (id == nullptr || len == 0) {
+		return GTID_ID_FLAVOR_UNKNOWN;
+	}
+
+	bool only_digits = true;
+	size_t hex_digits = 0;
+	for (size_t i = 0; i < len; i++) {
+		unsigned char c = static_cast<unsigned char>(id[i]);
+		if (c >= '0' && c <= '9') {
+			hex_digits++;
+			continue;
+		}
+		only_digits = false;
+		if (c == '-') {
+			continue;
+		}
+		if (!gtid_is_hex_digit(c)) {
+			return GTID_ID_FLAVOR_UNKNOWN;
+		}
+		hex_digits++;
+	}
+
+	if (hex_digits == 32) {
+		return GTID_ID_FLAVOR_UUID;
+	}
+	if (only_digits && is_canonical_mariadb_domain_id(id, len)) {
+		return GTID_ID_FLAVOR_DOMAIN;
+	}
+	return GTID_ID_FLAVOR_UNKNOWN;
+}
+
+// Copies a reader id field into `uuid_server`: a canonical MariaDB domain id is
+// kept verbatim, while the dashes of a MySQL UUID are stripped. Returns the
+// number of bytes written, or -1 when the field does not fit.
+static long copy_gtid_reader_id(const char *subtoken, size_t subtoken_len, char *uuid_server,
+                                size_t uuid_server_size) {
+	if (subtoken_len == 0) {
+		uuid_server[0] = '\0';
+		return 0;
+	}
+
+	size_t written = 0;
+	const bool all_digits = std::all_of(subtoken, subtoken + subtoken_len, [](unsigned char c) {
+		return c >= '0' && c <= '9';
+	});
+	if (all_digits) {
+		if (subtoken_len + 1 >= uuid_server_size) {
+			return -1;
+		}
+		memcpy(uuid_server, subtoken, subtoken_len);
+		written = subtoken_len;
+	} else {
+		for (size_t i = 0; i < subtoken_len; i++) {
+			if (subtoken[i] == '-') {
+				continue;
+			}
+			if (written + 1 >= uuid_server_size) {
+				return -1;
+			}
+			uuid_server[written++] = subtoken[i];
+		}
+	}
+	uuid_server[written] = '\0';
+	return static_cast<long>(written);
+}
+
+// Records the flavor of an id field, rejecting unknown ids and any change of
+// flavor on an endpoint that already established one.
+static bool accept_id_flavor(int &current, int candidate) {
+	if (candidate == GTID_ID_FLAVOR_UNKNOWN) {
+		return false;
+	}
+	if (current == GTID_ID_FLAVOR_UNKNOWN) {
+		current = candidate;
+		return true;
+	}
+	return current == candidate;
+}
+
 bool GTID_Server_Data::read_next_gtid() {
+	pthread_rwlock_wrlock(&executed_rwlock);
 	if (len==0) {
+		pthread_rwlock_unlock(&executed_rwlock);
 		return false;
 	}
 	void *nlp = NULL;
 	nlp = memchr(data+pos,'\n',len-pos);
 	if (nlp == NULL) {
+		pthread_rwlock_unlock(&executed_rwlock);
 		return false;
 	}
 	int l = (char *)nlp - (data+pos);
@@ -355,14 +538,18 @@ bool GTID_Server_Data::read_next_gtid() {
 					}
 				j++;
 				if (j%2 == 1) { // we are reading the uuid
-					char *p = uuid_server;
-					for (unsigned int k=0; k<strlen(subtoken); k++) {
-						if (subtoken[k]!='-') {
-							*p = subtoken[k];
-							p++;
-						}
+					const size_t subtoken_len = strlen(subtoken); // NOSONAR(cpp:S5813): strtok_r() returns a NUL-terminated token inside the NUL-terminated `bs` copy of the record.
+					if (!accept_id_flavor(gtid_flavor,
+					                      detect_id_flavor(subtoken, subtoken_len))) {
+						// unknown id, or a flavor change within one bootstrap line
+						invalid_msg = true;
+						break;
 					}
-					*p = '\0';
+					if (copy_gtid_reader_id(subtoken, subtoken_len, uuid_server,
+					                         sizeof(uuid_server)) < 0) {
+						invalid_msg = true;
+						break;
+					}
 				} else { // we are reading the trxid or trxid range
 					TrxId_Interval iv(trxid_t(0));
 					if (!TrxId_Interval::parse(subtoken, &iv)) {
@@ -384,6 +571,7 @@ bool GTID_Server_Data::read_next_gtid() {
 			proxy_warning("GTID: invalid bootstrap message from binlog reader on port %d for server %s:%d, disconnecting\n",
 				port, address, mysql_port);
 			active = false;
+			pthread_rwlock_unlock(&executed_rwlock);
 			return false;
 		}
 
@@ -391,72 +579,98 @@ bool GTID_Server_Data::read_next_gtid() {
 			events_read++;
 		}
 	} else {
-		strncpy(rec_msg,data+pos,l);
+		if (l >= (int)sizeof(rec_msg)) {
+			pos += l + 1;
+			proxy_warning("GTID: oversized message from binlog reader on port %d for server %s:%d, disconnecting\n",
+				port, address, mysql_port);
+			active = false;
+			pthread_rwlock_unlock(&executed_rwlock);
+			return false;
+		}
+		size_t rec_msg_len = (size_t)l;
+		memcpy(rec_msg, data + pos, rec_msg_len);
 		pos += l+1;
-		rec_msg[l] = 0;
+		rec_msg[rec_msg_len] = 0;
+		if (rec_msg[0] != 'I') {
+			pthread_rwlock_unlock(&executed_rwlock);
+			return true;
+		}
 		bool invalid_msg = false;
-		if (rec_msg[0]=='I') {
-			char *a = NULL;
-			int ul = 0;
-			switch (rec_msg[1]) {
-				case '1': // single trxid with UUID
-					a = strchr(rec_msg+3,':');
-					if (a == NULL) {
-						invalid_msg = true;
-						break;
-					}
-					ul = a-rec_msg-3;
-					strncpy(uuid_server,rec_msg+3,ul);
-					uuid_server[ul] = 0;
-					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(a+1));
-					events_read++;
-					break;
-				case '2': // single trxid, reuse last UUID
-					gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(rec_msg+3));
-					events_read++;
-					break;
-				case '3': // trxid range with UUID
-					a = strchr(rec_msg+3,':');
-					if (a == NULL) {
-						invalid_msg = true;
-						break;
-					}
-					ul = a-rec_msg-3;
-					strncpy(uuid_server,rec_msg+3,ul);
-					uuid_server[ul] = 0;
-					{
-						TrxId_Interval iv(trxid_t(0));
-						if (!TrxId_Interval::parse(a+1, &iv)) {
-							invalid_msg = true;
-							break;
-						}
-						gtid_executed.add((std::string)uuid_server, iv);
-					}
-					events_read++;
-					break;
-				case '4': // trxid range, reuse last UUID
-					{
-						TrxId_Interval iv(trxid_t(0));
-						if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
-							invalid_msg = true;
-							break;
-						}
-						gtid_executed.add((std::string)uuid_server, iv);
-					}
-					events_read++;
-					break;
-				default:
-					invalid_msg = true;
-			}
-
-			if (invalid_msg) {
-				proxy_warning("GTID: invalid or unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
-					rec_msg, port, address, mysql_port);
-				active = false;
+		auto copy_uuid = [this, &rec_msg](char *delimiter) {
+			const int uuid_len = delimiter - (rec_msg + 3);
+			if (uuid_len < 0 || (size_t)uuid_len >= sizeof(uuid_server)) {
 				return false;
 			}
+			memcpy(uuid_server, rec_msg + 3, (size_t)uuid_len);
+			uuid_server[uuid_len] = 0;
+			return true;
+		};
+		char *a = NULL;
+		switch (rec_msg[1]) {
+		case '1': // single trxid with UUID
+			a = strchr(rec_msg+3,':');
+			if (a == NULL || !accept_id_flavor(gtid_flavor,
+			                                 detect_id_flavor(rec_msg+3, (size_t)(a - (rec_msg+3))))
+					|| !copy_uuid(a)) {
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(a+1));
+			events_read++;
+			break;
+		case '2': // single trxid, reuse last UUID
+			if (gtid_flavor == GTID_ID_FLAVOR_UNKNOWN) {
+				// no id-bearing message was seen yet, nothing to reuse
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, (trxid_t)atoll(rec_msg+3));
+			events_read++;
+			break;
+		case '3': { // trxid range with UUID
+			a = strchr(rec_msg+3,':');
+			if (a == NULL || !accept_id_flavor(gtid_flavor,
+			                                 detect_id_flavor(rec_msg+3, (size_t)(a - (rec_msg+3))))
+					|| !copy_uuid(a)) {
+				invalid_msg = true;
+				break;
+			}
+			TrxId_Interval iv(trxid_t(0));
+			if (!TrxId_Interval::parse(a+1, &iv)) {
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, iv);
+			events_read++;
+			break;
+		}
+		case '4': { // trxid range, reuse last UUID
+			if (gtid_flavor == GTID_ID_FLAVOR_UNKNOWN) {
+				invalid_msg = true;
+				break;
+			}
+			TrxId_Interval iv(trxid_t(0));
+			if (!TrxId_Interval::parse(rec_msg+3, &iv)) {
+				invalid_msg = true;
+				break;
+			}
+			gtid_executed.add((std::string)uuid_server, iv);
+			events_read++;
+			break;
+		}
+		default:
+			invalid_msg = true;
+		}
+
+		if (invalid_msg) {
+			proxy_warning("GTID: invalid or unsupported message (%s) from binlog reader on port %d for server %s:%d, disconnecting\n",
+				rec_msg, port, address, mysql_port);
+			active = false;
+			pthread_rwlock_unlock(&executed_rwlock);
+			return false;
 		}
 	}
+	pthread_rwlock_unlock(&executed_rwlock);
 	return true;
 }
 

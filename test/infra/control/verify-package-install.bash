@@ -37,13 +37,21 @@ else
     exit 1
 fi
 
-# Extract distro from filename.
-# DEB:   proxysql_<vers>-<distro>_<arch>.deb        => ubuntu24
-# RPM:   proxysql-<vers>-1-<distro>.<arch>.rpm       => centos9
-DISTRO="$(echo "$PKG_FILE" | sed -n 's/.*\-\([a-z0-9]\+\)[-_.].*\.\(deb\|rpm\)$/\1/p')"
+# Extract distro from filename after removing the extension, architecture,
+# and optional compiler suffix.
+# DEB: proxysql_<vers>-<distro>[-clang]_<arch>.deb  => ubuntu24
+# RPM: proxysql-<vers>-1-<distro>[-clang].<arch>.rpm => centos9
+PKG_STEM="${PKG_FILE%.deb}"
+PKG_STEM="${PKG_STEM%.rpm}"
+PKG_STEM="${PKG_STEM%_amd64}"
+PKG_STEM="${PKG_STEM%_arm64}"
+PKG_STEM="${PKG_STEM%.x86_64}"
+PKG_STEM="${PKG_STEM%.aarch64}"
+PKG_STEM="${PKG_STEM%-clang}"
+DISTRO="${PKG_STEM##*-}"
 if [[ -z "$DISTRO" ]]; then
     echo "ERROR: could not extract distro from filename: $PKG_FILE" >&2
-    echo "  Expected: proxysql_<vers>-<distro>_<arch>.deb or proxysql-<vers>-1-<distro>.<arch>.rpm" >&2
+    echo "  Expected: proxysql_<vers>-<distro>[-clang]_<arch>.deb or proxysql-<vers>-1-<distro>[-clang].<arch>.rpm" >&2
     exit 1
 fi
 
@@ -61,25 +69,26 @@ else
 fi
 
 # ---- Map distro name to a clean Docker image ----
-declare -A IMAGE_MAP=(
-    [ubuntu22]="ubuntu:22.04"
-    [ubuntu24]="ubuntu:24.04"
-    [debian12]="debian:bookworm-slim"
-    [debian13]="debian:trixie-slim"
-    [centos9]="quay.io/centos/centos:stream9"
-    [centos10]="quay.io/centos/centos:stream10"
-    [almalinux8]="almalinux:8"
-    [almalinux9]="almalinux:9"
-    [almalinux10]="almalinux:10"
-    [fedora42]="fedora:42"
-    [fedora43]="fedora:43"
-    [fedora44]="fedora:44"
-    [opensuse15]="opensuse/leap:15.6"
-    [opensuse16]="opensuse/leap:16.0"
-)
-IMAGE="${IMAGE_MAP[$DISTRO]:-}"
+# A case table also works with macOS's /bin/bash 3.2 (no associative arrays).
+case "$DISTRO" in
+    ubuntu22) IMAGE="ubuntu:22.04" ;;
+    ubuntu24) IMAGE="ubuntu:24.04" ;;
+    ubuntu26) IMAGE="ubuntu:26.04" ;;
+    debian12) IMAGE="debian:bookworm-slim" ;;
+    debian13) IMAGE="debian:trixie-slim" ;;
+    centos9) IMAGE="quay.io/centos/centos:stream9" ;;
+    centos10) IMAGE="quay.io/centos/centos:stream10" ;;
+    almalinux8) IMAGE="almalinux:8" ;;
+    almalinux9) IMAGE="almalinux:9" ;;
+    almalinux10) IMAGE="almalinux:10" ;;
+    fedora42) IMAGE="fedora:42" ;;
+    fedora43) IMAGE="fedora:43" ;;
+    fedora44) IMAGE="fedora:44" ;;
+    opensuse16) IMAGE="opensuse/leap:16.0" ;;
+    *) IMAGE="" ;;
+esac
 if [[ -z "$IMAGE" ]]; then
-    echo "ERROR: unknown distro '$DISTRO' — add it to IMAGE_MAP in $0" >&2
+    echo "ERROR: unknown distro '$DISTRO' — add it to the image mapping in $0" >&2
     exit 1
 fi
 
@@ -91,13 +100,14 @@ echo ""
 # ---- Pull the clean distro image ----
 echo "==> Pulling $IMAGE ..."
 if ! docker pull "$IMAGE" >/dev/null 2>&1; then
-    echo "WARNING: could not pull $IMAGE — skipping verification" >&2
-    exit 0
+    echo "ERROR: could not pull $IMAGE" >&2
+    exit 1
 fi
 echo ""
 
 # ---- Prepare the test script that runs inside the container ----
-TEST_SCRIPT=$(cat << 'SCRIPT_BODY'
+# read avoids Bash 3.2's command-substitution/heredoc parser limitations.
+IFS= read -r -d '' TEST_SCRIPT << 'SCRIPT_BODY' || true
 #!/bin/bash
 set -euo pipefail
 PKG_TYPE="$1"
@@ -119,7 +129,10 @@ case "$PKG_TYPE" in
         elif command -v yum &>/dev/null; then
             yum install -y -q /tmp/pkg.rpm 2>&1
         elif command -v zypper &>/dev/null; then
-            zypper --non-interactive install -y /tmp/pkg.rpm 2>&1
+            # Release-build RPMs are intentionally unsigned until the
+            # release-kraken signing step.  Keep dependency resolution and
+            # installation strict while deferring only the signature gate.
+            zypper --non-interactive --no-gpg-checks install -y /tmp/pkg.rpm 2>&1
         else
             echo "ERROR: no supported package manager (dnf/yum/zypper)" >&2
             exit 1
@@ -170,7 +183,6 @@ fi
 echo ""
 echo "==> Package verification PASSED"
 SCRIPT_BODY
-)
 
 # ---- Run verification in clean distro container ----
 CID="proxysql-verify-$$"
@@ -182,8 +194,8 @@ trap cleanup EXIT
 
 echo "==> Starting clean container from $IMAGE ..."
 if ! docker run -d --name "$CID" "$IMAGE" sleep 120 >/dev/null 2>&1; then
-    echo "WARNING: could not start container from $IMAGE — skipping" >&2
-    exit 0
+    echo "ERROR: could not start container from $IMAGE" >&2
+    exit 1
 fi
 
 # Copy package into container

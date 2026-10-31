@@ -28,29 +28,38 @@
 #ifndef PROXYSQL_QUERY_PROCESSOR_PARSERSQL_H
 #define PROXYSQL_QUERY_PROCESSOR_PARSERSQL_H
 
+#include "MySQL_User_Variables.h"
 #include "proxysql_structs.h"
 #include <map>
 #include <string>
 #include <vector>
 
+enum class UserVariableQueryDisposition : uint8_t {
+	LEGACY,
+	SUPPORTED_SET,
+	SAFE,
+	UNSAFE_FALLBACK
+};
+
+struct UserVariableQueryDecision {
+	UserVariableQueryDisposition disposition;
+	bool parsersql_called;
+	bool legacy_udv_status_safe;
+};
+
 /**
- * @brief Computes a query digest using the MySQL-flavour ParserSQL parser.
+ * @brief Initialize digest metadata for the selected ParserSQL integration.
  *
- * Parses the query, normalizes it into digest text (replacing literals with
- * placeholders), and stores both the normalized text and its SpookyHash in
- * `qp->digest_text` / `qp->digest`.
- *
- * Controlled by `mysql-query_processor_parser`.
- *
- * @param qp           Output structure. `digest_text`, `first_comment`, and
- *                      `query_prefix` are set; `digest` receives the 64-bit hash.
- * @param query         Raw SQL query bytes.
- * @param query_length  Length of `query` in bytes.
+ * v3.0 uses ParserSQL's AST emitter for eligible complete statements and the
+ * legacy tokenizer for fallback cases; both use SpookyHash. Its
+ * experimental parser mode does not extract first-comment annotations.
+ * Newer tiers retain legacy-tokenizer digests pending the design in #6508.
+ * The caller owns allocated digest text unless it points at qp->buf.
  */
 void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length);
 
 /**
- * @brief Computes a query digest using the PostgreSQL-flavour ParserSQL parser.
+ * @brief PostgreSQL variant of the selected ParserSQL digest integration.
  *
  * Identical to parsersql_digest_init_mysql() but targets PostgreSQL syntax.
  *
@@ -104,10 +113,17 @@ enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int que
  * Controlled by `mysql-set_parser_algorithm` (value 3).
  *
  * @param query  The SET statement to parse.
+ * @param session_scope_only Require only session assignments (including
+ *               LOCAL). Reject the whole map before scope normalization if any
+ *               target is global, persistent, or a user variable. Used by
+ *               session-variable tracking.
  * @return       Map from normalised variable name to its value(s). Empty map
- *               if the query is not a valid SET statement.
+ *               if the query is not a valid SET statement or is not parsed in
+ *               full (trailing `;` and whitespace are allowed; trailing tokens,
+ *               including a second statement, are not).
  */
-std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(const std::string& query);
+std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
+    const std::string& query, bool session_scope_only = false);
 
 /**
  * @brief Parses a PostgreSQL SET statement into variable-value pairs.
@@ -121,5 +137,31 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(const 
  *               if the query is not a valid SET statement.
  */
 std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(const std::string& query);
+
+UserVariableQueryDecision mysql_user_variable_query_disposition(
+	const char* query, size_t query_length,
+	bool must_classify_and_sync, bool plain_text_com_query,
+	bool supported_user_variable_set);
+
+UserVariableQueryDecision mysql_user_variable_raw_query_disposition(
+	const char* query, size_t query_length,
+	bool must_classify_and_sync, bool plain_text_com_query,
+	bool supported_user_variable_set, bool digest_available);
+
+bool parsersql_set_changes_user_variable_replay_context_mysql(
+	const char* query, size_t query_length);
+
+bool mysql_user_variable_is_replay_context_name(
+	const char* variable, size_t variable_length);
+
+bool mysql_user_variable_unsafe_query_locks_hostgroup(
+	int query_rule_multiplex, bool already_locked);
+
+bool mysql_user_variable_backend_result_requires_binding(
+	bool backend_success, bool unsafe_fallback,
+	bool replay_context_change, int query_rule_multiplex);
+
+bool mysql_user_variable_fallback_uses_qpo_epilogue(
+	bool unsafe_fallback, bool replay_context_change);
 
 #endif

@@ -51,15 +51,18 @@ class SQLite3_Server {
 	std::unordered_map<std::string, group_rep_status> grouprep_map;
 	std::vector<table_def_t *> *tables_defs_grouprep;
 #endif // TEST_GROUPREP
-#ifdef TEST_READONLY
-	std::unordered_map<std::string, bool> readonly_map;
+#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	std::vector<table_def_t *> *tables_defs_readonly;
-#endif // TEST_READONLY
+	std::unordered_map<std::string, bool> readonly_map;
+#endif // TEST_READONLY || TEST_RDS_BGD
+#ifdef TEST_RDS_BGD
+	std::vector<table_def_t *> *tables_defs_rds_bgd;
+#endif // TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 	std::unordered_map<std::string, std::unique_ptr<int>> replicationlag_map;
 	std::vector<table_def_t*>* tables_defs_replicationlag;
 #endif // TEST_REPLICATIONLAG
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG) || defined(TEST_RDS_BGD)
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
@@ -94,14 +97,14 @@ class SQLite3_Server {
 	void init_grouprep_ifaces_string(std::string& s);
 	group_rep_status grouprep_test_value(const std::string& srv_addr);
 #endif // TEST_GROUPREP
-#ifdef TEST_READONLY
+#if defined(TEST_READONLY) || defined(TEST_RDS_BGD)
 	pthread_mutex_t test_readonly_mutex;
 	void load_readonly_table(MySQL_Session *sess);
 	int readonly_test_value(char *p);
 	int readonly_map_size() {
 		return readonly_map.size();
 	}
-#endif // TEST_READONLY
+#endif // TEST_READONLY || TEST_RDS_BGD
 #ifdef TEST_REPLICATIONLAG
 	pthread_mutex_t test_replicationlag_mutex;
 	void load_replicationlag_table(MySQL_Session* sess);
@@ -122,5 +125,6 @@ class SQLite3_Server {
 	void wrunlock();
 	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0, uint16_t status=2);
 	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
+	void send_MySQL_ERR(MySQL_Protocol *myprot, uint16_t error_code, const char *msg);
 };
 #endif // CLASS_PROXYSQL_SQLITE3_SERVER_H

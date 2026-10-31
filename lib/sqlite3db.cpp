@@ -8,6 +8,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <climits>
+#include <string_view>
 
 #ifdef DEBUG
 //#define VALGRIND_ENABLE_ERROR_REPORTING
@@ -161,6 +163,42 @@ void SQLite3_row::add_fields(char **_fields) {
 		ds=data_size;
 }
 
+bool SQLite3_row::add_fields(char **_fields, const unsigned long *_sizes) {
+	unsigned long long data_size = 0;
+	for (int i = 0; i < cnt; i++) {
+		if (_fields[i] != nullptr) {
+			if (_sizes[i] > static_cast<unsigned long>(INT_MAX) ||
+			    data_size + _sizes[i] + 1ULL > static_cast<unsigned long long>(INT_MAX)) {
+				return false;
+			}
+			sizes[i] = static_cast<int>(_sizes[i]);
+			data_size += sizes[i] + 1;
+		} else {
+			sizes[i] = 0;
+		}
+	}
+	data = nullptr;
+	if (data_size > 0) {
+		data = static_cast<char *>(malloc(static_cast<size_t>(data_size)));
+		if (data == nullptr) {
+			return false;
+		}
+	}
+	int data_ptr = 0;
+	for (int i = 0; i < cnt; i++) {
+		if (_fields[i] != nullptr && data != nullptr) {
+			memcpy(data + data_ptr, _fields[i], sizes[i]);
+			fields[i] = data + data_ptr;
+			data_ptr += sizes[i];
+			data[data_ptr++] = '\0';
+		} else {
+			fields[i] = nullptr;
+		}
+	}
+	ds = static_cast<int>(data_size);
+	return true;
+}
+
 
 /**
  * @brief Constructor for the SQLite3DB class.
@@ -168,6 +206,7 @@ void SQLite3_row::add_fields(char **_fields) {
 SQLite3DB::SQLite3DB() {
 	db=NULL;
 	url=NULL;
+	quarantined=false;
 	assert_on_error=0;
 	pthread_rwlock_init(&rwlock, NULL);
 }
@@ -201,6 +240,7 @@ int SQLite3DB::open(char *__url, int flags) {
 	// we shouldn't call open if url is not NULL
 	assert(url==NULL); // we always assert() here
 	assert(db==NULL);
+	quarantined=false;
 	url=strdup(__url);
 	int rc;
 	rc=(*proxy_sqlite3_open_v2)(url, &db, flags , NULL);
@@ -215,6 +255,16 @@ int SQLite3DB::open(char *__url, int flags) {
 	return 0;
 }
 
+bool SQLite3DB::quarantine() {
+	quarantined = true;
+	if (db == NULL) return true;
+	const int rc = (*proxy_sqlite3_close_v2)(db);
+	if (rc == SQLITE_OK) db = NULL;
+	// Even if SQLite cannot close immediately, the wrapper remains permanently
+	// disabled and get_db() no longer exposes the live transactional handle.
+	return true;
+}
+
 /**
  * @brief Executes a SQL statement.
  * 
@@ -222,8 +272,7 @@ int SQLite3DB::open(char *__url, int flags) {
  * @return True if the execution was successful, false otherwise.
  */
 bool SQLite3DB::execute(const char *str) {
-	assert(url);
-	assert(db);
+	if (url == NULL || db == NULL || quarantined) return false;
 	char *err=NULL;
 	int rc=0;
 	do {
@@ -257,6 +306,8 @@ bool SQLite3DB::execute(const char *str) {
  * @return The status of the preparation operation.
  */
 int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
+	if (statement != NULL) *statement = NULL;
+	if (db == NULL || quarantined) return SQLITE_MISUSE;
 	int rc;
 	do {
 		rc = (*proxy_sqlite3_prepare_v2)(db, str, -1, statement, 0);
@@ -272,6 +323,7 @@ void stmt_deleter_t::operator()(sqlite3_stmt* x) const {
 }
 
 std::pair<int,stmt_unique_ptr> SQLite3DB::prepare_v2(const char* query) {
+	if (db == NULL || quarantined) return {SQLITE_MISUSE, stmt_unique_ptr(nullptr)};
 	int rc { 0 };
 	sqlite3_stmt* stmt { nullptr };
 
@@ -325,9 +377,16 @@ SQLite3_result* SQLite3DB::execute_statement(const char *str, char **_error, int
  * @return True if the execution was successful, false otherwise.
  */
 bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int *affected_rows, SQLite3_result **resultset) {
+	*error=NULL;
+	*cols=0;
+	*affected_rows=0;
+	*resultset=NULL;
+	if (db == NULL || quarantined) {
+		*error=strdup("SQLite connection is quarantined");
+		return false;
+	}
 	int rc;
 	sqlite3_stmt *statement=NULL;
-	*error=NULL;
 	bool ret=false;
 	VALGRIND_DISABLE_ERROR_REPORTING;
 	do {
@@ -392,9 +451,16 @@ __exit_execute_statement:
  * @return True if the execution was successful, false otherwise.
  */
 bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, int *affected_rows, sqlite3_stmt **statement) {
+	*error=NULL;
+	*cols=0;
+	*affected_rows=0;
+	*statement=NULL;
+	if (db == NULL || quarantined) {
+		*error=strdup("SQLite connection is quarantined");
+		return false;
+	}
 	int rc;
 	//sqlite3_stmt *statement=NULL;
-	*error=NULL;
 	bool ret=false;
 	VALGRIND_DISABLE_ERROR_REPORTING;
 	if((*proxy_sqlite3_prepare_v2)(db, str, -1, statement, 0) != SQLITE_OK) {
@@ -471,8 +537,15 @@ SQLite3_result* SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** erro
  * @return True if the execution was successful, false otherwise.
  */
 bool SQLite3DB::execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows, SQLite3_result** resultset) {
-	int rc;
 	*error = NULL;
+	*cols = 0;
+	*affected_rows = 0;
+	*resultset = NULL;
+	if (db == NULL || quarantined || statement == NULL) {
+		*error = strdup("SQLite connection is quarantined");
+		return false;
+	}
+	int rc;
 	bool ret = false;
 	*cols = (*proxy_sqlite3_column_count)(statement);
 	if (*cols == 0) { // not a SELECT
@@ -543,24 +616,44 @@ int SQLite3DB::return_one_int(const char *str) {
  * @return The number of tables matching the structure.
  */
 int SQLite3DB::check_table_structure(const char *table_name, const char *table_def) {
-	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=\"%s\" AND sql=\"%s\"";
-	int count=0;
-	int l=strlen(q1)+strlen(table_name)+strlen(table_def)+1;
-	sqlite3_stmt *statement;
-	char *buff=(char *)calloc(1,l);
-	sprintf(buff, q1, table_name , table_def);
-	if((*proxy_sqlite3_prepare_v2)(db, buff, -1, &statement, 0) != SQLITE_OK) {
-	  proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on (*proxy_sqlite3_prepare_v2)() running query \"%s\" : %s\n", buff, (*proxy_sqlite3_errmsg)(db));
-	  (*proxy_sqlite3_finalize)(statement);
-	  free(buff);
-	  assert(0);
+	if (db == NULL || quarantined) return 0;
+	// SQLite stores an uppercase CREATE TABLE prefix without IF NOT EXISTS.
+	// Normalize only these leading keywords; preserve names and the table body.
+	std::string canonical_def(table_def);
+	const char* cursor = table_def;
+	constexpr char whitespace[] = " \t\n\r\f";
+	auto consume_keyword = [&](std::string_view keyword) {
+		const char* start = cursor + strspn(cursor, whitespace);
+		if (strncasecmp(start, keyword.data(), keyword.size()) != 0 ||
+			(start[keyword.size()] != '\0' &&
+			 strchr(whitespace, start[keyword.size()]) == nullptr)) return false;
+		cursor = start + keyword.size();
+		cursor += strspn(cursor, whitespace);
+		return true;
+	};
+	if (consume_keyword("CREATE") && consume_keyword("TABLE")) {
+		const char* table_start = cursor;
+		if (consume_keyword("IF")) {
+			table_start = consume_keyword("NOT") && consume_keyword("EXISTS") ? cursor : nullptr;
+		}
+		if (table_start != nullptr) canonical_def = std::string("CREATE TABLE ") + table_start;
 	}
+	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=?1 AND sql=?2";
+	int count=0;
+	sqlite3_stmt *statement=NULL;
+	if((*proxy_sqlite3_prepare_v2)(db, q1, -1, &statement, 0) != SQLITE_OK) {
+	  proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on (*proxy_sqlite3_prepare_v2)() running query \"%s\" : %s\n", q1, (*proxy_sqlite3_errmsg)(db));
+	  (*proxy_sqlite3_finalize)(statement);
+	  assert(0);
+	  return 0;
+	}
+	int rc=(*proxy_sqlite3_bind_text)(statement, 1, table_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
+	rc=(*proxy_sqlite3_bind_text)(statement, 2, canonical_def.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, this);
 	int result=0;
 	while ((result=(*proxy_sqlite3_step)(statement))==SQLITE_ROW) {
 	  count+=(*proxy_sqlite3_column_int)(statement,0);
 	}
 	(*proxy_sqlite3_finalize)(statement);
-	free(buff);
 	return count;
 }
 
@@ -684,7 +777,7 @@ char *SQLite3_result::checksum() {
 	memset(buf,'0',128);
 	uint32_t d32[2];
 	memcpy(&d32,&hash1,sizeof(hash1));
-	sprintf(buf,"0x%X%X", d32[0], d32[1]);
+	snprintf(buf, sizeof(buf), "0x%X%X", d32[0], d32[1]);
 	return strdup(buf);
 }
 
@@ -914,6 +1007,23 @@ int SQLite3_result::add_row(char **_fields) {
 	return SQLITE_ROW;
 }
 
+int SQLite3_result::add_row(char **_fields, const unsigned long *_sizes) {
+	SQLite3_row *row = new SQLite3_row(columns);
+	if (!row->add_fields(_fields, _sizes)) {
+		delete row;
+		return SQLITE_TOOBIG;
+	}
+	if (enabled_mutex) {
+		pthread_mutex_lock(&m);
+	}
+	rows.push_back(row);
+	rows_count++;
+	if (enabled_mutex) {
+		pthread_mutex_unlock(&m);
+	}
+	return SQLITE_ROW;
+}
+
 /**
  * @brief Adds a new row to the resulset using a NULL terminated variadic list of
  *  'const char*' as argument.
@@ -1127,11 +1237,11 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 					unsigned char temp[SHA_DIGEST_LENGTH];
 					SHA1(fb, statbuf.st_size, temp);
 					memset(binary_sha1_sqlite3, 0, SHA_DIGEST_LENGTH*2+1);
-					char buf[SHA_DIGEST_LENGTH*2];
-					for (int i=0; i < SHA_DIGEST_LENGTH - 1; i++) {
-						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
+					char buf[SHA_DIGEST_LENGTH*2+1];
+					for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
+						snprintf(buf + i*2, sizeof(buf) - i*2, "%02x", temp[i]);
 					}
-					memcpy(binary_sha1_sqlite3, buf, SHA_DIGEST_LENGTH*2);
+					memcpy(binary_sha1_sqlite3, buf, sizeof(buf));
 					munmap(fb,statbuf.st_size);
 				} else {
 					proxy_error("Unable to mmap %s: %s\n", plugin_name, strerror(errno));
@@ -1251,4 +1361,3 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		}
 	}
 }
-

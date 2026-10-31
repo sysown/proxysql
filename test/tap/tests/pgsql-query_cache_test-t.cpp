@@ -955,8 +955,19 @@ void execute_query_cache_notice_test(PGconn* admin_conn, PGconn* conn) {
 }
 
 void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
-    // 1) Enable query-cache-for-SELECT rules (same as basic test) so the system *would* cache
-    //    simple queries -- but extended query protocol should bypass cache.
+    PGresult* version = PQexec(admin_conn,
+        "SELECT variable_value FROM global_variables WHERE variable_name='admin-version'");
+    int major = 0, minor = 0;
+    if (PQresultStatus(version) != PGRES_TUPLES_OK || PQntuples(version) != 1 ||
+        sscanf(PQgetvalue(version, 0, 0), "%d.%d", &major, &minor) != 2)
+        BAIL_OUT("Cannot determine ProxySQL build tier from admin-version");
+    PQclear(version);
+    const bool extended_cache = major > 3 || (major == 3 && minor >= 1);
+    const auto cache_growth = [extended_cache](int actual, int expected) {
+        return extended_cache ? actual > expected : actual == expected;
+    };
+    // 1) Simple SELECT caching is available on every tier; extended caching
+    // requires PROXYSQL31. Determine the server tier, not the TAP build flags.
     if (!executeQueries(admin_conn, {
         "DELETE FROM pgsql_query_rules",
         "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
@@ -970,7 +981,8 @@ void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
     // Collect baseline metrics
     metrics.before = getQueryCacheMetrics(admin_conn);
 
-    // 2) Prepare and execute (extended query) - should NOT create a cache entry
+    // 2) Separate preparation followed by Bind/Describe/Execute/Sync populates
+    // the extended-protocol cache only on PROXYSQL31 builds.
     if (!prepareAndExec(conn, "ps_select_1", "SELECT 1")) {
         // attempt cleanup before returning
         executeQueries(admin_conn, { "DELETE FROM pgsql_query_rules", "LOAD PGSQL QUERY RULES TO RUNTIME" });
@@ -981,20 +993,20 @@ void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
     metrics.after = getQueryCacheMetrics(admin_conn);
     printQueryCacheMetrics();
 
-    // Expectation: extended/prepared queries are not cached -> no changes in cache metrics
-    checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Memory_bytes", 0, cache_growth);
+    checkMetricDelta<>("Query_Cache_count_GET", extended_cache ? 1 : 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", extended_cache ? 1 : 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_IN", 0, cache_growth);
     checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_Entries", extended_cache ? 1 : 0, std::equal_to<int>());
 
     metrics.swap();
 
     executeQueries(conn, { "DEALLOCATE ps_select_1" });
-    // 3) Execute prepared statement again (same extended protocol). Still should not touch cache.
+    // 3) Re-prepare and execute identical SQL: client statement lifecycle
+    // does not change the result key, so this execution hits on PROXYSQL31.
     if (!prepareAndExec(conn, "ps_select_1", "SELECT 1")) {
         // cleanup below
     }
@@ -1003,11 +1015,11 @@ void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
     printQueryCacheMetrics();
 
     checkMetricDelta<>("Query_Cache_Memory_bytes", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_count_GET_OK", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET", extended_cache ? 1 : 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_GET_OK", extended_cache ? 1 : 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_bytes_IN", 0, std::equal_to<int>());
-    checkMetricDelta<>("Query_Cache_bytes_OUT", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_bytes_OUT", 0, cache_growth);
     checkMetricDelta<>("Query_Cache_Purged", 0, std::equal_to<int>());
     checkMetricDelta<>("Query_Cache_Entries", 0, std::equal_to<int>());
 

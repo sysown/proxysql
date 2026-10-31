@@ -41,22 +41,6 @@ else
 	build_target="$PROXYSQL_BUILD_TYPE"
 fi
 
-# The v4.0 chassis tier (PROXYSQL40=1) builds plugins/mysqlx/ which
-# dynamically links against the system libprotobuf (3.x). Some of the
-# v4.0.0 packaging images were built before plugins/mysqlx existed and
-# do not yet ship libprotobuf-dev. Install it on demand here so the
-# plugin's pkg-config check succeeds.  The install is idempotent —
-# apt-get returns 0 if the package is already present.  PROXYSQL40=1
-# builds and packages all v4.0 plugins — there is no separate
-# PROXYSQLGENAI flag.
-if [[ "${PROXYSQL40:-}" == "1" ]]; then
-    if ! pkg-config --exists protobuf 2>/dev/null; then
-        echo "==> Installing libprotobuf-dev (required for the mysqlx plugin build under PROXYSQL40)"
-        apt-get update -qq
-        apt-get install -y --no-install-recommends libprotobuf-dev
-    fi
-fi
-
 # clean is expensive, do it before, outside of container
 #${MAKE} cleanbuild
 #
@@ -67,6 +51,12 @@ fi
 # all v4.0 plugins — PROXYSQLGENAI is no longer a separate flag.
 EXTRA=""
 [[ "${PROXYSQL40:-}" == "1" ]] && EXTRA="$EXTRA PROXYSQL40=1"
+# SKIP_GENAI_UNIT_TESTS=1 lets ci-builds.yml's -tap-mysqlx matrix
+# variant skip the ~14 genai_*_unit-t binaries (each links 30+
+# plugins/genai/src/*.cpp at -O0 -ggdb, ~160 MB apiece) so the
+# in-build working set fits the runner's ~14 GB free disk.
+# CI-mysqlx, the only consumer of -tap-mysqlx, never runs them.
+[[ "${SKIP_GENAI_UNIT_TESTS:-}" == "1" ]] && EXTRA="$EXTRA SKIP_GENAI_UNIT_TESTS=1"
 ${MAKE} ${MAKEOPT} ${EXTRA} ${deps_target}
 ${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 

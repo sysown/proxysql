@@ -1,6 +1,7 @@
 #include "openssl/rand.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "gen_utils.h"
 
 #ifdef DEBUG
 void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -39,7 +40,7 @@ char *sha1_pass_hex(char *sha1_pass) {
 	uint8_t a = 0;
 	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
 		memcpy(&a,sha1_pass+i,1);
-		sprintf(buff+1+2*i, "%02x", a);
+		snprintf(buff + 1 + 2 * i, 3, "%02x", a);
 	}
 	return buff;
 }
@@ -60,7 +61,7 @@ void proxy_create_random_string(char *_to, uint length, struct rand_struct *rand
 	if (rc==1) {
 		// For code coverage (to test the following code and other function)
 		// in DEBUG mode we pretend that RAND_bytes() fails 1% of the time
-		if(rand()%100==0) {
+		if(fastrand()%100==0) {
 			rc=0;
 		}
 	}
@@ -204,8 +205,8 @@ typedef union _4bytes_t {
 
 unsigned int CPY3(unsigned char *ptr) {
 	_4bytes_t buf;
-	buf.i=*(uint32_t *)ptr;
-	buf.data[3]=0;
+	buf.i = 0;
+	memcpy(buf.data, ptr, 3);
 	return buf.i;
 }
 
@@ -221,20 +222,22 @@ uint64_t CPY8(unsigned char *ptr) {
  * poiter to the variable to store the length
  * returns the bytes length of th field
 */
-uint8_t mysql_decode_length(unsigned char *ptr, uint32_t *len) {
+uint8_t mysql_decode_length(unsigned char *ptr, size_t avail, uint32_t *len) {
+	if (avail < 1) return 0;
 	if (*ptr <= 0xfb) { if (len) { *len = CPY1(ptr); };  return 1; }
-	if (*ptr == 0xfc) { if (len) { *len = CPY2(ptr+1); }; return 3; }
-	if (*ptr == 0xfd) { if (len) { *len = CPY3(ptr+1); };  return 4; }
-	if (*ptr == 0xfe) { if (len) { *len = CPY4(ptr+1); };  return 9; }
-	return 0; // never reaches here
+	if (*ptr == 0xfc) { if (avail < 3) return 0; if (len) { *len = CPY2(ptr+1); }; return 3; }
+	if (*ptr == 0xfd) { if (avail < 4) return 0; if (len) { *len = CPY3(ptr+1); };  return 4; }
+	if (*ptr == 0xfe) { if (avail < 9) return 0; if (len) { *len = CPY4(ptr+1); };  return 9; }
+	return 0;
 }
 
-uint8_t mysql_decode_length_ll(unsigned char *ptr, uint64_t *len) {
+uint8_t mysql_decode_length_ll(unsigned char *ptr, size_t avail, uint64_t *len) {
+	if (avail < 1) return 0;
 	if (*ptr <= 0xfb) { if (len) { *len = CPY1(ptr); };  return 1; }
-	if (*ptr == 0xfc) { if (len) { *len = CPY2(ptr+1); }; return 3; }
-	if (*ptr == 0xfd) { if (len) { *len = CPY3(ptr+1); };  return 4; }
-	if (*ptr == 0xfe) { if (len) { *len = CPY8(ptr+1); };  return 9; }
-	return 0; // never reaches here
+	if (*ptr == 0xfc) { if (avail < 3) return 0; if (len) { *len = CPY2(ptr+1); }; return 3; }
+	if (*ptr == 0xfd) { if (avail < 4) return 0; if (len) { *len = CPY3(ptr+1); };  return 4; }
+	if (*ptr == 0xfe) { if (avail < 9) return 0; if (len) { *len = CPY8(ptr+1); };  return 9; }
+	return 0;
 }
 
 uint8_t mysql_encode_length(uint64_t len, char *hd) {
@@ -244,4 +247,3 @@ uint8_t mysql_encode_length(uint64_t len, char *hd) {
 	if (hd) { *hd=0xfe; }
 	return 9;	
 }
-

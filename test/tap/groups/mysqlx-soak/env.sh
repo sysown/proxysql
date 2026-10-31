@@ -27,9 +27,15 @@ export SKIP_CLUSTER_START=1
 # default in test/scripts/mysqlx/{behavioral_validation,stress}.py.
 export MYSQLX_PROXYSQL_PORT=6603
 
-# Backend MySQL X protocol port (dbdeployer convention: classic + 20000).
-# infra-dbdeployer-mysql84 exposes 3306 (classic) on the docker
-# network, X protocol is reachable at 23306 from inside the container.
+# Backend MySQL X protocol port. dbdeployer's port convention is
+# classic-port + 10000, so port 3306 (classic) ↔ port 13306 (X
+# protocol). Verified by inspecting `mysqlx-port` in the sandbox's
+# my.sandbox.cnf:
+#   docker exec ... bash -lc 'grep ^mysqlx-port .../my.sandbox.cnf'
+#   mysqlx-port=13306
+# The previous 23306 (classic + 20000) was wrong; the mysqlx plugin
+# then tried to connect to a closed port for every backend session
+# and every SELECT after auth failed.
 export MYSQLX_BACKEND_HOST="dbdeployer1.${INFRA:-infra-dbdeployer-mysql84}"
 export MYSQLX_BACKEND_MYSQL_PORT=3306
-export MYSQLX_BACKEND_X_PORT=23306
+export MYSQLX_BACKEND_X_PORT=13306

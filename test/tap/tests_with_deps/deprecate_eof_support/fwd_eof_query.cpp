@@ -77,6 +77,36 @@ void MySQL_result_to_JSON(MYSQL_RES* resultset, json& j_res) {
 	}
 }
 
+int frontend_deprecate_eof(MYSQL* proxy) {
+	if (mysql_query(proxy, "PROXYSQL INTERNAL SESSION")) {
+		return -1;
+	}
+
+	MYSQL_RES* result = mysql_store_result(proxy);
+	if (!result) {
+		return -1;
+	}
+
+	int deprecate_eof = -1;
+	MYSQL_ROW row = mysql_fetch_row(result);
+	if (row && row[0]) {
+		try {
+			const json session = json::parse(row[0]);
+			const json& flag = session.at("conn").at("client_flag").at("client_deprecate_eof");
+			if (flag.is_boolean()) {
+				deprecate_eof = flag.get<bool>() ? 1 : 0;
+			} else if (flag.is_number_integer()) {
+				deprecate_eof = flag.get<int>() != 0 ? 1 : 0;
+			}
+		} catch (...) {
+			deprecate_eof = -1;
+		}
+	}
+
+	mysql_free_result(result);
+	return deprecate_eof;
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 	int res_code { 0 };
@@ -106,17 +136,6 @@ int main(int argc, char** argv) {
 		proxy->options.client_flag |= CLIENT_DEPRECATE_EOF;
 	#endif
 
-	bool eof_support = proxy->options.client_flag & (1UL << 24);
-
-	// NOTE: This is just for debugging purposes when testing both executable versions `fwd_eof_ok_query` and
-	// `fwd_eof_query` in isolation. Test `deprecate_eof_cache` is expecting a valid JSON as output.
-	/*
-	diag(
-		"Testing 'TEXT PROTOCOL' with: { 'eof_support': %d, 'user': '%s', 'client_flags': %lu }",
-		eof_support, cl.username, cl.client_flags
-	);
-	*/
-
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		std::string err_msg { "MySQL Error:" + std::string { mysql_error(proxy) } + " at line " + std::to_string(__LINE__) };
 		std::cerr << "{ \"Code\": \"Err\", \"Result\": \"" <<  err_msg << "\" }";
@@ -136,9 +155,14 @@ int main(int argc, char** argv) {
 		if (select_res != NULL) {
 			json j_res {};
 			MySQL_result_to_JSON(select_res, j_res);
+			const uint32_t status = proxy->server_status;
+			const uint32_t warnings = mysql_warning_count(proxy);
+			mysql_free_result(select_res);
+			const int deprecate_eof = frontend_deprecate_eof(proxy);
 			std::cout << "{ \"Code\": \"OK\", \"Result\": " << j_res.dump()
-				  << ", \"Status\": " << proxy->server_status
-				  << ", \"Warnings\": " << mysql_warning_count(proxy) 
+				  << ", \"Status\": " << status
+				  << ", \"Warnings\": " << warnings
+				  << ", \"FrontendDeprecateEOF\": " << deprecate_eof
 				  << ", \"Line\": " <<  __LINE__
 				  << " }";
 		} else {
@@ -149,7 +173,6 @@ int main(int argc, char** argv) {
 			res_code = -1;
 		}
 
-		mysql_free_result(select_res);
 	} else {
 		std::string err_msg { "MySQL Error:" + std::string { mysql_error(proxy) }+ "" };
 		std::cerr << "{ \"Code\": \"OK\", \"Result\": 0 }";

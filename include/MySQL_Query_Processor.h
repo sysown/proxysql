@@ -8,17 +8,21 @@
 class Command_Counter;
 typedef struct _MySQL_Query_processor_Rule_t : public QP_rule_t {
 	int gtid_from_hostgroup;
+	bool switch_to_fast_forward { false };
 } MySQL_Query_Processor_Rule_t;
 
 class MySQL_Query_Processor_Output : public Query_Processor_Output {
 public:
-MySQL_Query_Processor_Output() : Query_Processor_Output(), min_gtid(nullptr), gtid_from_hostgroup(-1) {}
+	MySQL_Query_Processor_Output()
+		: Query_Processor_Output(), min_gtid(nullptr),
+		  gtid_from_hostgroup(-1), switch_to_fast_forward(false) {}
 	~MySQL_Query_Processor_Output() = default;
 
 	void init() {
 		Query_Processor_Output::init();
-		min_gtid = NULL;
+		min_gtid = nullptr;
 		gtid_from_hostgroup = -1;
+		switch_to_fast_forward = false;
 	}
 	void destroy() {
 		Query_Processor_Output::destroy();
@@ -30,6 +34,7 @@ MySQL_Query_Processor_Output() : Query_Processor_Output(), min_gtid(nullptr), gt
 
 	char* min_gtid;
 	int gtid_from_hostgroup;
+	bool switch_to_fast_forward;
 };
 
 class MySQL_Rule_Text : public QP_rule_text {
@@ -60,7 +65,7 @@ public:
 
 private:
 	Command_Counter* commands_counters[MYSQL_COM_QUERY___NONE];
-	static bool _is_valid_gtid(char* gtid, size_t gtid_len);
+	static bool _is_valid_gtid(const char* gtid, size_t gtid_len);
 	static MySQL_Query_Processor_Rule_t* new_query_rule(const MySQL_Query_Processor_Rule_t* mqr);
 
 	inline
@@ -70,29 +75,36 @@ private:
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set gtid from hostgroup: %d. A new session will be created\n", mqr->rule_id, mqr->gtid_from_hostgroup);
 			ret->gtid_from_hostgroup = mqr->gtid_from_hostgroup;
 		}
+		if (mqr->switch_to_fast_forward) {
+			ret->switch_to_fast_forward = true;
+		}
 	}
 
 	inline
 	void query_parser_first_comment_extended(const char* key, const char* value, MySQL_Query_Processor_Output* qpo) {
-		if (!strcasecmp(key, "min_gtid")) {
-			if (mysql_thread___ignore_min_gtid_annotations) {
-				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Ignoring min_gtid=%s\n", value);
-			} else {
-				size_t l = strlen(value);
-				if (_is_valid_gtid((char*)value, l)) {
-					char* buf = (char*)malloc(l + 1);
-					strncpy(buf, value, l);
-					buf[l] = '\0';
-
-					if (qpo->min_gtid) {
-						free(qpo->min_gtid);
-					}
-					qpo->min_gtid = buf;
-				} else {
-					proxy_warning("Invalid min_gtid value=%s\n", value);
-				}
-			}
+		if (strcasecmp(key, "min_gtid")) {
+			return;
 		}
+		if (mysql_thread___ignore_min_gtid_annotations) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Ignoring min_gtid=%s\n", value);
+			return;
+		}
+		size_t l = strlen(value);
+		if (!_is_valid_gtid(value, l)) {
+			proxy_warning("Invalid min_gtid value=%s\n", value);
+			return;
+		}
+		char* buf = (char*)l_alloc(l + 1);
+		if (buf == nullptr) {
+			proxy_warning("Unable to allocate memory for min_gtid=%s\n", value);
+			return;
+		}
+		memcpy(buf, value, l);
+		buf[l] = '\0';
+		if (qpo->min_gtid) {
+			l_free(0, qpo->min_gtid);
+		}
+		qpo->min_gtid = buf;
 	}
 
 	friend class Query_Processor;

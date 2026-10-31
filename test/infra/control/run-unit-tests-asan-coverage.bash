@@ -145,6 +145,14 @@ if [ -s coverage/lcov.info ]; then
          --output-file coverage/lcov.info \
          --ignore-errors unused || true
 
+    # gcov records the container checkout prefix in SF: entries even though
+    # capture is rooted at lib/. Normalize those paths to the git-tree shape
+    # used by the TAP coverage producer so Codecov merges both reports.
+    sed -i \
+        -e 's|^SF:/opt/proxysql/|SF:|' \
+        -e "s|^SF:${REPO_ROOT}/|SF:|" \
+        coverage/lcov.info
+
     genhtml --quiet \
             --output-directory coverage/html \
             --title "ProxySQL unit tests coverage" \

@@ -16,6 +16,10 @@
  *       2. Attempts to perform a query, forcing the creation of a backend conn.
  *       3. Performs multiple checks over the query and ProxySQL error log metrics:
  *          - Checks if the query was expected to fail/succeed (conn creation).
+ *          - For the two normal backend-request cases, checks that a one-row result is parsed through the
+ *            SQLite3 self-loop. `mysql-enable_server_deprecate_eof` requests `CLIENT_DEPRECATE_EOF` on the
+ *            outbound connect call, while `mysql-enable_client_deprecate_eof` controls whether the SQLite3
+ *            backend greeting advertises support. Thus both deprecated-EOF and legacy-EOF results are tested.
  *          - Checks error log for conn creation failures (caps mismatch).
  *          - Checks audit log for number of conn received (SQLite3 backend ProxySQL-ProxySQL).
  *          - Checks stats on connection creation to be increased by the expected amount.
@@ -95,6 +99,24 @@ const char* FF_USER = get_env_str(TAP_NAME"FF_USER", "sbtest2");
 const char* FF_PASS = get_env_str(TAP_NAME"FF_PASS", "sbtest2");
 const int RETRIES_DELAY = get_env_int(TAP_NAME"CONNECT_RETRIES_DELAY", 500);
 const int TO_SERVER_MAX = get_env_int(TAP_NAME"CONNECT_TIMEOUT_SERVER_MAX", 2000);
+// Reserve part of the overall budget for retrying a successful but mismatched connection.
+const int TO_SERVER = std::min(120000, TO_SERVER_MAX / 2);
+const int CONNECT_RETRIES = 1000;
+
+bool valid_retry_budget(int timeout_max, int retries_delay) {
+	// Both timeout variables have a 10 ms minimum; the per-attempt timeout must be
+	// strictly below the total. A positive delay gives a finite attempt bound.
+	return timeout_max >= 20 && timeout_max <= 3600000
+		&& retries_delay >= 1 && retries_delay <= 10000 && retries_delay < timeout_max
+		// Keep the deadline, rather than connect_retries_on_failure, as the limit.
+		&& timeout_max <= CONNECT_RETRIES * retries_delay;
+}
+
+uint32_t max_conn_attempts(int timeout_max, int retries_delay) {
+	// The first attempt has no delay. Subsequent attempts start only after the
+	// preceding connection and retry delay, strictly before the overall deadline.
+	return 1 + (timeout_max - 1) / retries_delay;
+}
 
 // Not specific ENV variables
 const string PROXYSQL_LOG_PATH { get_env_str("REGULAR_INFRA_DATADIR", "/tmp/") + _S("/proxysql.log") };
@@ -205,8 +227,10 @@ int conn_pool_cleanup(MYSQL* admin, int tg_hg, int count) {
 }
 
 const vector<string> test_conn_creation___mysql_config {
+	"SET mysql-connect_retries_on_failure=" + _TO_S(CONNECT_RETRIES),
 	"SET mysql-connect_retries_delay=" + _TO_S(RETRIES_DELAY),
-	"SET mysql-connect_timeout_server=" + _TO_S(100),
+	// Allow slow successful connects without exceeding the configured total budget.
+	"SET mysql-connect_timeout_server=" + _TO_S(TO_SERVER),
 	"SET mysql-connect_timeout_server_max=" + _TO_S(TO_SERVER_MAX),
 	"LOAD MYSQL VARIABLES TO RUNTIME"
 };
@@ -326,6 +350,26 @@ struct test_cnf_t {
 	proxy_cnf_t proxy_conf;
 };
 
+const vector<proxy_cnf_t> backend_result_proxy_cnfs {
+	{ .cli_depr_eof = true,  .srv_depr_eof = true, .force_mismatch = false },
+	{ .cli_depr_eof = false, .srv_depr_eof = true, .force_mismatch = false },
+};
+
+bool should_check_backend_result(const test_cnf_t& test_cnf) {
+	if (test_cnf.pool_status.warmup || test_cnf.conn_conf.fast_forward) {
+		return false;
+	}
+
+	return std::any_of(
+		backend_result_proxy_cnfs.begin(), backend_result_proxy_cnfs.end(),
+		[&test_cnf] (const proxy_cnf_t& cnf) {
+			return cnf.cli_depr_eof == test_cnf.proxy_conf.cli_depr_eof
+				&& cnf.srv_depr_eof == test_cnf.proxy_conf.srv_depr_eof
+				&& cnf.force_mismatch == test_cnf.proxy_conf.force_mismatch;
+		}
+	);
+}
+
 vector<proxy_cnf_t> gen_all_proxy_cnfs() {
 	vector<vector<bool>> all_bin_vec { get_all_bin_vec(4) };
 	std::sort(all_bin_vec.begin(), all_bin_vec.end());
@@ -396,6 +440,10 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_timeout_server_max'", -1)
 	};
 	CHECK_EXT_VAL(admin, to_server_max);
+	if (retries_delay.val != RETRIES_DELAY || to_server_max.val != TO_SERVER_MAX) {
+		diag("Runtime retry budget differs from test configuration");
+		return EXIT_FAILURE;
+	}
 	///////////////////////////////////////////////////////////////////////////
 
 	diag(
@@ -453,6 +501,35 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 		mysql_query_t(proxy, "COMMIT");
 	}
 
+	if (rc == 0 && should_check_backend_result(test_conf)) {
+		const string expected_value { "proxysql-backend-deprecate-eof" };
+		const string result_query {
+			"/* hostgroup=" + _TO_S(SQLITE3_HG) + " */ SELECT '" + expected_value + "'"
+		};
+		diag("Issue row-returning query through SQLite3 backend   query=\"%s\"", result_query.c_str());
+
+		const int result_rc { mysql_query_t(proxy, result_query) };
+		MYSQL_RES* result { result_rc == 0 ? mysql_store_result(proxy) : nullptr };
+		MYSQL_ROW row { result ? mysql_fetch_row(result) : nullptr };
+		const bool valid_result {
+			result
+			&& mysql_num_fields(result) == 1
+			&& mysql_num_rows(result) == 1
+			&& row && row[0]
+			&& expected_value == row[0]
+		};
+
+		ok(
+			result_rc == 0 && valid_result,
+			"Backend result should parse with negotiated EOF mode   proxy_conf='%s'",
+			to_string(proxy_cnf).c_str()
+		);
+
+		if (result) {
+			mysql_free_result(result);
+		}
+	}
+
 	// Sanity check; query should **NEVER** fail if mismatch is allowed (no fast-forward).
 	if (rc != 0 && !conn_cnf.fast_forward) {
 		diag(
@@ -496,13 +573,14 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 		);
 	} else {
 		ok(
-			rc != 0,
-			"Query should FAIL (no backend-conn match)   conn_conf='%s' proxy_conf='%s' pool_st='%s'",
+			rc != 0 && mysql_errno(proxy) == 9001,
+			"Query should time out (no backend-conn match)   conn_conf='%s' proxy_conf='%s' pool_st='%s'",
 			to_string(conn_cnf).c_str(), to_string(proxy_cnf).c_str(), to_string(pool_st).c_str()
 		);
 	}
 
 	uint32_t exp_conns { 0 };
+	bool expect_mismatch { false };
 
 	// * -> (* *) -> *:
 	// If conn_pool is warm-up coons matches 'proxy_cnf.cli_depr_eof', conns should be reused from the pool.
@@ -546,7 +624,7 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 		) {
 			exp_conns = 1;
 		} else {
-			exp_conns = TO_SERVER_MAX / RETRIES_DELAY;
+			expect_mismatch = true;
 		}
 	}
 
@@ -559,12 +637,20 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 	const auto& [_a, match_lines] { get_matching_lines(logfile_fs, conn_match_regex)};
 	diag("Found General log matching lines   count=%ld", match_lines.size());
 
-	uint32_t exp_lines { exp_conns == 1 || exp_conns == 0 ? 0 : exp_conns };
+	// Successful connection time and scheduling consume the same overall budget as
+	// retry delays. There is no exact timing-derived count (or guaranteed second
+	// attempt). Require a mismatch, bound retries, then check every independent
+	// connection metric against the observed successful-but-rejected connections.
+	const uint32_t max_attempts { max_conn_attempts(to_server_max.val, retries_delay.val) };
 	ok(
-		match_lines.size() == exp_lines,
-		"Error log should hold conn match failures   lines=%ld exp_lines=%d",
-		match_lines.size(), exp_lines
+		expect_mismatch ? (match_lines.size() >= 1 && match_lines.size() <= max_attempts)
+			: match_lines.empty(),
+		"Error log should hold conn match failures   lines=%ld expected_range=[%u,%u]",
+		match_lines.size(), expect_mismatch ? 1U : 0U, expect_mismatch ? max_attempts : 0U
 	);
+	if (expect_mismatch) {
+		exp_conns = match_lines.size();
+	}
 
 	diag("Check Audit log for connections attempts on SQLite3");
 	MYSQL_QUERY_T(admin, "PROXYSQL FLUSH LOGS");
@@ -581,9 +667,12 @@ int test_conn_acquisition(MYSQL* admin, const test_cnf_t& test_conf) {
 	CHECK_EXT_VAL(admin, post_hg_st);
 
 	ok(
-		pre_hg_st.val.conn_ok + exp_conns == post_hg_st.val.conn_ok,
-		"Conn created should have increased by query attempt   pre-ConnOK=%d post-ConnOK=%d",
-		pre_hg_st.val.conn_ok, post_hg_st.val.conn_ok
+		pre_hg_st.val.conn_ok + exp_conns == post_hg_st.val.conn_ok
+			&& pre_hg_st.val.conn_err == post_hg_st.val.conn_err,
+		"Successful conns should match query attempts without connect errors"
+			"   pre-ConnOK=%d post-ConnOK=%d pre-ConnERR=%d post-ConnERR=%d",
+		pre_hg_st.val.conn_ok, post_hg_st.val.conn_ok,
+		pre_hg_st.val.conn_err, post_hg_st.val.conn_err
 	);
 
 	const ext_val_t<int64_t> post_srv_conns {
@@ -628,6 +717,10 @@ int test_conn_acquisition(
 		mysql_query_ext_val(admin, SELECT_RUNTIME_VAR"'mysql-connect_timeout_server_max'", -1)
 	};
 	CHECK_EXT_VAL(admin, to_server_max);
+	if (retries_delay.val != RETRIES_DELAY || to_server_max.val != TO_SERVER_MAX) {
+		diag("Runtime retry budget differs from test configuration");
+		return EXIT_FAILURE;
+	}
 	//////
 
 	diag("Update 'fast-forward' for testing user   user=\"%s\" fast_forward=%d", FF_USER, ff);
@@ -684,8 +777,8 @@ int test_conn_acquisition(
 
 	if ((force_match || ff) && client_eof) {
 		ok(
-			rc != 0,
-			"Query should FAIL (no backend-conn match)   ff=%d client_eof=%d force_match=%d",
+			rc != 0 && mysql_errno(proxy) == 9001,
+			"Query should time out (no backend-conn match)   ff=%d client_eof=%d force_match=%d",
 			ff, client_eof, force_match
 		);
 	} else {
@@ -696,10 +789,8 @@ int test_conn_acquisition(
 		);
 	}
 
-	const int32_t exp_conns {
-		!(force_match || ff) && warmup_pool ? 0 :
-			(force_match || ff || client_eof) ? TO_SERVER_MAX/RETRIES_DELAY : 1
-	};
+	const bool expect_mismatch { (force_match || ff) && client_eof };
+	uint32_t exp_conns { !(force_match || ff) && warmup_pool ? 0U : 1U };
 	const string conn_match_regex {
 		"Failed to obtain suitable connection for fast-forward; server lacks the required capabilities"
 			"   hostgroup=" + _TO_S(SQLITE3_HG) + " client_flags=\\d+ server_capabilities=\\d+"
@@ -709,12 +800,16 @@ int test_conn_acquisition(
 	const auto& [_a, match_lines] { get_matching_lines(logfile_fs, conn_match_regex)};
 	diag("Found General log matching lines   count=%ld", match_lines.size());
 
-	bool exp_lines  {};
+	const uint32_t max_attempts { max_conn_attempts(to_server_max.val, retries_delay.val) };
 	ok(
-		force_match || ff ? match_lines.size() == exp_conns : match_lines.size() == 0,
-		"Error log should hold conn match failures   lines=%ld exp_lines=%d",
-		match_lines.size(), exp_conns
+		expect_mismatch ? (match_lines.size() >= 1 && match_lines.size() <= max_attempts)
+			: match_lines.empty(),
+		"Error log should hold conn match failures   lines=%ld expected_range=[%u,%u]",
+		match_lines.size(), expect_mismatch ? 1U : 0U, expect_mismatch ? max_attempts : 0U
 	);
+	if (expect_mismatch) {
+		exp_conns = match_lines.size();
+	}
 
 	diag("Check Audit log for connections attempts on SQLite3");
 	MYSQL_QUERY_T(admin, "PROXYSQL FLUSH LOGS");
@@ -731,9 +826,12 @@ int test_conn_acquisition(
 	CHECK_EXT_VAL(admin, post_hg_st);
 
 	ok(
-		pre_hg_st.val.conn_ok + exp_conns == post_hg_st.val.conn_ok,
-		"Conn created should have increased by query attempt   pre-ConnOK=%d post-ConnOK=%d",
-		pre_hg_st.val.conn_ok, post_hg_st.val.conn_ok
+		pre_hg_st.val.conn_ok + exp_conns == post_hg_st.val.conn_ok
+			&& pre_hg_st.val.conn_err == post_hg_st.val.conn_err,
+		"Successful conns should match query attempts without connect errors"
+			"   pre-ConnOK=%d post-ConnOK=%d pre-ConnERR=%d post-ConnERR=%d",
+		pre_hg_st.val.conn_ok, post_hg_st.val.conn_ok,
+		pre_hg_st.val.conn_err, post_hg_st.val.conn_err
 	);
 
 	const ext_val_t<int64_t> post_srv_conns {
@@ -925,6 +1023,14 @@ int test_conn_ff_conv(MYSQL* admin, const CommandLine& cl, bool client_eof) {
 #endif
 
 int main(int argc, char** argv) {
+	if (!valid_retry_budget(TO_SERVER_MAX, RETRIES_DELAY)) {
+		diag("Invalid retry budget: CONNECT_TIMEOUT_SERVER_MAX=%d CONNECT_RETRIES_DELAY=%d. "
+			"Require timeout in [20,3600000] ms, delay in [1,10000] ms below timeout, "
+			"and at most 1000 attempts (ceil(timeout/delay)).",
+			TO_SERVER_MAX, RETRIES_DELAY);
+		return EXIT_FAILURE;
+	}
+
 	CommandLine cl;
 
 	if (cl.getEnv()) {
@@ -939,6 +1045,8 @@ int main(int argc, char** argv) {
 #else
 		* 2
 #endif
+		// gen_all_proxy_cnfs() projects a four-bit matrix onto three fields, so each case occurs twice.
+		+ 2 * backend_result_proxy_cnfs.size()
 	);
 
 	MYSQL* admin { create_mysql_conn({ cl.admin_host, cl.admin_username, cl.admin_password, cl.admin_port }) };

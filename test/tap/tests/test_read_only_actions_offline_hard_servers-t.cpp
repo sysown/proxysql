@@ -185,7 +185,7 @@ int set_read_only_value(const std::string& host, uint16_t port, const std::strin
 	}
 
 	char query[256];
-	sprintf(query, "SET @@global.read_only=%d", read_only_val);
+	snprintf(query, sizeof(query), "SET @@global.read_only=%d", read_only_val);
 
 	rc_query = mysql_query(mysqldb,query);
 

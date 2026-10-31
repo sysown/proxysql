@@ -1,0 +1,220 @@
+name: CI-dependency-artifacts
+
+# Normal builds also prepare exact dependencies on demand. This workflow warms
+# the common architectures/compilers when their actual inputs change.
+on:
+  pull_request:
+    paths:
+      - deps/artifacts/**
+      - deps/duckdb/**
+      - deps/libssl/**
+      - common_mk/openssl_flags.mk
+      - deps/Makefile
+      - Makefile
+      - docker-compose.yml
+      - test/infra/control/dependency-artifacts-smoke.bash
+      - .github/workflows/CI-dependency-artifacts.yml
+  push:
+    branches: [v3.0]
+    paths:
+      - deps/artifacts/**
+      - deps/duckdb/**
+      - deps/libssl/**
+      - common_mk/openssl_flags.mk
+      - deps/Makefile
+      - Makefile
+      - docker-compose.yml
+      - test/infra/control/dependency-artifacts-smoke.bash
+      - .github/workflows/CI-dependency-artifacts.yml
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Optional source branch, tag, or SHA to prepare
+        type: string
+        required: false
+      group:
+        description: Native build profiles to warm (existing signatures are reused)
+        type: choice
+        options: [ubuntu24, almalinux8, macos, all]
+        default: ubuntu24
+      dependency:
+        description: Dependencies to prepare
+        type: choice
+        options: [both, duckdb, openssl]
+        default: both
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      source_sha: ${{ steps.matrix.outputs.source_sha }}
+      control_sha: ${{ steps.matrix.outputs.control_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout reviewed build profile planner
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: sysown/proxysql
+          ref: refs/heads/v3.0
+          path: profile-control
+          fetch-depth: 0
+          sparse-checkout: deps/artifacts
+          persist-credentials: false
+      - name: Select exact build profiles
+        id: matrix
+        working-directory: profile-control
+        env:
+          PROFILE_GROUP: ${{ inputs.group || 'ubuntu24' }}
+          DEPENDENCY: ${{ inputs.dependency || 'both' }}
+          DISPATCH_EVENT: ${{ github.event_name }}
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          source_sha=$(git -C ../source rev-parse HEAD)
+          # A protected-branch dispatch must not let an unreviewed checkout
+          # populate default-branch caches before publication rejects it.
+          if [[ "$DISPATCH_EVENT" == workflow_dispatch && "$DISPATCH_REF" == refs/heads/v3.0 ]]; then
+            if ! git merge-base --is-ancestor "$source_sha" HEAD; then
+              echo 'Protected v3.0 dispatch requires source from reviewed history' >&2
+              exit 1
+            fi
+          fi
+          python3 -E deps/artifacts/publish.py matrix --group "$PROFILE_GROUP" --dependency "$DEPENDENCY" > "$RUNNER_TEMP/dependency-matrix.json"
+          {
+            echo "matrix=$(cat "$RUNNER_TEMP/dependency-matrix.json")"
+            echo "source_sha=$source_sha"
+            echo "control_sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.plan.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install native build tools
+        if: runner.os == 'macOS'
+        run: brew install cmake
+      - name: Checkout immutable dependency cache control
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: sysown/proxysql
+          ref: 17406cda439af9be04d1e29075b1073a1c205b33
+          path: ci-control
+          sparse-checkout: .github/actions/dependency-cache
+          persist-credentials: false
+      - name: Restore or automatically create the matching dependency
+        id: dependencies
+        uses: ./ci-control/.github/actions/dependency-cache
+        with:
+          source-path: .
+          service: ${{ matrix.service || 'native' }}
+          tier: v40
+          dependencies: ${{ matrix.dependency }}
+      - name: Keep verified OpenSSL publication candidate
+        if: steps.dependencies.outputs.openssl-key != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.profile }}-openssl
+          path: |
+            ${{ steps.dependencies.outputs.openssl-path }}/entry.json
+            ${{ steps.dependencies.outputs.openssl-path }}/bundle.tar.gz
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+      - name: Keep verified DuckDB publication candidate
+        if: steps.dependencies.outputs.duckdb-key != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-candidate-a${{ github.run_attempt }}-${{ matrix.profile }}-duckdb
+          path: |
+            ${{ steps.dependencies.outputs.duckdb-path }}/entry.json
+            ${{ steps.dependencies.outputs.duckdb-path }}/bundle.tar.gz
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  publication-plan:
+    needs: [plan, build]
+    # Successful profiles remain useful when another independent profile fails.
+    if: ${{ !cancelled() && (needs.build.result == 'success' || needs.build.result == 'failure') && github.repository == 'sysown/proxysql' && github.ref == 'refs/heads/v3.0' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.candidates.outputs.matrix }}
+      count: ${{ steps.candidates.outputs.count }}
+    steps:
+      - name: Checkout exact reviewed publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: sysown/proxysql
+          ref: ${{ needs.plan.outputs.control_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: dependency-candidate-a${{ github.run_attempt }}-*
+          path: candidates
+      - name: Validate candidates against reviewed source
+        id: candidates
+        env:
+          SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/dependency-source" "$SOURCE_SHA"
+          python3 -E deps/artifacts/publish.py plan-candidates --input candidates \
+            --source-root "$RUNNER_TEMP/dependency-source" --source-sha "$SOURCE_SHA" --github-output "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [plan, publication-plan]
+    if: ${{ !cancelled() && needs.publication-plan.result == 'success' && needs.publication-plan.outputs.count != '0' && github.repository == 'sysown/proxysql' && github.ref == 'refs/heads/v3.0' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.publication-plan.outputs.matrix) }}
+    concurrency:
+      group: dependency-publication-${{ matrix.dependency }}-${{ matrix.fingerprint }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout exact reviewed publisher
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: sysown/proxysql
+          ref: ${{ needs.plan.outputs.control_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: candidate
+      - name: Publish immutable dependency key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_SHA: ${{ needs.plan.outputs.source_sha }}
+          DEPENDENCY: ${{ matrix.dependency }}
+          FINGERPRINT: ${{ matrix.fingerprint }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/dependency-source" "$SOURCE_SHA"
+          python3 -E deps/artifacts/publish.py publish-candidate --input candidate \
+            --source-root "$RUNNER_TEMP/dependency-source" --source-sha "$SOURCE_SHA" \
+            --dependency "$DEPENDENCY" --fingerprint "$FINGERPRINT" --repository "$GITHUB_REPOSITORY"

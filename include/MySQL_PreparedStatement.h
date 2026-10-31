@@ -3,6 +3,7 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include <vector>
 
 /*
 One of the main challenge in handling prepared statement (PS) is that a single
@@ -67,6 +68,10 @@ class MySQL_STMT_Global_info {
 //		int delay;
 //	} properties;
 	bool is_select_NOT_for_update;
+#ifdef PROXYSQL31
+	// Conservative full-SQL guard for result caching, separate from routing.
+	bool has_cache_locking_tokens;
+#endif
 	MYSQL_BIND **params; // seems unused (?)
 	MySQL_STMT_Global_info(uint64_t id, char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, uint64_t _h);
 	void update_metadata(MYSQL_STMT *stmt);
@@ -127,6 +132,9 @@ class StmtLongDataHandler {
 	StmtLongDataHandler();
 	~StmtLongDataHandler();
 	unsigned int reset(uint32_t _stmt_id);
+#ifdef PROXYSQL31
+	bool has_data(uint32_t stmt_id) const;
+#endif
 	bool add(uint32_t _stmt_id, uint16_t _param_id, void *_data, unsigned long _size);
 	void *get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size, my_bool **_is_null);
 };
@@ -184,8 +192,20 @@ class MySQL_STMTs_local_v14 {
 	std::stack<uint32_t> free_client_ids;
 	uint32_t local_max_stmt_id;
 	public:
+	/**
+	 * @brief What a client statement handle maps to.
+	 * @details param_types: COM_STMT_EXECUTE may omit the parameter types, so
+	 *   the last ones the client sent are kept. They belong to the client handle,
+	 *   not to the shared global statement or its last decoded backend bindings.
+	 *   Kept in the same entry as the global id so that an execute looks the
+	 *   handle up once.
+	 */
+	struct client_stmt_t {
+		uint64_t global_id;
+		std::vector<unsigned char> param_types;
+	};
 	// this map associate client_stmt_id to global_stmt_id : this is used only for client connections
-	std::map<uint32_t, uint64_t> client_stmt_to_global_ids;
+	std::map<uint32_t, client_stmt_t> client_stmt_to_global_ids;
 	// this map associates client_stmt_id to prepare-time min_gtid annotations
 	std::map<uint32_t, std::string> client_stmt_to_min_gtid;
 	// this multimap associate global_stmt_id to client_stmt_id : this is used only for client connections
@@ -203,7 +223,7 @@ class MySQL_STMTs_local_v14 {
 		local_max_stmt_id = 0;
 		sess = NULL;
 		is_client_ = _ic;
-		client_stmt_to_global_ids = std::map<uint32_t, uint64_t>();
+		client_stmt_to_global_ids = std::map<uint32_t, client_stmt_t>();
 		client_stmt_to_min_gtid = std::map<uint32_t, std::string>();
 		global_stmt_to_client_ids = std::multimap<uint64_t, uint32_t>();
 		backend_stmt_to_global_ids = std::map<uint32_t, uint64_t>();
@@ -224,6 +244,11 @@ class MySQL_STMTs_local_v14 {
 	unsigned int get_num_backend_stmts() { return backend_stmt_to_global_ids.size(); }
 	uint32_t generate_new_client_stmt_id(uint64_t global_statement_id);
 	uint64_t find_global_stmt_id_from_client(uint32_t client_stmt_id);
+	/** @brief The entry of a client statement handle, or nullptr if the handle is unknown. */
+	client_stmt_t* find_client_stmt(uint32_t client_stmt_id) {
+		auto s = client_stmt_to_global_ids.find(client_stmt_id);
+		return s != client_stmt_to_global_ids.end() ? &s->second : nullptr;
+	}
 	void set_client_min_gtid(uint32_t client_stmt_id, const char* min_gtid);
 	const char* find_client_min_gtid(uint32_t client_stmt_id) const;
 	void erase_client_min_gtid(uint32_t client_stmt_id);

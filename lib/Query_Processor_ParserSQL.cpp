@@ -12,10 +12,8 @@
  * The file is organised into three sections:
  *
  *   **Section 1 — Digest adapter**
- *   Uses `Emitter::DIGEST` mode to produce normalised query text from a full AST, then
- *   hashes it with SpookyHash for backward compatibility with ProxySQL's existing digest
- *   infrastructure.  For statements that parse only to the token level (Tier 2 — no full
- *   AST), it falls back to `Digest<D>` which normalises at the token level instead.
+ *   v3.0 retains experimental ParserSQL-generated digests without first-comment
+ *   extraction. Newer tiers retain legacy-tokenizer digests pending #6508.
  *
  *   **Section 2 — Command type mapping**
  *   Translates ParserSQL's `StmtType` enum to ProxySQL's `MYSQL_COM_QUERY_command` /
@@ -33,12 +31,17 @@
 #include "Query_Processor_ParserSQL.h"
 #include "sql_parser/parser.h"
 #include "sql_parser/digest.h"
+#include "sql_parser/set_parser.h"
+#include "sql_parser/subquery_parse_callback.h"
+#include "c_tokenizer.h"
 #include "sql_parser/emitter.h"
 #include "sql_parser/ast.h"
 #include "sql_parser/common.h"
+#include "sql_parser/user_variable.h"
 #include "SpookyV2.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 
 using namespace sql_parser;
@@ -77,8 +80,8 @@ static std::string strip_quotes(const std::string& s) {
 static std::string strip_scope_prefix(std::string var_name) {
     if (var_name.size() > 2 && var_name[0] == '@' && var_name[1] == '@') {
         var_name = var_name.substr(2);
-    for (const char* prefix : {"session.", "local.", "global."}) {
-        size_t plen = strlen(prefix); // NOSONAR: prefix is a string literal, strlen is evaluated at compile-time
+        for (const char* prefix : {"session.", "local.", "global.", "persist.", "persist_only."}) {
+            size_t plen = strlen(prefix); // NOSONAR: prefix is a string literal, strlen is evaluated at compile-time
             if (var_name.size() > plen &&
                 strncasecmp(var_name.c_str(), prefix, plen) == 0) {
                 var_name = var_name.substr(plen);
@@ -93,7 +96,7 @@ static std::string strip_scope_prefix(std::string var_name) {
  * Normalises a SET variable name for consistent lookup.
  *
  * Steps:
- *   1. Strip keyword scope prefix (SESSION/GLOBAL/LOCAL).
+ *   1. Strip keyword scope prefix (SESSION/GLOBAL/LOCAL/PERSIST/PERSIST_ONLY).
  *   2. Strip @@-style scope prefix (@@session. → "").
  *   3. Lowercase the result.
  *   4. Resolve legacy aliases: "transaction_isolation" → "tx_isolation",
@@ -103,7 +106,7 @@ static std::string strip_scope_prefix(std::string var_name) {
  * wrote the SET statement, matching the behaviour of the regex-based parser.
  */
 static std::string normalize_set_var_name(std::string var_name) {
-    for (const char* prefix : {"SESSION ", "GLOBAL ", "LOCAL "}) {
+    for (const char* prefix : {"SESSION ", "GLOBAL ", "LOCAL ", "PERSIST ", "PERSIST_ONLY "}) {
         size_t plen = strlen(prefix); // NOSONAR: prefix is a string literal, strlen is evaluated at compile-time
         if (var_name.size() > plen &&
             strncasecmp(var_name.c_str(), prefix, plen) == 0) {
@@ -148,6 +151,102 @@ static void skip_quoted_char(const char*& p, const char* end) {
         if (*p == '\\' && p + 1 < end) p++;
         p++;
     }
+}
+
+static bool is_sql_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+static std::string trim_copy(const char* start, const char* end) {
+    while (start < end && is_sql_space(*start)) start++;
+    while (end > start && is_sql_space(*(end - 1))) end--;
+    return std::string(start, end);
+}
+
+static bool is_single_sql_token_value(const std::string& s) {
+    if (s.size() < 2) return false;
+    char q = s.front();
+    if (q != '\'' && q != '"' && q != '`') return false;
+    const char* p = s.data() + 1;
+    const char* end = s.data() + s.size();
+    while (p < end) {
+        if (*p == '\\' && p + 1 < end) {
+            p += 2;
+            continue;
+        }
+        if (*p == q) {
+            p++;
+            while (p < end && is_sql_space(*p)) p++;
+            return p == end;
+        }
+        p++;
+    }
+    return false;
+}
+
+static std::string strip_single_sql_token_quotes(const std::string& s) {
+    if (!is_single_sql_token_value(s)) return s;
+    size_t start = 1;
+    size_t end = s.size() - 1;
+    while (end > start && is_sql_space(s[end - 1])) end--;
+    return s.substr(start, end - start);
+}
+
+static bool is_assignment_operator_at(const char* p, const char* end) {
+    if (p >= end) return false;
+    if (*p == '=') return true;
+    return *p == ':' && p + 1 < end && *(p + 1) == '=';
+}
+
+static const char* skip_assignment_operator(const char* p, const char* end) {
+    if (p < end && *p == ':' && p + 1 < end && *(p + 1) == '=') return p + 2;
+    if (p < end && *p == '=') return p + 1;
+    return p;
+}
+
+static std::string extract_mysql_assignment_value(
+    const char*& scan, const char* query, int query_len)
+{
+    const char* qstart = query;
+    const char* qend = query + query_len;
+    if (!scan || scan < qstart || scan > qend) scan = qstart;
+
+    const char* p = scan;
+    int depth = 0;
+    while (p < qend) {
+        if (*p == '\'' || *p == '"' || *p == '`') {
+            skip_quoted_char(p, qend);
+        } else if (*p == '(' || *p == '[') {
+            depth++;
+        } else if ((*p == ')' || *p == ']') && depth > 0) {
+            depth--;
+        } else if (depth == 0 && is_assignment_operator_at(p, qend)) {
+            break;
+        }
+        p++;
+    }
+    if (p >= qend) return "";
+
+    const char* value_start = skip_assignment_operator(p, qend);
+    while (value_start < qend && is_sql_space(*value_start)) value_start++;
+
+    p = value_start;
+    depth = 0;
+    while (p < qend) {
+        if (*p == '\'' || *p == '"' || *p == '`') {
+            skip_quoted_char(p, qend);
+        } else if (*p == '(' || *p == '[') {
+            depth++;
+        } else if ((*p == ')' || *p == ']') && depth > 0) {
+            depth--;
+        } else if (depth == 0 && (*p == ',' || *p == ';')) {
+            break;
+        }
+        p++;
+    }
+
+    scan = (p < qend && *p == ',') ? p + 1 : p;
+    return trim_copy(value_start, p);
 }
 
 static std::string extract_paren_expr(const char* query, int query_len,
@@ -296,76 +395,234 @@ static std::string emit_delimited_ident_raw(
 // ---------------------------------------------------------------------------
 // Section 1: Digest adapter
 // ---------------------------------------------------------------------------
+//
+// v3.0 restores its established ParserSQL digest flow (#6507), keeping 1.1.1.
+// The existing newer-tier integration remains gated separately.
 
-/**
- * @brief MySQL digest: normalise then SpookyHash.
- *
- * Two-tier strategy:
- *   - If the parser produces a full AST (Tier 1), `Emitter::DIGEST` mode walks
- *     it and emits normalised text with literals replaced by placeholders (?).
- *   - If the parser only reached the token level (Tier 2 — partial parse of
- *     unsupported statement types), `Digest<D>` performs token-level
- *     normalisation as a fallback.
- *
- * The resulting normalised text is hashed with SpookyHash::Hash64 to produce
- * the 64-bit digest that ProxySQL uses for query rule matching and statistics.
- */
-void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length) {
-    qp->digest_text = NULL;
-    qp->first_comment = NULL;
-    qp->query_prefix = NULL;
-    qp->digest = 0;
-
-    auto result = tl_mysql_parser.parse(query, query_length);
-
-    if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        std::string normalized;
-        if (result.ast) {
-            // Tier 1: full AST available — use Emitter in DIGEST mode
-            Emitter<Dialect::MySQL> emitter(tl_mysql_parser.arena(), EmitMode::DIGEST);
-            emitter.emit(result.ast);
-            StringRef ref = emitter.result();
-            normalized.assign(ref.ptr, ref.len);
-        } else {
-            // Tier 2: token-level fallback for statements without full AST support
-            Digest<Dialect::MySQL> digest(tl_mysql_parser.arena());
-            DigestResult dr = digest.compute(query, query_length);
-            normalized.assign(dr.normalized.ptr, dr.normalized.len);
-        }
-        qp->digest_text = strdup(normalized.c_str());
-        // SpookyHash is preserved for backward compatibility with existing digest stats
-        qp->digest = SpookyHash::Hash64(normalized.c_str(), normalized.size(), 0);
+/** Load the legacy tokenizer options for dialect @p D. */
+template <Dialect D>
+static void parsersql_tokenizer_options(options& opts, int& max_digest_length) {
+    if constexpr (D == Dialect::MySQL) {
+        opts.lowercase = mysql_thread___query_digests_lowercase;
+        opts.replace_null = mysql_thread___query_digests_replace_null;
+        opts.replace_number = mysql_thread___query_digests_no_digits;
+        opts.keep_comment = mysql_thread___query_digests_keep_comment;
+        opts.grouping_limit = mysql_thread___query_digests_grouping_limit;
+        opts.groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
+        opts.max_query_length = mysql_thread___query_digests_max_query_length;
+        max_digest_length = mysql_thread___query_digests_max_digest_length;
+    } else {
+        opts.lowercase = pgsql_thread___query_digests_lowercase;
+        opts.replace_null = pgsql_thread___query_digests_replace_null;
+        opts.replace_number = pgsql_thread___query_digests_no_digits;
+        opts.keep_comment = pgsql_thread___query_digests_keep_comment;
+        opts.grouping_limit = pgsql_thread___query_digests_grouping_limit;
+        opts.groups_grouping_limit = pgsql_thread___query_digests_groups_grouping_limit;
+        opts.max_query_length = pgsql_thread___query_digests_max_query_length;
+        max_digest_length = pgsql_thread___query_digests_max_digest_length;
     }
-
-    tl_mysql_parser.reset();
+    // Standalone adapter callers may not have initialized worker variables.
+    // Runtime configuration requires positive limits; use the normal defaults.
+    if (opts.max_query_length <= 0) opts.max_query_length = 65000;
+    if (max_digest_length <= 0) max_digest_length = 2048;
 }
 
-/** PostgreSQL variant of the digest adapter. See parsersql_digest_init_mysql for details. */
-void parsersql_digest_init_pgsql(SQP_par_t* qp, const char* query, int query_length) {
+/**
+ * @brief Produce the digest text, hash and first comment with the legacy tokenizer.
+ *
+ * This is the only digest path, taken in parser mode as well as in legacy mode,
+ * so that *-query_processor_parser never changes a digest. The command type is
+ * not computed here; query_parser_command_type() asks ParserSQL lazily when the
+ * command type is actually needed.
+ */
+template <Dialect D>
+static void parsersql_tokenizer_digest(SQP_par_t* qp, const char* query, int query_length) {
+    options opts {};
+    int max_digest_length;
+    parsersql_tokenizer_options<D>(opts, max_digest_length);
+    char* buffer = nullptr;
+    if constexpr (D == Dialect::MySQL) {
+        if (query_length < QUERY_DIGEST_BUF) buffer = qp->buf;
+        qp->digest_text = mysql_query_digest_and_first_comment(
+            query, query_length, &qp->first_comment, buffer, &opts);
+    } else {
+        // With query_digests_keep_comment the digest can be longer than the query,
+        // so the fixed buffer is only used when it is known to be large enough.
+        if (pgsql_query_digest_buffer_size(query_length, &opts) <= static_cast<int>(QUERY_DIGEST_BUF)) {
+            buffer = qp->buf;
+        }
+        qp->digest_text = pgsql_query_digest_and_first_comment(
+            query, query_length, &qp->first_comment, buffer, &opts);
+    }
+    // A query without SQL tokens (only comments or whitespace) keeps its empty
+    // digest text and the hash of "", exactly as in legacy mode, so it is
+    // counted in the digest stats in both modes (#6454).
+    if (qp->digest_text) {
+        const size_t length = strnlen(qp->digest_text, max_digest_length);
+        qp->digest = SpookyHash::Hash64(qp->digest_text, length, 0);
+    }
+}
+#ifndef PROXYSQL31
+static enum MYSQL_COM_QUERY_command stmt_type_to_mysql_command(StmtType st);
+static enum PGSQL_QUERY_command stmt_type_to_pgsql_command(StmtType st);
+
+static bool parsersql_is_literal_expr(const AstNode* node) {
+    switch (node->type) {
+        case NodeType::NODE_LITERAL_INT:
+        case NodeType::NODE_LITERAL_FLOAT:
+        case NodeType::NODE_LITERAL_STRING:
+        case NodeType::NODE_LITERAL_NULL:
+        case NodeType::NODE_LITERAL_HEX:
+        case NodeType::NODE_LITERAL_BIT:
+        case NodeType::NODE_PLACEHOLDER:
+            return true;
+        case NodeType::NODE_UNARY_OP:
+            if (node->value_len != 1 || (node->value_ptr[0] != '-' && node->value_ptr[0] != '+')) {
+                return false;
+            }
+            [[fallthrough]];
+        case NodeType::NODE_EXPRESSION:
+        case NodeType::NODE_TUPLE:
+        case NodeType::NODE_VALUES_ROW:
+            for (const AstNode* child = node->first_child; child; child = child->next_sibling) {
+                if (!parsersql_is_literal_expr(child)) return false;
+            }
+            return true;
+        default:
+            return false;
+    }
+}
+
+/**
+ * @brief True if the DIGEST emitter would hide a non-literal expression in @p node.
+ *
+ * In DIGEST mode ParserSQL renders every IN / NOT IN list that is not a single
+ * subquery as "IN (?)", and keeps only the first row of a VALUES clause,
+ * whatever the omitted elements are. The legacy tokenizer only replaces
+ * literals. ProxySQL string-matches the digest text for routing and
+ * multiplexing decisions (LAST_INSERT_ID / @@IDENTITY routing, GET_LOCK(,
+ * user variables, ...), so hiding e.g. "IN (LAST_INSERT_ID())" or
+ * "VALUES (1),(GET_LOCK('x',1))" changed behaviour versus
+ * query_processor_parser=0 (#6428). Such statements must use the legacy
+ * tokenizer. Lists made only of literals and placeholders lose nothing.
+ */
+static bool parsersql_digest_hides_expression(const AstNode* node) {
+    // The collapsed children, if any, are always a suffix of the child list.
+    const AstNode* hidden = nullptr;
+    if (node->type == NodeType::NODE_IN_LIST) {
+        const AstNode* expr = node->first_child;
+        const AstNode* first_val = expr ? expr->next_sibling : nullptr;
+        // A single subquery is emitted in full, not collapsed.
+        if (!first_val || first_val->type != NodeType::NODE_SUBQUERY || first_val->next_sibling) {
+            hidden = first_val;
+        }
+    } else if (node->type == NodeType::NODE_VALUES_CLAUSE && node->value_len == 0) {
+        // Only the first row is emitted.
+        hidden = node->first_child ? node->first_child->next_sibling : nullptr;
+    }
+    for (const AstNode* child = hidden; child; child = child->next_sibling) {
+        if (!parsersql_is_literal_expr(child)) return true;
+    }
+    // Literal-only children cannot contain another list: search only the emitted ones.
+    for (const AstNode* child = node->first_child; child != hidden; child = child->next_sibling) {
+        if (parsersql_digest_hides_expression(child)) return true;
+    }
+    return false;
+}
+
+// Temporary v3.0 compatibility path pending #6508. Incomplete ASTs use the
+// legacy digest, so a parsed prefix does not discard trailing SQL.
+// First-comment annotations remain unavailable in this mode (#6507).
+template <Dialect D>
+static void parsersql_native_digest(SQP_par_t* qp, const char* query,
+                                   int query_length, Parser<D>& parser) {
+    const auto parsed = parser.parse(query, query_length);
+    if constexpr (D == Dialect::MySQL) {
+        qp->parsersql_command_type = stmt_type_to_mysql_command(parsed.stmt_type);
+    } else {
+        qp->parsersql_command_type = stmt_type_to_pgsql_command(parsed.stmt_type);
+    }
+    const auto fallback = [&]() {
+        // Retain the bounded legacy fallback for unsupported/incomplete input,
+        // arena exhaustion and expressions hidden by DIGEST emission (#6428).
+        // This is conditional; ordinary parsed queries never run this tokenizer.
+        qp->parsersql_command_type = -1;
+        parsersql_tokenizer_digest<D>(qp, query, query_length);
+        free(qp->first_comment);
+        qp->first_comment = nullptr;
+        parser.reset();
+    };
+    if (parsed.status != ParseResult::OK || !parsed.full_input || !parsed.ast ||
+        parsersql_digest_hides_expression(parsed.ast)) {
+        fallback();
+        return;
+    }
+    Emitter<D> emitter(parser.arena(), EmitMode::DIGEST);
+    emitter.emit(parsed.ast);
+    const StringRef normalized = emitter.result();
+    // AST allocation can succeed while the emitter exhausts the same arena.
+    // Digest consumers require C strings, so embedded NUL also needs fallback.
+    if (!normalized.ptr || memchr(normalized.ptr, '\0', normalized.len)) {
+        fallback();
+        return;
+    }
+    // Copy before reset: both emitter and token-digest output live in the arena.
+    if (normalized.len < QUERY_DIGEST_BUF) {
+        if (normalized.len) memcpy(qp->buf, normalized.ptr, normalized.len);
+        qp->buf[normalized.len] = '\0';
+        qp->digest_text = qp->buf;
+    } else {
+        qp->digest_text = static_cast<char*>(malloc(static_cast<size_t>(normalized.len) + 1));
+        if (!qp->digest_text) {
+            fallback();
+            return;
+        }
+        memcpy(qp->digest_text, normalized.ptr, normalized.len);
+        qp->digest_text[normalized.len] = '\0';
+    }
+    if (qp->digest_text) {
+        qp->digest = SpookyHash::Hash64(qp->digest_text, normalized.len, 0);
+    }
+    parser.reset();
+}
+#endif
+
+/**
+ * @brief Dispatch digest generation according to the build-tier contract.
+ */
+template <Dialect D>
+static void parsersql_digest_init(SQP_par_t* qp, const char* query, int query_length) {
     qp->digest_text = NULL;
     qp->first_comment = NULL;
     qp->query_prefix = NULL;
     qp->digest = 0;
-
-    auto result = tl_pgsql_parser.parse(query, query_length);
-
-    if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        std::string normalized;
-        if (result.ast) {
-            Emitter<Dialect::PostgreSQL> emitter(tl_pgsql_parser.arena(), EmitMode::DIGEST);
-            emitter.emit(result.ast);
-            StringRef ref = emitter.result();
-            normalized.assign(ref.ptr, ref.len);
-        } else {
-            Digest<Dialect::PostgreSQL> digest(tl_pgsql_parser.arena());
-            DigestResult dr = digest.compute(query, query_length);
-            normalized.assign(dr.normalized.ptr, dr.normalized.len);
-        }
-        qp->digest_text = strdup(normalized.c_str());
-        qp->digest = SpookyHash::Hash64(normalized.c_str(), normalized.size(), 0);
+#ifndef PROXYSQL31
+    qp->parsersql_command_type = -1;
+#endif
+    if (!query || query_length < 0) return;
+    if constexpr (D == Dialect::PostgreSQL) {
+        // PgSQL_Query_Info includes the protocol terminator in QueryLength.
+        if (query_length > 0 && query[query_length - 1] == '\0') --query_length;
     }
+    // An empty query is digested too, as in legacy mode: it gets digest text ""
+    // and the hash of "" (#6454).
+#ifdef PROXYSQL31
+    parsersql_tokenizer_digest<D>(qp, query, query_length);
+#else
+    if constexpr (D == Dialect::MySQL) {
+        parsersql_native_digest<D>(qp, query, query_length, tl_mysql_parser);
+    } else {
+        parsersql_native_digest<D>(qp, query, query_length, tl_pgsql_parser);
+    }
+#endif
+}
 
-    tl_pgsql_parser.reset();
+void parsersql_digest_init_mysql(SQP_par_t* qp, const char* query, int query_length) {
+    parsersql_digest_init<Dialect::MySQL>(qp, query, query_length);
+}
+
+void parsersql_digest_init_pgsql(SQP_par_t* qp, const char* query, int query_length) {
+    parsersql_digest_init<Dialect::PostgreSQL>(qp, query, query_length);
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +734,406 @@ enum PGSQL_QUERY_command parsersql_command_type_pgsql(const char* query, int que
 }
 
 // ---------------------------------------------------------------------------
+// MySQL user-variable tracking contract
+// ---------------------------------------------------------------------------
+
+static std::string copy_ref(StringRef ref) {
+    return ref.ptr ? std::string(ref.ptr, ref.len) : std::string();
+}
+
+static std::string lowercase_ascii(StringRef ref) {
+    std::string value = copy_ref(ref);
+    for (char& c : value) {
+        unsigned char byte = static_cast<unsigned char>(c);
+        if (byte >= 'A' && byte <= 'Z') c = static_cast<char>(byte + ('a' - 'A'));
+    }
+    return value;
+}
+
+static bool is_ascii(StringRef ref) {
+    for (size_t i = 0; i < ref.len; ++i) {
+        if (static_cast<unsigned char>(ref.ptr[i]) > 0x7f) return false;
+    }
+    return true;
+}
+
+static void append_length(std::string& tuple, size_t length) {
+    uint64_t value = static_cast<uint64_t>(length);
+    for (unsigned int shift = 0; shift < 64; shift += 8) {
+        tuple.push_back(static_cast<char>((value >> shift) & 0xff));
+    }
+}
+
+static uint64_t hash_user_variable_assignment(const UserVariableAssignment& assignment) {
+    std::string tuple;
+    tuple.reserve(1 + 16 + assignment.replay_target.size() + assignment.raw_literal.size());
+    tuple.push_back(static_cast<char>(assignment.kind));
+    append_length(tuple, assignment.replay_target.size());
+    tuple.append(assignment.replay_target);
+    append_length(tuple, assignment.raw_literal.size());
+    tuple.append(assignment.raw_literal);
+    return SpookyHash::Hash64(tuple.data(), tuple.size(), 0);
+}
+
+static bool literal_kind(const AstNode* rhs, UserVariableLiteralKind& kind) {
+    switch (rhs->type) {
+        case NodeType::NODE_LITERAL_STRING:
+            kind = UserVariableLiteralKind::STRING;
+            return true;
+        case NodeType::NODE_LITERAL_INT:
+            kind = UserVariableLiteralKind::INTEGER;
+            return true;
+        case NodeType::NODE_LITERAL_FLOAT:
+            kind = UserVariableLiteralKind::DECIMAL;
+            return true;
+        case NodeType::NODE_LITERAL_HEX:
+            kind = UserVariableLiteralKind::HEXADECIMAL;
+            return true;
+        case NodeType::NODE_LITERAL_BIT:
+            kind = UserVariableLiteralKind::BIT;
+            return true;
+        case NodeType::NODE_LITERAL_NULL:
+            kind = UserVariableLiteralKind::NULL_VALUE;
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool supported_user_variable_rhs(
+    const AstNode* rhs, UserVariableLiteralKind& kind)
+{
+    if (!rhs || rhs->next_sibling || !rhs->source_ptr || rhs->source_len == 0) return false;
+    if (literal_kind(rhs, kind)) return true;
+    if (rhs->type != NodeType::NODE_UNARY_OP || !rhs->first_child ||
+        rhs->first_child->next_sibling || rhs->value_len != 1 ||
+        (rhs->value_ptr[0] != '+' && rhs->value_ptr[0] != '-')) {
+        return false;
+    }
+    const AstNode* operand = rhs->first_child;
+    if (operand->type == NodeType::NODE_LITERAL_INT) {
+        kind = UserVariableLiteralKind::INTEGER;
+        return true;
+    }
+    if (operand->type == NodeType::NODE_LITERAL_FLOAT) {
+        kind = UserVariableLiteralKind::DECIMAL;
+        return true;
+    }
+    if (operand->type == NodeType::NODE_LITERAL_HEX) {
+        kind = UserVariableLiteralKind::HEXADECIMAL;
+        return true;
+    }
+    if (operand->type == NodeType::NODE_LITERAL_BIT) {
+        kind = UserVariableLiteralKind::BIT;
+        return true;
+    }
+    return false;
+}
+
+static bool assignment_has_user_target(const AstNode* assignment) {
+    if (!assignment || assignment->type != NodeType::NODE_VAR_ASSIGNMENT) return false;
+    const AstNode* target = assignment->first_child;
+    return target && target->type == NodeType::NODE_VAR_TARGET &&
+        target->first_child && target->first_child->type == NodeType::NODE_USER_VARIABLE;
+}
+
+struct ReplayContextTarget {
+    std::string name;
+    bool affects_session { false };
+};
+
+static bool is_scope(const std::string& value, const char* scope) {
+    const size_t scope_length = std::strlen(scope);
+    return value.size() == scope_length &&
+        strncasecmp(value.data(), scope, scope_length) == 0;
+}
+
+static ReplayContextTarget replay_context_target(const AstNode* target) {
+    if (!target || target->type != NodeType::NODE_VAR_TARGET) return {};
+
+    std::vector<std::string> identifiers;
+    for (const AstNode* child = target->first_child; child;
+         child = child->next_sibling) {
+        if (child->type == NodeType::NODE_USER_VARIABLE) return {};
+        if (child->type == NodeType::NODE_IDENTIFIER &&
+            child->value_ptr && child->value_len != 0) {
+            identifiers.emplace_back(child->value_ptr, child->value_len);
+        }
+    }
+    if (identifiers.empty()) return {};
+
+    bool affects_session = true;
+    std::string name = identifiers.back();
+    if (identifiers.size() > 1) {
+        // MySQL does not combine a scope keyword with an @/@@ target.
+        // In particular, LOCAL @@global.x must not mask the global scope.
+        if (!name.empty() && name[0] == '@') return {};
+        const std::string& scope = identifiers.front();
+        affects_session = is_scope(scope, "SESSION") || is_scope(scope, "LOCAL");
+    } else if (name.size() > 2 && name[0] == '@' && name[1] == '@') {
+        const size_t dot = name.find('.', 2);
+        if (dot != std::string::npos) {
+            const std::string scope = name.substr(2, dot - 2);
+            affects_session = is_scope(scope, "SESSION") || is_scope(scope, "LOCAL");
+        }
+    }
+
+    if (!name.empty() && name[0] == '@' &&
+        (name.size() == 1 || name[1] != '@')) {
+        return {};
+    }
+    return {normalize_set_var_name(std::move(name)), affects_session};
+}
+
+
+UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
+    const char* query, size_t query_length)
+{
+    UserVariableSetAnalysis analysis;
+    if (!query) {
+        analysis.status = UserVariableSetStatus::PARSE_ERROR;
+        return analysis;
+    }
+
+    auto result = tl_mysql_parser.parse(query, query_length);
+    analysis.is_set_statement = result.stmt_type == StmtType::SET;
+    if (result.status != ParseResult::OK || !result.full_input) {
+        if (result.has_user_variables) {
+            analysis.status = UserVariableSetStatus::PARSE_ERROR;
+        }
+        tl_mysql_parser.reset();
+        return analysis;
+    }
+    if (result.stmt_type != StmtType::SET || !result.ast ||
+        result.ast->type != NodeType::NODE_SET_STMT) {
+        tl_mysql_parser.reset();
+        return analysis;
+    }
+
+    bool has_user_target = false;
+    for (const AstNode* child = result.ast->first_child; child; child = child->next_sibling) {
+        if (assignment_has_user_target(child)) has_user_target = true;
+    }
+    if (!has_user_target) {
+        tl_mysql_parser.reset();
+        return analysis;
+    }
+
+    std::vector<UserVariableAssignment> assignments;
+    std::vector<SessionVariableAssignment> session_assignments;
+    for (const AstNode* child = result.ast->first_child; child; child = child->next_sibling) {
+        if (!assignment_has_user_target(child)) {
+#ifndef PROXYSQL31
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            tl_mysql_parser.reset();
+            return analysis;
+#else
+            const AstNode* target = child->type == NodeType::NODE_VAR_ASSIGNMENT
+                ? child->first_child : nullptr;
+            const ReplayContextTarget session_target = replay_context_target(target);
+            const AstNode* rhs = target ? target->next_sibling : nullptr;
+            UserVariableLiteralKind kind;
+            if (!session_target.affects_session || session_target.name.empty() ||
+                !rhs || rhs->next_sibling ||
+                !(supported_user_variable_rhs(rhs, kind) || rhs->type == NodeType::NODE_IDENTIFIER ||
+                    ((rhs->type == NodeType::NODE_COLUMN_REF || rhs->type == NodeType::NODE_LITERAL_INT) && !rhs->first_child))) {
+                analysis.status = UserVariableSetStatus::UNSUPPORTED;
+                tl_mysql_parser.reset();
+                return analysis;
+            }
+            const std::string value = rhs->source_ptr ? copy_ref(rhs->source()) : copy_ref(rhs->value());
+            if (rhs->type != NodeType::NODE_LITERAL_STRING && !strcasecmp(value.c_str(), "DEFAULT") &&
+                session_target.name != "sql_select_limit" && session_target.name != "max_join_size") {
+                analysis.status = UserVariableSetStatus::UNSUPPORTED;
+                tl_mysql_parser.reset();
+                return analysis;
+            }
+            session_assignments.push_back({session_target.name, value, rhs->type == NodeType::NODE_LITERAL_STRING});
+            continue;
+#endif
+        }
+
+        const AstNode* target = child->first_child;
+        const AstNode* variable = target->first_child;
+        const AstNode* rhs = target->next_sibling;
+        if (target->next_sibling == nullptr || target->first_child->next_sibling ||
+            variable->value_len == 0 || variable->value_len > 64 ||
+            !variable->source_ptr || variable->source_len < 2) {
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            tl_mysql_parser.reset();
+            return analysis;
+        }
+
+        StringRef target_source = variable->source();
+        char name_start = target_source.ptr[1];
+        bool quoted = name_start == '\'' || name_start == '"' || name_start == '`';
+        if (quoted && std::memchr(target_source.ptr, '\\', target_source.len)) {
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            tl_mysql_parser.reset();
+            return analysis;
+        }
+
+        UserVariableLiteralKind kind;
+        if (!supported_user_variable_rhs(rhs, kind)) {
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            tl_mysql_parser.reset();
+            return analysis;
+        }
+
+        if (!is_ascii(variable->value()) || std::memchr(variable->value_ptr, '\0', variable->value_len)) {
+            analysis.status = UserVariableSetStatus::UNSUPPORTED;
+            analysis.assignments.clear();
+            tl_mysql_parser.reset();
+            return analysis;
+        }
+
+        UserVariableAssignment assignment;
+        assignment.canonical_name = lowercase_ascii(variable->value());
+        assignment.replay_target = copy_ref(target_source);
+        assignment.raw_literal = copy_ref(rhs->source());
+        assignment.kind = kind;
+        assignment.hash = hash_user_variable_assignment(assignment);
+        assignments.push_back(std::move(assignment));
+    }
+
+    analysis.status = UserVariableSetStatus::SUPPORTED;
+    analysis.assignments = std::move(assignments);
+    analysis.session_assignments = std::move(session_assignments);
+    tl_mysql_parser.reset();
+    return analysis;
+}
+
+::UserVariableUsage parsersql_classify_user_variable_usage_mysql(
+    const char* query, size_t query_length)
+{
+    if (!query) return ::UserVariableUsage::UNSAFE_OR_UNKNOWN;
+    auto result = tl_mysql_parser.parse(query, query_length);
+    sql_parser::UserVariableUsage upstream =
+        sql_parser::classify_mysql_user_variable_usage(result);
+    tl_mysql_parser.reset();
+    switch (upstream) {
+        case sql_parser::UserVariableUsage::NO_USER_VARIABLE:
+            return ::UserVariableUsage::NO_USER_VARIABLE;
+        case sql_parser::UserVariableUsage::READ_ONLY:
+            return ::UserVariableUsage::READ_ONLY;
+        case sql_parser::UserVariableUsage::UNSAFE_OR_UNKNOWN:
+            return ::UserVariableUsage::UNSAFE_OR_UNKNOWN;
+    }
+    return ::UserVariableUsage::UNSAFE_OR_UNKNOWN;
+}
+
+UserVariableQueryDecision mysql_user_variable_query_disposition(
+    const char* query, size_t query_length,
+    bool must_classify_and_sync, bool plain_text_com_query,
+    bool supported_user_variable_set)
+{
+    if (!plain_text_com_query || !must_classify_and_sync) {
+        return {UserVariableQueryDisposition::LEGACY, false, false};
+    }
+    if (supported_user_variable_set) {
+        return {UserVariableQueryDisposition::SUPPORTED_SET, false, true};
+    }
+    if (!query || std::memchr(query, '@', query_length) == nullptr) {
+        return {UserVariableQueryDisposition::SAFE, false, true};
+    }
+
+    const ::UserVariableUsage usage =
+        parsersql_classify_user_variable_usage_mysql(query, query_length);
+    if (usage == ::UserVariableUsage::NO_USER_VARIABLE ||
+        usage == ::UserVariableUsage::READ_ONLY) {
+        return {UserVariableQueryDisposition::SAFE, true, true};
+    }
+    return {UserVariableQueryDisposition::UNSAFE_FALLBACK, true, false};
+}
+
+UserVariableQueryDecision mysql_user_variable_raw_query_disposition(
+    const char* query, size_t query_length,
+    bool must_classify_and_sync, bool plain_text_com_query,
+    bool supported_user_variable_set, bool digest_available)
+{
+    // Digest availability controls legacy statistics, not raw-query UDV policy.
+    (void)digest_available;
+    return mysql_user_variable_query_disposition(
+        query, query_length, must_classify_and_sync,
+        plain_text_com_query, supported_user_variable_set);
+}
+
+bool mysql_user_variable_is_replay_context_name(
+    const char* variable, size_t variable_length)
+{
+    if (!variable) return false;
+    const char* names[] = {
+        "sql_mode",
+        "character_set_client",
+        "character_set_connection",
+        "collation_connection"
+    };
+    for (const char* name : names) {
+        const size_t name_length = std::strlen(name);
+        if (name_length == variable_length &&
+            strncasecmp(variable, name, name_length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool mysql_user_variable_unsafe_query_locks_hostgroup(
+    int query_rule_multiplex, bool already_locked)
+{
+    return query_rule_multiplex == -1 && !already_locked;
+}
+
+bool mysql_user_variable_backend_result_requires_binding(
+    bool backend_success, bool unsafe_fallback,
+    bool replay_context_change, int query_rule_multiplex)
+{
+    // A successful unsafe/context-changing query makes the selected backend
+    // authoritative even when a query rule explicitly controls multiplexing.
+    (void)query_rule_multiplex;
+    return backend_success && (unsafe_fallback || replay_context_change);
+}
+
+bool mysql_user_variable_fallback_uses_qpo_epilogue(
+    bool unsafe_fallback, bool replay_context_change)
+{
+    return unsafe_fallback || replay_context_change;
+}
+
+
+bool parsersql_set_changes_user_variable_replay_context_mysql(
+    const char* query, size_t query_length)
+{
+    if (!query) return false;
+    auto result = tl_mysql_parser.parse(query, query_length);
+    if (result.status != ParseResult::OK || !result.full_input ||
+        result.stmt_type != StmtType::SET || !result.ast ||
+        result.ast->type != NodeType::NODE_SET_STMT) {
+        tl_mysql_parser.reset();
+        return false;
+    }
+
+    bool changes_context = false;
+    for (const AstNode* child = result.ast->first_child; child;
+         child = child->next_sibling) {
+        if (child->type == NodeType::NODE_SET_NAMES ||
+            child->type == NodeType::NODE_SET_CHARSET) {
+            changes_context = true;
+            break;
+        }
+        if (child->type != NodeType::NODE_VAR_ASSIGNMENT) continue;
+        const ReplayContextTarget target = replay_context_target(child->first_child);
+        if (target.affects_session && mysql_user_variable_is_replay_context_name(
+            target.name.data(), target.name.size())) {
+            changes_context = true;
+            break;
+        }
+    }
+    tl_mysql_parser.reset();
+    return changes_context;
+}
+
+// ---------------------------------------------------------------------------
 // Section 3: SET AST walker
 // ---------------------------------------------------------------------------
 // Walks the immediate children of a NODE_SET_STMT, handling three node types:
@@ -528,7 +1185,7 @@ static std::string resolve_var_value(
 
 static std::string finalize_var_value(std::string val) {
     if (val == "''" || val == "\"\"") return "";
-    return strip_quotes(val);
+    return strip_single_sql_token_quotes(val);
 }
 
 template <Dialect D>
@@ -569,6 +1226,8 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
     std::map<std::string, std::vector<std::string>> result;
     if (!set_stmt) return result;
 
+    const char* mysql_assignment_scan = query;
+
     for (const AstNode* child = set_stmt->first_child;
          child; child = child->next_sibling)
     {
@@ -585,8 +1244,16 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
                 const AstNode* target = child->first_child;
                 if (!target || target->type != NodeType::NODE_VAR_TARGET) break;
 
-                std::string var_name = normalize_set_var_name(
-                    emit_node_text<D>(target, arena));
+                std::string target_text;
+                if constexpr (D == Dialect::MySQL) {
+                    const AstNode* variable = target->first_child;
+                    if (variable && variable->type == NodeType::NODE_USER_VARIABLE) {
+                        target_text.assign("@");
+                        target_text.append(variable->value_ptr, variable->value_len);
+                    }
+                }
+                if (target_text.empty()) target_text = emit_node_text<D>(target, arena);
+                std::string var_name = normalize_set_var_name(target_text);
 
                 // Collect every RHS sibling of the target. For MySQL there is
                 // always exactly one. For PostgreSQL, multi-value lists such
@@ -604,11 +1271,17 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
                 std::vector<std::string> vals;
                 for (const AstNode* rhs = target->next_sibling;
                      rhs; rhs = rhs->next_sibling) {
-                    std::string raw = resolve_var_value<D>(
-                        target, rhs, query, query_len, arena);
                     if constexpr (D == Dialect::PostgreSQL) {
+                        std::string raw = resolve_var_value<D>(
+                            target, rhs, query, query_len, arena);
                         vals.push_back(std::move(raw));
                     } else {
+                        std::string raw = extract_mysql_assignment_value(
+                            mysql_assignment_scan, query, query_len);
+                        if (raw.empty()) {
+                            raw = resolve_var_value<D>(
+                                target, rhs, query, query_len, arena);
+                        }
                         vals.push_back(finalize_var_value(std::move(raw)));
                     }
                 }
@@ -630,17 +1303,54 @@ static std::map<std::string, std::vector<std::string>> walk_set_stmt(
     return result;
 }
 
+// Keep the tokenizer's error state available to the session tracker. The
+// general ParserSQL 1.0.11 entry point can report OK after dropping a malformed
+// SET assignment, including a GLOBAL assignment with a missing RHS.
+static ParseResult parse_mysql_set_for_session(const std::string& query) {
+    ParseResult result;
+    Tokenizer<Dialect::MySQL> tokenizer;
+    tokenizer.reset(query.data(), query.size());
+    if (tokenizer.next_token().type != TokenType::TK_SET) return result;
+
+    SetParser<Dialect::MySQL> parser(tokenizer, tl_mysql_parser.arena());
+    parser.set_subquery_callback(&parse_subquery_select<Dialect::MySQL>);
+    result.ast = parser.parse();
+    if (tokenizer.peek().type == TokenType::TK_SEMICOLON) tokenizer.skip();
+    result.full_input = tokenizer.peek().type == TokenType::TK_EOF;
+    result.status = tokenizer.has_error() ? ParseResult::ERROR : ParseResult::OK;
+    return result;
+}
+
 std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
-    const std::string& query)
+    const std::string& query, bool session_scope_only)
 {
-    auto result = tl_mysql_parser.parse(query.c_str(), query.size());
-    if (result.status == ParseResult::OK || result.status == ParseResult::PARTIAL) {
-        if (result.ast && result.ast->type == NodeType::NODE_SET_STMT) {
-            auto parsed = walk_set_stmt<Dialect::MySQL>(
-                result.ast, tl_mysql_parser.arena(), query.c_str(), query.size());
-            tl_mysql_parser.reset();
-            return parsed;
+    auto result = session_scope_only ? parse_mysql_set_for_session(query)
+        : tl_mysql_parser.parse(query.c_str(), query.size());
+    // Only a complete parse may be tracked, as in parsersql_digest_init(): an
+    // OK result with full_input == false covers only a prefix of the input
+    // (`SET a=1 junk`, `SET a=1; SELECT 1`), and a partial AST also cannot
+    // prove that all targets are session-scoped. An empty map makes the
+    // session forward the statement instead.
+    if (result.status != ParseResult::OK || !result.full_input || !result.ast) {
+        tl_mysql_parser.reset();
+        return {};
+    }
+    if (session_scope_only) {
+        // Check before the walker strips scopes or coalesces duplicate names.
+        for (const AstNode* child = result.ast ? result.ast->first_child : nullptr;
+             child; child = child->next_sibling) {
+            if (child->type == NodeType::NODE_VAR_ASSIGNMENT &&
+                !replay_context_target(child->first_child).affects_session) {
+                tl_mysql_parser.reset();
+                return {};
+            }
         }
+    }
+    if (result.ast->type == NodeType::NODE_SET_STMT) {
+        auto parsed = walk_set_stmt<Dialect::MySQL>(
+            result.ast, tl_mysql_parser.arena(), query.c_str(), query.size());
+        tl_mysql_parser.reset();
+        return parsed;
     }
     tl_mysql_parser.reset();
     return {};
@@ -649,7 +1359,15 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
 std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     const std::string& query)
 {
-    auto result = tl_pgsql_parser.parse(query.c_str(), query.size());
+    // Simple-query protocol payloads can include their terminating NUL in
+    // QueryLength. It is framing, not SQL: after a trailing comma ParserSQL
+    // otherwise tries to parse it as another value. Exclude only that final
+    // byte; never truncate at an embedded NUL and silently discard SQL.
+    size_t query_length = query.size();
+    if (query_length && query[query_length - 1] == '\0') --query_length;
+    if (std::memchr(query.data(), '\0', query_length)) return {};
+
+    auto result = tl_pgsql_parser.parse(query.c_str(), query_length);
     // PG walker: only act on a clean OK parse. PARTIAL means the parser hit
     // unexpected syntax mid-statement (e.g. `public,,schema1` -> the empty
     // element after the first comma) and produced an AST that captures only
@@ -663,16 +1381,14 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     // for malformed-input rejection (which is what algorithms 0/1/2 do for
     // these cases too).
     //
-    // The MySQL walker keeps accepting PARTIAL: MySQL SET frequently uses
-    // PARTIAL legitimately for un-parseable RHS expressions (e.g.
-    // `SET x = (SELECT ...)`), where the walker falls back to
-    // `extract_paren_expr` on a NODE_SUBQUERY placeholder. PG search_path
-    // tracked variables don't have analogous shapes.
-    if (result.status == ParseResult::OK) {
+    // An OK result with full_input == false also covers only a prefix of
+    // the input (`SET a = 1 junk`, `SET a = 1; SELECT 1`). ast_covers_full_input()
+    // additionally rejects trailing bytes the AST does not reach.
+    if (result.status == ParseResult::OK && result.full_input) {
         if (result.ast && result.ast->type == NodeType::NODE_SET_STMT &&
-            ast_covers_full_input(result.ast, query.c_str(), (int)query.size())) {
+            ast_covers_full_input(result.ast, query.c_str(), (int)query_length)) {
             auto parsed = walk_set_stmt<Dialect::PostgreSQL>(
-                result.ast, tl_pgsql_parser.arena(), query.c_str(), query.size());
+                result.ast, tl_pgsql_parser.arena(), query.c_str(), query_length);
             tl_pgsql_parser.reset();
             return parsed;
         }

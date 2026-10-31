@@ -194,18 +194,40 @@ class sqlite3server_main_loop_listeners {
 
 	bool update_ifaces(char *list, char ***_ifaces) {
 		wrlock();
-		int i;
-		char **ifaces=*_ifaces;
+		int i = 0;
+		char **old_ifaces = *_ifaces;
+		char **new_ifaces = (char **)l_alloc(MAX_IFACES * sizeof(char *));
+		if (new_ifaces != NULL) {
+			memset(new_ifaces, 0, MAX_IFACES * sizeof(char *));
+		}
 		tokenizer_t tok;
 		tokenizer( &tok, list, ";", TOKENIZER_NO_EMPTIES );
 		const char* token;
-		ifaces=reset_ifaces(ifaces);
-		i=0;
+		if (new_ifaces == NULL) {
+			free_tokenizer( &tok );
+			wrunlock();
+			return false;
+		}
 		for ( token = tokenize( &tok ) ; token && i < MAX_IFACES ; token = tokenize( &tok ) ) {
-			ifaces[i]=(char *)malloc(strlen(token)+1);
-			strcpy(ifaces[i],token);
+			new_ifaces[i] = strdup(token);
+			if (new_ifaces[i] == NULL) {
+				for (int j = 0; j < i; ++j) {
+					l_free(0, new_ifaces[j]);
+				}
+				l_free(0, new_ifaces);
+				free_tokenizer( &tok );
+				wrunlock();
+				return false;
+			}
 			i++;
 		}
+		if (old_ifaces != NULL) {
+			for (int j = 0; j < MAX_IFACES; ++j) {
+				l_free(0, old_ifaces[j]);
+			}
+			l_free(0, old_ifaces);
+		}
+		*_ifaces = new_ifaces;
 		free_tokenizer( &tok );
 		version++;
 		wrunlock();
@@ -265,7 +287,9 @@ static void *child_mysql(void *arg) {
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
 	free(arg);
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false);
+	if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false) == false) {
+		goto __exit_child_mysql;
+	}
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {

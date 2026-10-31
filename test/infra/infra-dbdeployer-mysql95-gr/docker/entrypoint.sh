@@ -30,7 +30,8 @@ dbdeployer deploy replication "${MYSQL_VERSION}" \
     -c innodb_flush_log_at_trx_commit=2 \
     -c sync_binlog=0 \
     -c binlog_checksum=NONE \
-    -c innodb_use_native_aio=0
+    -c innodb_use_native_aio=0 \
+    -c report_host=dbdeployer1.${INFRA}
 
 echo "Group Replication deployed. Waiting for all nodes to be ready..."
 

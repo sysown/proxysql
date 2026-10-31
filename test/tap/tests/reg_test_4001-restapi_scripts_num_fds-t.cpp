@@ -100,10 +100,16 @@ int main(int argc, char** argv) {
 	diag("RESTAPI enabled.");
 
 	string script_base_path = script_dst;
-	const ept_info_t dummy_ept { "dummy_ept_script", "%s.py", "POST", 5000 };
+	const bool with_asan = get_env_int("WITHASAN", 0) != 0;
+	const uint64_t endpoint_timeout = with_asan ? 15000 : 5000;
+	const ept_info_t dummy_ept { "dummy_ept_script", "%s.py", "POST", endpoint_timeout };
 
 	vector<ept_info_t> v_epts_info {};
-	for (const auto& req : honest_requests) v_epts_info.push_back(req.ept_info);
+	for (const auto& req : honest_requests) {
+		ept_info_t ept_info = req.ept_info;
+		ept_info.timeout = endpoint_timeout;
+		v_epts_info.push_back(ept_info);
+	}
 
 	diag("Configuring RESTAPI endpoints using scripts in: %s", script_base_path.c_str());
 	int ept_conf_res = configure_endpoints(admin, script_base_path, v_epts_info, dummy_ept, true);

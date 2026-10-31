@@ -15,10 +15,14 @@
 
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_Plugin.h"
+#include "ProxySQL_PluginListenerGate.h"
+#include "ProxySQL_ServerDiscovery.h"
 #include "tap.h"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -29,6 +33,12 @@
 #ifndef PROXYSQL_FAKE_PLUGIN_PATH
 #error "PROXYSQL_FAKE_PLUGIN_PATH must be defined"
 #endif
+#ifndef PROXYSQL_FAKE_PLUGIN2_PATH
+#error "PROXYSQL_FAKE_PLUGIN2_PATH must be defined"
+#endif
+#ifndef PROXYSQL_FAKE_PLUGIN_DEBUG_MISMATCH_PATH
+#error "PROXYSQL_FAKE_PLUGIN_DEBUG_MISMATCH_PATH must be defined"
+#endif
 
 namespace {
 
@@ -37,6 +47,13 @@ char g_fake_config_db = '\0';
 char g_fake_stats_db  = '\0';
 
 std::string g_log_path {};
+bool g_retirement_saw_managed_inventory = false;
+
+void observe_managed_inventory_during_retirement(ProxySQL_ServerProtocol protocol) {
+	ScopedServerDiscoveryProtocolLock lock(protocol);
+	if (proxysql_is_server_inventory_managed_locked(protocol, 701, 702))
+		g_retirement_saw_managed_inventory = true;
+}
 
 void make_log_path() {
 	char tpl[] = "/tmp/proxysql_plugin_lifecycle_log.XXXXXX";
@@ -44,6 +61,7 @@ void make_log_path() {
 	if (fd >= 0) close(fd);
 	g_log_path = tpl;
 	setenv("PROXYSQL_FAKE_PLUGIN_LOG", g_log_path.c_str(), 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_LOG", g_log_path.c_str(), 1);
 }
 
 void clear_log() {
@@ -51,6 +69,12 @@ void clear_log() {
 	// See plugin_manager_unit-t.cpp for the SonarCloud rationale.
 	std::ofstream truncate_handle(g_log_path, std::ios::trunc);
 	(void)truncate_handle;
+}
+
+void append_log(const char* event) {
+	if (g_log_path.empty()) return;
+	std::ofstream log(g_log_path, std::ios::app);
+	log << event << '\n';
 }
 
 std::string read_log() {
@@ -63,6 +87,7 @@ void cleanup_log() {
 	if (g_log_path.empty()) return;
 	std::remove(g_log_path.c_str());
 	unsetenv("PROXYSQL_FAKE_PLUGIN_LOG");
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_LOG");
 }
 
 bool contains_in_order(const std::string& haystack, const char* first, const char* second) {
@@ -70,6 +95,24 @@ bool contains_in_order(const std::string& haystack, const char* first, const cha
 	if (pos_first == std::string::npos) return false;
 	size_t pos_second = haystack.find(second, pos_first + 1);
 	return pos_second != std::string::npos;
+}
+
+size_t count_occurrences(const std::string& haystack, const char* needle) {
+	size_t count = 0;
+	size_t pos = 0;
+	while ((pos = haystack.find(needle, pos)) != std::string::npos) {
+		++count;
+		pos += std::strlen(needle);
+	}
+	return count;
+}
+
+using retained_uninstall_cb = bool (*)();
+
+retained_uninstall_cb retain_uninstall_callback(void*& handle) {
+	handle = dlopen(PROXYSQL_FAKE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL);
+	return handle == nullptr ? nullptr : reinterpret_cast<retained_uninstall_cb>(dlsym(
+		handle, "proxysql_fake_uninstall_server_discovery_controller_for_test"));
 }
 
 } // namespace
@@ -104,6 +147,218 @@ static void test_phase_b_and_init_both_fire() {
 
 	(void)proxysql_stop_configured_plugins(mgr, err);
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
+static void test_duplicate_descriptor_names_are_rejected() {
+	char alias_path[] = "/tmp/proxysql_duplicate_plugin.XXXXXX"; // NOSONAR: mkstemp creates it atomically.
+	const int fd = mkstemp(alias_path);
+	if (fd >= 0) close(fd);
+	if (fd >= 0) std::remove(alias_path);
+	const bool linked = fd >= 0 && symlink(PROXYSQL_FAKE_PLUGIN_PATH, alias_path) == 0;
+	ProxySQL_PluginManager manager;
+	std::string error;
+	const bool first_loaded = manager.load(PROXYSQL_FAKE_PLUGIN_PATH, error);
+	const bool duplicate_rejected = linked && !manager.load(alias_path, error) &&
+		error.find("duplicate plugin descriptor name") != std::string::npos;
+	ok(first_loaded && duplicate_rejected,
+		"different modules cannot publish the same listener-gate owner name (err='%s')",
+		error.c_str());
+	if (linked) std::remove(alias_path);
+}
+
+// An early-action-capable plugin must run after Admin is live but before its
+// normal init/start lifecycle. The production regression this catches is
+// inserting the action phase before schema/Admin setup or after init/start.
+static void test_early_action_runs_between_admin_and_init() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION", "continue", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_discover_configured_plugins(mgr, paths, err),
+	   "plugin discovery succeeds before CLI registration (err='%s')", err.c_str());
+	ez::ezOptionParser parser;
+	ok(proxysql_register_configured_plugin_cli(mgr.get(), parser, err),
+	   "plugin CLI registration succeeds before schema registration (err='%s')", err.c_str());
+	const char* argv[] { "proxysql", "--fake-plugin-action", "continue" };
+	parser.parse(3, argv);
+	ok(proxysql_register_configured_plugin_schemas(mgr.get(), err),
+	   "schema registration succeeds before Admin is live (err='%s')", err.c_str());
+	append_log("core:admin_ready");
+	ProxySQL_PluginParsedOptionContext parsed_options(parser);
+	const auto action = proxysql_run_configured_plugin_early_actions(
+		mgr.get(), parsed_options.early_action_context("test.cnf", "test-datadir"), err);
+	ok(action == ProxySQL_PluginEarlyActionResult::not_requested ||
+	   action == ProxySQL_PluginEarlyActionResult::continue_startup,
+	   "early action permits normal startup (err='%s')", err.c_str());
+	ok(proxysql_init_configured_plugins(mgr.get(), err) &&
+	   proxysql_start_configured_plugins(mgr.get(), err),
+	   "normal init and start succeed after the action phase (err='%s')", err.c_str());
+
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:early_action") != std::string::npos,
+	   "early action callback fired (log='%s')", log.c_str());
+	ok(contains_in_order(log, "fake_plugin:phase_b", "core:admin_ready") &&
+	   contains_in_order(log, "core:admin_ready", "fake_plugin:early_action") &&
+	   contains_in_order(log, "fake_plugin:early_action", "fake_plugin:init") &&
+	   contains_in_order(log, "fake_plugin:init", "fake_plugin:start"),
+	   "CLI registration/schema/Admin/action/init/start lifecycle is ordered (log='%s')", log.c_str());
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
+static ProxySQL_PluginEarlyActionResult run_fake_early_action(
+	const char* requested_action, std::string& err) {
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	if (!proxysql_discover_configured_plugins(mgr, paths, err)) {
+		return ProxySQL_PluginEarlyActionResult::exit_failure;
+	}
+	ez::ezOptionParser parser;
+	if (!proxysql_register_configured_plugin_cli(mgr.get(), parser, err) ||
+		!proxysql_register_configured_plugin_schemas(mgr.get(), err)) {
+		return ProxySQL_PluginEarlyActionResult::exit_failure;
+	}
+	const char* argv[] { "proxysql", "--fake-plugin-action", requested_action };
+	parser.parse(3, argv);
+	ProxySQL_PluginParsedOptionContext parsed_options(parser);
+	const auto result = proxysql_run_configured_plugin_early_actions(
+		mgr.get(), parsed_options.early_action_context("test.cnf", "test-datadir"), err);
+	std::string stop_error;
+	(void)proxysql_stop_configured_plugins(mgr, stop_error);
+	return result;
+}
+
+// The production regressions this catches are translating a requested early
+// exit into normal startup, or invoking init/start after an action requested
+// process termination.
+static void test_early_action_exit_results_skip_normal_lifecycle() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION", "1", 1);
+	std::string err;
+
+	clear_log();
+	const auto success = run_fake_early_action("exit_success", err);
+	ok(success == ProxySQL_PluginEarlyActionResult::exit_success,
+	   "exit_success is returned for a successful one-shot action (err='%s')", err.c_str());
+	const std::string success_log = read_log();
+	ok(success_log.find("fake_plugin:early_action") != std::string::npos &&
+	   success_log.find("fake_plugin:init") == std::string::npos &&
+	   success_log.find("fake_plugin:start") == std::string::npos,
+	   "exit_success omits init and start (log='%s')", success_log.c_str());
+
+	clear_log();
+	const auto failure = run_fake_early_action("exit_failure", err);
+	ok(failure == ProxySQL_PluginEarlyActionResult::exit_failure,
+	   "exit_failure is returned for a failed one-shot action (err='%s')", err.c_str());
+	const std::string failure_log = read_log();
+	ok(failure_log.find("fake_plugin:early_action") != std::string::npos &&
+	   failure_log.find("fake_plugin:init") == std::string::npos &&
+	   failure_log.find("fake_plugin:start") == std::string::npos,
+	   "exit_failure omits init and start (log='%s')", failure_log.c_str());
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION");
+}
+
+// The production regression this catches is allowing a plugin exception to
+// escape startup, or including parsed option values in the failure message.
+static void test_early_action_exception_is_a_sanitized_failure() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION", "1", 1);
+	clear_log();
+	std::string err;
+	const auto result = run_fake_early_action("throw", err);
+	ok(result == ProxySQL_PluginEarlyActionResult::exit_failure,
+	   "an early-action exception becomes exit_failure");
+	ok(err.find("fake_plugin") != std::string::npos && err.find("throw") == std::string::npos,
+	   "exception failure names the plugin but not the option value (err='%s')", err.c_str());
+	ok(read_log().find("fake_plugin:init") == std::string::npos &&
+	   read_log().find("fake_plugin:start") == std::string::npos,
+	   "an exception omits init and start");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION");
+}
+
+bool test_action_is_set(void*, const char*) { return true; }
+
+bool test_action_get_string(void* opaque, const char*, std::string& value) {
+	value = *static_cast<std::string*>(opaque);
+	return true;
+}
+
+// The production regression this catches is continuing through later actions
+// after an earlier configured plugin asked the process to exit.
+static void test_first_early_exit_short_circuits_later_plugins() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_ENABLE_EARLY_ACTION", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths {
+		PROXYSQL_FAKE_PLUGIN_PATH, PROXYSQL_FAKE_PLUGIN2_PATH
+	};
+	std::string err;
+	ok(proxysql_discover_configured_plugins(mgr, paths, err),
+	   "two early-action plugins load in configured order (err='%s')", err.c_str());
+	std::string requested_action = "exit_success";
+	const ProxySQL_PluginEarlyActionContext context {
+		&requested_action, &test_action_is_set, &test_action_get_string,
+		"test.cnf", "test-datadir", nullptr
+	};
+	const auto result = proxysql_run_configured_plugin_early_actions(mgr.get(), context, err);
+	ok(result == ProxySQL_PluginEarlyActionResult::exit_success,
+	   "the first configured exit result is returned");
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:early_action") != std::string::npos &&
+	   log.find("fake_plugin2:early_action") == std::string::npos,
+	   "the first exit short-circuits the later plugin action (log='%s')", log.c_str());
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_ENABLE_EARLY_ACTION");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_EARLY_ACTION");
+}
+
+// ABI 5 descriptors end at register_schemas. The production regression this
+// catches is reading the ABI-6 early_action tail from an older plugin.
+static void test_abi5_skips_early_action_tail() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI5_TAIL_GUARD", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr(new ProxySQL_PluginManager());
+	std::string err;
+	ok(mgr->load(PROXYSQL_FAKE_PLUGIN_PATH, err), "ABI 5 fake plugin loads");
+	ez::ezOptionParser parser;
+	ProxySQL_PluginParsedOptionContext parsed_options(parser);
+	const auto result = proxysql_run_configured_plugin_early_actions(
+		mgr.get(), parsed_options.early_action_context("test.cnf", "test-datadir"), err);
+	ok(result == ProxySQL_PluginEarlyActionResult::not_requested,
+	   "ABI 5 descriptor skips the ABI 6 early-action tail (err='%s')", err.c_str());
+	ok(read_log().find("fake_plugin:early_action") == std::string::npos,
+	   "ABI 5 plugin did not run an early action");
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI5_TAIL_GUARD");
+}
+
+// ABI-7 descriptors include the secret-service era prefix but do not have the
+// ABI-8 runtime_ready field. The production regression is reading that tail
+// unconditionally during phase 3.
+static void test_abi7_skips_runtime_ready_tail() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI7_TAIL_GUARD", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr(new ProxySQL_PluginManager());
+	std::string err;
+	ok(mgr->load(PROXYSQL_FAKE_PLUGIN_PATH, err) && mgr->init_all(err) && mgr->start_all(err),
+		"ABI 7 plugin reaches started state without an ABI 8 descriptor tail");
+	ProxySQL_PluginRuntimeContext context { nullptr, 4321 };
+	ok(proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"ABI 7 plugin is skipped by runtime-ready dispatch (err='%s')", err.c_str());
+	ok(read_log().find("fake_plugin:runtime_ready") == std::string::npos,
+		"ABI 7 plugin did not read or invoke the ABI 8 runtime-ready tail");
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_ABI7_TAIL_GUARD");
 }
 
 // Case 2: plugin sets only init (register_schemas field is null).
@@ -170,6 +425,27 @@ static void test_phase_b_db_handles_are_null() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
 }
 
+// ABI-7 secret callbacks are callable in Phase B but must reject the request:
+// configdb and the core-owned secret table do not exist until Admin is live.
+static void test_phase_b_secret_services_are_not_available() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_TEST_SECRETS", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err),
+	   "Phase-B secret-service probe does not fail schema registration (err='%s')", err.c_str());
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:phase_b_secrets_not_available") != std::string::npos,
+	   "Phase-B secret callbacks report not_available and clear supplied output");
+
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_TEST_SECRETS");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
 // Case 4: a failing register_schemas aborts the load and init() is NOT
 // called.  Verifies the loader treats Phase-B failure as a hard error.
 static void test_phase_b_failure_aborts_init() {
@@ -190,6 +466,10 @@ static void test_phase_b_failure_aborts_init() {
 	   "register_schemas actually ran and logged its failure");
 	ok(log.find("fake_plugin:init") == std::string::npos,
 	   "init was NOT called after register_schemas failed");
+	ok(mgr == nullptr,
+	   "schema-registration failure tears down the discovered manager");
+	ok(proxysql_get_plugin_manager() == nullptr,
+	   "schema-registration failure unpublishes the active manager");
 
 	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_FAIL");
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
@@ -227,11 +507,57 @@ static void test_phase_b_partial_failure_rolls_back() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
 }
 
+// A config_db table participates in automatic disk-to-memory restore. It must
+// therefore have a same-name admin_db destination; reject an orphan at schema
+// registration time instead of issuing invalid SQL later during startup.
+static void test_phase_b_orphan_config_table_is_rejected() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_REGISTER_CONFIG_ONLY", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(!proxysql_load_configured_plugins(mgr, paths, err),
+	   "load rejects a config_db table without an admin_db twin");
+	ok(err.find("fake_plugin_orphan_config") != std::string::npos &&
+	   err.find("admin_db") != std::string::npos,
+	   "orphan config-table error identifies the table and missing admin_db twin (err='%s')",
+	   err.c_str());
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_REGISTER_CONFIG_ONLY");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
+// Same-name tables are not sufficient: automatic SELECT * restoration also
+// requires identical column layouts. Reject incompatible twins before Admin
+// materializes either schema.
+static void test_phase_b_mismatched_config_table_is_rejected() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_REGISTER_MISMATCHED_TWINS", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(!proxysql_load_configured_plugins(mgr, paths, err),
+	   "load rejects same-name admin/config tables with incompatible definitions");
+	ok(err.find("fake_plugin_mismatched_twins") != std::string::npos &&
+	   err.find("identical") != std::string::npos,
+	   "mismatched-twin error identifies the table and definition contract (err='%s')",
+	   err.c_str());
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_REGISTER_MISMATCHED_TWINS");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+}
+
 // Case 5: init() succeeds but start() fails.  stop() MUST still be
 // called for teardown symmetry — anything init() allocated would otherwise
 // leak.  This is the "init pairs with stop" contract.
 static void test_stop_runs_when_start_fails() {
 	setenv("PROXYSQL_FAKE_PLUGIN_START_FAIL", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
 	clear_log();
 
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
@@ -251,8 +577,288 @@ static void test_stop_runs_when_start_fails() {
 	   "start_fail marker confirms start() was called and returned false");
 	ok(log.find("fake_plugin:stop") != std::string::npos,
 	   "stop() was called for init-success/start-fail plugin (teardown symmetry)");
+	ok(contains_in_order(log, "fake_plugin:stop_server_controller_uninstalled", "fake_plugin:stop"),
+	   "start-fail teardown retires its init-installed controller before stop returns");
 
 	unsetenv("PROXYSQL_FAKE_PLUGIN_START_FAIL");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+}
+
+static void test_stop_uninstalls_controller_through_retained_service() {
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_CHECK_SERVER_DISCOVERY_PHASE", "1", 1);
+	clear_log();
+
+	void* fixture_handle = nullptr;
+	const retained_uninstall_cb retained_uninstall = retain_uninstall_callback(fixture_handle);
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(fixture_handle != nullptr && retained_uninstall != nullptr &&
+	   proxysql_load_configured_plugins(mgr, paths, err) &&
+	   proxysql_init_configured_plugins(mgr.get(), err) &&
+	   proxysql_start_configured_plugins(mgr.get(), err),
+	   "real plugin installs a discovery controller during init");
+	mgr->replace_managed_server_hostgroup_claims_for_test(
+		ProxySQL_ServerProtocol::mysql, {{701, 702}});
+	g_retirement_saw_managed_inventory = false;
+	proxysql_server_discovery_retirement_attempt_for_test =
+		&observe_managed_inventory_during_retirement;
+	ok(proxysql_stop_configured_plugins(mgr, err) && !mgr,
+	   "retained uninstall service succeeds from stop and manager teardown completes");
+	proxysql_server_discovery_retirement_attempt_for_test = nullptr;
+	ok(g_retirement_saw_managed_inventory &&
+	   !proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol::mysql, 701, 702),
+	   "stop preserves managed inventory ownership until controller retirement completes");
+
+	const std::string log = read_log();
+	ok(contains_in_order(log, "fake_plugin:server_controller_shutdown",
+	   "fake_plugin:server_controller_destroyed") &&
+	   contains_in_order(log, "fake_plugin:server_controller_destroyed",
+	   "fake_plugin:stop_server_controller_uninstalled") &&
+	   contains_in_order(log, "fake_plugin:stop_server_controller_uninstalled", "fake_plugin:stop"),
+	   "controller drains, shuts down, and is destroyed synchronously before stop returns");
+	ok(log.find("fake_plugin:stop_server_controller_install_rejected") != std::string::npos &&
+	   log.find("fake_plugin:stop_server_module_register_rejected") != std::string::npos &&
+	   log.find("fake_plugin:stop_server_desired_set_rejected") != std::string::npos,
+	   "stop target does not re-enable install, registration, or desired-set posting");
+	ok(count_occurrences(log, "fake_plugin:server_controller_shutdown") == 1 &&
+	   count_occurrences(log, "fake_plugin:server_controller_destroyed") == 1,
+	   "manager destructor does not retire the explicitly uninstalled controller twice");
+	ok(!retained_uninstall(), "retained uninstall service fails closed after stop returns");
+
+	dlclose(fixture_handle);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_CHECK_SERVER_DISCOVERY_PHASE");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+}
+
+static void test_rediscovery_clears_retiring_manager() {
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	const bool started = proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err);
+	if (started) {
+		mgr->replace_managed_server_hostgroup_claims_for_test(
+			ProxySQL_ServerProtocol::mysql, {{701, 702}});
+	}
+	g_retirement_saw_managed_inventory = false;
+	proxysql_server_discovery_retirement_attempt_for_test =
+		&observe_managed_inventory_during_retirement;
+	const bool rediscovered = started &&
+		proxysql_discover_configured_plugins(mgr, {}, err);
+	proxysql_server_discovery_retirement_attempt_for_test = nullptr;
+	bool managed_after = true;
+	{
+		ScopedServerDiscoveryProtocolLock lock(ProxySQL_ServerProtocol::mysql);
+		managed_after = proxysql_is_server_inventory_managed_locked(
+			ProxySQL_ServerProtocol::mysql, 701, 702);
+	}
+	ok(rediscovered && !mgr && g_retirement_saw_managed_inventory && !managed_after,
+	   "rediscovery keeps the retiring manager live through controller release and clears it before return");
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+}
+
+static void test_stop_uninstall_is_scoped_to_controller_owner() {
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH, PROXYSQL_FAKE_PLUGIN2_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+	   proxysql_init_configured_plugins(mgr.get(), err) &&
+	   proxysql_start_configured_plugins(mgr.get(), err),
+	   "first of two real plugins installs the discovery controller");
+	ok(proxysql_stop_configured_plugins(mgr, err) && !mgr,
+	   "two-plugin reverse-order stop completes after owner-scoped uninstall attempts");
+
+	const std::string log = read_log();
+	ok(log.find("fake_plugin2:stop_server_controller_uninstall_rejected") != std::string::npos &&
+	   log.find("fake_plugin2:stop_server_controller_uninstalled") == std::string::npos &&
+	   contains_in_order(log, "fake_plugin2:stop_server_controller_uninstall_rejected",
+	   "fake_plugin2:stop") &&
+	   contains_in_order(log, "fake_plugin2:stop", "fake_plugin:server_controller_shutdown"),
+	   "non-owner stop cannot shut down or destroy another plugin's controller");
+	ok(contains_in_order(log, "fake_plugin:server_controller_shutdown",
+	   "fake_plugin:server_controller_destroyed") &&
+	   contains_in_order(log, "fake_plugin:server_controller_destroyed",
+	   "fake_plugin:stop_server_controller_uninstalled") &&
+	   contains_in_order(log, "fake_plugin:stop_server_controller_uninstalled", "fake_plugin:stop") &&
+	   count_occurrences(log, "fake_plugin:server_controller_shutdown") == 1 &&
+	   count_occurrences(log, "fake_plugin:server_controller_destroyed") == 1,
+	   "owner stop later drains and destroys its controller synchronously exactly once");
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+}
+
+static void test_failed_stop_cleanup_is_idempotent(const char* failure_env,
+	const char* failure_marker, const char* description) {
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER", "1", 1);
+	setenv(failure_env, "1", 1);
+	clear_log();
+
+	void* fixture_handle = nullptr;
+	const retained_uninstall_cb retained_uninstall = retain_uninstall_callback(fixture_handle);
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	const bool started = fixture_handle != nullptr && retained_uninstall != nullptr &&
+		proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err);
+	bool stop_result = true;
+	bool threw = false;
+	try {
+		stop_result = proxysql_stop_configured_plugins(mgr, err);
+	} catch (...) {
+		threw = true;
+	}
+	ok(started && !threw && !stop_result && !mgr && err == "plugin stop failed", "%s", description);
+
+	const std::string log = read_log();
+	ok(contains_in_order(log, "fake_plugin:server_controller_destroyed",
+	   "fake_plugin:stop_server_controller_uninstalled") &&
+	   log.find(failure_marker) != std::string::npos &&
+	   count_occurrences(log, "fake_plugin:server_controller_destroyed") == 1,
+	   "failed stop still destroys its controller exactly once");
+	ok(!retained_uninstall(), "failed stop clears its transient uninstall target");
+
+	dlclose(fixture_handle);
+	unsetenv(failure_env);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_STOP_UNINSTALL_SERVER_DISCOVERY_CONTROLLER");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_SERVER_DISCOVERY_CONTROLLER");
+}
+
+// Runtime readiness is deliberately separate from start(): its callback must
+// run only after phase 3 has the HGM/Auth/QPro/MTH core dependencies, and a
+// failed first reconciliation must leave the process able to start listeners.
+static void test_runtime_ready_runs_before_listeners_and_teardown_removes_gates() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err),
+		"runtime-ready plugin reaches the started state (err='%s')", err.c_str());
+	append_log("core:hgm_auth_qpro_mth_ready");
+	ProxySQL_PluginRuntimeContext context { nullptr, 1234 };
+	ok(proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"successful runtime-ready reconciliation does not degrade the plugin (err='%s')", err.c_str());
+	append_log("core:listeners_started");
+	const std::string log = read_log();
+	ok(contains_in_order(log, "core:hgm_auth_qpro_mth_ready", "fake_plugin:runtime_ready") &&
+		contains_in_order(log, "fake_plugin:runtime_ready", "core:listeners_started"),
+		"runtime_ready is ordered after core prerequisites and before listeners (log='%s')", log.c_str());
+	ok(proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450).has_value(),
+		"runtime-ready plugin installs its listener gate through ABI 8 services");
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	ok(!proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450).has_value(),
+		"manager teardown removes gates owned by its plugin");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY");
+}
+
+static void test_runtime_ready_failure_degrades_without_aborting_listener_start() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_INSTALL_READY", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err),
+		"plugin start succeeds before its runtime-ready reconciliation");
+	ProxySQL_PluginRuntimeContext context { nullptr, 5678 };
+	ok(proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"runtime readiness can first leave the plugin listener ready (err='%s')", err.c_str());
+	auto listener_gate = proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450);
+	ok(listener_gate && listener_gate->state == ProxySQL_PluginListenerState::ready,
+		"the callback starts its second reconciliation with a ready gate");
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_FAIL", "1", 1);
+	ok(!proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"a failed runtime-ready callback reports a degraded plugin");
+	listener_gate = proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450);
+	ok(listener_gate && listener_gate->state == ProxySQL_PluginListenerState::closed &&
+		listener_gate->reason == "runtime readiness degraded",
+		"a false callback closes its previously ready gates with a sanitized reason");
+	append_log("core:listeners_started");
+	const std::string log = read_log();
+	ok(log.find("fake_plugin:runtime_ready_fail") != std::string::npos &&
+		contains_in_order(log, "fake_plugin:runtime_ready_fail", "core:listeners_started"),
+		"runtime-ready failure does not prevent listeners from starting (log='%s')", log.c_str());
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_FAIL");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_INSTALL_READY");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY");
+}
+
+static void test_runtime_ready_exception_closes_ready_gates() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_INSTALL_READY", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_THROW", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err),
+		"plugin start succeeds before its runtime-ready exception");
+	ProxySQL_PluginRuntimeContext context { nullptr, 6789 };
+	ok(!proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"a throwing runtime-ready callback reports a degraded plugin");
+	const auto listener_gate = proxysql_plugin_listener_gate_lookup("127.0.0.1", 6450);
+	ok(listener_gate && listener_gate->state == ProxySQL_PluginListenerState::closed &&
+		listener_gate->reason == "runtime readiness degraded",
+		"an exception closes its newly ready gate with a sanitized reason");
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_THROW");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_INSTALL_READY");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY");
+}
+
+static void test_runtime_ready_callbacks_receive_isolated_contexts() {
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_MUTATE_CONTEXT", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN2_ENABLE_RUNTIME_READY", "1", 1);
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_PATH, PROXYSQL_FAKE_PLUGIN2_PATH };
+	std::string err;
+	ok(proxysql_load_configured_plugins(mgr, paths, err) &&
+		proxysql_init_configured_plugins(mgr.get(), err) &&
+		proxysql_start_configured_plugins(mgr.get(), err),
+		"two runtime-ready plugins start before their callbacks run");
+	ProxySQL_PluginRuntimeContext context { nullptr, 7890 };
+	ok(proxysql_runtime_ready_configured_plugins(mgr.get(), context, err),
+		"a callback mutating its context cannot degrade the following plugin (err='%s')", err.c_str());
+	const std::string log = read_log();
+	ok(contains_in_order(log, "fake_plugin:runtime_ready_mutated_context", "fake_plugin2:runtime_ready"),
+		"the second runtime-ready callback received an unpoisoned context (log='%s')", log.c_str());
+	(void)proxysql_stop_configured_plugins(mgr, err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN2_ENABLE_RUNTIME_READY");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_RUNTIME_READY_MUTATE_CONTEXT");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_RUNTIME_READY");
 }
 
 // Case 6: plugin returns a descriptor with an unknown abi_version.  The
@@ -278,18 +884,58 @@ static void test_bogus_abi_version_rejected() {
 	unsetenv("PROXYSQL_FAKE_PLUGIN_FORCE_BOGUS_ABI");
 }
 
+static void test_debug_abi_mismatch_rejected() {
+	clear_log();
+
+	std::unique_ptr<ProxySQL_PluginManager> mgr;
+	std::vector<std::string> paths { PROXYSQL_FAKE_PLUGIN_DEBUG_MISMATCH_PATH };
+	std::string err;
+	ok(!proxysql_load_configured_plugins(mgr, paths, err),
+	   "load fails when plugin and core DEBUG ABI tags differ");
+	ok(err.find("DEBUG") != std::string::npos,
+	   "error message identifies the DEBUG ABI mismatch (err='%s')", err.c_str());
+	ok(read_log().find("fake_plugin:init") == std::string::npos,
+	   "init was NOT called on a plugin rejected by the DEBUG ABI check");
+}
+
 int main() {
-	plan(26);
+	plan(98);
+
+	ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) <=
+		PROXYSQL_PLUGIN_ABI_VERSION_MAX,
+		"the loader accepts the current additive ABI");
 
 	make_log_path();
+	test_duplicate_descriptor_names_are_rejected();
 
 	test_phase_b_and_init_both_fire();
+	test_early_action_runs_between_admin_and_init();
+	test_early_action_exit_results_skip_normal_lifecycle();
+	test_early_action_exception_is_a_sanitized_failure();
+	test_first_early_exit_short_circuits_later_plugins();
+	test_abi5_skips_early_action_tail();
+	test_abi7_skips_runtime_ready_tail();
 	test_only_init_skips_phase_b();
 	test_phase_b_db_handles_are_null();
+	test_phase_b_secret_services_are_not_available();
 	test_phase_b_failure_aborts_init();
 	test_phase_b_partial_failure_rolls_back();
+	test_phase_b_orphan_config_table_is_rejected();
+	test_phase_b_mismatched_config_table_is_rejected();
 	test_stop_runs_when_start_fails();
+	test_stop_uninstalls_controller_through_retained_service();
+	test_rediscovery_clears_retiring_manager();
+	test_stop_uninstall_is_scoped_to_controller_owner();
+	test_failed_stop_cleanup_is_idempotent("PROXYSQL_FAKE_PLUGIN_STOP_FAIL",
+		"fake_plugin:stop_fail", "false-returning stop still tears down the manager");
+	test_failed_stop_cleanup_is_idempotent("PROXYSQL_FAKE_PLUGIN_STOP_THROW",
+		"fake_plugin:stop_throw", "throwing stop is contained and still tears down the manager");
+	test_runtime_ready_runs_before_listeners_and_teardown_removes_gates();
+	test_runtime_ready_failure_degrades_without_aborting_listener_start();
+	test_runtime_ready_exception_closes_ready_gates();
+	test_runtime_ready_callbacks_receive_isolated_contexts();
 	test_bogus_abi_version_rejected();
+	test_debug_abi_mismatch_rejected();
 
 	cleanup_log();
 	return exit_status();

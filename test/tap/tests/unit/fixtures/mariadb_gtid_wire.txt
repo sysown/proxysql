@@ -1,0 +1,51 @@
+# MariaDB GTID reader -> ProxySQL wire contract.
+#
+# This file is the shared contract between the two halves of MariaDB GTID
+# support, which live in two repositories and are never run against each other
+# in CI. Both halves verify against this file, so a change to the reader's
+# output breaks the reader's own live test AND ProxySQL's parser test.
+#
+#   reader:    test/tap/tests/test_mariadb_gtid_stream-t.cpp
+#              normalizes what the live reader emitted and compares it here.
+#   proxysql:  test/tap/tests/unit/gtid_wire_contract_unit-t.cpp
+#              expands each line here into concrete wire text, feeds it to
+#              GTID_Server_Data::read_next_gtid(), and asserts the watermark.
+#
+# Keep this file byte-identical in both repositories. If you change it in one,
+# change it in the other in the same commit, and say why in the commit body.
+#
+# Format: one record per line, "<kind>\t<normalized line>". Blank lines and
+# lines starting with '#' are ignored. The normalized line is the literal wire
+# text the reader sends, with the server-dependent numbers replaced by
+# placeholders, because how many transactions a server has executed at test
+# time is not reproducible.
+#
+# Placeholders and the value ProxySQL's unit test substitutes:
+#
+#   <start>  first sequence of a snapshot interval   -> 1
+#   <end>    snapshot watermark (highest sequence)   -> 77
+#   <seq>    first streamed sequence                 -> 78
+#   <seq2>   second streamed sequence                -> 79
+#
+# A domain id is a decimal uint32. It is written literally rather than as a
+# placeholder because 0 is the interesting case: it is the only single-digit
+# domain, and it must never be confused with an absent or malformed id.
+#
+# Why the wire form is not the native one: MariaDB reports positions as
+# "domain-server-sequence" with no colon (0-1-270), but the reader sends
+# GTID_Set::to_string(), which is "domain:start-end" (0:1-270) -- with a colon.
+# The native spelling never appears on the wire.
+
+# Snapshot: one domain, the server's current watermark, as a closed interval.
+# ProxySQL must record the watermark as [start, end], so that a causal read at
+# end is satisfied and a read at end+1 is not.
+ST	ST=0:<start>-<end>
+
+# First streamed transaction after the snapshot, same domain as the snapshot.
+# ProxySQL must extend that domain's watermark to seq.
+I1	I1=0:<seq>
+
+# Second streamed transaction, same domain as the preceding update, so the
+# reader omits the domain. ProxySQL must reuse its last domain; a bare
+# sequence with no domain must never be applied to the wrong domain.
+I2	I2=<seq2>

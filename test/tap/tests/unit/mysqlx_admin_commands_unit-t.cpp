@@ -81,6 +81,8 @@ int main() {
 	// create them explicitly.
 	admindb.execute(ADMIN_SQLITE_RUNTIME_MYSQL_USERS);
 	admindb.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS);
+	admindb.execute(ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	admindb.execute(ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES);
 
 	ProxySQL_PluginCommandContext ctx;
 	ctx.admindb = &admindb;
@@ -175,23 +177,36 @@ int main() {
 	{
 		auto* cmd = find_command("LOAD MYSQLX VARIABLES TO RUNTIME");
 		ok(cmd != nullptr, "LOAD MYSQLX VARIABLES TO RUNTIME command registered");
-		admindb.execute("INSERT INTO mysqlx_variables (variable_name, variable_value) VALUES ('thread_pool_size', '4')");
+		admindb.execute(
+			"INSERT INTO global_variables (variable_name, variable_value) VALUES "
+			"('mysqlx-thread_pool_size', '8'),"
+			"('mysqlx-connect_timeout', '10000'),"
+			"('mysqlx-tls_mode', 'DISABLED'),"
+			"('mysqlx-tls_backend_mode', 'as_client'),"
+			"('mysqlx-max_cached_connections_per_thread', '100'),"
+			"('admin-test_unrelated', 'kept')");
 		ProxySQL_PluginCommandResult res = cmd(ctx, nullptr);
-		ok(res.error_code == 0, "LOAD MYSQLX VARIABLES TO RUNTIME succeeds");
+		ok(res.error_code == 0 && res.rows_affected == 5 &&
+		   admindb.return_one_int("SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'mysqlx-%'") == 5 &&
+		   admindb.return_one_int("SELECT COUNT(*) FROM global_variables WHERE variable_name='admin-test_unrelated'") == 1,
+		   "LOAD MYSQLX VARIABLES TO RUNTIME publishes only the five mysqlx-* variables");
 	}
 
 	{
 		auto* cmd = find_command("SAVE MYSQLX VARIABLES TO MEMORY");
 		ok(cmd != nullptr, "SAVE MYSQLX VARIABLES TO MEMORY command registered");
-		admindb.execute("DELETE FROM mysqlx_variables");
+		admindb.execute("DELETE FROM global_variables WHERE variable_name LIKE 'mysqlx-%'");
 		ProxySQL_PluginCommandResult res = cmd(ctx, nullptr);
 		ok(res.error_code == 0, "SAVE MYSQLX VARIABLES TO MEMORY succeeds");
-		// save_variables_to_admin_table dumps the five well-known variables
+		// save_variables_to_global dumps the five well-known variables
 		// (thread_pool_size, connect_timeout, tls_mode, max_cached_conns,
 		// tls_backend_mode) from the in-memory store regardless of what
 		// was previously loaded.
-		int cnt = admindb.return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
-		ok(cnt == 5, "mysqlx_variables has 5 rows after save (all known variables)");
+		int cnt = admindb.return_one_int(
+			"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'mysqlx-%'");
+		ok(cnt == 5 &&
+		   admindb.return_one_int("SELECT COUNT(*) FROM global_variables WHERE variable_name='admin-test_unrelated'") == 1,
+		   "SAVE restores five mysqlx-* rows without touching other namespaces");
 	}
 
 	{

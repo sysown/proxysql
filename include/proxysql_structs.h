@@ -19,7 +19,8 @@ enum MySerStatus {
 	MYSQL_SERVER_STATUS_SHUNNED,
 	MYSQL_SERVER_STATUS_OFFLINE_SOFT,
 	MYSQL_SERVER_STATUS_OFFLINE_HARD,
-	MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG
+	MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG,
+	MYSQL_SERVER_STATUS_SHUNNED_AWS_BGD
 };
 
 enum log_event_type {
@@ -28,6 +29,8 @@ enum log_event_type {
 	PROXYSQL_MYSQL_AUTH_ERR,
 	PROXYSQL_MYSQL_AUTH_CLOSE,
 	PROXYSQL_MYSQL_AUTH_QUIT,
+	PROXYSQL_MYSQL_AUTH_PASSTHROUGH_OK,
+	PROXYSQL_MYSQL_AUTH_PASSTHROUGH_FAIL,
 	PROXYSQL_MYSQL_CHANGE_USER_OK,
 	PROXYSQL_MYSQL_CHANGE_USER_ERR,
 	PROXYSQL_MYSQL_INITDB,
@@ -44,7 +47,11 @@ enum log_event_type {
 	PROXYSQL_METADATA
 };
 
-enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND, USERNAME_NONE };
+// USERNAME_ADMIN is a scope for 'admin-admin_credentials' / 'admin-stats_credentials'.
+// It is compiled unconditionally, but only *used* when PROXYSQL31 is defined --
+// see ADMIN_CRED_SCOPE in MySQL_Authentication.hpp. On the stable tier those
+// credentials continue to live in USERNAME_FRONTEND alongside mysql_users.
+enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND, USERNAME_NONE, USERNAME_ADMIN };
 
 #define PROXYSQL_USE_RESULT
 
@@ -265,6 +272,7 @@ enum pgsql_variable_name {
 	PGSQL_INTERVALSTYLE,
 	PGSQL_STANDARD_CONFORMING_STRINGS,
 	PGSQL_TIMEZONE,
+	PGSQL_SEARCH_PATH,
 	PGSQL_NAME_LAST_LOW_WM,
 	PGSQL_ALLOW_IN_PLACE_TABLESPACES,
 	PGSQL_BYTEA_OUTPUT,
@@ -278,7 +286,6 @@ enum pgsql_variable_name {
 	PGSQL_ESCAPE_STRING_WARNING,
 	PGSQL_EXTRA_FLOAT_DIGITS,
 	PGSQL_MAINTENANCE_WORK_MEM,
-	PGSQL_SEARCH_PATH,
 	PGSQL_SYNCHRONOUS_COMMIT,
 	PGSQL_NAME_LAST_HIGH_WM
 };
@@ -287,6 +294,7 @@ enum session_status {
 	CONNECTING_CLIENT,
 	CONNECTING_SERVER,
 	LDAP_AUTH_CLIENT,
+	AUTHENTICATING_BACKEND_FOR_CLIENT,
 	PINGING_SERVER,
 	WAITING_CLIENT_DATA,
 	WAITING_SERVER_DATA,
@@ -319,6 +327,26 @@ enum session_status {
 	RESYNCHRONIZING_CONNECTION,
 	SETTING_SESSION_TRACK_VARIABLES,
 	SETTING_SESSION_TRACK_STATE,
+	SETTING_USER_VARIABLES,
+	// NOTE: append-only. PROCESSING_STMT_BIND (Task P1) is placed at the END of the
+	// enum on purpose: inserting it mid-list would renumber every following value, and
+	// the build does not track header→object dependencies, so any translation unit not
+	// recompiled would silently disagree on the numeric values (observed: a stale
+	// pgsql_tracked_variables[] holding the old SETTING_VARIABLE value crashed
+	// verify_server_variable with "Wrong status"). Keep new statuses here.
+	PROCESSING_STMT_BIND,
+	// Named-portal Close (Task P2): a real backend Close('P', name) round-trip
+	// (CloseComplete '3' forwarded, registry entry evicted). Append-only, same
+	// rationale as PROCESSING_STMT_BIND above.
+	PROCESSING_STMT_CLOSE,
+#ifdef PROXYSQL40
+	// AWS IAM backend authentication waits here for its token. Appended, so every
+	// tier keeps the values above, which are also those of v3.0.11.
+	WAITING_AWS_IAM_TOKEN,
+#endif // PROXYSQL40
+	SETTING_USER_VARIABLE_CONTEXT,
+	// A buffered extended-query unit sent in one write. Append-only, as above.
+	PROCESSING_EXTQ_BATCH,
 	session_status___NONE // special marker
 };
 
@@ -767,6 +795,42 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_NONE
 };
 
+/**
+ * @brief The credential scope holding 'admin-admin_credentials' and
+ *   'admin-stats_credentials'.
+ *
+ * @details Historically these shared USERNAME_FRONTEND with mysql_users /
+ *   pgsql_users -- one flat map keyed by username -- so an Admin credential and
+ *   a row of the same name overwrote each other. That is the only reason the
+ *   documentation states those users cannot also appear in mysql_users.
+ *
+ *   From the Innovative tier onward they get their own scope, removing the
+ *   collision rather than policing it. This is an INCOMPATIBLE change (a
+ *   colliding name currently resolves to one entry; afterwards the two are
+ *   independent), so it is gated to PROXYSQL31. On the stable tier this is
+ *   USERNAME_FRONTEND, every call site passes what it always passed, and
+ *   behaviour is unchanged. See issue #5987.
+ */
+#ifdef PROXYSQL31
+#define ADMIN_CRED_SCOPE USERNAME_ADMIN
+#else
+#define ADMIN_CRED_SCOPE USERNAME_FRONTEND
+#endif /* PROXYSQL31 */
+
+/**
+ * @brief Credential scope to resolve a username in, for a given session type.
+ * @details ADMIN and STATS sessions use ADMIN_CRED_SCOPE; every other session
+ *   type (MySQL/PgSQL frontend, SQLite server, ClickHouse) uses
+ *   USERNAME_FRONTEND. Shared by both protocol implementations so the policy
+ *   exists once.
+ */
+static inline enum cred_username_type cred_scope_for_session(enum proxysql_session_type session_type) {
+	if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+		return ADMIN_CRED_SCOPE;
+	}
+	return USERNAME_FRONTEND;
+}
+
 #endif /* PROXYSQL_ENUMS */
 
 
@@ -854,6 +918,10 @@ struct __SQP_query_parser_t {
 	char *digest_text;
 	char *first_comment;
 	char *query_prefix;
+#ifndef PROXYSQL31
+	// Reuse the classification obtained while generating a ParserSQL digest.
+	int parsersql_command_type { -1 };
+#endif
 };
 
 struct _PtrSize_t {
@@ -1132,6 +1200,7 @@ __thread int pgsql_thread___default_max_latency_ms;
 __thread int pgsql_thread___unshun_algorithm;
 __thread int pgsql_thread___free_connections_pct;
 __thread bool pgsql_thread___kill_backend_connection_when_disconnect;
+__thread bool pgsql_thread___use_native_backend_protocol;
 __thread int pgsql_thread___max_allowed_packet;
 
 /* variables used for SSL , from proxy to server (p2s) */
@@ -1249,6 +1318,22 @@ __thread char *mysql_thread___ldap_user_variable;
 __thread char *mysql_thread___default_session_track_gtids;
 __thread char *mysql_thread___firewall_whitelist_errormsg;
 __thread int mysql_thread___default_authentication_plugin_int;
+__thread bool mysql_thread___passthrough_auth_enabled;
+__thread bool mysql_thread___passthrough_auth_empty_password;
+__thread bool mysql_thread___passthrough_auth_unknown_users;
+__thread bool mysql_thread___passthrough_auth_require_tls;
+#ifdef PROXYSQL40
+__thread bool mysql_thread___aws_locality_awareness;
+#endif
+__thread int mysql_thread___passthrough_default_hg;
+__thread int mysql_thread___passthrough_auth_cache_ttl_s;
+__thread int mysql_thread___passthrough_auth_max_inflight_probes;
+__thread int mysql_thread___passthrough_auth_max_failures_per_user;
+__thread int mysql_thread___passthrough_auth_max_failures_per_ip;
+__thread int mysql_thread___passthrough_auth_failure_window_s;
+__thread int mysql_thread___passthrough_auth_failure_map_cap;
+__thread char *mysql_thread___passthrough_default_schema;
+__thread char *mysql_thread___passthrough_auth_username_pattern;
 __thread int mysql_thread___max_allowed_packet;
 __thread bool mysql_thread___automatic_detect_sqli;
 __thread bool mysql_thread___firewall_whitelist_enabled;
@@ -1296,6 +1381,7 @@ __thread int mysql_thread___query_processor_regex;
 __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___set_parser_algorithm;
 __thread int mysql_thread___query_processor_parser;
+__thread int mysql_thread___user_variable_tracking;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
@@ -1332,6 +1418,7 @@ __thread bool mysql_thread___default_reconnect;
 __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
+__thread bool mysql_thread___update_gtid_from_ok;
 __thread char * mysql_thread___default_variables[SQL_NAME_LAST_LOW_WM];
 __thread int mysql_thread___query_digests_grouping_limit;
 __thread int mysql_thread___query_digests_groups_grouping_limit;
@@ -1388,6 +1475,7 @@ __thread int mysql_thread___monitor_ping_interval;
 __thread int mysql_thread___monitor_ping_max_failures;
 __thread int mysql_thread___monitor_ping_timeout;
 __thread int mysql_thread___monitor_aws_rds_topology_discovery_interval;
+__thread int mysql_thread___aws_blue_green_deployment_auto_discovery;
 __thread int mysql_thread___monitor_read_only_interval;
 __thread int mysql_thread___monitor_read_only_timeout;
 __thread int mysql_thread___monitor_read_only_max_timeout_count;
@@ -1475,6 +1563,7 @@ extern __thread int pgsql_thread___default_max_latency_ms;
 extern __thread int pgsql_thread___unshun_algorithm;
 extern __thread int pgsql_thread___free_connections_pct;
 extern __thread bool pgsql_thread___kill_backend_connection_when_disconnect;
+extern __thread bool pgsql_thread___use_native_backend_protocol;
 extern __thread int pgsql_thread___max_allowed_packet;
 
 extern __thread char* pgsql_thread___ssl_p2s_ca;
@@ -1590,6 +1679,22 @@ extern __thread char *mysql_thread___ldap_user_variable;
 extern __thread char *mysql_thread___default_session_track_gtids;
 extern __thread char *mysql_thread___firewall_whitelist_errormsg;
 extern __thread int mysql_thread___default_authentication_plugin_int;
+extern __thread bool mysql_thread___passthrough_auth_enabled;
+extern __thread bool mysql_thread___passthrough_auth_empty_password;
+extern __thread bool mysql_thread___passthrough_auth_unknown_users;
+extern __thread bool mysql_thread___passthrough_auth_require_tls;
+#ifdef PROXYSQL40
+extern __thread bool mysql_thread___aws_locality_awareness;
+#endif
+extern __thread int mysql_thread___passthrough_default_hg;
+extern __thread int mysql_thread___passthrough_auth_cache_ttl_s;
+extern __thread int mysql_thread___passthrough_auth_max_inflight_probes;
+extern __thread int mysql_thread___passthrough_auth_max_failures_per_user;
+extern __thread int mysql_thread___passthrough_auth_max_failures_per_ip;
+extern __thread int mysql_thread___passthrough_auth_failure_window_s;
+extern __thread int mysql_thread___passthrough_auth_failure_map_cap;
+extern __thread char *mysql_thread___passthrough_default_schema;
+extern __thread char *mysql_thread___passthrough_auth_username_pattern;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread bool mysql_thread___automatic_detect_sqli;
 extern __thread bool mysql_thread___firewall_whitelist_enabled;
@@ -1637,6 +1742,7 @@ extern __thread int mysql_thread___query_processor_regex;
 extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___set_parser_algorithm;
 extern __thread int mysql_thread___query_processor_parser;
+extern __thread int mysql_thread___user_variable_tracking;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
@@ -1673,6 +1779,7 @@ extern __thread bool mysql_thread___default_reconnect;
 extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
+extern __thread bool mysql_thread___update_gtid_from_ok;
 extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST_LOW_WM];
 extern __thread int mysql_thread___query_digests_grouping_limit;
 extern __thread int mysql_thread___query_digests_groups_grouping_limit;
@@ -1729,6 +1836,7 @@ extern __thread int mysql_thread___monitor_ping_interval;
 extern __thread int mysql_thread___monitor_ping_max_failures;
 extern __thread int mysql_thread___monitor_ping_timeout;
 extern __thread int mysql_thread___monitor_aws_rds_topology_discovery_interval;
+extern __thread int mysql_thread___aws_blue_green_deployment_auto_discovery;
 extern __thread int mysql_thread___monitor_read_only_interval;
 extern __thread int mysql_thread___monitor_read_only_timeout;
 extern __thread int mysql_thread___monitor_read_only_max_timeout_count;
@@ -1905,23 +2013,23 @@ pgsql_variable_st pgsql_tracked_variables[]{
 	{ PGSQL_CLIENT_ENCODING,       SETTING_VARIABLE,	"client_encoding", "client_encoding", "UTF8", (PGTRACKED_VAR_OPT_QUOTE | PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_client_encoding, { "names", nullptr } },
 	{ PGSQL_DATESTYLE,			   SETTING_VARIABLE,	"DateStyle", "datestyle", "ISO, MDY" , (PGTRACKED_VAR_OPT_QUOTE | PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_datestyle, nullptr },
 	{ PGSQL_INTERVALSTYLE,		   SETTING_VARIABLE,	"IntervalStyle", "intervalstyle", "postgres" , (PGTRACKED_VAR_OPT_QUOTE | PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_intervalstyle, nullptr },
-	{ PGSQL_STANDARD_CONFORMING_STRINGS, SETTING_VARIABLE, "standard_conforming_strings", "standard_conforming_strings", "on", (PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_bool, nullptr },
+	{ PGSQL_STANDARD_CONFORMING_STRINGS, SETTING_VARIABLE, "standard_conforming_strings", "standard_conforming_strings", "on", PGTRACKED_VAR_OPT_PARAM_STATUS, &pgsql_variable_validator_bool, nullptr },
 	{ PGSQL_TIMEZONE,			   SETTING_VARIABLE,	"TimeZone", "timezone", "GMT" , (PGTRACKED_VAR_OPT_QUOTE | PGTRACKED_VAR_OPT_PARAM_STATUS), nullptr, { "TIME ZONE", nullptr } },
+	{ PGSQL_SEARCH_PATH,		   SETTING_VARIABLE,    "search_path", "search_path", "\"$user\", public", (PGTRACKED_VAR_OPT_NO_STRIP_VALUE | PGTRACKED_VAR_OPT_PARAM_STATUS), &pgsql_variable_validator_search_path, nullptr },
 	{ PGSQL_NAME_LAST_LOW_WM,      session_status___NONE, "placeholder", "placeholder", "0" , 0, nullptr, nullptr },  // this is just a placeholder to separate the previous index from the next block
-	{ PGSQL_ALLOW_IN_PLACE_TABLESPACES,	   SETTING_VARIABLE,	"allow_in_place_tablespaces", "allow_in_place_tablespaces", "off", (0), &pgsql_variable_validator_bool, nullptr },
-	{ PGSQL_BYTEA_OUTPUT,		   SETTING_VARIABLE,	"bytea_output", "bytea_output", "hex", (PGTRACKED_VAR_OPT_QUOTE), &pgsql_variable_validator_bytea_output,  nullptr },
-	{ PGSQL_CLIENT_MIN_MESSAGES,   SETTING_VARIABLE,	"client_min_messages", "client_min_messages", "notice", (PGTRACKED_VAR_OPT_QUOTE), &pgsql_variable_validator_client_min_messages,  nullptr },
-	{ PGSQL_ENABLE_BITMAPSCAN,	   SETTING_VARIABLE,	"enable_bitmapscan", "enable_bitmapscan", "on", (0), &pgsql_variable_validator_bool, nullptr },
-	{ PGSQL_ENABLE_HASHJOIN,	   SETTING_VARIABLE,	"enable_hashjoin", "enable_hashjoin", "on", (0), &pgsql_variable_validator_bool, nullptr },
-	{ PGSQL_ENABLE_INDEXSCAN,	   SETTING_VARIABLE,	"enable_indexscan", "enable_indexscan", "on", (0), &pgsql_variable_validator_bool, nullptr },
-	{ PGSQL_ENABLE_NESTLOOP,	   SETTING_VARIABLE,	"enable_nestloop", "enable_nestloop", "on", (0), &pgsql_variable_validator_bool, nullptr },
-	{ PGSQL_ENABLE_SEQSCAN,		   SETTING_VARIABLE,	"enable_seqscan", "enable_seqscan", "on", (0), &pgsql_variable_validator_bool, nullptr },
-	{ PGSQL_ENABLE_SORT,		   SETTING_VARIABLE,	"enable_sort", "enable_sort", "on", (0), &pgsql_variable_validator_bool, nullptr },
-	{ PGSQL_ESCAPE_STRING_WARNING, SETTING_VARIABLE,    "escape_string_warning", "escape_string_warning", "on", (0), &pgsql_variable_validator_bool, nullptr },
-	{ PGSQL_EXTRA_FLOAT_DIGITS,	   SETTING_VARIABLE,    "extra_float_digits", "extra_float_digits", "1", (0), &pgsql_variable_validator_extra_float_digits, nullptr },
-	{ PGSQL_MAINTENANCE_WORK_MEM,  SETTING_VARIABLE,    "maintenance_work_mem", "maintenance_work_mem", "64MB", (PGTRACKED_VAR_OPT_QUOTE), &pgsql_variable_validator_maintenance_work_mem, nullptr },
-	{ PGSQL_SEARCH_PATH,		   SETTING_VARIABLE,    "search_path", "search_path", "\"$user\", public", (PGTRACKED_VAR_OPT_NO_STRIP_VALUE), &pgsql_variable_validator_search_path, nullptr },
-	{ PGSQL_SYNCHRONOUS_COMMIT,	   SETTING_VARIABLE,	"synchronous_commit", "synchronous_commit", "on", (PGTRACKED_VAR_OPT_QUOTE), &pgsql_variable_validator_synchronous_commit, nullptr},
+	{ PGSQL_ALLOW_IN_PLACE_TABLESPACES,	   SETTING_VARIABLE,	"allow_in_place_tablespaces", "allow_in_place_tablespaces", "off", 0, &pgsql_variable_validator_bool, nullptr },
+	{ PGSQL_BYTEA_OUTPUT,		   SETTING_VARIABLE,	"bytea_output", "bytea_output", "hex", PGTRACKED_VAR_OPT_QUOTE, &pgsql_variable_validator_bytea_output,  nullptr },
+	{ PGSQL_CLIENT_MIN_MESSAGES,   SETTING_VARIABLE,	"client_min_messages", "client_min_messages", "notice", PGTRACKED_VAR_OPT_QUOTE, &pgsql_variable_validator_client_min_messages,  nullptr },
+	{ PGSQL_ENABLE_BITMAPSCAN,	   SETTING_VARIABLE,	"enable_bitmapscan", "enable_bitmapscan", "on", 0, &pgsql_variable_validator_bool, nullptr },
+	{ PGSQL_ENABLE_HASHJOIN,	   SETTING_VARIABLE,	"enable_hashjoin", "enable_hashjoin", "on", 0, &pgsql_variable_validator_bool, nullptr },
+	{ PGSQL_ENABLE_INDEXSCAN,	   SETTING_VARIABLE,	"enable_indexscan", "enable_indexscan", "on", 0, &pgsql_variable_validator_bool, nullptr },
+	{ PGSQL_ENABLE_NESTLOOP,	   SETTING_VARIABLE,	"enable_nestloop", "enable_nestloop", "on", 0, &pgsql_variable_validator_bool, nullptr },
+	{ PGSQL_ENABLE_SEQSCAN,		   SETTING_VARIABLE,	"enable_seqscan", "enable_seqscan", "on", 0, &pgsql_variable_validator_bool, nullptr },
+	{ PGSQL_ENABLE_SORT,		   SETTING_VARIABLE,	"enable_sort", "enable_sort", "on", 0, &pgsql_variable_validator_bool, nullptr },
+	{ PGSQL_ESCAPE_STRING_WARNING, SETTING_VARIABLE,    "escape_string_warning", "escape_string_warning", "on", 0, &pgsql_variable_validator_bool, nullptr },
+	{ PGSQL_EXTRA_FLOAT_DIGITS,	   SETTING_VARIABLE,    "extra_float_digits", "extra_float_digits", "1", 0, &pgsql_variable_validator_extra_float_digits, nullptr },
+	{ PGSQL_MAINTENANCE_WORK_MEM,  SETTING_VARIABLE,    "maintenance_work_mem", "maintenance_work_mem", "64MB", PGTRACKED_VAR_OPT_QUOTE, &pgsql_variable_validator_maintenance_work_mem, nullptr },
+	{ PGSQL_SYNCHRONOUS_COMMIT,	   SETTING_VARIABLE,	"synchronous_commit", "synchronous_commit", "on", PGTRACKED_VAR_OPT_QUOTE, &pgsql_variable_validator_synchronous_commit, nullptr},
 };
 
 #endif //EXCLUDE_TRACKING_VARIABLES

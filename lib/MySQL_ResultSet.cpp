@@ -38,6 +38,14 @@ extern "C" char * sha256_crypt_r (const char *key, const char *salt, char *buffe
 
 uint8_t mysql_encode_length(uint64_t len, char *hd);
 
+// A maximum-length payload packet always requires a continuation, including
+// an empty terminal packet when the row is an exact multiple of 0xFFFFFF.
+static inline unsigned long long mysql_framed_len(unsigned long long length) {
+	return length + (length / 0xFFFFFF + 1) * sizeof(mysql_hdr);
+}
+
+static constexpr unsigned long long PS_RESULTSET_HEARTBEAT_BYTES = 32ULL * 1024 * 1024;
+
 
 MySQL_ResultSet::MySQL_ResultSet() {
 	buffer = NULL;
@@ -137,7 +145,7 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 		PROXY_TRACE2();
 		// if the backend server has CLIENT_DEPRECATE_EOF enabled, and the client does not support
 		// CLIENT_DEPRECATE_EOF, warning_count will be excluded from the intermediate EOF packet
-		add_eof((mysql->server_capabilities & CLIENT_DEPRECATE_EOF));
+		add_eof(mysql->server_capabilities & CLIENT_DEPRECATE_EOF);
 	}
 }
 
@@ -170,18 +178,10 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 		unsigned long long total_size=0;
 		MYSQL_ROWS *r=_stmt->result.data;
 		if (r) {
-			total_size+=r->length;
-			if (r->length > 0xFFFFFF) {
-				total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-			}
-			total_size+=sizeof(mysql_hdr);
+			total_size+=mysql_framed_len(r->length);
 			while(r->next) {
 				r=r->next;
-				total_size+=r->length;
-				if (r->length > 0xFFFFFF) {
-					total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-				}
-				total_size+=sizeof(mysql_hdr);
+				total_size+=mysql_framed_len(r->length);
 			}
 #define MAXBUFFSTMT 12*1024*1024  // hardcoded to LESS *very important* than 16MB
 			if (total_size < MAXBUFFSTMT) {
@@ -191,23 +191,15 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 				total_size=0;
 				r=_stmt->result.data;
 				add_row2(r,(unsigned char *)pkt.ptr);
-				total_size+=r->length;
-				if (r->length > 0xFFFFFF) {
-					total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-				}
-				total_size+=sizeof(mysql_hdr);
+				total_size+=mysql_framed_len(r->length);
 				while(r->next) {
 					r=r->next;
 					add_row2(r,(unsigned char *)pkt.ptr+total_size);
-					total_size+=r->length;
-					if (r->length > 0xFFFFFF) {
-						total_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-					}
-					total_size+=sizeof(mysql_hdr);
+					total_size+=mysql_framed_len(r->length);
 				}
 				PSarrayOUT.add(pkt.ptr,pkt.size);
-				if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
-					// generate a heartbeat every 256MB
+				if (resultset_size/PS_RESULTSET_HEARTBEAT_BYTES != ((resultset_size+pkt.size)/PS_RESULTSET_HEARTBEAT_BYTES)) {
+					// generate a heartbeat every 32 MiB
 					unsigned long long curtime=monotonic_time();
 					c_myds->sess->thread->atomic_curtime=curtime;
 				}
@@ -220,18 +212,14 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 					if (r->length >= MAXBUFFSTMT) {
 						// we have a large row
 						// we will send just that
-						tmp_pkt_size = r->length;
-						if (r->length > 0xFFFFFF) {
-							tmp_pkt_size+=(r->length / 0xFFFFFF) * sizeof(mysql_hdr);
-						}
-						tmp_pkt_size += sizeof(mysql_hdr);
+						tmp_pkt_size = mysql_framed_len(r->length);
 						PtrSize_t pkt;
 						pkt.size=tmp_pkt_size;
 						pkt.ptr=malloc(pkt.size);
 						add_row2(r,(unsigned char *)pkt.ptr);
 						PSarrayOUT.add(pkt.ptr,pkt.size);
-						if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
-							// generate a heartbeat every 256MB
+						if (resultset_size/PS_RESULTSET_HEARTBEAT_BYTES != ((resultset_size+pkt.size)/PS_RESULTSET_HEARTBEAT_BYTES)) {
+							// generate a heartbeat every 32 MiB
 							unsigned long long curtime=monotonic_time();
 							c_myds->sess->thread->atomic_curtime=curtime;
 						}
@@ -243,8 +231,7 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 						unsigned int a = 0;
 						while (r && (tmp_pkt_size + r->length) < MAXBUFFSTMT) {
 							a++;
-							tmp_pkt_size += r->length;
-							tmp_pkt_size += sizeof(mysql_hdr);
+							tmp_pkt_size += mysql_framed_len(r->length);
 							//if (r->next) {
 								r = r->next;
 							//}
@@ -257,13 +244,12 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 							pkt.ptr=malloc(pkt.size);
 							while (tmp2 < tmp_pkt_size) {
 								add_row2(r,(unsigned char *)pkt.ptr+tmp2);
-								tmp2 += r->length;
-								tmp2 += sizeof(mysql_hdr);
+								tmp2 += mysql_framed_len(r->length);
 								r = r->next;
 							}
 							PSarrayOUT.add(pkt.ptr,pkt.size);
-							if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
-								// generate a heartbeat every 256MB
+							if (resultset_size/PS_RESULTSET_HEARTBEAT_BYTES != ((resultset_size+pkt.size)/PS_RESULTSET_HEARTBEAT_BYTES)) {
+								// generate a heartbeat every 32 MiB
 								unsigned long long curtime=monotonic_time();
 								c_myds->sess->thread->atomic_curtime=curtime;
 							}
@@ -327,8 +313,15 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROWS *rows) {
 	unsigned long row_length = rows->length;
 	// we call generate_pkt_row3 passing row_length
 	sid=myprot->generate_pkt_row3(this, &pkt_length, sid, 0, NULL, row, row_length);
+	const unsigned long long next_resultset_size = resultset_size + pkt_length;
+	if (
+		resultset_size / PS_RESULTSET_HEARTBEAT_BYTES != next_resultset_size / PS_RESULTSET_HEARTBEAT_BYTES
+		&& myds && myds->sess && myds->sess->thread
+	) {
+		myds->sess->thread->atomic_curtime = monotonic_time();
+	}
 	sid++;
-	resultset_size+=pkt_length;
+	resultset_size = next_resultset_size;
 	num_rows++;
 	return pkt_length;
 }
@@ -361,7 +354,7 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 	unsigned long length=row->length;
 	num_rows++;
 	uint8_t pkt_sid=sid;
-	if (length < (0xFFFFFF+sizeof(mysql_hdr))) {
+	if (length < 0xFFFFFF) {
 		mysql_hdr myhdr;
 		myhdr.pkt_length=length;
 		myhdr.pkt_id=pkt_sid;
@@ -369,8 +362,8 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 		memcpy(offset+sizeof(mysql_hdr), row->data, row->length);
 		pkt_sid++;
 	} else {
-		unsigned int left=length;
-		unsigned int copied=0;
+		unsigned long left=length;
+		unsigned long copied=0;
 		while (left>=0xFFFFFF) {
 			mysql_hdr myhdr;
 			myhdr.pkt_length=0xFFFFFF;
@@ -447,7 +440,7 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 		MYSQL *_mysql=_myds->myconn->mysql;
 		buffer_to_PSarrayOut();
 		char sqlstate[10];
-		sprintf(sqlstate,"%s",mysql_sqlstate(_mysql));
+		snprintf(sqlstate, sizeof(sqlstate), "%s",mysql_sqlstate(_mysql));
 		if (_myds && _myds->killed_at) { // see case #750
 			if (_myds->kill_type == 0) {
 				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,1907,sqlstate,(char *)"Query execution was interrupted, query_timeout exceeded");

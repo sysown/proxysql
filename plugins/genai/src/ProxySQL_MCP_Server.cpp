@@ -19,29 +19,15 @@ using json = nlohmann::json;
 #include "AI_Tool_Handler.h"
 #include "RAG_Tool_Handler.h"
 #include "AI_Features_Manager.h"
+#include "genai_plugin.h"
 #include "proxysql_utils.h"
+
+#include <exception>
 
 using namespace httpserver;
 
-extern ProxySQL_Admin *GloAdmin;
-
-/**
- * @brief Thread function for the MCP server
- *
- * This function runs in a dedicated thread and starts the webserver.
- *
- * @param arg Pointer to the webserver instance
- * @return NULL
- */
-static void *mcp_server_thread(void *arg) {
-	set_thread_name("MCP_Server", GloVars.set_thread_name);
-	httpserver::webserver * ws = (httpserver::webserver *)arg;
-	ws->start(true);
-	return NULL;
-}
-
 ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
-	: port(p), use_ssl(h->variables.mcp_use_ssl), thread_id(0), handler(h)
+	: port(p), use_ssl(h->variables.mcp_use_ssl), handler(h)
 {
 	proxy_info("Creating ProxySQL MCP Server on port %d (SSL: %s)\n",
 		port, use_ssl ? "enabled" : "disabled");
@@ -181,7 +167,9 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 	// 6. AI endpoint (for LLM and other AI features).
 	if (handler->ai_tool_handler) {
 		std::unique_ptr<httpserver::http_resource> ai_resource =
-			std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->ai_tool_handler, "ai"));
+			std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(
+				handler, handler->ai_tool_handler, "ai",
+				&genai_context().runtime_dependencies_mutex));
 		ws->register_resource("/mcp/ai", ai_resource.get(), true);
 		_endpoints.push_back({"/mcp/ai", std::move(ai_resource)});
 	}
@@ -194,7 +182,9 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 		handler->rag_tool_handler = new RAG_Tool_Handler(GloAI, catalog_path);
 		if (handler->rag_tool_handler->init() == 0) {
 			std::unique_ptr<httpserver::http_resource> rag_resource =
-				std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(handler, handler->rag_tool_handler, "rag"));
+				std::unique_ptr<httpserver::http_resource>(new MCP_JSONRPC_Resource(
+					handler, handler->rag_tool_handler, "rag",
+					&genai_context().runtime_dependencies_mutex));
 			ws->register_resource("/mcp/rag", rag_resource.get(), true);
 			_endpoints.push_back({"/mcp/rag", std::move(rag_resource)});
 			proxy_info("RAG Tool Handler initialized\n");
@@ -220,85 +210,105 @@ ProxySQL_MCP_Server::ProxySQL_MCP_Server(int p, MCP_Threads_Handler* h)
 }
 
 ProxySQL_MCP_Server::~ProxySQL_MCP_Server() {
+	// Join the listener's request threads FIRST: they hold
+	// 'runtime_dependencies_mutex' in shared mode while executing, so taking
+	// the exclusive side before they are done could deadlock.
 	stop();
 
-	// Clean up all tool handlers stored in the handler object
-	if (handler) {
-
-		// Clean up MySQL Tool Handler
-		if (handler->mysql_tool_handler) {
-			proxy_info("Cleaning up MySQL Tool Handler...\n");
-			delete handler->mysql_tool_handler;
-			handler->mysql_tool_handler = NULL;
+	// The tool handlers below are reachable from the Admin projection refresh
+	// path (refresh_stats_mcp_query_digest and friends), which takes only the
+	// SHARED side of 'runtime_dependencies_mutex' and then dereferences
+	// handler->query_tool_handler / the catalog. Taking the exclusive lock
+	// here makes destruction mutually exclusive with those readers; without it
+	// a concurrent "SELECT ... FROM stats_mcp_query_digest" during an MCP
+	// reload frees memory out from under a live reader.
+	{
+		std::unique_lock<GenAIRWLock> runtime_guard(genai_context().runtime_dependencies_mutex);
+		// Clean up all tool handlers stored in the handler object
+		if (handler) {
+			// Clean up MySQL Tool Handler
+			if (handler->mysql_tool_handler) {
+				proxy_info("Cleaning up MySQL Tool Handler...\n");
+				delete handler->mysql_tool_handler;
+				handler->mysql_tool_handler = NULL;
+			}
+			// Clean up Config Tool Handler
+			if (handler->config_tool_handler) {
+				proxy_info("Cleaning up Config Tool Handler...\n");
+				delete handler->config_tool_handler;
+				handler->config_tool_handler = NULL;
+			}
+			// Clean up Query Tool Handler
+			if (handler->query_tool_handler) {
+				proxy_info("Cleaning up Query Tool Handler...\n");
+				delete handler->query_tool_handler;
+				handler->query_tool_handler = NULL;
+			}
+			// Clean up Admin Tool Handler
+			if (handler->admin_tool_handler) {
+				proxy_info("Cleaning up Admin Tool Handler...\n");
+				delete handler->admin_tool_handler;
+				handler->admin_tool_handler = NULL;
+			}
+			// Clean up Cache Tool Handler
+			if (handler->cache_tool_handler) {
+				proxy_info("Cleaning up Cache Tool Handler...\n");
+				delete handler->cache_tool_handler;
+				handler->cache_tool_handler = NULL;
+			}
+			// Clean up Stats Tool Handler
+			if (handler->stats_tool_handler) {
+				proxy_info("Cleaning up Stats Tool Handler...\n");
+				delete handler->stats_tool_handler;
+				handler->stats_tool_handler = NULL;
+			}
+			// Clean up AI Tool Handler (uses shared components, don't delete them)
+			if (handler->ai_tool_handler) {
+				proxy_info("Cleaning up AI Tool Handler...\n");
+				delete handler->ai_tool_handler;
+				handler->ai_tool_handler = NULL;
+			}
+			// Clean up RAG Tool Handler
+			if (handler->rag_tool_handler) {
+				proxy_info("Cleaning up RAG Tool Handler...\n");
+				delete handler->rag_tool_handler;
+				handler->rag_tool_handler = NULL;
+			}
 		}
-
-		// Clean up Config Tool Handler
-		if (handler->config_tool_handler) {
-			proxy_info("Cleaning up Config Tool Handler...\n");
-			delete handler->config_tool_handler;
-			handler->config_tool_handler = NULL;
-		}
-
-		// Clean up Query Tool Handler
-		if (handler->query_tool_handler) {
-			proxy_info("Cleaning up Query Tool Handler...\n");
-			delete handler->query_tool_handler;
-			handler->query_tool_handler = NULL;
-		}
-
-		// Clean up Admin Tool Handler
-		if (handler->admin_tool_handler) {
-			proxy_info("Cleaning up Admin Tool Handler...\n");
-			delete handler->admin_tool_handler;
-			handler->admin_tool_handler = NULL;
-		}
-
-		// Clean up Cache Tool Handler
-		if (handler->cache_tool_handler) {
-			proxy_info("Cleaning up Cache Tool Handler...\n");
-			delete handler->cache_tool_handler;
-			handler->cache_tool_handler = NULL;
-		}
-
-		// Clean up Stats Tool Handler
-		if (handler->stats_tool_handler) {
-			proxy_info("Cleaning up Stats Tool Handler...\n");
-			delete handler->stats_tool_handler;
-			handler->stats_tool_handler = NULL;
-		}
-
-		// Clean up AI Tool Handler (uses shared components, don't delete them)
-		if (handler->ai_tool_handler) {
-			proxy_info("Cleaning up AI Tool Handler...\n");
-			delete handler->ai_tool_handler;
-			handler->ai_tool_handler = NULL;
-		}
-
-		// Clean up RAG Tool Handler
-		if (handler->rag_tool_handler) {
-			proxy_info("Cleaning up RAG Tool Handler...\n");
-			delete handler->rag_tool_handler;
-			handler->rag_tool_handler = NULL;
-		}
-	}
+	} // end explicit runtime_dependencies_mutex scope
 }
 
-void ProxySQL_MCP_Server::start() {
+bool ProxySQL_MCP_Server::start() {
 	if (!ws) {
 		proxy_error("Cannot start MCP server: webserver not initialized\n");
-		return;
+		return false;
 	}
 
 	const char* mode = handler->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
 	proxy_info("Starting MCP %s server on port %d\n", mode, port);
 
-	// Start the server in a dedicated thread
-	if (pthread_create(&thread_id, NULL, mcp_server_thread, ws.get()) != 0) {
-		proxy_error("Failed to create MCP server thread: %s\n", strerror(errno));
-		return;
+	// libhttpserver configures libmicrohttpd with its internal polling
+	// thread. Starting non-blocking here keeps the real bind in this call, so
+	// failures are known before plugin_main publishes the server instance.
+	try {
+		ws->start(false);
+	} catch (const std::exception& e) {
+		proxy_error("Failed to start MCP %s server on port %d: %s\n",
+			mode, port, e.what());
+		return false;
+	} catch (...) {
+		proxy_error("Failed to start MCP %s server on port %d: unknown error\n",
+			mode, port);
+		return false;
+	}
+
+	if (!ws->is_running()) {
+		proxy_error("Failed to start MCP %s server on port %d\n", mode, port);
+		return false;
 	}
 
 	proxy_info("MCP %s server started successfully\n", mode);
+	return true;
 }
 
 void ProxySQL_MCP_Server::stop() {
@@ -306,12 +316,6 @@ void ProxySQL_MCP_Server::stop() {
 		const char* mode = handler->variables.mcp_use_ssl ? "HTTPS" : "HTTP";
 		proxy_info("Stopping MCP %s server\n", mode);
 		ws->stop();
-
-		if (thread_id) {
-			pthread_join(thread_id, NULL);
-			thread_id = 0;
-		}
-
 		proxy_info("MCP %s server stopped\n", mode);
 	}
 }

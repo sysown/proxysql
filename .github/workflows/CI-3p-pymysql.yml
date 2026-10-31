@@ -1,0 +1,63 @@
+name: CI-3p-pymysql
+run-name: "${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }} ${{ github.workflow }} ${{ github.event.workflow_run && github.event.workflow_run.head_sha || github.sha }} ${{ inputs.producer_run_id && format('producer={0}/{1}', inputs.producer_run_id, inputs.producer_attempt) || format('trigger={0}/{1}', github.event.workflow_run.id || github.run_id, github.event.workflow_run.run_attempt || github.run_attempt) }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      testtree:
+        description: 'proxysql_3p_testing treeish/branch/tag/hash'
+        default: main
+        type: string
+      control_ref:
+        type: string
+        default: GH-Actions
+        description: CI script ref; candidate workflow validation also requires repinning uses
+      producer_run_id:
+        type: string
+        required: true
+        description: Exact producer workflow run ID (manual tests)
+      producer_attempt:
+        type: string
+        required: true
+        description: Exact producer attempt (manual tests)
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  run-mysql:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # `write-all` is required because reusable-workflow permissions are the
+    # intersection of caller + callee, and the callee at
+    # ci-<group>.yml@GH-Actions declares write-all (its actions/cache/save
+    # needs a cache-writable token).
+    permissions: write-all
+    uses: sysown/proxysql/.github/workflows/ci-3p-pymysql.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}
+      infradb: ${{ vars.MATRIX_3P_PYMYSQL_infradb_mysql }}
+      connector: ${{ vars.MATRIX_3P_PYMYSQL_connector_mysql }}
+
+      consumer_id: run-mysql
+      control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
+      producer_run_id: ${{ inputs.producer_run_id || '' }}
+      producer_attempt: ${{ inputs.producer_attempt || '' }}
+  run-mariadb:
+    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    # `write-all` is required because reusable-workflow permissions are the
+    # intersection of caller + callee, and the callee at
+    # ci-<group>.yml@GH-Actions declares write-all (its actions/cache/save
+    # needs a cache-writable token).
+    permissions: write-all
+    uses: sysown/proxysql/.github/workflows/ci-3p-pymysql.yml@GH-Actions
+    secrets: inherit
+    with:
+      trigger: ${{ toJson(github) }}
+      infradb: ${{ vars.MATRIX_3P_PYMYSQL_infradb_mariadb }}
+      connector: ${{ vars.MATRIX_3P_PYMYSQL_connector_mariadb }}
+      consumer_id: run-mariadb
+      control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
+      producer_run_id: ${{ inputs.producer_run_id || '' }}
+      producer_attempt: ${{ inputs.producer_attempt || '' }}

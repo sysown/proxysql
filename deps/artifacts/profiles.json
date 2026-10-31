@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "profiles": [
+    {"profile":"ubuntu24-amd64-gcc","system":"Linux","group":"ubuntu24","arch":"amd64","runner":"ubuntu-24.04","service":"ubuntu24_build","compiler":"gcc"},
+    {"profile":"ubuntu24-arm64-gcc","system":"Linux","group":"ubuntu24","arch":"arm64","runner":"ubuntu-24.04-arm","service":"ubuntu24_build","compiler":"gcc"},
+    {"profile":"ubuntu24-amd64-clang","system":"Linux","group":"ubuntu24","arch":"amd64","runner":"ubuntu-24.04","service":"ubuntu24_clang_build","compiler":"clang"},
+    {"profile":"ubuntu24-arm64-clang","system":"Linux","group":"ubuntu24","arch":"arm64","runner":"ubuntu-24.04-arm","service":"ubuntu24_clang_build","compiler":"clang"},
+    {"profile":"almalinux8-amd64-gcc","system":"Linux","group":"almalinux8","arch":"amd64","runner":"ubuntu-24.04","service":"almalinux8_build","compiler":"gcc"},
+    {"profile":"almalinux8-arm64-gcc","system":"Linux","group":"almalinux8","arch":"arm64","runner":"ubuntu-24.04-arm","service":"almalinux8_build","compiler":"gcc"},
+    {"profile":"almalinux8-amd64-clang","system":"Linux","group":"almalinux8","arch":"amd64","runner":"ubuntu-24.04","service":"almalinux8_clang_build","compiler":"clang"},
+    {"profile":"almalinux8-arm64-clang","system":"Linux","group":"almalinux8","arch":"arm64","runner":"ubuntu-24.04-arm","service":"almalinux8_clang_build","compiler":"clang"},
+    {"profile":"macos14-arm64-clang","system":"Darwin","group":"macos","arch":"arm64","runner":"macos-14","service":null,"compiler":"clang"}
+  ]
+}

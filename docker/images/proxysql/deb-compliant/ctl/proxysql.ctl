@@ -8,7 +8,7 @@ Version: PKG_VERSION_CURVER
 Maintainer: ProxySQL LLC <info@proxysql.com>
 Copyright: copyright
 Architecture: PKG_ARCH
-Depends: libgnutls28 | libgnutls30, libssl (>= 3.0.0) | libssl3 (>= 3.0.0)
+Depends: libgnutls28 | libgnutls30
 # Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /usr/bin/

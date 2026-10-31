@@ -1,3 +1,4 @@
+#include "gen_utils.h"
 #include "query_processor.h"
 
 // reverse:  reverse string s in place
@@ -24,6 +25,19 @@ static void my_itoa(char s[], unsigned long long n)
      reverse(s);
 }
 
+static char *store_or_duplicate_query_digest_value(char *fixed_buf, size_t fixed_buf_len, const char *input) {
+    if (input == NULL) {
+        return NULL;
+    }
+    size_t input_len = std::string_view(input).size();
+    if (input_len < fixed_buf_len) {
+        memcpy(fixed_buf, input, input_len);
+        fixed_buf[input_len] = '\0';
+        return fixed_buf;
+    }
+    return strdup(input);
+}
+
 
 QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _schema, uint64_t _digest, const char* _digest_text,
 	int _hid, const char* _client_addr, int query_digests_max_digest_length) {
@@ -32,24 +46,9 @@ QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _sch
 	if (_digest_text) {
 		digest_text=strndup(_digest_text, query_digests_max_digest_length);
 	}
-	if (strlen(_user) < sizeof(username_buf)) {
-		strcpy(username_buf, _user);
-		username = username_buf;
-	} else {
-		username = strdup(_user);
-	}
-	if (strlen(_schema) < sizeof(schemaname_buf)) {
-		strcpy(schemaname_buf, _schema);
-		schemaname = schemaname_buf;
-	} else {
-		schemaname = strdup(_schema);
-	}
-	if (strlen(_client_addr) < sizeof(client_address_buf)) {
-		strcpy(client_address_buf, _client_addr);
-		client_address = client_address_buf;
-	} else {
-		client_address = strdup(_client_addr);
-	}
+	username = store_or_duplicate_query_digest_value(username_buf, sizeof(username_buf), _user);
+	schemaname = store_or_duplicate_query_digest_value(schemaname_buf, sizeof(schemaname_buf), _schema);
+	client_address = store_or_duplicate_query_digest_value(client_address_buf, sizeof(client_address_buf), _client_addr);
 	count_star = 0;
 	first_seen = 0;
 	last_seen = 0;
@@ -60,24 +59,88 @@ QP_query_digest_stats::QP_query_digest_stats(const char* _user, const char* _sch
 	rows_sent = 0;
 	hid = _hid;
 }
+/**
+ * @brief Lower @p slot to @p v if @p v is a smaller non-zero value.
+ *
+ * Zero is the "never set" sentinel for `min_time` and `first_seen`, so a zero
+ * @p v is ignored and a zero @p slot always loses to a real value. The loop
+ * re-reads @p slot through the failed compare-exchange, so it exits as soon as
+ * another thread has already installed a value at least as small.
+ *
+ * @param slot Counter to lower.
+ * @param v Candidate value.
+ */
+template <typename T>
+static void atomic_min_nonzero(std::atomic<T>& slot, T v) {
+	if (v == 0) {
+		return;
+	}
+	T cur = slot.load(std::memory_order_relaxed);
+	while (cur == 0 || v < cur) {
+		if (slot.compare_exchange_weak(cur, v, std::memory_order_relaxed)) {
+			return;
+		}
+	}
+}
+
+/**
+ * @brief Raise @p slot to @p v if @p v is larger.
+ *
+ * Once the counter has settled this degrades to a single relaxed load, because
+ * the loop is not entered at all when @p v is not an improvement.
+ *
+ * @param slot Counter to raise.
+ * @param v Candidate value.
+ */
+template <typename T>
+static void atomic_max(std::atomic<T>& slot, T v) {
+	T cur = slot.load(std::memory_order_relaxed);
+	while (v > cur) {
+		if (slot.compare_exchange_weak(cur, v, std::memory_order_relaxed)) {
+			return;
+		}
+	}
+}
+
 void QP_query_digest_stats::add_time(
 	unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,
 	unsigned long long cnt
 ) {
-	count_star += cnt;
-	sum_time+=t;
-	rows_affected+=ra;
-	rows_sent+=rs;
-	if (t < min_time || min_time==0) {
-		if (t) min_time = t;
+	count_star.fetch_add(static_cast<unsigned int>(cnt), std::memory_order_relaxed);
+	sum_time.fetch_add(t, std::memory_order_relaxed);
+	rows_affected.fetch_add(ra, std::memory_order_relaxed);
+	rows_sent.fetch_add(rs, std::memory_order_relaxed);
+	atomic_min_nonzero(min_time, t);
+	atomic_max(max_time, t);
+	time_t first = first_seen.load(std::memory_order_relaxed);
+	while (first == 0) {
+		if (first_seen.compare_exchange_weak(first, static_cast<time_t>(n), std::memory_order_relaxed)) {
+			break;
+		}
 	}
-	if (t > max_time) {
-		max_time = t;
+	// `n` is the calling thread's cached `curtime`; concurrent callers can reach
+	// this point out of order, so preserve the newest observation timestamp.
+	atomic_max(last_seen, static_cast<time_t>(n));
+}
+// Merges the counters of 'other' into this entry. Used when reconciling stats
+// collected while a purge operation was running (see purge_query_digests_async()).
+void QP_query_digest_stats::merge(const QP_query_digest_stats *other) {
+	count_star.fetch_add(other->count_star.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	sum_time.fetch_add(other->sum_time.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	rows_affected.fetch_add(other->rows_affected.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	rows_sent.fetch_add(other->rows_sent.load(std::memory_order_relaxed), std::memory_order_relaxed);
+	atomic_min_nonzero(min_time, other->min_time.load(std::memory_order_relaxed));
+	atomic_max(max_time, other->max_time.load(std::memory_order_relaxed));
+	const time_t other_first = other->first_seen.load(std::memory_order_relaxed);
+	if (other_first) {
+		time_t first = first_seen.load(std::memory_order_relaxed);
+		while (first == 0 || other_first < first) {
+			if (first_seen.compare_exchange_weak(first, other_first, std::memory_order_relaxed)) {
+				break;
+			}
+		}
 	}
-	if (first_seen==0) {
-		first_seen=n;
-	}
-	last_seen=n;
+	atomic_max(last_seen, other->last_seen.load(std::memory_order_relaxed));
 }
 QP_query_digest_stats::~QP_query_digest_stats() {
 	if (digest_text) {
@@ -142,7 +205,7 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 
 	assert(qdsp != NULL);
 	assert(qdsp->digest);
-	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
+	snprintf(qdsp->digest, sizeof(qdsp->digest), "0x%016llX", (long long unsigned int)digest);
 	pta[3]=qdsp->digest;
 
 	pta[4] = get_digest_text(digest_text_umap);
@@ -151,16 +214,13 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	my_itoa(qdsp->count_star, count_star);
 	pta[5]=qdsp->count_star;
 
-	time_t __now;
-	time(&__now);
-	unsigned long long curtime=monotonic_time();
 	time_t seen_time;
-	seen_time= __now - curtime/1000000 + first_seen/1000000;
+	seen_time=monotonic_time_to_realtime(first_seen);
 	//sprintf(qdsp->first_seen,"%ld", seen_time);
 	my_itoa(qdsp->first_seen, seen_time);
 	pta[6]=qdsp->first_seen;
 
-	seen_time= __now - curtime/1000000 + last_seen/1000000;
+	seen_time=monotonic_time_to_realtime(last_seen);
 	//sprintf(qdsp->last_seen,"%ld", seen_time);
 	my_itoa(qdsp->last_seen, seen_time);
 	pta[7]=qdsp->last_seen;
@@ -173,10 +233,9 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	//sprintf(qdsp->max_time,"%llu",max_time);
 	my_itoa(qdsp->max_time,max_time);
 	pta[10]=qdsp->max_time;
-	// we are reverting this back to the use of sprintf instead of my_itoa
-	// because with my_itoa we are losing the sign
-	// see issue #2285
-	sprintf(qdsp->hid,"%d",hid);
+	// Use formatted conversion instead of my_itoa because my_itoa loses the sign.
+	// See issue #2285.
+	snprintf(qdsp->hid, sizeof(qdsp->hid), "%d",hid);
 	//my_itoa(qdsp->hid,hid);
 	pta[11]=qdsp->hid;
 	//sprintf(qdsp->rows_affected,"%llu",rows_affected);

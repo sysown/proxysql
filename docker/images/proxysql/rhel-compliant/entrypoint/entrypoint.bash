@@ -14,6 +14,15 @@ echo -e "==> C compiler: ${CC} -> $(readlink -e $(type -p ${CC}))\n$(${CC} --ver
 echo -e "==> C++ compiler: ${CXX} -> $(readlink -e $(type -p ${CXX}))\n$(${CXX} --version)"
 #echo -e "==> linker version:\n$ ${LD} -> $(readlink -e $(type -p ${LD}))\n$(${LD} --version)"
 
+if ! perl -MTime::Piece -e 1 >/dev/null 2>&1; then
+	echo "==> Installing perl-Time-Piece (OpenSSL 3.5)"
+	if command -v dnf >/dev/null 2>&1; then
+		dnf install -y perl-Time-Piece
+	else
+		yum install -y perl-Time-Piece
+	fi
+fi
+
 echo "==> Cleaning"
 # Delete package if exists
 rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.rpm || true
@@ -39,26 +48,6 @@ elif [[ ${BLD_NAME} =~ \-test|\-tap ]]; then
 else
 	deps_target="build_deps_$PROXYSQL_BUILD_TYPE"
 	build_target="$PROXYSQL_BUILD_TYPE"
-fi
-
-# The v4.0 chassis tier (PROXYSQL40=1) builds plugins/mysqlx/ which
-# dynamically links against the system libprotobuf (3.x). Some of the
-# v4.0.0 packaging images were built before plugins/mysqlx existed and
-# do not yet ship protobuf-devel. Install it on demand for RHEL-family
-# images.  PROXYSQL40=1 builds and packages all v4.0 plugins — there
-# is no separate PROXYSQLGENAI flag.
-if [[ "${PROXYSQL40:-}" == "1" ]]; then
-    if ! pkg-config --exists protobuf 2>/dev/null; then
-        echo "==> Installing protobuf-devel (required for PROXYSQL40=1 mysqlx plugin build)"
-        if command -v dnf >/dev/null 2>&1; then
-            dnf install -y protobuf-devel
-        elif command -v yum >/dev/null 2>&1; then
-            yum install -y protobuf-devel
-        else
-            echo "ERROR: cannot install protobuf-devel (neither dnf nor yum present)" >&2
-            exit 1
-        fi
-    fi
 fi
 
 # clean is expensive, do it before, outside of container

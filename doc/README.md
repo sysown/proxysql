@@ -29,6 +29,8 @@ Critical documentation that has been reviewed and verified by maintainers:
 - **`README.md`** - Main project overview and quick start
 - **`INSTALL.md`** - Installation instructions
 - **`FAQ.md`** - Frequently asked questions
+- **[`duckdb/`](duckdb/index.md)** - DuckDB plugin tutorial, user guide,
+  reference manuals, security, operations, and troubleshooting
 
 ### 🔧 Internal Documentation
 

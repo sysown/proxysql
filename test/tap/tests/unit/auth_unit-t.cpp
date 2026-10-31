@@ -52,6 +52,15 @@ static bool mysql_add_frontend(MySQL_Authentication *auth,
 	);
 }
 
+static bool mysql_add_frontend_with_attributes(MySQL_Authentication *auth,
+	const char *user, bool use_ssl, const char *attributes)
+{
+	return auth->add(
+		(char *)user, (char *)"pass", USERNAME_FRONTEND,
+		use_ssl, 0, (char *)"", false, false, false,
+		100, (char *)attributes, (char *)"");
+}
+
 // ============================================================================
 // Helper: add a MySQL backend user
 // ============================================================================
@@ -449,6 +458,90 @@ static void test_mysql_frontend_backend_separation() {
 	free_account_details(be);
 }
 
+static void test_mysql_spiffe_requires_ssl() {
+	GloMyAuth->reset();
+
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "spiffe-user", false,
+		R"({"spiffe_id":"spiffe://example.org/ns/default/sa/client"})");
+	account_details_t account = GloMyAuth->lookup(
+		(char *)"spiffe-user", USERNAME_FRONTEND, { false, false, false });
+	ok(account.use_ssl, "MySQL: SPIFFE user requires TLS");
+	free_account_details(account);
+
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "spiffe-user", false,
+		R"({"spiffe_id":"spiffe://example.org/ns/default/sa/client"})");
+	account = GloMyAuth->lookup(
+		(char *)"spiffe-user", USERNAME_FRONTEND, { false, false, false });
+	ok(account.use_ssl, "MySQL: SPIFFE user remains TLS-required on update");
+	free_account_details(account);
+
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "plain-user", false, R"({"role":"client"})");
+	account = GloMyAuth->lookup(
+		(char *)"plain-user", USERNAME_FRONTEND, { false, false, false });
+	ok(!account.use_ssl, "MySQL: non-SPIFFE user preserves explicit TLS setting");
+	free_account_details(account);
+}
+
+static void test_mysql_invalid_spiffe_attributes_do_not_require_ssl() {
+	GloMyAuth->reset();
+
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "invalid-spiffe-user", false, R"({"role":"client"})");
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "invalid-spiffe-user", false,
+		R"({"spiffe_id":"spiffe://example.org/ns/default/sa/client","default-transaction_isolation":123})");
+	account_details_t account = GloMyAuth->lookup(
+		(char *)"invalid-spiffe-user", USERNAME_FRONTEND, { false, false, true });
+	ok(!account.use_ssl, "MySQL: invalid SPIFFE attributes preserve explicit TLS setting");
+	ok(account.attributes != nullptr && account.attributes[0] == '\0',
+		"MySQL: invalid SPIFFE attributes are cleared");
+	free_account_details(account);
+}
+
+static void test_mysql_spiffe_attributes_case_variant_requires_ssl() {
+	GloMyAuth->reset();
+
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "case-variant-spiffe-user", false,
+		R"({"spiffe_id":"spiffe://example.org/ns/default/sa/client"})");
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "case-variant-spiffe-user", false,
+		R"({"SPIFFE_ID":"spiffe://example.org/ns/default/sa/client"})");
+	account_details_t account = GloMyAuth->lookup(
+		(char *)"case-variant-spiffe-user", USERNAME_FRONTEND,
+		{ false, false, true });
+	ok(account.use_ssl, "MySQL: retained SPIFFE attributes require TLS");
+	ok(account.attributes != nullptr &&
+		strcmp(account.attributes,
+			R"({"spiffe_id":"spiffe://example.org/ns/default/sa/client"})") == 0,
+		"MySQL: case-variant update retains recognized SPIFFE attributes");
+	free_account_details(account);
+}
+
+static void test_mysql_spiffe_changed_attributes_toggle_ssl() {
+	GloMyAuth->reset();
+
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "changed-spiffe-user", false, R"({"role":"client"})");
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "changed-spiffe-user", false,
+		R"({"spiffe_id":"spiffe://example.org/ns/default/sa/client","role":"client"})");
+	account_details_t account = GloMyAuth->lookup(
+		(char *)"changed-spiffe-user", USERNAME_FRONTEND, { false, false, false });
+	ok(account.use_ssl, "MySQL: changed SPIFFE attributes require TLS");
+	free_account_details(account);
+
+	mysql_add_frontend_with_attributes(
+		GloMyAuth, "changed-spiffe-user", false, R"({"role":"updated"})");
+	account = GloMyAuth->lookup(
+		(char *)"changed-spiffe-user", USERNAME_FRONTEND, { false, false, false });
+	ok(!account.use_ssl, "MySQL: changed non-SPIFFE attributes clear TLS requirement");
+	free_account_details(account);
+}
+
 // ============================================================================
 // 8. PgSQL_Authentication: Core CRUD
 // ============================================================================
@@ -558,7 +651,7 @@ static void test_pgsql_inactive_pattern() {
 // ============================================================================
 
 int main() {
-	plan(60);
+	plan(69);
 
 	test_init_minimal();
 	test_init_auth();
@@ -577,6 +670,10 @@ int main() {
 	test_mysql_checksums();                  // 4 tests
 	test_mysql_memory();                     // 3 tests
 	test_mysql_frontend_backend_separation();// 4 tests
+	test_mysql_spiffe_requires_ssl();        // 3 tests
+	test_mysql_invalid_spiffe_attributes_do_not_require_ssl(); // 2 tests
+	test_mysql_spiffe_attributes_case_variant_requires_ssl(); // 2 tests
+	test_mysql_spiffe_changed_attributes_toggle_ssl(); // 2 tests
 
 	// PgSQL tests
 	test_pgsql_add_exists_lookup();          // 5 tests

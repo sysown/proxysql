@@ -3,11 +3,11 @@
 #include "mysqlx_plugin.h"
 #include "mysqlx_stats.h"
 #include "sqlite3db.h"
+#include "proxysql.h"
+#include "proxysql_debug.h"
 
 #include <initializer_list>
 #include <string>
-
-#include <cstdio>
 
 namespace {
 
@@ -17,8 +17,6 @@ const char kMysqlxRoutesTable[] = "mysqlx_routes";
 const char kRuntimeMysqlxRoutesTable[] = "runtime_mysqlx_routes";
 const char kMysqlxBackendEndpointsTable[] = "mysqlx_backend_endpoints";
 const char kRuntimeMysqlxBackendEndpointsTable[] = "runtime_mysqlx_backend_endpoints";
-const char kMysqlxVariablesTable[] = "mysqlx_variables";
-const char kRuntimeMysqlxVariablesTable[] = "runtime_mysqlx_variables";
 
 const char kMysqlxUsersTableDef[] =
 	"CREATE TABLE mysqlx_users ("
@@ -55,7 +53,7 @@ const char kRuntimeMysqlxUsersTableDef[] =
 // from_string(); the CHECK constraint here mirrors the canonical lower-
 // case spellings so a typo at INSERT time is caught early. Default
 // 'inherit' preserves prior behaviour: a route without an explicit
-// override defers to the deployment-wide `mysqlx_tls_mode`.
+// override defers to the deployment-wide `mysqlx-tls_mode`.
 const char kMysqlxRoutesTableDef[] =
 	"CREATE TABLE mysqlx_routes ("
 	" name VARCHAR NOT NULL PRIMARY KEY,"
@@ -104,18 +102,6 @@ const char kRuntimeMysqlxBackendEndpointsTableDef[] =
 	" PRIMARY KEY (hostname, mysql_port)"
 	" )";
 
-const char kMysqlxVariablesTableDef[] =
-	"CREATE TABLE mysqlx_variables ("
-	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
-	" variable_value VARCHAR NOT NULL DEFAULT ''"
-	" )";
-
-const char kRuntimeMysqlxVariablesTableDef[] =
-	"CREATE TABLE runtime_mysqlx_variables ("
-	" variable_name VARCHAR NOT NULL PRIMARY KEY,"
-	" variable_value VARCHAR NOT NULL DEFAULT ''"
-	" )";
-
 ProxySQL_PluginCommandResult command_failure(const char* message) {
 	return {1, 0, message != nullptr ? message : "mysqlx admin command failed"};
 }
@@ -151,6 +137,9 @@ ProxySQL_PluginCommandResult load_routes_to_runtime(const ProxySQL_PluginCommand
 	// routes, close listeners for removed or deactivated routes. The symbol
 	// is weak so unit tests that don't link plugin.cpp can resolve cleanly;
 	// in that case it's nullptr and reconciliation is skipped.
+	proxy_info("mysqlx: load_routes_to_runtime: mysqlx_routes active row_count=%lu, reconcile_listeners=%s\n",
+	           (unsigned long)row_count,
+	           mysqlx_reconcile_listeners ? "resolved" : "NULL (weak symbol unresolved)");
 	if (mysqlx_reconcile_listeners) {
 		mysqlx_reconcile_listeners(*ctx.admindb);
 	}
@@ -174,10 +163,11 @@ ProxySQL_PluginCommandResult load_variables_to_runtime(const ProxySQL_PluginComm
 		return command_failure("mysqlx variables load requires admin db");
 	}
 	std::string err;
-	if (!mysqlx_context().config_store->install_variables_from_admin(*ctx.admindb, err)) {
-		return command_failure(err.empty() ? "install_variables_from_admin failed" : err.c_str());
+	if (!mysqlx_context().config_store->install_variables_from_global(*ctx.admindb, err)) {
+		return command_failure(err.empty() ? "install_variables_from_global failed" : err.c_str());
 	}
-	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
+	uint64_t row_count = ctx.admindb->return_one_int(
+		"SELECT COUNT(*) FROM main.global_variables WHERE variable_name LIKE 'mysqlx-%'");
 	return {0, row_count, "mysqlx variables loaded to runtime"};
 }
 
@@ -223,10 +213,11 @@ ProxySQL_PluginCommandResult save_variables_from_runtime(const ProxySQL_PluginCo
 	if (ctx.admindb == nullptr) {
 		return command_failure("mysqlx variables save requires admin db");
 	}
-	if (!mysqlx_context().config_store->save_variables_to_admin_table(*ctx.admindb)) {
+	if (!mysqlx_context().config_store->save_variables_to_global(*ctx.admindb)) {
 		return command_failure("failed to save mysqlx variables to memory");
 	}
-	uint64_t row_count = ctx.admindb->return_one_int("SELECT COUNT(*) FROM mysqlx_variables");
+	uint64_t row_count = ctx.admindb->return_one_int(
+		"SELECT COUNT(*) FROM main.global_variables WHERE variable_name LIKE 'mysqlx-%'");
 	return {0, row_count, "mysqlx variables saved from runtime"};
 }
 
@@ -249,12 +240,6 @@ void refresh_endpoints_runtime_view(SQLite3DB* admindb, void*) {
 	if (mysqlx_context().config_store == nullptr) return;
 	mysqlx_context().config_store->project_endpoints_to_runtime_view(*admindb);
 }
-void refresh_variables_runtime_view(SQLite3DB* admindb, void*) {
-	if (admindb == nullptr) return;
-	if (mysqlx_context().config_store == nullptr) return;
-	mysqlx_context().config_store->project_variables_to_runtime_view(*admindb);
-}
-
 // Chassis passes statsdb directly via db_kind=stats_db.
 void refresh_stats_routes_view(SQLite3DB* db, void*) {
 	if (db == nullptr) return;
@@ -381,7 +366,12 @@ ProxySQL_PluginCommandResult load_variables_from_disk(const ProxySQL_PluginComma
 	if (ctx.admindb == nullptr) {
 		return command_failure("mysqlx variables disk load requires admin db");
 	}
-	if (!disk_to_memory(*ctx.admindb, kMysqlxVariablesTable)) {
+	if (!ctx.admindb->execute("BEGIN") ||
+	    !ctx.admindb->execute("DELETE FROM main.global_variables WHERE variable_name LIKE 'mysqlx-%'") ||
+	    !ctx.admindb->execute("INSERT OR REPLACE INTO main.global_variables "
+	                         "SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysqlx-%'") ||
+	    !ctx.admindb->execute("COMMIT")) {
+		ctx.admindb->execute("ROLLBACK");
 		return command_failure("failed to load mysqlx variables from disk");
 	}
 	return {0, 0, "mysqlx variables loaded from disk"};
@@ -391,7 +381,12 @@ ProxySQL_PluginCommandResult save_variables_to_disk(const ProxySQL_PluginCommand
 	if (ctx.admindb == nullptr) {
 		return command_failure("mysqlx variables disk save requires admin db");
 	}
-	if (!memory_to_disk(*ctx.admindb, kMysqlxVariablesTable)) {
+	if (!ctx.admindb->execute("BEGIN") ||
+	    !ctx.admindb->execute("DELETE FROM disk.global_variables WHERE variable_name LIKE 'mysqlx-%'") ||
+	    !ctx.admindb->execute("INSERT OR REPLACE INTO disk.global_variables "
+	                         "SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysqlx-%'") ||
+	    !ctx.admindb->execute("COMMIT")) {
+		ctx.admindb->execute("ROLLBACK");
 		return command_failure("failed to save mysqlx variables to disk");
 	}
 	return {0, 0, "mysqlx variables saved to disk"};
@@ -460,9 +455,22 @@ const char kStatsMysqlxProcesslistTableDef[] =
 
 } // namespace
 
+void mysqlx_warn_deprecated_disk_variables(SQLite3DB& db, ProxySQL_PluginServices& services) {
+	if (db.return_one_int(
+		    "SELECT COUNT(*) FROM disk.sqlite_master "
+		    "WHERE type='table' AND name='mysqlx_variables'") > 0 &&
+	    services.log_message != nullptr) {
+		services.log_message(
+			4,
+			"mysqlx: disk.mysqlx_variables is deprecated and ignored; MySQLX variables "
+			"now use mysqlx-* rows in disk.global_variables. After migrating any values, "
+			"manually run: DROP TABLE IF EXISTS disk.mysqlx_variables;");
+	}
+}
+
 bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	if (services.register_table == nullptr || services.register_command == nullptr) {
-		fprintf(stderr, "mysqlx: cannot register admin schema, services not available\n");
+		proxy_error("mysqlx: cannot register admin schema, services not available\n");
 		return false;
 	}
 
@@ -475,9 +483,6 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 	register_table_pair(services, kMysqlxBackendEndpointsTable, kMysqlxBackendEndpointsTableDef);
 	register_runtime_table(services, kRuntimeMysqlxBackendEndpointsTable, kRuntimeMysqlxBackendEndpointsTableDef);
 
-	register_table_pair(services, kMysqlxVariablesTable, kMysqlxVariablesTableDef);
-	register_runtime_table(services, kRuntimeMysqlxVariablesTable, kRuntimeMysqlxVariablesTableDef);
-
 	// Each runtime_mysqlx_<X> table is an admin-side projection of
 	// MysqlxConfigStore state, not a persistent admin table. The
 	// chassis invokes these refresh callbacks before any admin SELECT
@@ -487,7 +492,6 @@ bool mysqlx_register_admin_schema(ProxySQL_PluginServices& services) {
 		services.register_runtime_view({kRuntimeMysqlxUsersTable,             &refresh_users_runtime_view,     nullptr, ProxySQL_PluginDBKind::admin_db});
 		services.register_runtime_view({kRuntimeMysqlxRoutesTable,            &refresh_routes_runtime_view,    nullptr, ProxySQL_PluginDBKind::admin_db});
 		services.register_runtime_view({kRuntimeMysqlxBackendEndpointsTable,  &refresh_endpoints_runtime_view, nullptr, ProxySQL_PluginDBKind::admin_db});
-		services.register_runtime_view({kRuntimeMysqlxVariablesTable,         &refresh_variables_runtime_view, nullptr, ProxySQL_PluginDBKind::admin_db});
 		services.register_runtime_view({kStatsMysqlxRoutesTable,              &refresh_stats_routes_view,      nullptr, ProxySQL_PluginDBKind::stats_db});
 		services.register_runtime_view({kStatsMysqlxProcesslistTable,         &refresh_stats_processlist_view, nullptr, ProxySQL_PluginDBKind::stats_db});
 	}

@@ -1,5 +1,5 @@
-@@ -611,9 +611,9 @@
-     LOG(ERROR) << "nodes:\n" << dump;
+@@ -611,9 +611,9 @@ bool Prog::IsOnePass() {
+     ABSL_LOG(ERROR) << "nodes:\n" << dump;
    }
  
 -  dfa_mem_ -= nalloc*statesize;

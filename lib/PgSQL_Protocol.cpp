@@ -1,11 +1,16 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <openssl/crypto.h>
+#include <limits>
+#include <locale>
 #include "proxysql.h"
 #include "cpp.h"
+#include "gen_utils.h"
 #include "PgSQL_Authentication.h"
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Protocol.h"
+#include "PgSQL_PreparedStatement.h"
 extern "C" {
 #include "usual/time.h"
 }
@@ -21,6 +26,31 @@ extern PgSQL_Authentication* GloPgAuth;
 #define INT4OID 23
 #define TEXTOID 25
 #define NUMERICOID 1700
+
+static char *encode_bytea(const uint8_t *data, int length) {
+	if (length < 0 || (data == nullptr && length != 0)) {
+		return nullptr;
+	}
+
+	const size_t byte_len = static_cast<size_t>(length);
+	const size_t max_byte_len = (std::numeric_limits<size_t>::max() - 3) / 2;
+	if (byte_len > max_byte_len) {
+		return nullptr;
+	}
+
+	const size_t required = 2 + byte_len * 2 + 1;
+	char *encoded = (char *)l_alloc(required);
+	if (encoded == nullptr) {
+		return nullptr;
+	}
+	encoded[0] = '\\';
+	encoded[1] = 'x';
+	encoded[2] = '\0';
+	for (size_t i = 0; i < byte_len; ++i) {
+		snprintf(encoded + 2 + i * 2, 3, "%02x", data[i]);
+	}
+	return encoded;
+}
 
 
 void PG_pkt::make_space(unsigned int len) {
@@ -200,20 +230,11 @@ void PG_pkt::write_RowDescription(const char *tupdesc, ...) {
 void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error, int affected_rows, const char *query_type, bool send_ready_for_query,
 	char txn_state) {
 	assert(psa != NULL);
-	const char *fs = strchr(query_type, ' ');
-	int qtlen = strlen(query_type);
-	if (fs != NULL) {
-		qtlen = (fs - query_type) + 1;
-	}
-	char buf[qtlen];
-	memcpy(buf,query_type, qtlen-1);
-	buf[qtlen-1] = 0;
-	{
-		char *s = buf;
-		while (*s) {
-			*s = toupper((unsigned char) *s);
-			s++;
-		}
+	const char *query = query_type ? query_type : "";
+	const size_t command_len = strcspn(query, " \t\r\n");
+	std::string buf(query, command_len);
+	for (char& c : buf) {
+		c = std::toupper(c, std::locale::classic());
 	}
 	if (result) {
 		int ncol = result->columns;
@@ -250,12 +271,11 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 			pkt.to_PtrSizeArray(psa);
 		}
 
-		if (strcmp(buf,"SELECT") == 0) {
-			char tmpbuf[128];
-			sprintf(tmpbuf,"%s %d", buf, result->rows_count);
-			pkt.write_generic('C', "s", tmpbuf);
+		if (buf == "SELECT") {
+			const std::string completion_tag = buf + " " + std::to_string(result->rows_count);
+			pkt.write_generic('C', "s", completion_tag.c_str());
 		} else {
-			pkt.write_CommandComplete(buf);
+			pkt.write_CommandComplete(buf.c_str());
 		}
 		pkt.to_PtrSizeArray(psa);
 		if (send_ready_for_query) pkt.write_ReadyForQuery(txn_state);
@@ -278,15 +298,14 @@ void SQLite3_to_Postgres(PtrSizeArray *psa, SQLite3_result *result, char *error,
 */
 			// see https://www.postgresql.org/docs/current/protocol-message-formats.html
 		} else {
-			char tmpbuf[128];
-			if (strcmp(buf,"INSERT") == 0) {
-				sprintf(tmpbuf,"%s 0 %d", buf, affected_rows);
-				pkt.write_generic('C', "s", tmpbuf);
-			} else if (strcmp(buf,"UPDATE") == 0 || strcmp(buf,"DELETE") == 0) {
-				sprintf(tmpbuf,"%s %d", buf, affected_rows);
-				pkt.write_generic('C', "s", tmpbuf);
+			if (buf == "INSERT") {
+				const std::string completion_tag = buf + " 0 " + std::to_string(affected_rows);
+				pkt.write_generic('C', "s", completion_tag.c_str());
+			} else if (buf == "UPDATE" || buf == "DELETE") {
+				const std::string completion_tag = buf + " " + std::to_string(affected_rows);
+				pkt.write_generic('C', "s", completion_tag.c_str());
 			} else {
-				pkt.write_CommandComplete(buf);
+				pkt.write_CommandComplete(buf.c_str());
 			}
 		}
 		pkt.to_PtrSizeArray(psa);
@@ -315,20 +334,11 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 			val = tmp;
 		} else if (tupdesc[i] == 's') {
 			val = va_arg(ap, char *);
-		} else if (tupdesc[i] == 'b') {
-			int blen = va_arg(ap, int);
-			if (blen >= 0) {
-				uint8_t *bval = va_arg(ap, uint8_t *);
-				size_t required = 2 + blen * 2 + 1;
-				tmp2 = (char *)malloc(required);
-				strcpy(tmp2, "\\x");
-				for (int j = 0; j < blen; j++)
-					sprintf(tmp2 + (2 + j * 2), "%02x", bval[j]);
-				val = tmp2;
-			} else {
-				(void) va_arg(ap, uint8_t *);
-				val = NULL;
-			}
+				} else if (tupdesc[i] == 'b') {
+					const int blen = va_arg(ap, int);
+					const uint8_t *bval = va_arg(ap, uint8_t *);
+					tmp2 = encode_bytea(bval, blen);
+					val = tmp2;
 		} else if (tupdesc[i] == 'T') {
 			usec_t time = va_arg(ap, usec_t);
 			val = format_time_s(time, tmp, sizeof(tmp));
@@ -342,7 +352,7 @@ void PG_pkt::write_DataRow(const char *tupdesc, ...) {
 			put_uint32(len);
 			put_bytes(val, len);
 			if (tmp2 != NULL) {
-				free(tmp2);
+				l_free(0, tmp2);
 				tmp2 = NULL;
 			}
 		} else {
@@ -378,6 +388,26 @@ void PG_pkt::to_PtrSizeArray(PtrSizeArray *psa, unsigned c) {
 	}
 }
 
+// Auth-method selection: given the configured minimum-strength floor and the connecting user's
+// stored secret type, return the AUTHENTICATION_METHOD to challenge with. A SCRAM verifier always
+// uses SCRAM; an md5 hash uses md5 unless the floor demands SCRAM (then *reject=true and the caller
+// runs the generic mock-fail); plaintext follows the floor.
+int pgsql_reconcile_auth_method(int floor, int stored, bool* reject) {
+	*reject = false;
+	switch (stored) {
+		case PASSWORD_TYPE_SCRAM_SHA_256:               // a SCRAM verifier meets/exceeds any floor
+			return (int)AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256;
+		case PASSWORD_TYPE_MD5:                          // md5 only; reject if the floor demands SCRAM
+			if (floor >= (int)AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256) {
+				*reject = true;
+				return (int)AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256; // mock under the floor's method
+			}
+			return (int)AUTHENTICATION_METHOD::MD5_PASSWORD;
+		default:                                         // PASSWORD_TYPE_PLAINTEXT — satisfies any floor
+			return floor;                                // the floor's own method
+	}
+}
+
 bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsigned int* len, uint32_t* _thread_id, bool deprecate_eof_active) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
 
@@ -391,7 +421,43 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 	}
 	*_thread_id = thread_id;
 
-	switch ((AUTHENTICATION_METHOD)pgsql_thread___authentication_method) {
+	// --- Choose the auth method from the connecting user's stored secret.
+	// The username is already parsed (process_startup_packet ran first). For a known user, the stored
+	// secret's type decides the method (a SCRAM verifier -> SCRAM even under a lower floor; an md5 hash
+	// too weak for a SCRAM floor -> still challenged with the floor method, then mocked at response time).
+	// For an unknown user we keep the floor's method so the handshake is indistinguishable, and the
+	// response handler runs the mock to a generic failure (anti-enumeration).
+	int floor = pgsql_thread___authentication_method;
+	AUTHENTICATION_METHOD selected = (AUTHENTICATION_METHOD)floor;
+	{
+		const char* user = (const char*)(*myds)->myconn->conn_params.get_value(PG_USER);
+		if (user && *user) {
+			bool _ssl = false, _tp = true, _ff = false; int _hg = -1, _mc = 0; void* _sha = NULL; char* _attr = NULL;
+			// Same credential scope as the response-time lookup in process_handshake_response()
+			// (#5987): ADMIN/STATS resolve against the Admin scope, everything else against
+			// USERNAME_FRONTEND. The two lookups must agree or the challenge method and the
+			// verification would be chosen from different credentials.
+			char* stored = GloPgAuth->lookup((char*)user, cred_scope_for_session((*myds)->sess->session_type),
+							&_ssl, &_hg, &_tp, &_ff, &_mc, &_sha, &_attr);
+			if (stored) {
+				bool reject = false; // on reject we still challenge with the floor method; the response handler mocks
+				selected = (AUTHENTICATION_METHOD) pgsql_reconcile_auth_method(
+						floor, (int)get_password_type(stored), &reject);
+				free(stored);
+				if (_sha) free(_sha);
+				if (_attr) free(_attr);
+			}
+			// unknown user: `selected` stays = floor; the response handler detects the miss and mocks.
+			// Known limitation (#6349): with a floor below SCRAM, a known user whose stored secret
+			// maps to a different method than the floor (a SCRAM verifier under an md5/cleartext
+			// floor, an md5 hash under a cleartext floor) is challenged differently from an unknown
+			// user, so the first server message can reveal that the user exists. PostgreSQL has the
+			// same property (unknown roles get the password_encryption method). Not reachable with
+			// the default SCRAM floor, nor when every stored secret follows the floor.
+		}
+	}
+
+	switch (selected) {
 
 	case AUTHENTICATION_METHOD::NO_PASSWORD:
 		pgpkt.write_generic(type, "i", PG_PKT_AUTH_OK);
@@ -402,11 +468,8 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 	case AUTHENTICATION_METHOD::MD5_PASSWORD:
 		memset((*myds)->tmp_login_salt, 0, sizeof((*myds)->tmp_login_salt));
 		if (RAND_bytes((*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt)) != 1) {
-			// Fallback method: using a basic pseudo-random generator
-			srand((unsigned int)time(NULL));  
-			for (size_t i = 0; i < sizeof((*myds)->tmp_login_salt); i++) {
-				(*myds)->tmp_login_salt[i] = rand_fast() % 256;
-			}
+			proxy_error("RAND_bytes() failed generating PostgreSQL login salt\n");
+			return false;
 		}
 		pgpkt.write_generic(type, "ib", PG_PKT_AUTH_MD5, (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
 		break;
@@ -420,7 +483,7 @@ bool PgSQL_Protocol::generate_pkt_initial_handshake(bool send, void** _ptr, unsi
 		assert(0);
 	}
 
-	(*myds)->auth_method = (AUTHENTICATION_METHOD)pgsql_thread___authentication_method;
+	(*myds)->auth_method = selected;
 	(*myds)->auth_next_pkt_type = 'p';
 
 	if (send == true) {
@@ -443,6 +506,7 @@ bool PgSQL_Protocol::get_header(unsigned char* pkt, unsigned int pkt_len, pgsql_
 	uint16_t len16;
 	uint8_t type8;
 	uint32_t code;
+	uint32_t version = 0;
 	//const uint8_t* ptr;
 
 	unsigned int read_pos = 0;
@@ -529,15 +593,23 @@ bool PgSQL_Protocol::get_header(unsigned char* pkt, unsigned int pkt_len, pgsql_
 		else if (code == PG_PKT_GSSENCREQ) {
 			type = PG_PKT_GSSENCREQ;
 		}
-		else if ((code >> 16) == 3 && (code & 0xFFFF) < 2) {
+		else if ((code >> 16) == (PG_PROTOCOL_LATEST >> 16)) {
+			// Every minor version of the major we speak is accepted here, including ones we do
+			// not implement. The minor version is a negotiable number in this protocol, so
+			// refusing it at this point would close the socket on a client that only needs to be
+			// told which version we speak. process_startup_packet() answers it. Deriving the
+			// major from PG_PROTOCOL_LATEST keeps this gate and the version we advertise in
+			// agreement.
 			type = PG_PKT_STARTUP;
-		}
-		else if (code == PG_PKT_STARTUP_V2) {
-			type = PG_PKT_STARTUP_V2;
+			version = code;
 		}
 		else {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "unknown special pkt: len=%u code=%u\n", len, code);
-			return false;
+			// Every other code in this position is a protocol version, which is how PostgreSQL
+			// reads it too; version 2 lands here as well. Carrying it through instead of failing
+			// here lets the startup handler say which version was asked for.
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "unsupported startup pkt: len=%u code=%u\n", len, code);
+			type = PG_PKT_STARTUP_UNSUPPORTED;
+			version = code;
 		}
 		got = OLD_HEADER_LEN;
 	}
@@ -549,6 +621,7 @@ bool PgSQL_Protocol::get_header(unsigned char* pkt, unsigned int pkt_len, pgsql_
 	/* store pkt info */
 	hdr->type = type;
 	hdr->len = len;
+	hdr->version = version;
 
 	/* fill pkt with only data for this packet */
 	if (len > pkt_len - read_pos) {
@@ -626,6 +699,11 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 	ssl_request = false;
 	pgsql_hdr hdr{};
 	if (!get_header(pkt, len, &hdr)) {
+		// The caller closes the connection on false. Without a message the client sees nothing but
+		// a dropped socket and can only report a generic connection failure.
+		proxy_error("Malformed startup packet received from client %s:%d\n", (*myds)->addr.addr, (*myds)->addr.port);
+		generate_error_packet(true, false, "invalid startup packet",
+			PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 		return false;
 	}
 
@@ -638,6 +716,19 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		(*myds)->encrypted = have_ssl;
 		ssl_request = true;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. SSL_REQUEST:'%c'\n", (*myds)->sess, (*myds), have_ssl ? 'S' : 'N');
+		return true;
+	}
+
+	if (hdr.type == PG_PKT_GSSENCREQ) {
+		// We do not speak GSSAPI encryption. PostgreSQL answers 'N' and lets the client fall back
+		// to SSL or plaintext on the same connection; closing instead strands a client that only
+		// offered it. Reusing ssl_request here means "reply sent, wait for the real startup packet".
+		char* gss_supported = (char*)malloc(1);
+		*gss_supported = 'N';
+		(*myds)->PSarrayOUT->add((void*)gss_supported, 1);
+		(*myds)->sess->writeout();
+		ssl_request = true;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. GSSENC_REQUEST:'N'\n", (*myds)->sess, (*myds));
 		return true;
 	}
 
@@ -697,9 +788,13 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		return false;
 	}
 
-	//PG_PKT_STARTUP_V2 not supported
 	if (hdr.type != PG_PKT_STARTUP) {
-		proxy_error("Unsupported packet type '%u' received from client %s:%d\n", hdr.type, (*myds)->addr.addr, (*myds)->addr.port);
+		char errmsg[128];
+		snprintf(errmsg, sizeof(errmsg), "unsupported frontend protocol %u.%u: server supports %u.0 to %u.%u",
+			hdr.version >> 16, hdr.version & 0xFFFF,
+			PG_PROTOCOL_LATEST >> 16, PG_PROTOCOL_LATEST >> 16, PG_PROTOCOL_LATEST & 0xFFFF);
+		proxy_error("%s. Client %s:%d\n", errmsg, (*myds)->addr.addr, (*myds)->addr.port);
+		generate_error_packet(true, false, errmsg, PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, true);
 		return false;
 	}
 
@@ -717,6 +812,33 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		generate_error_packet(true, false, "no PostgreSQL user name specified in startup packet", 
 			PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION, true);
 		return false;
+	}
+
+	// A minor version we do not implement, and any protocol extension the client asked for, are
+	// answered with NegotiateProtocolVersion: we name the version we do speak and the client
+	// continues at it. Only the major version is fatal. This message has to be queued before the
+	// authentication request the caller generates next, which is the order PostgreSQL sends them in.
+	std::vector<std::string> unsupported_options;
+	auto& params = (*myds)->myconn->conn_params.connection_parameters;
+	for (auto it = params.begin(); it != params.end(); ) {
+		if (strncmp(it->first.c_str(), "_pq_.", 5) == 0) {
+			unsupported_options.push_back(it->first);
+			// Dropped as well as reported: a leftover _pq_. key is not a setting, and would
+			// otherwise be forwarded to the backend as one and rejected there.
+			it = params.erase(it);
+		} else {
+			++it;
+		}
+	}
+
+	if ((hdr.version & 0xFFFF) > (PG_PROTOCOL_LATEST & 0xFFFF) || unsupported_options.empty() == false) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. Negotiating protocol %u.%u down to %u.%u, %lu unsupported option(s)\n",
+			(*myds)->sess, (*myds), hdr.version >> 16, hdr.version & 0xFFFF,
+			PG_PROTOCOL_LATEST >> 16, PG_PROTOCOL_LATEST & 0xFFFF, unsupported_options.size());
+		PG_pkt pgpkt{};
+		pgpkt.write_NegotiateProtocolVersion(PG_PROTOCOL_LATEST, unsupported_options);
+		auto buff = pgpkt.detach();
+		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
 	}
 
 	(*myds)->DSS = STATE_SERVER_HANDSHAKE;
@@ -882,18 +1004,24 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 	bool fast_forward = false;
 	bool _ret_use_ssl = false;
 	EXECUTION_STATE ret = EXECUTION_STATE::FAILED;
+	bool mock = false; // assigned after the credential lookup below; declared here, before the
+	                   // function's gotos, so a `goto __exit` can't cross its initialization.
+	bool pinned = false; // set when this packet reuses the secret the login started on; same reason
+	                     // as `mock` for being declared up here.
 
 	pgsql_hdr hdr{};
+	// These three aborts leave the login dead, so they go through the exit label rather than
+	// returning: that is where a secret kept for a still-pending login gets wiped.
 	if (!get_header(pkt, len, &hdr)) {
-		return EXECUTION_STATE::FAILED;
+		goto __exit_process_pkt_handshake_response;
 	}
 
 	if (hdr.data.size == 0) {
-		return EXECUTION_STATE::FAILED;
+		goto __exit_process_pkt_handshake_response;
 	}
 
 	if (hdr.type != (*myds)->auth_next_pkt_type) {
-		return EXECUTION_STATE::FAILED;
+		goto __exit_process_pkt_handshake_response;
 	}
 
 	user = (char*)(*myds)->myconn->conn_params.get_value(PG_USER);
@@ -904,7 +1032,21 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		goto __exit_process_pkt_handshake_response;
 	}
 
-	password = GloPgAuth->lookup((char*)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
+	// ADMIN/STATS sessions resolve against the Admin credential scope; see
+	// cred_scope_for_session(). On the stable tier this is USERNAME_FRONTEND and
+	// behaviour is unchanged. See #5987.
+	password = GloPgAuth->lookup((char*)user, cred_scope_for_session((*myds)->sess->session_type), &_ret_use_ssl, &default_hostgroup, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
+
+	/* Put back the secret this login started on: the client's answer was computed against it, and
+	 * everything below reads `password`. A user deleted mid-login makes this lookup come back empty,
+	 * which skips the restore and leaves the rejection further down to refuse the login. */
+	pinned = (password != NULL && (*myds)->pending_auth_secret != NULL);
+	if (pinned) {
+		OPENSSL_cleanse(password, strlen(password));
+		free(password);
+		password = (*myds)->pending_auth_secret;
+		(*myds)->pending_auth_secret = NULL;
+	}
 
 	if (password) {
 #ifdef DEBUG
@@ -916,18 +1058,31 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds)->sess, (*myds), user, tmp_pass);
 		free(tmp_pass);
 #endif // debug
-		(*myds)->sess->default_hostgroup = default_hostgroup;
-		//(*myds)->sess->default_schema = default_schema; // just the pointer is passed
-		if ((*myds)->sess->user_attributes) free((*myds)->sess->user_attributes);
-		(*myds)->sess->user_attributes = attributes; // just the pointer is passed
-		//(*myds)->sess->schema_locked = schema_locked;
-		(*myds)->sess->transaction_persistent = transaction_persistent;
-		(*myds)->sess->session_fast_forward = SESSION_FORWARD_TYPE_NONE; // default
-		if ((*myds)->sess->session_type == PROXYSQL_SESSION_PGSQL) {
-			(*myds)->sess->session_fast_forward = fast_forward ? SESSION_FORWARD_TYPE_PERMANENT : SESSION_FORWARD_TYPE_NONE;
+		if (pinned) {
+			/* The first packet of this login already applied hostgroup, attributes and the rest from
+			 * the same row the secret above came from. Taking the fresh ones now would build the
+			 * session out of two different reloads -- old credential, new routing -- and send the
+			 * pre-rotation password to the post-rotation server pool.
+			 *
+			 * Note that `pinned` decides two things at once: reuse the earlier secret, and skip
+			 * these fields because an earlier packet already set them. Holding a secret from before
+			 * the first password packet would need those two separated, or the fields would never
+			 * be set at all. */
+			free(attributes);
+		} else {
+			(*myds)->sess->default_hostgroup = default_hostgroup;
+			//(*myds)->sess->default_schema = default_schema; // just the pointer is passed
+			if ((*myds)->sess->user_attributes) free((*myds)->sess->user_attributes);
+			(*myds)->sess->user_attributes = attributes; // just the pointer is passed
+			//(*myds)->sess->schema_locked = schema_locked;
+			(*myds)->sess->transaction_persistent = transaction_persistent;
+			(*myds)->sess->session_fast_forward = SESSION_FORWARD_TYPE_NONE; // default
+			if ((*myds)->sess->session_type == PROXYSQL_SESSION_PGSQL) {
+				(*myds)->sess->session_fast_forward = fast_forward ? SESSION_FORWARD_TYPE_PERMANENT : SESSION_FORWARD_TYPE_NONE;
+			}
+			(*myds)->sess->user_max_connections = max_connections;
+			(*myds)->sess->use_ssl = _ret_use_ssl;
 		}
-		(*myds)->sess->user_max_connections = max_connections;
-		(*myds)->sess->use_ssl = _ret_use_ssl;
 	} else {
 
 		if (
@@ -951,14 +1106,28 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		if (attributes) free(attributes);
 	}
 
-	if (password) {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_method=%s\n", (*myds)->sess, (*myds), user, AUTHENTICATION_METHOD_STR[(int)(*myds)->auth_method]);
+	// Anti-enumeration: an unknown user, or a known user whose stored secret is too weak for the
+	// floor (e.g. an md5 hash under a SCRAM floor), runs the SAME handshake against a mock secret and
+	// fails identically to a wrong password — so the client cannot tell them apart. The challenge
+	// method was already chosen in generate_pkt_initial_handshake; here we only decide real-verify vs mock.
+	if (!password) {
+		mock = true; // unknown frontend user
+	} else {
+		// Derive mock from the method already committed in generate_pkt_initial_handshake, a floor change between the 		     	     // challenge and this password packet must not flip a valid in-flight login into the mock-fail path. 
+		// The sole reject case is an md5 secret challenged under SCRAM (md5 too weak for a SCRAM floor).
+		mock = (*myds)->auth_method == AUTHENTICATION_METHOD::SASL_SCRAM_SHA_256 &&
+			get_password_type(password) == PASSWORD_TYPE_MD5;
+	}
+
+	if (password || mock) {
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_method=%s , mock=%d\n", (*myds)->sess, (*myds), user, AUTHENTICATION_METHOD_STR[(int)(*myds)->auth_method], mock ? 1 : 0);
 		switch ((*myds)->auth_method) {
 		case AUTHENTICATION_METHOD::MD5_PASSWORD:
 		{
 			uint32_t pass_len = 0;
 			pass = extract_password(&hdr, &pass_len);
 			using_password = (pass_len > 0);
+			if (mock) break; // anti-enum: unknown/too-weak user — consume the response, fail generically
 
 			if (pass_len) {
 				if (pass[pass_len - 1] == 0) {
@@ -967,21 +1136,28 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			}
 
 			if (!pass || *pass == '\0') {
+				// No dedicated error here: it would only be sent for known users, and so tell them
+				// apart from unknown ones (anti-enumeration, #6349). Fail like a wrong password.
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds)->sess, (*myds), user);
-				generate_error_packet(true, false, "empty password returned by client", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 				break;
 			}
 
 			unsigned char md5_digest[MD5_DIGEST_LENGTH];
 			char md5_string[MD5_DIGEST_LENGTH * 2 + sizeof((*myds)->tmp_login_salt)];
 			EVP_MD_CTX* md5_context = EVP_MD_CTX_new();
-			EVP_DigestInit_ex(md5_context, EVP_md5(), NULL);
-			EVP_DigestUpdate(md5_context, password, strlen(password));
-			EVP_DigestUpdate(md5_context, user, strlen(user));
 			unsigned int md5_len = 0;
-			EVP_DigestFinal_ex(md5_context, md5_digest, &md5_len);
-			for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
-				sprintf(&md5_string[i * 2], "%02x", (unsigned int)md5_digest[i]);
+			// Fill md5_string[0..31] with the hex of md5(password+username). If the stored secret is
+			// already an md5 hash ("md5"+32hex), reuse those 32 hex chars directly — no plaintext needed.
+			if (get_password_type(password) == PASSWORD_TYPE_MD5) {
+				memcpy(md5_string, password + 3, MD5_DIGEST_LENGTH * 2);
+			} else {
+				EVP_DigestInit_ex(md5_context, EVP_md5(), NULL);
+				EVP_DigestUpdate(md5_context, password, strlen(password));
+				EVP_DigestUpdate(md5_context, user, strlen(user));
+				EVP_DigestFinal_ex(md5_context, md5_digest, &md5_len);
+				for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
+					snprintf(&md5_string[i * 2], 3, "%02x", (unsigned int)md5_digest[i]);
+				}
 			}
 			//
 			memcpy(md5_string+(MD5_DIGEST_LENGTH*2), (*myds)->tmp_login_salt, sizeof((*myds)->tmp_login_salt));
@@ -991,10 +1167,10 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			EVP_MD_CTX_free(md5_context);
 			memcpy(md5_string, "md5", 3);
 			for (int i = 0, j = 3;  i < MD5_DIGEST_LENGTH; i++, j+=2) {
-				sprintf(&md5_string[j], "%02x", (unsigned int)md5_digest[i]);
+				snprintf(&md5_string[j], 3, "%02x", (unsigned int)md5_digest[i]);
 			}
 
-			if (strlen(md5_string) == pass_len && strcmp(md5_string, pass) == 0) {
+			if (strlen(md5_string) == pass_len && CRYPTO_memcmp(md5_string, pass, pass_len) == 0) {
 				ret = EXECUTION_STATE::SUCCESSFUL;
 			}
 		}
@@ -1004,14 +1180,15 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			uint32_t pass_len = 0;
 			pass = extract_password(&hdr, &pass_len);
 			using_password = (pass_len > 0);
+			if (mock) break; // anti-enum: unknown/too-weak user — consume the response, fail generically
 
 			if (!pass || *pass == '\0') {
+				// Same as the MD5 branch: fail like a wrong password, no dedicated error (#6349).
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Empty password returned by client.\n", (*myds)->sess, (*myds), user);
-				generate_error_packet(true, false, "empty password returned by client", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 				break;
 			}
 
-			if (strlen(password) == pass_len && strcmp(password, pass) == 0) {
+			if (strlen(password) == pass_len && CRYPTO_memcmp(password, pass, pass_len) == 0) {
 				ret = EXECUTION_STATE::SUCCESSFUL;
 			}
 		}
@@ -1029,8 +1206,13 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			}
 
 			PgCredentials stored_user_info{ '\0' };
-			strncpy(stored_user_info.name, user, MAX_USERNAME);
-			strncpy(stored_user_info.passwd, password, MAX_PASSWORD);
+			snprintf(stored_user_info.name, sizeof(stored_user_info.name), "%.*s", (int)(sizeof(stored_user_info.name) - 1), user);
+			// `password` is NULL on the anti-enumeration path (unknown frontend user -> mock=true):
+			// the `if (password || mock)` guard above lets NULL reach here, and "%.*s" with a NULL
+			// argument is UB. stored_user_info was value-initialised, so passwd stays "" for the mock.
+			if (password)
+				snprintf(stored_user_info.passwd, sizeof(stored_user_info.passwd), "%.*s", (int)(sizeof(stored_user_info.passwd) - 1), password);
+			stored_user_info.mock_auth = mock; // unknown/too-weak -> mock SCRAM (deterministic fake salt), fails like a wrong password
 
 			if (!(*myds)->scram_state->server_nonce) {
 				/* process as SASLInitialResponse */
@@ -1082,16 +1264,23 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				data = (const unsigned char*)hdr.data.ptr;
 				length = hdr.data.size;
 
-				if (scram_handle_client_final((*myds)->scram_state, &stored_user_info, data, length)) {
-					/* save SCRAM keys for user */
-					if (!(*myds)->scram_state->adhoc) {
-						memcpy(stored_user_info.scram_ClientKey,
+				const bool proof_verified = scram_handle_client_final((*myds)->scram_state, &stored_user_info, data, length);
+				if (proof_verified && password) {
+					/* Persist the harvested ClientKey + the verifier's ServerKey onto the long-lived
+					 * client userinfo so the backend connection can hand them to libpq. Harvest ONLY
+					 * when the stored secret IS a SCRAM verifier: for a plaintext-stored user the SCRAM
+					 * exchange runs against an ad-hoc verifier whose random salt will not match the
+					 * backend's rolpassword, so those keys must never be reused on the backend leg.
+					 * (Gating on scram_state->adhoc is insufficient — it stays false on a plaintext
+					 * user's 2nd+ login when the verifier cache hits.) */
+					if (password && get_password_type(password) == PASSWORD_TYPE_SCRAM_SHA_256) {
+						memcpy(userinfo->scram_client_key,
 							(*myds)->scram_state->ClientKey,
-							sizeof((*myds)->scram_state->ClientKey));
-						memcpy(stored_user_info.scram_ServerKey,
+							sizeof(userinfo->scram_client_key));
+						memcpy(userinfo->scram_server_key,
 							(*myds)->scram_state->ServerKey,
-							sizeof((*myds)->scram_state->ServerKey));
-						stored_user_info.has_scram_keys = true;
+							sizeof(userinfo->scram_server_key));
+						userinfo->has_scram_keys = true;
 					}
 
 					free_scram_state((*myds)->scram_state);
@@ -1100,6 +1289,25 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					//	return false;
 					//welcome_client();
 					ret = EXECUTION_STATE::SUCCESSFUL;
+				}
+				else if (proof_verified) {
+					/* The proof verified but the credential is gone: the user was removed by a LOAD
+					 * PGSQL USERS TO RUNTIME between client-first and client-final. Verification runs
+					 * against scram_state, built from the secret that existed at client-first, so it
+					 * still succeeds -- and without this guard the login counts as SUCCESSFUL and the
+					 * block below strdup()s a NULL password, taking the whole process down.
+					 *
+					 * Keyed on proof_verified, not on !password: an unknown username also reaches
+					 * client-final with password==NULL (that is the anti-enumeration mock exchange),
+					 * but its proof cannot verify against the mock secret, so it belongs on the
+					 * ordinary failure path below and must not log an error on every bad-username
+					 * attempt.
+					 *
+					 * ret stays FAILED, so the session emits the same generic "Access denied" the
+					 * wrong-password path does and a removed user remains indistinguishable from a
+					 * bad password. */
+					proxy_error("Session=%p , DS=%p , user='%s'. Credential removed during the SCRAM exchange; rejecting the login\n",
+						(*myds)->sess, (*myds), user);
 				}
 				else {
 					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL authentication failed.\n", (*myds)->sess, (*myds), user);
@@ -1114,8 +1322,10 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			break;
 		}
 	} else {
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. User not found in the database.\n", (*myds)->sess, (*myds), user);
-		generate_error_packet(true, false, "User not found", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
+		// Unreachable in normal flow: an unknown user now has mock==true and enters the branch above
+		// (anti-enumeration). Kept as defense-in-depth with a generic, non-revealing failure.
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Authentication failed (no credential, no mock).\n", (*myds)->sess, (*myds), user);
+		generate_error_packet(true, false, "password authentication failed", PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION, true);
 	}
 
 	if (ret == EXECUTION_STATE::SUCCESSFUL) {
@@ -1126,6 +1336,10 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		if (userinfo->password) free(userinfo->password);
 
 		userinfo->username = strdup((const char*)user);
+		// This is the credential the session hands to every backend connection it opens. For a
+		// login that spanned a reload it is deliberately the secret the login was verified against,
+		// not the newer one: a client that proved knowledge of the old password must not be given a
+		// session that works with the new one.
 		userinfo->password = strdup((const char*)password);
 
 		std::vector<std::pair<std::string, std::string>> parameters;
@@ -1173,7 +1387,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					proxy_error("invalid value for parameter \"%s\": \"%s\"\n", param_name.c_str(), param_val.c_str());
 					m = (char*)"invalid value for parameter \"%s\": \"%s\"";
 					errmsg = (char*)malloc(param_val.length() + param_name.length() + strlen(m));
-					sprintf(errmsg, m, param_name.c_str(), param_val.c_str());
+					snprintf(errmsg, param_val.length() + param_name.length() + strlen(m), m, param_name.c_str(), param_val.c_str());
 					generate_error_packet(true, false, errmsg, PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, true);
 					free(errmsg);	
 					ret = EXECUTION_STATE::FAILED;
@@ -1253,7 +1467,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					proxy_error("invalid value for parameter \"%s\": \"%s\"\n", pgsql_tracked_variables[idx].set_variable_name, value_copy.c_str());
 					m = (char*)"invalid value for parameter \"%s\": \"%s\"";
 					errmsg = (char*)malloc(value_copy.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m));
-					sprintf(errmsg, m, pgsql_tracked_variables[idx].set_variable_name, value_copy.c_str());
+					snprintf(errmsg, value_copy.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m), m, pgsql_tracked_variables[idx].set_variable_name, value_copy.c_str());
 					generate_error_packet(true, false, errmsg, PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, true);
 					free(errmsg);
 					ret = EXECUTION_STATE::FAILED;
@@ -1303,7 +1517,6 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				// parameter provided is not part of the tracked variables. Will lock on hostgroup on next query.
 				const char* val_cstr = param_val.c_str();
 				proxy_warning("Unrecognized connection parameter. Please report this as a bug for future enhancements:%s:%s\n", param_key.c_str(), val_cstr);
-				const char* escaped_str = escape_string_backslash_spaces(val_cstr);
 				std::string& untracked = sess->untracked_option_parameters;
 				// Append the "[ ]-c <key>=<value>" token in place, avoiding the
 				// temporary strings a "-c " + key + "=" + value concatenation creates.
@@ -1312,9 +1525,11 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 				untracked += "-c ";
 				untracked += param_key;
 				untracked += '=';
-				untracked += escaped_str;
-				if (escaped_str != val_cstr)
-					free((char*)escaped_str);
+				// Escaped for the StartupMessage wire form. The libpq path raises this to
+				// its own level when it builds the conninfo; storing the conninfo form here
+				// instead would reach the native path over-escaped, and the backend would
+				// reject it with `invalid value for parameter "<key>": "<truncated>\"`.
+				pg_append_escaped_option_value(untracked, val_cstr);
 			}
 		}
 
@@ -1333,14 +1548,31 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		// we always duplicate username and password, or crashes happen
 		if (!userinfo->username) // if set already, ignore
 			userinfo->username = strdup((const char*)user);
-		if (using_password)
+		if (using_password) {
+			// A SCRAM login reaches this twice -- once per packet -- so the first allocation has to
+			// go before the second one overwrites the pointer.
+			if (userinfo->password) free(userinfo->password);
 			userinfo->password = strdup((const char*)"");
+		}
 	}
 	userinfo->set(NULL, NULL, NULL, NULL); // just to call compute_hash()
 
 __exit_process_pkt_handshake_response:
+	/* PENDING means another packet is coming and it will look the credential up again: keep this
+	 * copy rather than free it, so the rest of the login runs on the same secret. Every other
+	 * outcome ends the login, so whatever was kept is wiped here -- otherwise a client that stalls
+	 * after the first packet, or sends a bad one, leaves a stored secret on the heap until it times
+	 * out. The mock exchange is excluded simply because it cannot succeed whatever the next packet
+	 * says, so there is nothing worth keeping. Not for safety: a real login holds a copy for the
+	 * same window, and scram_state holds key material derived from the same secret either way. */
+	(*myds)->clear_pending_auth_secret();
+	if (ret == EXECUTION_STATE::PENDING && mock == false) {
+		(*myds)->pending_auth_secret = password;
+		password = NULL;
+	}
 	free(pass);
 	if (password) {
+		OPENSSL_cleanse(password, strlen(password));
 		free(password);
 		password = NULL;
 	}
@@ -1355,7 +1587,7 @@ __exit_process_pkt_handshake_response:
 	return ret;
 }
 
-void PgSQL_Protocol::welcome_client() {
+bool PgSQL_Protocol::welcome_client() {
 	PG_pkt pgpkt(128);
 
 	pgpkt.set_multi_pkt_mode(true);
@@ -1406,8 +1638,8 @@ void PgSQL_Protocol::welcome_client() {
 	uint32_t backend_pid = (*myds)->sess->thread_session_id;
 	uint32_t cancel_key = -1;
 	if (RAND_bytes((unsigned char*)&cancel_key, sizeof(cancel_key)) != 1) {
-		// Fallback: use libc PRNG
-		cancel_key = (uint32_t)random();
+		proxy_error("RAND_bytes() failed generating PostgreSQL cancel key\n");
+		return false;
 	}
 	(*myds)->sess->cancel_secret_key = cancel_key;
 
@@ -1426,9 +1658,11 @@ void PgSQL_Protocol::welcome_client() {
 	(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
 	//(*myds)->DSS = STATE_CLIENT_AUTH_OK;
 	//(*myds)->sess->status = WAITING_CLIENT_DATA;
+	return true;
 }
 
-void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr) {
+void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr,
+	char txn_state) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
 
@@ -1449,7 +1683,7 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 		'C', PgSQL_Error_Helper::get_error_code(code), 'M', msg, 0);
 
 	if (ready == true) {
-		pgpkt.write_ReadyForQuery();
+		pgpkt.write_ReadyForQuery(txn_state);
 		pgpkt.set_multi_pkt_mode(false);
 	}
 
@@ -1459,6 +1693,11 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 		switch ((*myds)->DSS) {
 		case STATE_SERVER_HANDSHAKE:
 		case STATE_CLIENT_HANDSHAKE:
+		// A TLS client is still in STATE_SSL_INIT when its startup packet arrives, because nothing
+		// moves the state on until that packet has been accepted. Every error raised while reading
+		// it is reported from here, so leaving this state out aborted the whole proxy on anything
+		// an encrypted client got wrong in its first packet.
+		case STATE_SSL_INIT:
 		case STATE_QUERY_SENT_DS:
 		case STATE_QUERY_SENT_NET:
 		case STATE_ERR:
@@ -1607,6 +1846,9 @@ char* extract_tag_from_query(const char* query) {
 	constexpr size_t deallocate_prepare_all_len = sizeof("DEALLOCATE PREPARE ALL") - 1;
 	constexpr size_t discard_all_len = sizeof("DISCARD ALL") - 1;
 
+	if (query == nullptr) {
+		return strdup("");
+	}
 	size_t qtlen = strlen(query);
 	if ((qtlen > create_table_len) && strncasecmp(query, "CREATE TABLE AS", create_table_len) == 0) {
 		return strdup("SELECT");
@@ -1617,23 +1859,13 @@ char* extract_tag_from_query(const char* query) {
 	} else if ((qtlen >= discard_all_len) && (strncasecmp(query, "DISCARD ALL", discard_all_len) == 0)) {
 		return strdup("DISCARD ALL");
 	} else {
-		const char* fs = strchr(query, ' ');
-
-		if (fs != NULL) {
-			qtlen = (fs - query) + 1;
-		}
-		char buf[qtlen];
-		memcpy(buf, query, qtlen - 1);
-		buf[qtlen - 1] = 0;
-		{
-			char* s = buf;
-			while (*s) {
-				*s = toupper((unsigned char)*s);
-				s++;
-			}
+		qtlen = strcspn(query, " \t\r\n");
+		std::string buf(query, qtlen);
+		for (char& c : buf) {
+			c = std::toupper(c, std::locale::classic());
 		}
 
-		return strdup(buf);
+		return strdup(buf.c_str());
 	}
 }
 
@@ -1653,7 +1885,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 		allocated_tag = extract_tag_from_query(query);
 		assert(allocated_tag);
 		if (strcmp(allocated_tag, "INSERT") == 0) {
-			sprintf(tmpbuf, "%s 0 %d", allocated_tag, rows);
+			snprintf(tmpbuf, sizeof(tmpbuf), "%s 0 %d", allocated_tag, rows);
 			tag = tmpbuf;
 		} else if (strcmp(allocated_tag, "UPDATE") == 0 ||
 			strcmp(allocated_tag, "DELETE") == 0 ||
@@ -1662,7 +1894,7 @@ bool PgSQL_Protocol::generate_ok_packet(bool send, bool ready, const char* msg, 
 			strcmp(allocated_tag, "FETCH") == 0 ||
 			strcmp(allocated_tag, "COPY") == 0 ||
 			strcmp(allocated_tag, "SELECT") == 0) {
-			sprintf(tmpbuf, "%s %d", allocated_tag, rows);
+			snprintf(tmpbuf, sizeof(tmpbuf), "%s %d", allocated_tag, rows);
 			tag = tmpbuf;
 		} else {
 			tag = allocated_tag;
@@ -2434,7 +2666,7 @@ unsigned int PgSQL_Protocol::copy_parse_completion_to_PgSQL_Query_Result(bool se
 	return size;
 }
 
-unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result, 
+unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool send, PgSQL_Query_Result* pg_query_result,
 	const PGresult* result, uint8_t stmt_type) {
 	assert(pg_query_result);
 	assert(result);
@@ -2528,7 +2760,7 @@ unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool
 
 	if (send == true) {
 		// not supported
-		//(*myds)->PSarrayOUT->add((void*)_ptr, size); 
+		//(*myds)->PSarrayOUT->add((void*)_ptr, size);
 	}
 	pg_query_result->resultset_size += total_size;
 	if (alloced_new_buffer) {
@@ -2542,10 +2774,15 @@ unsigned int PgSQL_Protocol::copy_describe_completion_to_PgSQL_Query_Result(bool
 
 PgSQL_Query_Result::PgSQL_Query_Result() {
 	buffer = NULL;
+	proto = NULL;
+	myds = NULL;
+	conn = NULL;
 	transfer_started = false;
+	stmt_had_tuple = false;
 	buffer_used = 0;
 	resultset_size = 0;
 	num_fields = 0;
+	native_command_count = 0;
 	num_rows = 0;
 	pkt_count = 0;
 	affected_rows = -1;
@@ -2678,6 +2915,187 @@ unsigned int PgSQL_Query_Result::add_ready_status(PGTransactionStatusType txn_st
 	return bytes;
 }
 
+unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len) {
+	// Reconstruct the raw client-wire message: type(1) + be32 length(4) + payload.
+	// The length field is (payload_len + 4) per the PostgreSQL wire protocol (it
+	// counts itself but not the type byte).
+	const unsigned int size = 1 + 4 + payload_len;
+	const uint32_t wire_len = (uint32_t)(payload_len + 4);
+
+	bool alloced_new_buffer = false;
+	unsigned char* _ptr = buffer_reserve_space(size);
+	if (_ptr == NULL) {
+		// buffer too small for this message (already flushed to PSarrayOUT inside
+		// buffer_reserve_space); allocate a standalone packet, same as the libpq
+		// copy_* helpers do.
+		_ptr = (unsigned char*)l_alloc(size);
+		alloced_new_buffer = true;
+	}
+
+	// Write header (type + big-endian length) then the payload bytes verbatim.
+	_ptr[0] = (unsigned char)type;
+	_ptr[1] = (unsigned char)((wire_len >> 24) & 0xff);
+	_ptr[2] = (unsigned char)((wire_len >> 16) & 0xff);
+	_ptr[3] = (unsigned char)((wire_len >> 8) & 0xff);
+	_ptr[4] = (unsigned char)(wire_len & 0xff);
+	if (payload_len) {
+		memcpy(_ptr + 5, payload, payload_len);
+	}
+
+	resultset_size += size;
+	if (alloced_new_buffer) {
+		PSarrayOUT.add(_ptr, size);
+	}
+	pkt_count++;
+
+	// Per-message-type side effects / flags. These mirror what the libpq add_*
+	// helpers set, but derive everything from the raw payload instead of a PGresult.
+	switch (type) {
+	case '1': // ParseComplete: bare ack, no payload. See PGSQL_QUERY_RESULT_ACK.
+	case '2': // BindComplete: bare ack, no payload. Only reaches here (i.e. is not
+	          // suppressed) for a named-portal Bind (native BIND step), whose real
+	          // BindComplete is forwarded to the client rather than synthesized. For
+	          // every other step the drain suppresses '2' before this call. Marking it
+	          // ACK keeps a Flush-terminated named Bind's sole message a non-empty
+	          // result so PgSQL_Result_to_PgSQL_wire streams it (mirrors '1'/'n'/'s').
+	case '3': // CloseComplete: bare ack, no payload. Only reaches here for a named-
+	          // portal Close (native CLOSE_P step), whose real CloseComplete is forwarded
+	          // to the client rather than synthesized (unnamed Close is synthesized in the
+	          // session and never reaches the backend). Marking it ACK keeps a Flush-
+	          // terminated named Close's sole message a non-empty result so
+	          // PgSQL_Result_to_PgSQL_wire streams it (mirrors '1'/'2'/'n'/'s'). Task P2.
+	case 'n': // NoData (Describe response when the statement returns no rows/columns)
+	case 's': // PortalSuspended (Execute response when max_rows cut the result short)
+		result_packet_type |= PGSQL_QUERY_RESULT_ACK;
+		break;
+	case 'T': // RowDescription
+		result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+		stmt_had_tuple = true;
+		if (payload_len >= 2) {
+			num_fields = ((unsigned int)payload[0] << 8) | (unsigned int)payload[1];
+		}
+		break;
+	case 'D': // DataRow
+		result_packet_type |= PGSQL_QUERY_RESULT_TUPLE;
+		stmt_had_tuple = true;
+		num_rows++;
+		break;
+	case 'C': { // CommandComplete: payload is a NUL-terminated command tag.
+		// Only extract affected rows for a pure command (no tuple data). This
+		// mirrors the libpq path, which calls add_command_completion(result, false)
+		// — i.e. extract_affected_rows=false — for row-returning results (SELECT,
+		// or any query that already emitted RowDescription/DataRow). For those, the
+		// trailing number in "SELECT <rows>" is a returned-row count, not affected
+		// rows, so we leave affected_rows untouched.
+		// The test is per statement (stmt_had_tuple), not per result: a native
+		// simple query feeds every statement of a batch into this one result, so
+		// the result-wide TUPLE flag set by "SELECT 1" would also hide the count of
+		// a later "UPDATE 10" (issue #6435). As on libpq, where each statement gets
+		// its own result, the last DML count of the batch wins; counts are not summed.
+		const bool had_tuple = stmt_had_tuple;
+		stmt_had_tuple = false;
+		native_command_count++;
+		result_packet_type |= PGSQL_QUERY_RESULT_COMMAND;
+		// Parse the trailing integer of the tag for affected rows. For INSERT the
+		// tag is "INSERT <oid> <rows>" (rows is the 2nd/last number); for UPDATE/
+		// DELETE/MOVE/FETCH/COPY it is "<verb> <rows>" (rows is the last number).
+		if (!had_tuple && payload_len > 0) {
+			// Find tag length up to the NUL terminator (defensive: bound by payload_len).
+			uint32_t taglen = 0;
+			while (taglen < payload_len && payload[taglen] != '\0') taglen++;
+			// Unterminated tag: nothing would stop strtoull below reading past the
+			// end of the message. -1 leaves the row count unrecorded.
+			if (taglen == payload_len) break;
+			if (taglen > 0) {
+				// Scan back over the trailing run of digits.
+				uint32_t end = taglen;
+				uint32_t start = end;
+				while (start > 0 && payload[start - 1] >= '0' && payload[start - 1] <= '9') start--;
+				if (start < end) {
+					// We have a trailing number; this is the affected-rows count.
+					affected_rows = strtoull((const char*)(payload + start), NULL, 10);
+				}
+			}
+		}
+		break;
+	}
+	case 'I': // EmptyQueryResponse
+		native_command_count++;
+		result_packet_type |= PGSQL_QUERY_RESULT_EMPTY;
+		stmt_had_tuple = false; // ends the statement, as 'C' does
+		break;
+	case 'E': // ErrorResponse
+		result_packet_type |= PGSQL_QUERY_RESULT_ERROR;
+		stmt_had_tuple = false; // a failed statement ends without a 'C'
+		if (conn) {
+			conn->native_fill_error_from_E(payload, payload_len);
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql,
+				conn->parent->myhgc->hid, conn->parent->address, conn->parent->port, 1907);
+		}
+		break;
+	case 'N': // NoticeResponse
+		result_packet_type |= PGSQL_QUERY_RESULT_NOTICE;
+		break;
+	case 'S': { // ParameterStatus: two C-strings (name\0value\0). Track it.
+		if (conn && payload_len > 0) {
+			uint32_t i = 0;
+			const unsigned char* name = payload;
+			while (i < payload_len && payload[i] != '\0') i++;
+			if (i < payload_len) {
+				std::string pname((const char*)name, (size_t)i);
+				i++; // skip NUL
+				const unsigned char* value = payload + i;
+				uint32_t vstart = i;
+				while (i < payload_len && payload[i] != '\0') i++;
+				std::string pvalue((const char*)value, (size_t)(i - vstart));
+				conn->native_params[pname] = pvalue;
+			}
+		}
+		break;
+	}
+	case 'H': // CopyOutResponse: bytes forwarded verbatim (stream-through)
+		result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT;
+		break;
+	case 'd': // CopyData: count as a row for stats parity with the libpq path (add_copy_out_row also increments num_rows)
+		num_rows++;
+		break;
+	case 'c': // CopyDone: no side effect; CommandComplete follows
+		break;
+	case 'Z': // ReadyForQuery: final message; records txn status and finalizes buffer.
+		if (conn && payload_len >= 1) {
+			conn->set_ready_for_query_status((char)payload[0]);
+		}
+		result_packet_type |= PGSQL_QUERY_RESULT_READY;
+		stmt_had_tuple = false;
+		// Mirror add_ready_status(): flush the in-line buffer into PSarrayOUT so the
+		// completed result is wholly in PSarrayOUT (get_resultset asserts buffer_used==0).
+		buffer_to_PSarrayOut();
+		// NOTE: the session's PgSQL_ExplicitTxnStateMgr (BEGIN/COMMIT/ROLLBACK/
+		// SAVEPOINT state) is fed EXACTLY ONCE per query by PgSQL_Session::handler()'s
+		// post-RunQuery epilogue (the shared PROCESSING_QUERY / PROCESSING_STMT_EXECUTE
+		// rc0 case calls handle_transaction_state()) — for BOTH the libpq and the native
+		// path, since native result completion returns through that same handler switch.
+		// A call was previously made HERE too (commit e9428cbda, when native completion
+		// bypassed the shared handler epilogue). After the native extended-query
+		// stmt-pipeline refactor routed native completion back through handler(), this
+		// call became a SECOND invocation: the first correctly registered/cleared the
+		// txn, the second re-ran start_transaction()/commit() on the now-updated state
+		// and tripped its "already/no transaction in progress" warning branch — once per
+		// transaction, for simple AND extended-protocol BEGIN/COMMIT alike (the
+		// extended case surfaced as pgbench -M prepared's per-COMMIT warning storm).
+		// Do NOT call handle_transaction_state() here; handler() owns it.
+		break;
+	default:
+		// Unrecognized message types are streamed through verbatim with no extra side
+		// effects. 'A' (NotificationResponse) and 'G'/'W' (CopyInResponse/CopyBothResponse)
+		// never reach this function: native_fetch_result_cont() deals with both before
+		// calling it, discarding 'A' and answering 'G'/'W' with CopyFail.
+		break;
+	}
+
+	return size;
+}
+
 bool PgSQL_Query_Result::get_resultset(PtrSizeArray* PSarrayFinal) {
 	transfer_started = true;
 	// Ready packet confirms that the result is complete
@@ -2782,9 +3200,11 @@ unsigned char* PgSQL_Query_Result::buffer_reserve_space(unsigned int size) {
 void PgSQL_Query_Result::reset() {
 	resultset_size = 0;
 	num_fields = 0;
+	native_command_count = 0;
 	num_rows = 0;
 	pkt_count = 0;
 	affected_rows = -1;
+	stmt_had_tuple = false;
 	result_packet_type = PGSQL_QUERY_RESULT_NO_DATA;
 }
 

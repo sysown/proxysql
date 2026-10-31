@@ -4,6 +4,9 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#ifdef PROXYSQL31
+#include "HostgroupPoolStats.h"
+#endif
 
 #ifndef CLASS_BASE_SESSION_H
 #define CLASS_BASE_SESSION_H
@@ -40,6 +43,9 @@ class Base_Session {
 	unsigned long long transaction_started_at;
 
 	T * thread;
+#ifdef PROXYSQL31
+	HostgroupPoolWait hostgroup_pool_wait;
+#endif
 	B *mybe;
 	PtrArray *mybes;
 	DS * client_myds;

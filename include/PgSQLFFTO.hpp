@@ -2,6 +2,7 @@
 #define PGSQL_FFTO_HPP
 
 #include "TrafficObserver.hpp"
+#include "PgSQLResponseFramer.h"
 #include <deque>
 #include <vector>
 #include <string>
@@ -77,6 +78,11 @@ private:
     uint64_t m_affected_rows {0};          ///< Accumulated affected rows for the current query.
     uint64_t m_rows_sent {0};              ///< Accumulated rows sent for the current query.
     bool m_current_finalize_on_sync {false}; ///< Whether current query finalizes on ReadyForQuery ('Z').
+    /// Whether the current query has received its own response terminator
+    /// (CommandComplete, EmptyQueryResponse or PortalSuspended). Mirrored from
+    /// m_rs; ReadyForQuery finalization gates on m_rs.response_seen().
+    bool m_response_seen {false};
+    PgSQLResponseFramer m_rs; ///< Response framer for server message classification.
 
     struct PendingQuery {
         std::string query;

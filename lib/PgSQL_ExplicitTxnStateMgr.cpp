@@ -3,6 +3,7 @@
 #include "PgSQL_Session.h"
 #include "PgSQL_Data_Stream.h"
 #include "PgSQL_Connection.h"
+#include "c_tokenizer.h"
 
 extern class PgSQL_Variables pgsql_variables;
 
@@ -45,11 +46,15 @@ void verify_server_variables(PgSQL_Session* session) {
 #endif
 }
 
+// Whether a transaction is open is recorded here from the FIRST WORD of each query, so it is a
+// guess. The backend's own answer can legitimately differ: a client sending "SELECT 1; BEGIN;"
+// leaves a transaction this never saw, and tracking is skipped entirely for a hostgroup-pinned
+// session and when query digests are off. The handlers below warn and give up when the two
+// disagree; they must not assert that they agree, because that aborts the proxy on ordinary SQL.
 void PgSQL_ExplicitTxnStateMgr::start_transaction() {
     if (transaction_state.empty() == false) {
         // Transaction already started, do nothing and return
 		proxy_warning("Received BEGIN command. There is already a transaction in progress\n");
-        assert(session->NumActiveTransactions() > 0);
         return;
     }
 
@@ -77,7 +82,6 @@ void PgSQL_ExplicitTxnStateMgr::start_transaction() {
 void PgSQL_ExplicitTxnStateMgr::commit() {
     if (transaction_state.empty()) {
         proxy_warning("Received COMMIT command. There is no transaction in progress\n");
-        assert(session->NumActiveTransactions() == 0);
         return;
     }
 
@@ -95,7 +99,6 @@ void PgSQL_ExplicitTxnStateMgr::rollback(bool rollback_and_chain) {
 
     if (transaction_state.empty()) {
         proxy_warning("Received ROLLBACK command. There is no transaction in progress\n");
-        assert(session->NumActiveTransactions() == 0);
         return;
     }
 
@@ -109,8 +112,10 @@ void PgSQL_ExplicitTxnStateMgr::rollback(bool rollback_and_chain) {
             uint32_t client_hash = pgsql_variables.client_get_hash(session, idx);
             uint32_t server_hash = pgsql_variables.server_get_hash(session, idx);
 
-            assert(client_hash == server_hash);
-            if (hash == client_hash)
+            // The two can differ here: a connection reset is put off while a transaction is
+            // open. ROLLBACK puts the backend back to its value at BEGIN, which is the snapshot,
+            // so both take it.
+            if (hash == client_hash && hash == server_hash)
                 continue;
 
             pgsql_variables.client_set_hash_and_value(session, idx, var_snapshot.var_value[idx], hash);
@@ -152,7 +157,6 @@ bool PgSQL_ExplicitTxnStateMgr::rollback_to_savepoint(std::string_view name) {
 	
     if (transaction_state.empty()) {
         proxy_warning("Received ROLLBACK TO SAVEPOINT '%s' command. There is no transaction in progress\n", name.data());
-        assert(session->NumActiveTransactions() == 0);
         return false;
     }
     
@@ -181,8 +185,8 @@ bool PgSQL_ExplicitTxnStateMgr::rollback_to_savepoint(std::string_view name) {
 		if (hash != 0) {
 			uint32_t client_hash = pgsql_variables.client_get_hash(session, idx);
 			uint32_t server_hash = pgsql_variables.server_get_hash(session, idx);
-			assert(client_hash == server_hash);
-			if (hash == client_hash)
+			// Can differ while a connection reset is put off; see rollback().
+			if (hash == client_hash && hash == server_hash)
 				continue;
 			pgsql_variables.client_set_hash_and_value(session, idx, var_snapshot.var_value[idx], hash);
 			pgsql_variables.server_set_hash_and_value(session, idx, var_snapshot.var_value[idx], hash);
@@ -214,7 +218,6 @@ bool PgSQL_ExplicitTxnStateMgr::release_savepoint(std::string_view name) {
 
     if (transaction_state.empty()) {
         proxy_warning("Received RELEASE SAVEPOINT '%s' command. There is no transaction in progress\n", name.data());
-        assert(session->NumActiveTransactions() == 0);
         return false;
     }
 
@@ -248,7 +251,6 @@ bool PgSQL_ExplicitTxnStateMgr::add_savepoint(std::string_view name) {
 
     if (transaction_state.empty()) {
         proxy_warning("Received SAVEPOINT '%s' command. There is no transaction in progress\n", name.data());
-        assert(session->NumActiveTransactions() == 0);
         return false;
     }
 
@@ -337,6 +339,58 @@ void PgSQL_ExplicitTxnStateMgr::reset_state() {
     }
     transaction_state.clear();
     savepoint.clear();
+}
+
+char PgSQL_ExplicitTxnStateMgr::txn_end_in_digest(const char* digest) {
+	char kind = 0;
+	const char* lost = NULL;
+	for (const char* stmt = pgsql_stmt_skip_lead(digest, &lost); stmt != NULL;
+		stmt = pgsql_digest_next_stmt(stmt, &lost)) {
+		size_t len = 0;
+		char k = 0;
+		if (pgsql_stmt_first_keyword_is(stmt, "ROLLBACK")) { k = 'R'; len = sizeof("ROLLBACK") - 1; }
+		else if (pgsql_stmt_first_keyword_is(stmt, "ABORT")) { k = 'R'; len = sizeof("ABORT") - 1; }
+		else if (pgsql_stmt_first_keyword_is(stmt, "COMMIT")) { k = 'C'; len = sizeof("COMMIT") - 1; }
+		else if (pgsql_stmt_first_keyword_is(stmt, "END")) { k = 'C'; len = sizeof("END") - 1; }
+		if (k == 0) continue;
+		const char* next = pgsql_stmt_skip_lead(stmt + len, NULL);
+		if (next != NULL && (pgsql_stmt_first_keyword_is(next, "PREPARED") ||
+			(k == 'R' && pgsql_stmt_first_keyword_is(next, "TO")))) {
+			continue;
+		}
+		kind = k;
+	}
+	return lost != NULL ? 0 : kind;
+}
+
+void PgSQL_ExplicitTxnStateMgr::sync_with_backend(bool backend_in_txn, char ended_by) {
+	if (backend_in_txn == false) {
+		if (transaction_state.empty()) return;
+		const bool backend_attached = session->mybe && session->mybe->server_myds &&
+			session->mybe->server_myds->myconn;
+		if (ended_by == 'R' && backend_attached) {
+			rollback(false);
+			return;
+		}
+		if (ended_by != 'C' && backend_attached) {
+			// Unknown end: a tracked SET since BEGIN may or may not have been put back on the
+			// backend. Its value there is unknown, so it is re-sent before the next use, and
+			// the connection cannot carry it unseen to another session.
+			const PgSQL_Variable_Snapshot& var_snapshot = transaction_state.front();
+			bool changed = false;
+			for (int idx = 0; idx < PGSQL_NAME_LAST_HIGH_WM; idx++) {
+				if (var_snapshot.var_hash[idx] != pgsql_variables.client_get_hash(session, idx)) {
+					pgsql_variables.server_reset_value(session, idx, false);
+					changed = true;
+				}
+			}
+			if (changed) session->mybe->server_myds->myconn->reorder_dynamic_variables_idx();
+		}
+		reset_state();
+	} else if (transaction_state.empty()) {
+		// The snapshot is taken now, not at the unseen BEGIN: the closest this gets.
+		start_transaction();
+	}
 }
 
 TxnCmd PgSQL_TxnCmdParser::parse(std::string_view input) noexcept {

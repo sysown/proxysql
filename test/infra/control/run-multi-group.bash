@@ -353,6 +353,7 @@ if [ "${COVERAGE}" -eq 1 ]; then
     # Each group's test-runner already copied .gcno adjacent to .gcda (in its
     # EXIT trap). We run fastcov sequentially per group — no concurrent gcov.
     COVERAGE_LOG="${COMBINED_COVERAGE_DIR}/coverage-generation.log"
+    COVERAGE_FAILED=0
     for group in ${TAP_GROUPS}; do
         infra_id="${group}-${RUN_ID}"
         gcov_dir="${WORKSPACE}/ci_infra_logs/${infra_id}/gcov"
@@ -360,7 +361,7 @@ if [ "${COVERAGE}" -eq 1 ]; then
 
         if [ -d "${gcov_dir}" ] && [ "$(find "${gcov_dir}" -name '*.gcda' 2>/dev/null | head -1)" ]; then
             echo ">>> Generating coverage for ${group} from ${gcov_dir}..."
-            docker run --rm \
+            if ! docker run --rm \
                 -v "${WORKSPACE}:${WORKSPACE}" \
                 -e WORKSPACE="${WORKSPACE}" \
                 -e GCOV_DIR="${gcov_dir}" \
@@ -368,14 +369,20 @@ if [ "${COVERAGE}" -eq 1 ]; then
                 -e COVERAGE_LOG="${COVERAGE_LOG}" \
                 proxysql-ci-base:latest \
                 bash -c '
-                    if command -v fastcov >/dev/null 2>&1; then
-                        cd "${GCOV_DIR}"
-                        fastcov -b -j4 -l \
-                            -e /usr deps \
-                            -d . -o "${GROUP_INFO}" >> "${COVERAGE_LOG}" 2>&1 || \
-                            echo ">>> WARNING: fastcov failed for ${GCOV_DIR}" >> "${COVERAGE_LOG}"
+                    set -e
+                    cd "${GCOV_DIR}"
+                    fastcov -b -j4 -l \
+                        -e /usr deps \
+                        -d . -o "${GROUP_INFO}" >> "${COVERAGE_LOG}" 2>&1
+                    if [ ! -s "${GROUP_INFO}" ]; then
+                        echo ">>> ERROR: fastcov produced an empty coverage report for ${GCOV_DIR}" >&2
+                        exit 1
                     fi
-                ' || echo ">>> WARNING: Coverage generation failed for ${group}"
+                '
+            then
+                echo ">>> ERROR: Coverage generation failed for ${group} (see ${COVERAGE_LOG})" >&2
+                COVERAGE_FAILED=1
+            fi
         else
             echo ">>> No .gcda files found for ${group}, skipping"
         fi
@@ -471,6 +478,10 @@ if [ "${COVERAGE}" -eq 1 ]; then
         fi
     else
         echo ">>> No coverage files found to combine"
+    fi
+    if [ "${COVERAGE_FAILED}" -ne 0 ]; then
+        echo ">>> ERROR: One or more groups failed coverage generation" >&2
+        OVERALL_FAILED=1
     fi
     echo ""
 fi

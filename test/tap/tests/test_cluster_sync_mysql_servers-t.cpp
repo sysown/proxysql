@@ -75,7 +75,7 @@ const char* get_cluster_visible_host() {
 	static char buf[256] = {};
 	if (buf[0]) return buf;
 	if (gethostname(buf, sizeof(buf)) != 0) {
-		strncpy(buf, "127.0.0.1", sizeof(buf) - 1);
+		snprintf(buf, sizeof(buf), "%s", "127.0.0.1");
 	}
 	return buf;
 }

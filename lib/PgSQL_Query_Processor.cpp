@@ -189,7 +189,7 @@ PgSQL_Rule_Text::PgSQL_Rule_Text(const PgSQL_Query_Processor_Rule_t* pqr) {
 
 	char buf[20];
 	if (pqr->digest) {
-		sprintf(buf, "0x%016llX", (long long unsigned int)pqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)pqr->digest);
 		pta[8] = strdup(buf);
 	}
 	else {
@@ -375,25 +375,21 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(int rule_id,
 	newQR->regex_engine2 = NULL;
 	newQR->hits = 0;
 
-	newQR->client_addr_wildcard_position = -1; // not existing by default
 	newQR->client_addr = (client_addr ? strdup(client_addr) : NULL);
-	if (newQR->client_addr) {
-		char* pct = strchr(newQR->client_addr, '%');
-		if (pct) { // there is a wildcard . We assume Admin did already all the input validation
-			if (pct == newQR->client_addr) {
-				// client_addr == '%'
-				// % is at the end of the string, but also at the beginning
-				// becoming a catch all
-				newQR->client_addr_wildcard_position = 0;
-			}
-			else {
-				// this math is valid also if (pct == newQR->client_addr)
-				// but we separate it to clarify that client_addr_wildcard_position is a match all
-				newQR->client_addr_wildcard_position = strlen(newQR->client_addr) - strlen(pct);
-			}
-		}
+	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, QP_ADDR_FIELD_CLIENT) == false) {
+		// Admin rejects a malformed value before we get here, so this only
+		// fires on a rule that bypassed validation. Keep the address but leave
+		// the predicate inert rather than matching on a partial parse.
+		proxy_error("Query rule with rule_id %d has an invalid client_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (proxy_addr ? strdup(proxy_addr) : NULL);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		// Same reasoning as the client_addr case above: the predicate is left
+		// inert and the failure is reported, not silently ignored.
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = proxy_port;
 	newQR->log = log;
 	newQR->digest = 0;
@@ -449,7 +445,7 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 
 	char buf[20];
 	if (pqr->digest) { // not 0
-		sprintf(buf, "0x%016llX", (long long unsigned int)pqr->digest);
+		snprintf(buf, sizeof(buf), "0x%016llX", (long long unsigned int)pqr->digest);
 	}
 
 	std::string re_mod;
@@ -510,25 +506,16 @@ PgSQL_Query_Processor_Rule_t* PgSQL_Query_Processor::new_query_rule(const PgSQL_
 	newQR->regex_engine2 = NULL;
 	newQR->hits = 0;
 
-	newQR->client_addr_wildcard_position = -1; // not existing by default
 	newQR->client_addr = (pqr->client_addr ? strdup(pqr->client_addr) : NULL);
-	if (newQR->client_addr) {
-		char* pct = strchr(newQR->client_addr, '%');
-		if (pct) { // there is a wildcard . We assume Admin did already all the input validation
-			if (pct == newQR->client_addr) {
-				// client_addr == '%'
-				// % is at the end of the string, but also at the beginning
-				// becoming a catch all
-				newQR->client_addr_wildcard_position = 0;
-			}
-			else {
-				// this math is valid also if (pct == newQR->client_addr)
-				// but we separate it to clarify that client_addr_wildcard_position is a match all
-				newQR->client_addr_wildcard_position = strlen(newQR->client_addr) - strlen(pct);
-			}
-		}
+	if (qp_addr_predicate_init(&newQR->client_addr_pred, newQR->client_addr, QP_ADDR_FIELD_CLIENT) == false) {
+		proxy_error("Query rule with rule_id %d has an invalid client_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->client_addr);
 	}
 	newQR->proxy_addr = (pqr->proxy_addr ? strdup(pqr->proxy_addr) : NULL);
+	if (qp_addr_predicate_init(&newQR->proxy_addr_pred, newQR->proxy_addr, QP_ADDR_FIELD_PROXY) == false) {
+		proxy_error("Query rule with rule_id %d has an invalid proxy_addr, address matching disabled: %s\n",
+			newQR->rule_id, newQR->proxy_addr);
+	}
 	newQR->proxy_port = pqr->proxy_port;
 	newQR->log = pqr->log;
 	newQR->digest = 0;
@@ -657,6 +644,87 @@ SQLite3_result* PgSQL_Query_Processor::get_stats_commands_counters() {
 	return result;
 }
 
+/**
+ * @brief Classifies what follows a leading SELECT.
+ *
+ * ProxySQL intercepts pg_cancel_backend() and pg_terminate_backend() itself, because the
+ * PID a client passes is the ProxySQL session id that SELECT pg_backend_pid() returned.
+ * The function name must be complete and followed by '(' (whitespace and comments allowed
+ * in between) or by the end of the text, which is where a 32-byte query prefix or a legacy token can stop: a longer
+ * identifier such as pg_cancel_backend_count() or a column named pg_cancel_backend stays a
+ * SELECT.
+ *
+ * @param p Text right after SELECT and the spaces that follow it. Must not be NULL.
+ */
+static enum PGSQL_QUERY_command select_target_command_type(const char* p) {
+	enum PGSQL_QUERY_command cmd = PGSQL_QUERY_SELECT;
+	size_t len = 0;
+	if (pgsql_stmt_first_keyword_is(p, "pg_cancel_backend")) {
+		cmd = PGSQL_QUERY_CANCEL_BACKEND;
+		len = sizeof("pg_cancel_backend") - 1;
+	} else if (pgsql_stmt_first_keyword_is(p, "pg_terminate_backend")) {
+		cmd = PGSQL_QUERY_TERMINATE_BACKEND;
+		len = sizeof("pg_terminate_backend") - 1;
+	} else {
+		return PGSQL_QUERY_SELECT;
+	}
+	// PostgreSQL takes a comment for whitespace, so "pg_cancel_backend/*x*/(1)" is a call too.
+	// Nothing after the name, or a comment the text ends inside (a cut prefix), counts like
+	// the end of the text.
+	p = pgsql_stmt_skip_lead(p + len, NULL);
+	return (p == NULL || *p == '(') ? cmd : PGSQL_QUERY_SELECT;
+}
+
+static enum PGSQL_QUERY_command legacy_command_type(const char* text);
+
+/**
+ * @brief Where the first keyword of @p text starts: past whitespace of any kind, comments,
+ * '(' and ';'. NULL when there is no keyword.
+ */
+static const char* first_keyword(const char* text) {
+	const char* p = pgsql_stmt_skip_lead(text, NULL);
+	while (p != NULL && (*p == '(' || *p == ';')) {
+		p = pgsql_stmt_skip_lead(p + 1, NULL);
+	}
+	return p;
+}
+
+/**
+ * @brief Refines a SELECT or UNKNOWN reported by ParserSQL with the legacy classification (#6422).
+ *
+ * ParserSQL reports SELECT for "SELECT pg_cancel_backend(N)" and for data-modifying CTEs
+ * ("WITH d AS (DELETE ... RETURNING *) SELECT ..."). The session must still intercept
+ * cancel/terminate, and a CTE must not be treated as a read. ParserSQL reports UNKNOWN when
+ * it cannot parse the text, as with "SELECT pg_terminate_backend(1234" from the 32-byte
+ * query prefix used without digests.
+ *
+ * Leading whitespace of any kind, comments (kept in the digest by
+ * pgsql-query_digests_keep_comment, always present in a raw query prefix), '(' and ';' are
+ * skipped first, in place, so that the text is not copied. When the first keyword is SELECT
+ * the result is promoted to CANCEL_BACKEND / TERMINATE_BACKEND if it is one of the
+ * intercepted calls, and is a SELECT otherwise: the digest tokenizer turns PostgreSQL
+ * arguments into '?' placeholders, which ParserSQL cannot parse, so its UNKNOWN must not
+ * demote a plain SELECT. Any other text reported as SELECT gets the legacy classification,
+ * which is what tells a CTE apart.
+ *
+ * @param ret Classification from ParserSQL: PGSQL_QUERY_SELECT or PGSQL_QUERY_UNKNOWN.
+ * @param text Digest text or query prefix. Must not be NULL.
+ */
+static enum PGSQL_QUERY_command parser_refine_command_type(enum PGSQL_QUERY_command ret, const char* text) {
+	const char* p = first_keyword(text);
+	if (p == NULL) return ret;
+	if (pgsql_stmt_first_keyword_is(p, "SELECT") == false) {
+		return ret == PGSQL_QUERY_SELECT ? legacy_command_type(p) : ret;
+	}
+	p = pgsql_stmt_skip_lead(p + sizeof("SELECT") - 1, NULL);
+	if (p == NULL) return PGSQL_QUERY_SELECT;
+	const enum PGSQL_QUERY_command target = select_target_command_type(p);
+	// A SELECT the digest parser could not classify (e.g. the tokenizer turned its
+	// arguments into '?', which is not PostgreSQL syntax) is still a SELECT once the
+	// first keyword says so. Only the two intercepted calls are promoted.
+	return target != PGSQL_QUERY_SELECT ? target : PGSQL_QUERY_SELECT;
+}
+
 enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_par_t* qp) {
 	char* text = NULL;
 	if (qp->digest_text) {
@@ -669,12 +737,66 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
 
 	if (pgsql_thread___query_processor_parser == 1) {
-		if (text) {
-			return parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
+#ifndef PROXYSQL31
+		if (qp->parsersql_command_type >= 0) {
+			ret = static_cast<PGSQL_QUERY_command>(qp->parsersql_command_type);
+		} else
+		{
+			// Prefix-only callers have no digest parse to reuse.
+			if (text) {
+				ret = parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
+			}
 		}
-		return PGSQL_QUERY_UNKNOWN;
+		if (text && (ret == PGSQL_QUERY_SELECT || ret == PGSQL_QUERY_UNKNOWN)) {
+			ret = parser_refine_command_type(ret, text);
+		}
+#else
+		// ParserSQL is asked only where its answer can differ: a SELECT is decided by
+		// parser_refine_command_type(), and the legacy classifier names the rest the same way except
+		// CREATE/ALTER/DROP (no subtypes in ParserSQL) and ROLLBACK (ROLLBACK TO SAVEPOINT).
+		// pgsql_parser_command_type_unit-t fails if a ParserSQL change breaks that.
+		if (text) {
+			ret = parser_refine_command_type(PGSQL_QUERY_UNKNOWN, text);
+			if (ret == PGSQL_QUERY_UNKNOWN) {
+				const char* p = first_keyword(text);
+				if (pgsql_stmt_first_keyword_is(p, "CREATE") == false && pgsql_stmt_first_keyword_is(p, "ALTER") == false &&
+					pgsql_stmt_first_keyword_is(p, "DROP") == false && pgsql_stmt_first_keyword_is(p, "ROLLBACK") == false) {
+					ret = legacy_command_type(text);
+				}
+			}
+			if (ret == PGSQL_QUERY_UNKNOWN) {
+				ret = parsersql_command_type_pgsql(text, strlen(text)); // NOSONAR
+				if (ret == PGSQL_QUERY_SELECT || ret == PGSQL_QUERY_UNKNOWN) {
+					ret = parser_refine_command_type(ret, text);
+				}
+			}
+		}
+#endif
+		// ParserSQL cannot parse the tokenizer digest when it holds '?' placeholders or
+		// statements outside its grammar. Fall back to the legacy classifier, as MySQL
+		// does, so the command counters keep a meaningful value (#6454).
+		if (ret == PGSQL_QUERY_UNKNOWN) {
+			ret = legacy_command_type(text);
+		}
+	} else {
+		ret = legacy_command_type(text);
 	}
 
+	// query_prefix is only set when digests are disabled; it is owned here in both modes
+	if (qp->query_prefix) {
+		free(qp->query_prefix);
+		qp->query_prefix = NULL;
+	}
+	return ret;
+}
+
+/**
+ * @brief Tokenizer-based classification used when pgsql-query_processor_parser=0.
+ *
+ * @param text Digest text, or the query prefix when digests are disabled. May be NULL.
+ */
+static enum PGSQL_QUERY_command legacy_command_type(const char* text) {
+	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
 	char c1;
 
 	tokenizer_t tok;
@@ -1109,9 +1231,7 @@ __remove_parenthesis:
 		if (!strcasecmp("SELECT", token)) {
 			token = (char*)tokenize(&tok);
 			if (token == NULL) break;
-			if (!strncasecmp("pg_cancel_backend", token, sizeof("pg_cancel_backend") - 1)) ret = PGSQL_QUERY_CANCEL_BACKEND;
-			else if (!strncasecmp("pg_terminate_backend", token, sizeof("pg_terminate_backend") - 1)) ret = PGSQL_QUERY_TERMINATE_BACKEND;
-			else ret = PGSQL_QUERY_SELECT;
+			ret = select_target_command_type(token);
 			break;
 		}
 		if (!strcasecmp("SET", token)) {
@@ -1163,9 +1283,5 @@ __remove_parenthesis:
 
 __exit__query_parser_command_type:
 	free_tokenizer(&tok);
-	if (qp->query_prefix) {
-		free(qp->query_prefix);
-		qp->query_prefix = NULL;
-	}
 	return ret;
 }

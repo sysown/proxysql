@@ -9,6 +9,7 @@
 #include <ctime>
 #include <functional>
 #include <cstring>
+#include <memory>
 #include "../deps/json/json.hpp"
 
 using json = nlohmann::json;
@@ -56,9 +57,8 @@ Discovery_Schema::~Discovery_Schema() {
 int Discovery_Schema::init() {
 	// Initialize database connection
 	db = new SQLite3DB();
-	char path_buf[db_path.size() + 1];
-	strcpy(path_buf, db_path.c_str());
-	int rc = db->open(path_buf, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	std::string path_buf = db_path;
+	int rc = db->open(&path_buf[0], SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
 	if (rc != SQLITE_OK) {
 		proxy_error("Failed to open discovery catalog database at %s: %d\n", db_path.c_str(), rc);
 		return -1;
@@ -1313,6 +1313,8 @@ int Discovery_Schema::rebuild_fts_index(int run_id) {
 				} catch (...) {
 					// Ignore parse errors
 				}
+			}
+			if (prof_result) {
 				delete prof_result;
 			}
 
@@ -2492,7 +2494,10 @@ int Discovery_Schema::log_query_tool_call(
 // ============================================================
 
 void Discovery_Schema::load_mcp_query_rules(SQLite3_result* resultset) {
-	if (!resultset || resultset->rows_count == 0) {
+	// Ownership is transferred by MCP_Threads_Handler. Keep that contract on
+	// every return path, including an empty snapshot.
+	std::unique_ptr<SQLite3_result> result_guard(resultset);
+	if (!resultset) {
 		proxy_info("No MCP query rules to load\n");
 		return;
 	}

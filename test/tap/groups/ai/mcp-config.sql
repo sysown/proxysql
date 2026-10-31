@@ -3,11 +3,24 @@
 -- Variables are substituted using envsubst before execution
 
 -- Configure MCP variables
-SET mcp-port='${TAP_MCPPORT}';
-SET mcp-use_ssl='true';
+SET mcp-port='${TAP_MCP_PORT}';
+SET mcp-use_ssl='false';
+SET mcp-config_endpoint_auth='${TAP_MCP_AUTH_TOKEN_SQL}';
+SET mcp-stats_endpoint_auth='${TAP_MCP_AUTH_TOKEN_SQL}';
+SET mcp-query_endpoint_auth='${TAP_MCP_AUTH_TOKEN_SQL}';
+SET mcp-admin_endpoint_auth='${TAP_MCP_AUTH_TOKEN_SQL}';
+SET mcp-cache_endpoint_auth='${TAP_MCP_AUTH_TOKEN_SQL}';
+SET mcp-ai_endpoint_auth='${TAP_MCP_AUTH_TOKEN_SQL}';
+SET mcp-rag_endpoint_auth='${TAP_MCP_AUTH_TOKEN_SQL}';
 SET mcp-enabled='false';
 LOAD MCP VARIABLES TO RUNTIME;
 SAVE MCP VARIABLES TO DISK;
+
+-- Initialize the AI feature manager before the MCP listener constructs the
+-- AI and RAG endpoint handlers.
+SET genai-enabled='true';
+LOAD GENAI VARIABLES TO RUNTIME;
+SAVE GENAI VARIABLES TO DISK;
 
 -- Configure MySQL servers for MCP
 DELETE FROM mysql_servers WHERE hostgroup_id IN (0, ${MCP_MYSQL_HOSTGROUP_ID});

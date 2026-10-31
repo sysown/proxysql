@@ -187,6 +187,38 @@ void test_malformed_packet(const std::string& test_name,
 }
 
 /**
+ * @brief A GSSAPI encryption request is well formed, so it gets an answer rather than a close
+ *
+ * ProxySQL does not speak GSSAPI encryption. The protocol's answer for that is a single 'N',
+ * which lets the client fall back to SSL or plaintext on the same connection, and it is what
+ * PostgreSQL sends. Closing the connection instead strands a client that only offered it.
+ */
+void test_gss_encrypt_request(const std::string& test_name, const std::string& host, int port) {
+    int sock = create_raw_connection(host, port);
+    if (sock < 0) {
+        ok(0, "%s: Failed to create connection", test_name.c_str());
+        return;
+    }
+
+    const std::vector<uint8_t> data = {0x00, 0x00, 0x00, 0x08,
+        (PG_GSS_ENCRYPT_CODE >> 24) & 0xFF, (PG_GSS_ENCRYPT_CODE >> 16) & 0xFF,
+        (PG_GSS_ENCRYPT_CODE >> 8) & 0xFF, PG_GSS_ENCRYPT_CODE & 0xFF};
+
+    if (!send_exact(sock, data.data(), data.size())) {
+        close(sock);
+        ok(0, "%s: Failed to send data", test_name.c_str());
+        return;
+    }
+
+    char reply = 0;
+    const bool answered = recv_exact(sock, &reply, 1);
+    ok(answered && reply == 'N', "%s: refused with 'N', connection left usable (got '%c')",
+       test_name.c_str(), reply);
+
+    close(sock);
+}
+
+/**
  * @brief Verify ProxySQL is still operational after malformed packet test
  */
 bool verify_proxysql_alive(const CommandLine& cl, Connection_type_t conn_type) {
@@ -405,13 +437,8 @@ void run_malformed_packet_tests(const std::string& host, int port, const char* t
         {0x00, 0x00, 0x00, 0x08,
          0xDE, 0xAD, 0xBE, 0xEF});
 
-    // Test 15: GSS encrypt request (not supported)
-    test_malformed_packet("GSS encrypt request", host, port,
-        {0x00, 0x00, 0x00, 0x08,
-         (PG_GSS_ENCRYPT_CODE >> 24) & 0xFF,
-         (PG_GSS_ENCRYPT_CODE >> 16) & 0xFF,
-         (PG_GSS_ENCRYPT_CODE >> 8) & 0xFF,
-         PG_GSS_ENCRYPT_CODE & 0xFF});
+    // Test 15: GSS encrypt request. Well formed, so it is answered, not dropped.
+    test_gss_encrypt_request("GSS encrypt request", host, port);
 
     // ==================== CANCEL REQUEST TESTS ====================
 
@@ -577,7 +604,8 @@ void test_malformed_packet_phase2(const std::string& test_name,
                                    int port,
                                    const std::string& username,
                                    const std::string& password,
-                                   const std::vector<uint8_t>& malformed_data) {
+                                   const std::vector<uint8_t>& malformed_data,
+                                   bool accept_ready_for_query = false) {
 
     // Use libpq to establish authenticated connection, then extract socket
     std::stringstream conninfo;
@@ -618,9 +646,12 @@ void test_malformed_packet_phase2(const std::string& test_name,
         return;
     }
 
-    // Step 7: Wait for response to the malformed packet
-    // Keep reading messages until we get an error response, connection close, or timeout
+    // Step 7: Wait for a response to the packet.
+    // Most cases expect an error response, connection close, or timeout. The
+    // rapid-Sync stress case also accepts ReadyForQuery, which is a normal
+    // response to a complete Sync frame.
     bool got_error_response = false;
+    bool got_ready_for_query = false;
     bool connection_closed = false;
     bool timeout = false;
     char first_byte = 0;
@@ -655,14 +686,18 @@ void test_malformed_packet_phase2(const std::string& test_name,
             got_error_response = true;
             break;
         }
+        if (accept_ready_for_query && msg_type == 'Z') {
+            got_ready_for_query = true;
+            break;
+        }
         // Continue reading if it's other protocol traffic
     }
 
-    bool handled_gracefully = connection_closed || timeout || got_error_response;
+    bool handled_gracefully = connection_closed || timeout || got_error_response || got_ready_for_query;
 
-    ok(handled_gracefully, "%s: Phase 2 malformed packet handled (closed=%d, timeout=%d, error=%d, first=0x%02X)",
+    ok(handled_gracefully, "%s: Phase 2 packet handled (closed=%d, timeout=%d, error=%d, ready=%d, first=0x%02X)",
        test_name.c_str(), (int)connection_closed, (int)timeout, (int)got_error_response,
-       first_byte);
+       (int)got_ready_for_query, first_byte);
 
     // Clean up libpq connection (closes socket internally)
     PQfinish(conn);
@@ -827,13 +862,14 @@ void run_phase2_malformed_packet_tests(const std::string& host, int port,
     test_malformed_packet_phase2("Multiple small queries",
         host, port, username, password, multi_pkt);
 
-    // Test 25: Rapid fire empty packets
+    // Test 25: Rapid-fire complete Sync packets. Sync is not malformed; a
+    // ReadyForQuery response is the expected graceful outcome.
     std::vector<uint8_t> rapid;
     for (int i = 0; i < 100; i++) {
         rapid.insert(rapid.end(), {'S', 0x00, 0x00, 0x00, 0x04});
     }
-    test_malformed_packet_phase2("Rapid fire sync packets",
-        host, port, username, password, rapid);
+    test_malformed_packet_phase2("Rapid fire Sync packets",
+        host, port, username, password, rapid, true);
 
     // ==================== DATA TYPE OVERFLOW TESTS ====================
 

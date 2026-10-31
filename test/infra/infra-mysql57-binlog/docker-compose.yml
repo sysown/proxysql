@@ -132,7 +132,7 @@ services:
 
   orc1:
     hostname: orc1.${INFRA}
-    image: proxysql/ci-infra:openark-orchestrator
+    image: proxysql/ci-infra:percona-orchestrator
     container_name: ${COMPOSE_PROJECT}-orc1-1
     volumes:
       - ./conf/orchestrator/orc1/orchestrator.conf.json:/etc/orchestrator.conf.json
@@ -149,7 +149,7 @@ services:
 
   orc2:
     hostname: orc2.${INFRA}
-    image: proxysql/ci-infra:openark-orchestrator
+    image: proxysql/ci-infra:percona-orchestrator
     container_name: ${COMPOSE_PROJECT}-orc2-1
     volumes:
       - ./conf/orchestrator/orc2/orchestrator.conf.json:/etc/orchestrator.conf.json
@@ -166,7 +166,7 @@ services:
 
   orc3:
     hostname: orc3.${INFRA}
-    image: proxysql/ci-infra:openark-orchestrator
+    image: proxysql/ci-infra:percona-orchestrator
     container_name: ${COMPOSE_PROJECT}-orc3-1
     volumes:
       - ./conf/orchestrator/orc3/orchestrator.conf.json:/etc/orchestrator.conf.json

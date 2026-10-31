@@ -9,6 +9,20 @@ endif
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
+# Keep shared core class layouts identical in standalone subdirectory builds.
+PROXYSQLCLICKHOUSE ?= 1
+PSQLCH := $(if $(filter 1,$(PROXYSQLCLICKHOUSE)),-DPROXYSQLCLICKHOUSE)
+
+ifeq ($(UNAME_S),Darwin)
+SHLIB_EXT  := .dylib
+SHARED_FLAGS := -dynamiclib
+FORCE_LOAD := -force_load
+else
+SHLIB_EXT  := .so
+SHARED_FLAGS := -shared
+FORCE_LOAD := -Wl,--whole-archive
+endif
+
 DISTRO := $(shell if [ -f /etc/os-release ]; then grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"'; else echo "unknown"; fi)
 
 CENTOSVER := Unknown
@@ -34,7 +48,7 @@ STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPL
 
 WGCOV :=
 ifeq ($(WITHGCOV),1)
-	WGCOV := -DWITHGCOV -lgcov --coverage
+	WGCOV := -DWITHGCOV -lgcov --coverage -fprofile-update=atomic
 endif
 
 WASAN :=

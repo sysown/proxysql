@@ -3,7 +3,7 @@
  * @brief Parser for PostgreSQL ErrorResponse message fields.
  *
  * Extracted for unit testability. Scans ErrorResponse payload for
- * SQLSTATE ('C') and message ('M') fields.
+ * SQLSTATE ('C'), message ('M') and severity ('V', else 'S') fields.
  *
  * @see PostgreSQL Protocol: ErrorResponse message format
  */
@@ -22,6 +22,8 @@ struct PgSQLErrorResult {
     char sqlstate[6];         ///< 5-char SQLSTATE + null terminator (empty if not found).
     const char* message;      ///< Pointer into payload at 'M' field value (null if not found).
     size_t message_len;       ///< Length of message string.
+    const char* severity;     ///< Pointer into payload at 'V' (not localized), else 'S' (null if neither).
+    size_t severity_len;      ///< Length of severity string.
 };
 
 /**

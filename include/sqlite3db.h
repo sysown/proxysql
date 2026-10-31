@@ -11,12 +11,19 @@
 #include <utility>
 #define PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
 
+// Retries a step while the database is locked, backing off exponentially from
+// 100us to a 10ms cap. The previous fixed 100us sleep meant a lock held for any
+// noticeable time was waited out at ~10k wakeups/sec; the cap keeps a long wait
+// from burning a core while staying responsive when contention is brief.
 #ifndef SAFE_SQLITE3_STEP2
 #define SAFE_SQLITE3_STEP2(_stmt) do {\
+  unsigned int _backoff_us = 100;\
   do {\
     rc=(*proxy_sqlite3_step)(_stmt);\
     if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
-      usleep(100);\
+      usleep(_backoff_us);\
+      _backoff_us *= 2;\
+      if (_backoff_us > 10000) { _backoff_us = 10000; }\
     }\
   } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
@@ -159,6 +166,7 @@ class SQLite3_row {
 	~SQLite3_row();
 	void add_fields(sqlite3_stmt *stmt);
 	void add_fields(char **_fields);
+	bool add_fields(char **_fields, const unsigned long *_sizes);
 };
 
 class SQLite3_column {
@@ -186,6 +194,7 @@ class SQLite3_result {
 	void add_column_definition(int a, const char *b);
 	int add_row(sqlite3_stmt *stmt, bool skip=false);
 	int add_row(char **_fields);
+	int add_row(char **_fields, const unsigned long *_sizes);
 	int add_row(const char **_fields) { return add_row((char **)_fields); }
 	int add_row(SQLite3_row *old_row);
 	int add_row(const char* _field, ...);
@@ -212,14 +221,19 @@ class SQLite3DB {
 	private:
 	char *url;
 	sqlite3 *db;
+	bool quarantined;
 	pthread_rwlock_t rwlock;
 	public:
 	char *get_url() const { return url; }
-	sqlite3 *get_db() const { return db; }
+	sqlite3 *get_db() const { return quarantined ? nullptr : db; }
 	int assert_on_error;
 	SQLite3DB();
 	~SQLite3DB();
 	int open(char *, int);
+	// Permanently disables a connection whose transactional state cannot be
+	// recovered. sqlite3_close_v2 rolls back the live transaction before the
+	// handle is made unavailable to later Admin operations.
+	bool quarantine();
 
 	void rdlock();
 	void rdunlock();

@@ -181,7 +181,7 @@ Where:
 | `mcp-cache_endpoint_auth` | (empty) | Auth token for /cache endpoint |
 | `mcp-ai_endpoint_auth` | (empty) | Auth token for /ai endpoint |
 | `mcp-timeout_ms` | 30000 | Query timeout in milliseconds |
-| `runtime_mcp_target_profiles` | n/a | Logical targets (`target_id`, protocol, hostgroup, auth profile) |
+| `runtime_mcp_target_profiles` | n/a | Logical targets (`target_id`, protocol, hostgroup, auth profile) plus `effective` / `skip_reason`, which say whether the MCP query endpoint can actually use the row |
 | `runtime_mcp_auth_profiles` | n/a | Backend credentials bound to target profiles |
 
 **RAG Configuration Variables:**
