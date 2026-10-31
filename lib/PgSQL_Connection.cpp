@@ -867,6 +867,12 @@ handler_again:
 			if (!exit_pipeline_mode && has_error) {
 				NEXT_IMMEDIATE(ASYNC_RESYNC_START);
 			}
+
+			// The backend is in sync again. In a part ended with Flush the client's ReadyForQuery comes
+			// with its own Sync.
+			if (myds->sess->is_extq_flush_segment()) {
+				NEXT_IMMEDIATE(fetch_result_end_st);
+			}
 		}
 
 		// finally add ready for query packet
@@ -1097,7 +1103,7 @@ handler_again:
 			update_bytes_sent(5);
 		}
 		else {
-			update_bytes_sent(reset_session_in_txn == false ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5));
+			update_bytes_sent((reset_session_in_txn == false && reset_session_rollback_only == false) ? (sizeof("DISCARD ALL") + 5) : (sizeof("ROLLBACK") + 5));
 		}
 		if (async_exit_status) {
 			next_event(ASYNC_RESET_SESSION_CONT);
@@ -1160,6 +1166,57 @@ handler_again:
 	case ASYNC_RESET_SESSION_FAILED:
 	case ASYNC_RESET_SESSION_SUCCESSFUL:
 	case ASYNC_RESET_SESSION_TIMEOUT:
+		break;
+
+	case ASYNC_PING_START:
+		ping_start();
+		if (async_exit_status) {
+			next_event(ASYNC_PING_CONT);
+		} else {
+			if (is_error_present()) {
+				NEXT_IMMEDIATE(ASYNC_PING_END);
+			}
+			NEXT_IMMEDIATE(ASYNC_PING_CONT);
+		}
+		break;
+	case ASYNC_PING_CONT:
+	{
+		if (event) {
+			ping_cont(event);
+		}
+		if (async_exit_status) {
+			// pgsql-ping_timeout_server, set by the thread that started the ping.
+			if (myds->wait_until != 0 && myds->sess->thread->curtime >= myds->wait_until) {
+				NEXT_IMMEDIATE(ASYNC_PING_TIMEOUT);
+			}
+			next_event(ASYNC_PING_CONT);
+			break;
+		}
+		if (is_error_present()) {
+			NEXT_IMMEDIATE(ASYNC_PING_END);
+		}
+		// libpq only; a native ping keeps no result.
+		PGresult* result = get_result();
+		if (result) {
+			if (PQresultStatus(result) != PGRES_EMPTY_QUERY) {
+				set_error_from_result(result, PGSQL_ERROR_FIELD_ALL);
+			}
+			PQclear(result);
+			NEXT_IMMEDIATE(ASYNC_PING_CONT);
+		}
+		NEXT_IMMEDIATE(ASYNC_PING_END);
+	}
+	break;
+	case ASYNC_PING_END:
+		PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::unhandled_notice_cb, this);
+		if (is_error_present()) {
+			NEXT_IMMEDIATE(ASYNC_PING_FAILED);
+		}
+		NEXT_IMMEDIATE(ASYNC_PING_SUCCESSFUL);
+		break;
+	case ASYNC_PING_FAILED:
+	case ASYNC_PING_SUCCESSFUL:
+	case ASYNC_PING_TIMEOUT:
 		break;
 
 	default:
@@ -1770,6 +1827,18 @@ void PgSQL_Connection::native_result_fatal(const char* code, const char* message
 	native_result_aborted = true;
 	native_teardown();
 	native_result_complete = true;   // nothing more will come from this connection
+}
+
+// A killed backend sends its FATAL (57P01, 57P05) just before it closes. Keep that as the
+// reason; the close on its own only says the backend went away.
+void PgSQL_Connection::native_result_backend_closed() {
+	if (!is_error_present()) {
+		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed the connection");
+		return;
+	}
+	const std::string code = get_error_code_str();
+	const std::string message = get_error_message();
+	native_result_fatal(code.c_str(), message.c_str());
 }
 
 // A failed send() after login means the socket is dead (ECONNRESET / EPIPE), so it gets the
@@ -3838,11 +3907,13 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// Sync error recovery above).
 				if (t == 'Z') {
 					const bool has_error = (query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_ERROR) != 0;
-					if (!myds->sess->is_extended_query_ready_for_query() && !has_error) {
+					// Not the client's after an error in a part ended with Flush: its Sync comes later.
+					const bool implicit = myds->sess->is_extq_flush_segment();
+					if (implicit || (!myds->sess->is_extended_query_frame_empty() && !has_error)) {
 						// An implicit Sync before a simple query ends the backend
 						// extended cycle, but the client awaits the simple query's
-						// ReadyForQuery. Match the libpq path while still recording
-						// the backend transaction state and flushing its result.
+						// ReadyForQuery, after an error too. Match the libpq path while
+						// still recording the backend transaction state and flushing its result.
 						if (msg.payload_len >= 1) set_ready_for_query_status((char)msg.payload[0]);
 						query_result->buffer_to_PSarrayOut();
 					} else {
@@ -4291,14 +4362,11 @@ int PgSQL_Connection::async_reset_session(short event) {
 // the calling function should check pgsql error in pgsql struct
 int PgSQL_Connection::async_ping(short event) {
 	PROXY_TRACE();
-	// In native_mode pgsql_conn is permanently NULL; the libpq ping path is
-	// not applicable. Pretend the ping succeeded; the native path keeps its
-	// own liveness state via the socket readiness callback.
-	if (native_mode) {
-		async_state_machine = ASYNC_PING_SUCCESSFUL;
-		return 0;
-	}
-	assert(pgsql_conn);
+	// A real round trip, like MySQL's COM_PING: an empty query and its ReadyForQuery.
+	// A backend killed while pooled answers with its FATAL or a closed socket, and one
+	// that is silently gone does not answer before pgsql-ping_timeout_server. The
+	// traffic also keeps idle_session_timeout and NAT idle timers from ending it.
+	assert(native_mode || pgsql_conn);
 	switch (async_state_machine) {
 	case ASYNC_PING_SUCCESSFUL:
 		unknown_transaction_status = false;
@@ -4313,10 +4381,18 @@ int PgSQL_Connection::async_ping(short event) {
 		break;
 	case ASYNC_IDLE:
 		async_state_machine = ASYNC_PING_START;
-	default:
-		//handler(event);
-		async_state_machine = ASYNC_PING_SUCCESSFUL;
+		// fall through
+	case ASYNC_PING_START:
+	case ASYNC_PING_CONT:
+	case ASYNC_PING_END:
+		handler(event);
 		break;
+	default:
+		// A pooled connection is always ASYNC_IDLE. Driving any other state from here
+		// would replay that step on an idle socket, so fail the ping and let the
+		// session destroy the connection instead.
+		set_error(PGSQL_ERROR_CODES::ERRCODE_INTERNAL_ERROR, "connection was not idle when pinged", false);
+		return -1;
 	}
 
 	// check again
@@ -4580,6 +4656,17 @@ void PgSQL_Connection::stmt_describe_start() {
 		const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
 		switch (extended_query_info->stmt_type) {
 		case 'P': // Portal
+			// The unnamed portal is bound only when its Execute is sent. Described on its own, its
+			// Bind goes first; the backend's BindComplete is not passed on (the client already got
+			// one).
+			if (extended_query_info->bind_msg && extended_query_info->stmt_client_portal_name &&
+				extended_query_info->stmt_client_portal_name[0] == '\0') {
+				const PtrSize_t& raw = extended_query_info->bind_msg->get_raw_pkt();
+				if (!pg_build_bind_rename(native_outbuf, (const unsigned char*)raw.ptr, raw.size, query.backend_stmt_name)) {
+					set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, "invalid Bind message", false);
+					return;
+				}
+			}
 			pg_build_describe(native_outbuf, 'P', extended_query_info->stmt_client_portal_name);
 			native_stmt_step = PG_Native_Stmt_Step::DESCRIBE_P;
 			break;
@@ -4847,9 +4934,9 @@ void PgSQL_Connection::stmt_execute_start() {
 		// Execute(portal, max_rows) — NO Bind. A Describe('P', portal) is folded in
 		// first exactly when the client asked for the portal's RowDescription
 		// (PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL, set by the Describe->Execute peek).
-		// max_rows is honored on the wire for NAMED portals only (the unnamed path below
-		// always emits 0 — invariant 2). A resume Execute after PortalSuspended is just
-		// another Execute on the same portal and takes this same path.
+		// max_rows goes on the wire as the client sent it, here and on the unnamed path
+		// below. A resume Execute after PortalSuspended is just another Execute on the
+		// same portal and takes this same path.
 		native_stmt_reset_step();
 		const PgSQL_Extended_Query_Info* eqi = query.extended_query_info;
 		if ((eqi->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
@@ -4950,7 +5037,8 @@ void PgSQL_Connection::stmt_execute_start() {
 		// did not ask for Describe, preserving its original response shape.
 		pg_build_describe(native_outbuf, 'P', "");
 
-		pg_build_execute(native_outbuf, "", 0); // unnamed portal, max_rows 0 (parity phase)
+		// The unnamed portal with the client's row limit: PostgreSQL suspends it there (PortalSuspended).
+		pg_build_execute(native_outbuf, "", extended_query_info->max_rows);
 
 		const bool use_flush =
 			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
@@ -5145,8 +5233,9 @@ void PgSQL_Connection::reset_session_start() {
 		// a transaction is open, so an open one is rolled back first and DISCARD ALL
 		// goes out on the next pass.
 		reset_session_in_pipeline = false; // nothing here ever runs in pipeline mode
-		reset_session_in_txn = IsKnownActiveTransaction();
-		const char* cmd = (reset_session_in_txn == false ? "DISCARD ALL" : "ROLLBACK");
+		// Rollback only: the ROLLBACK is the whole reset, no DISCARD ALL follows it.
+		reset_session_in_txn = (reset_session_rollback_only == false) && IsKnownActiveTransaction();
+		const char* cmd = ((reset_session_in_txn || reset_session_rollback_only) ? "ROLLBACK" : "DISCARD ALL");
 		set_query(cmd, strlen(cmd));
 		query_start();
 		if (async_exit_status == PG_EVENT_NONE && is_error_present() == false) {
@@ -5173,8 +5262,8 @@ void PgSQL_Connection::reset_session_start() {
 			return;
 		}
 	} else {
-		reset_session_in_txn = IsKnownActiveTransaction();
-		if (PQsendQuery(pgsql_conn, (reset_session_in_txn == false ? "DISCARD ALL" : "ROLLBACK")) == 0) {
+		reset_session_in_txn = (reset_session_rollback_only == false) && IsKnownActiveTransaction();
+		if (PQsendQuery(pgsql_conn, ((reset_session_in_txn || reset_session_rollback_only) ? "ROLLBACK" : "DISCARD ALL")) == 0) {
 			set_error_from_PQerrorMessage();
 			proxy_error("Failed to send query. %s\n", get_error_code_with_message().c_str());
 			return;
@@ -5195,7 +5284,7 @@ void PgSQL_Connection::native_reset_session_cont() {
 	// can arrive.
 	if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
 		if (!native_flush_outbuf()) {
-			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed during reset");
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "send failed");
 			return;
 		}
 		if (!native_outbuf.empty() || !native_ssl_outbuf.empty()) {
@@ -5214,13 +5303,13 @@ void PgSQL_Connection::native_reset_session_cont() {
 				return;
 			}
 			if (r < 0) {
-				native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during reset");
+				native_result_backend_closed();
 				return;
 			}
 			continue;
 		}
 		if (fr == FRAME_ERROR) {
-			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message during reset");
+			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_PROTOCOL_VIOLATION), "malformed backend message");
 			return;
 		}
 		switch (msg.type) {
@@ -5270,6 +5359,59 @@ void PgSQL_Connection::reset_session_cont(short event) {
 		return;
 	}
 
+	pgsql_result = PQgetResult(pgsql_conn);
+}
+
+void PgSQL_Connection::ping_start() {
+	PROXY_TRACE();
+	if (native_mode) {
+		set_query("", 0);
+		query_start();
+		if (async_exit_status == PG_EVENT_NONE && is_error_present() == false) {
+			// Sent in full: what is left is the reply (see reset_session_start()).
+			async_exit_status = PG_EVENT_READ;
+		}
+		return;
+	}
+	reset_error();
+	async_exit_status = PG_EVENT_NONE;
+	PQsetNoticeReceiver(pgsql_conn, &PgSQL_Connection::notice_handler_cb, this);
+	if (PQsendQuery(pgsql_conn, "") == 0) {
+		set_error_from_PQerrorMessage();
+		return;
+	}
+	// ping_cont() flushes it once the socket is writable.
+	async_exit_status = PG_EVENT_WRITE;
+}
+
+// reset_session_cont() without its log lines: the session prints one line per dead
+// connection, from the error recorded here.
+void PgSQL_Connection::ping_cont(short event) {
+	PROXY_TRACE();
+	if (native_mode) {
+		native_reset_session_cont();
+		return;
+	}
+	async_exit_status = PG_EVENT_NONE;
+	if (event & POLLOUT) {
+		const int res = PQflush(pgsql_conn);
+		if (res < 0) {
+			set_error_from_PQerrorMessage();
+		} else {
+			async_exit_status = (res > 0) ? PG_EVENT_WRITE : PG_EVENT_READ;
+		}
+		return;
+	}
+	if (PQconsumeInput(pgsql_conn) == 0) {
+		if (is_error_present() == false) {
+			set_error_from_PQerrorMessage();
+		}
+		return;
+	}
+	if (PQisBusy(pgsql_conn)) {
+		async_exit_status = PG_EVENT_READ;
+		return;
+	}
 	pgsql_result = PQgetResult(pgsql_conn);
 }
 
@@ -5323,6 +5465,15 @@ unsigned int PgSQL_Connection::get_memory_usage() const {
 	// TODO: need to create new function in libpq
 	unsigned int memory_bytes = (16 * 1024) * 2; //PSgetMemoryUsage(pgsql_conn);
 	return /*sizeof(PGconn) +*/ memory_bytes;
+}
+
+bool PgSQL_Connection::leave_pipeline_mode() {
+	if (native_mode || PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) return true;
+	if (PQexitPipelineMode(pgsql_conn) == 0) {
+		set_error_from_PQerrorMessage();
+		return false;
+	}
+	return true;
 }
 
 char PgSQL_Connection::get_transaction_status_char() {
@@ -5692,7 +5843,8 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 	// In ProxySQL, as we are not tracking individual Advisory Locks, we will reset the status only 
 	// when we see pg_advisory_unlock_all, which releases all session-level advisory locks.
 	if (get_status(STATUS_PGSQL_CONNECTION_ADVISORY_LOCK) == false) { // we search for pg_advisory_lock* if not already set
-		if (!strncasecmp(query_digest_text, "SELECT pg_advisory_lock", sizeof("SELECT pg_advisory_lock")-1)) {
+		if (!strncasecmp(query_digest_text, "SELECT pg_advisory_lock", sizeof("SELECT pg_advisory_lock")-1) ||
+			!strncasecmp(query_digest_text, "SELECT pg_try_advisory_lock", sizeof("SELECT pg_try_advisory_lock")-1)) {
 			set_status(true, STATUS_PGSQL_CONNECTION_ADVISORY_LOCK);
 		}
 	} else {
@@ -5869,8 +6021,8 @@ int PgSQL_Connection::async_perform_resync(short event) {
 			}
 		}
 		// We just needed to know if the query was successful, not. 
-		// We discard the result.
-		if (query_result) {
+		// We discard the result, unless it answers the client's own Sync.
+		if (query_result && resync_relay == false) {
 			assert(!query_result_reuse);
 			query_result->clear();
 			query_result_reuse = query_result;
@@ -5883,7 +6035,10 @@ int PgSQL_Connection::async_perform_resync(short event) {
 		// (PQconsumeInput in fetch_result_cont()) that resync_failed has always missed too;
 		// fetch_result_start() resets error state before this drain runs for both modes,
 		// so it can't be a stale leftover here.
-		if (resync_failed || is_error_present()) {
+		// For the client's own Sync, an error the backend sent on a healthy connection (a commit
+		// that failed) is the client's answer, not a failed resync.
+		if (resync_failed || (is_error_present() &&
+			(resync_relay == false || is_connection_in_reusable_state() == false))) {
 			return -1;
 		} else {
 			async_state_machine = ASYNC_IDLE;

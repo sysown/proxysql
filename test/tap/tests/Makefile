@@ -525,6 +525,7 @@ endif
 # it is empty on Darwin where the linker has no such flag).
 PG_LITE_CLIENT_TESTS := \
 	pgsql-extended_query_protocol_test-t \
+	pgsql-extended_query_flush-t \
 	pgsql-reg_test_5273_bind_parameter_format-t \
 	pgsql-reg_test_5899_bind_zero_param_formats-t \
 	pgsql-reg_test_5300_threshold_resultset_deadlock-t \
@@ -547,6 +548,7 @@ PG_LITE_CLIENT_TESTS := \
 	pgsql-extq_rule_error_stops_batch-t \
 	pgsql-discard_all_txn_block-t \
 	pgsql-local_error_txn_state-t \
+	pgsql-reg_test_6521_cancel_idle_session_busy_poll-t \
 	pgsql-reg_test_6345_admin_extended_query_sync-t \
 	pgsql-reg_test_6349_auth_anti_enumeration-t \
 	test_ffto_pgsql_pipeline-t \
@@ -572,7 +574,8 @@ PGSQL_MOCK_BACKEND_TESTS := \
 	pgsql-native_hostile_backend-t \
 	pgsql-native_scram_mechanism-t \
 	pgsql-native_notify-t \
-	pgsql-native_send_failure_pool-t
+	pgsql-native_send_failure_pool-t \
+	pgsql-idle_ping_dead_conns-t
 
 $(PGSQL_MOCK_BACKEND_TESTS): %: %.cpp pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< pgsql_mock_backend.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
@@ -667,4 +670,4 @@ parsersql_digest_test-t: parsersql_digest_test
 	ln -fs parsersql_digest_test parsersql_digest_test-t
 
 # These tests query the target server capability or active backend mode.
-pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-local_error_txn_state-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t pgsql-reg_test_6375_offline_retry-t pgsql-extended_query_protocol_test-t pgsql-unsupported_feature_test-t: pgsql_native_tier.h
+pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-local_error_txn_state-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t pgsql-reg_test_6375_offline_retry-t pgsql-extended_query_protocol_test-t pgsql-unsupported_feature_test-t pgsql-idle_ping_dead_conns-t: pgsql_native_tier.h

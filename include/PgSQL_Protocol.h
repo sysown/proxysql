@@ -1258,7 +1258,7 @@ private:
 	// parse options parameter
 	static bool parse_options(const char* options, std::vector<std::pair<std::string, std::string>>& options_list);
 
-	PgSQL_Data_Stream** myds;
+	PgSQL_Data_Stream** myds = nullptr;
 	PgSQL_Connection_userinfo* userinfo;
 	PgSQL_Session* sess;
 	

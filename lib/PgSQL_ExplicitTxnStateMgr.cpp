@@ -363,6 +363,36 @@ char PgSQL_ExplicitTxnStateMgr::txn_end_in_digest(const char* digest) {
 	return lost != NULL ? 0 : kind;
 }
 
+bool PgSQL_ExplicitTxnStateMgr::commit_in_digest(const char* digest) {
+	const char* lost = NULL;
+	for (const char* stmt = pgsql_stmt_skip_lead(digest, &lost); stmt != NULL;
+		stmt = pgsql_digest_next_stmt(stmt, &lost)) {
+		if (pgsql_stmt_first_keyword_is(stmt, "COMMIT") || pgsql_stmt_first_keyword_is(stmt, "END")) return true;
+		// PREPARE alone is SQL PREPARE, which only creates a statement.
+		if (pgsql_stmt_first_keyword_is(stmt, "PREPARE") &&
+			pgsql_stmt_first_keyword_is(pgsql_stmt_skip_lead(stmt + sizeof("PREPARE") - 1, NULL), "TRANSACTION")) {
+			return true;
+		}
+	}
+	return lost != NULL;
+}
+
+bool PgSQL_ExplicitTxnStateMgr::commit_in_query(const char* digest, const char* query) {
+	// Same rule as pgsql_query_has_stmt_keyword(): the digest buffer is as long as the query up to
+	// query_digests_max_query_length, so only the digest of a longer query can have been cut short.
+	if (digest != NULL && *digest != '\0' &&
+		(query == NULL || strnlen(query, (size_t)pgsql_thread___query_digests_max_query_length + 1) <=
+			(size_t)pgsql_thread___query_digests_max_query_length)) {
+		return commit_in_digest(digest);
+	}
+	if (query == NULL) return true; // nothing to read: fail closed
+	char* full = pgsql_query_full_digest(query);
+	if (full == NULL) return true; // cannot be told apart: fail closed
+	const bool found = commit_in_digest(full);
+	free(full);
+	return found;
+}
+
 void PgSQL_ExplicitTxnStateMgr::sync_with_backend(bool backend_in_txn, char ended_by) {
 	if (backend_in_txn == false) {
 		if (transaction_state.empty()) return;
