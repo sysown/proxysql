@@ -14,36 +14,6 @@
 
 namespace {
 
-// Parse a "host:port" / "[host]:port" bind spec into host and port. Mirrors
-// the logic used at plugin startup — kept local to this translation unit so
-// the reconciliation helper does not depend on plugin.cpp internals.
-bool parse_bind_addr(const std::string& bind, std::string& host, int& port) {
-	if (!bind.empty() && bind[0] == '[') {
-		auto closing = bind.find(']');
-		if (closing != std::string::npos) {
-			host = bind.substr(1, closing - 1);
-			port = 33060;
-			if (closing + 1 < bind.size() && bind[closing + 1] == ':') {
-				port = std::atoi(bind.substr(closing + 2).c_str());
-			}
-			return true;
-		}
-	}
-	auto pos = bind.rfind(':');
-	if (pos == std::string::npos || pos == 0 || pos == bind.size() - 1) {
-		host = bind;
-		port = 33060;
-		return true;
-	}
-
-	host = bind.substr(0, pos);
-	port = std::atoi(bind.substr(pos + 1).c_str());
-	if (port <= 0 || port > 65535) {
-		port = 33060;
-	}
-	return true;
-}
-
 struct DesiredRoute {
 	std::string name;
 	std::string host;
@@ -88,8 +58,11 @@ void mysqlx_reconcile_listeners_impl(
 		for (auto& r : routes) {
 			DesiredRoute dr;
 			dr.name = std::move(r.first);
-			dr.port = 33060;
-			parse_bind_addr(r.second, dr.host, dr.port);
+			if (!mysqlx_parse_bind_address(r.second, dr.host, dr.port)) {
+				proxy_error("mysqlx: invalid bind '%s' for route '%s': expected an explicit port in 1..65535\n",
+					r.second.c_str(), dr.name.c_str());
+				return; // Leave current listeners intact when the desired set is invalid.
+			}
 			proxy_info("mysqlx: reconcile_listeners: desired route name='%s' host='%s' port=%d (raw bind='%s')\n",
 			           dr.name.c_str(), dr.host.c_str(), dr.port, r.second.c_str());
 			desired.push_back(std::move(dr));
