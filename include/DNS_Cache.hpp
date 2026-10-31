@@ -125,6 +125,16 @@ public:
 	* @param hostname Hostname to unpin.
 	*/
 	void unpin(const std::string& hostname);
+	/**
+	 * @brief Check if a hostname's cached IPs include the given IP.
+	 * @param hostname The hostname to look up in the cache.
+	 * @param ip The IP address to search for.
+	 * @return true if the IP is found, or if the cache is disabled, or if
+	 *         the hostname is not in the cache (no evidence of mismatch).
+	 *         Returns false only when the hostname IS cached and the IP is
+	 *         NOT among its resolved addresses.
+	 */
+	bool contains_ip(const std::string& hostname, const std::string& ip) const;
 
 private:
 	struct IP_ADDR {
