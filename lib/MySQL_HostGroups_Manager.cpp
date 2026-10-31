@@ -959,6 +959,11 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 		delete myhgc;
 	}
 	delete MyHostGroups;
+	// Reloads replace these owned snapshots, but their final versions remain
+	// until shutdown. Monitor and Admin consumers have already stopped here.
+	delete runtime_mysql_servers;
+	delete incoming_mysql_servers_v2;
+	delete mysql_servers_to_monitor;
 	delete mydb;
 	if (admindb) {
 		delete admindb;

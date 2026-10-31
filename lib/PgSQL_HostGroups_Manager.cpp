@@ -1046,6 +1046,10 @@ PgSQL_HostGroups_Manager::~PgSQL_HostGroups_Manager() {
 		delete myhgc;
 	}
 	delete MyHostGroups;
+	// Release the last owned snapshots after Monitor and Admin have stopped.
+	delete runtime_pgsql_servers;
+	delete incoming_pgsql_servers_v2;
+	delete pgsql_servers_to_monitor;
 	delete mydb;
 	if (admindb) {
 		delete admindb;
