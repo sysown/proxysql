@@ -6386,7 +6386,10 @@ bool PgSQL_Thread::Scan_Sessions_to_Kill___handle_query_cancellation(PgSQL_Sessi
 					should_kill = true;
 				}
 			}
-			if (should_kill && sess->mybe && sess->mybe->server_myds) {
+			// An idle session has nothing to cancel, and nothing there clears cancel_query:
+			// BeforePoll, which wakes at once while it is set, would spin the thread.
+			if (should_kill && sess->mybe && sess->mybe->server_myds &&
+				sess->status != WAITING_CLIENT_DATA) {
 				proxy_info("Query cancellation requested [Session ID=%u]\n", it->thread_id);
 				sess->mybe->server_myds->cancel_query = true;
 				sess->mybe->server_myds->kill_type = 1;
