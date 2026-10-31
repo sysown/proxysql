@@ -290,6 +290,14 @@ private:
 	// everywhere extended_query_phase goes back to IDLE: miss one and the next batch's
 	// lone DISCARD ALL is refused for work an already-finished batch did.
 	bool extq_backend_used { false };
+	// Whether the queued (unsynced) frame holds an Execute. A client Flush is only served,
+	// as an implicit Sync, for frames without one (see case 'H').
+	bool extq_frame_has_execute { false };
+	// The frame now running was cut short by a client Flush and is served as an implicit Sync.
+	bool extq_flush_active { false };
+	// A message run for a client Flush failed: like PostgreSQL, every message up to the client's
+	// Sync is discarded, and that Sync is answered with the ReadyForQuery held back at the error.
+	bool extq_discard_until_sync { false };
 #ifdef PROXYSQL31
 	// Candidate frame: Bind, optional Describe(portal), Execute, client Sync.
 	uint8_t extended_cache_frame_stage { 0 };
@@ -302,6 +310,9 @@ private:
 	// discarded until Sync, which is answered with a single ReadyForQuery.
 	bool admin_extq_rejected { false };
 	std::queue<PktType> extended_query_frame;
+	// The unnamed portal's Bind, held until its Execute, a replacement Bind, a Close of the
+	// portal, a client Sync or a simple Query. It outlives a frame cut short by a client Flush:
+	// the Execute for it comes in a later frame (see extq_frame_done_release_bind()).
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
 
 	// --- Buffered extended-query units (native protocol) ---
@@ -432,9 +443,12 @@ private:
 	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);
 	int handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg);
 	int handle_post_sync_execute_message(PgSQL_Execute_Message* execute_msg);
+	void generate_extq_error(const char* msg, PGSQL_ERROR_CODES code, bool track, char txn_state);
 	void handle_post_sync_error(PGSQL_ERROR_CODES errcode, const char* errmsg, bool fatal);
 	void handle_post_sync_locked_on_hostgroup_error(const char* query, int query_len);
 	void reset_extended_query_frame(bool backend_saw_error = false);
+	void extq_frame_done_release_bind();
+	void extq_reset_frame_for_error_batch();
 
 
 	//void return_proxysql_internal(PtrSize_t*);
@@ -590,6 +604,10 @@ public:
 
 	inline uint8_t get_extended_query_phase() const {
 		return extended_query_phase;
+	}
+
+	inline bool is_extq_flush_active() const {
+		return extq_flush_active;
 	}
 
 	inline bool is_extended_query_ready_for_query() const {
