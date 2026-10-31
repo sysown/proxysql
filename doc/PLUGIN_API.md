@@ -306,6 +306,18 @@ The runtime snapshot published to the controller still carries the
 configuration rows only; a controller can read the live rows with
 `proxysql_current_server_runtime_rows()`.
 
+A save from runtime into Admin MEMORY follows the same rule: discovered
+servers are runtime state, never configuration. `SAVE MYSQL|PGSQL SERVERS FROM
+RUNTIME` and the save that follows a Cluster v1 or v2 pull (with
+`cluster_mysql_servers_save_to_disk` / `cluster_pgsql_servers_save_to_disk`)
+leave the `mysql_servers` / `pgsql_servers` rows of hostgroups held by active
+claims as they are, and save the runtime rows of every other hostgroup. After a
+v1 pull those hostgroups keep the node's own rows; after a v2 pull they keep the
+peer's configuration rows, which the pull wrote before loading. The
+`runtime_mysql_servers` / `runtime_pgsql_servers` tables still show the live
+rows. The scoped save of a desired set with `memory` or `memory_and_disk`
+persistence is a separate path and still writes the rows it materializes.
+
 Limits of this rule:
 
 - Cluster: a node that installs a ready-made runtime resultset (Cluster v1 and

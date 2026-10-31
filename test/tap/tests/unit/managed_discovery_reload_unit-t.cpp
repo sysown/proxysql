@@ -82,6 +82,22 @@ void create_server_load_schema(SQLite3DB& db) {
 	db.execute("CREATE TABLE pgsql_servers_ssl_params (hostgroup_id INTEGER, hostname TEXT, port INTEGER, username TEXT)");
 }
 
+/** Admin tables written by a full save from runtime (column sets of the real save). */
+void create_server_save_schema(SQLite3DB& db) {
+	db.execute("CREATE TABLE mysql_servers (hostgroup_id INTEGER, hostname TEXT, port INTEGER, gtid_port INTEGER, status TEXT, weight INTEGER, compression INTEGER, max_connections INTEGER, max_replication_lag INTEGER, use_ssl INTEGER, max_latency_ms INTEGER, comment TEXT)");
+	db.execute("CREATE TABLE pgsql_servers (hostgroup_id INTEGER, hostname TEXT, port INTEGER, status TEXT, weight INTEGER, compression INTEGER, max_connections INTEGER, max_replication_lag INTEGER, use_ssl INTEGER, max_latency_ms INTEGER, comment TEXT)");
+	db.execute("CREATE TABLE mysql_replication_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, check_type TEXT, comment TEXT)");
+	db.execute("CREATE TABLE mysql_group_replication_hostgroups (writer_hostgroup INTEGER, backup_writer_hostgroup INTEGER, reader_hostgroup INTEGER, offline_hostgroup INTEGER, active INTEGER, max_writers INTEGER, writer_is_also_reader INTEGER, max_transactions_behind INTEGER, comment TEXT)");
+	db.execute("CREATE TABLE mysql_galera_hostgroups (writer_hostgroup INTEGER, backup_writer_hostgroup INTEGER, reader_hostgroup INTEGER, offline_hostgroup INTEGER, active INTEGER, max_writers INTEGER, writer_is_also_reader INTEGER, max_transactions_behind INTEGER, comment TEXT)");
+	db.execute("CREATE TABLE mysql_aws_aurora_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, active INTEGER, aurora_port INTEGER, domain_name TEXT, max_lag_ms INTEGER, check_interval_ms INTEGER, check_timeout_ms INTEGER, writer_is_also_reader INTEGER, new_reader_weight INTEGER, add_lag_ms INTEGER, min_lag_ms INTEGER, lag_num_checks INTEGER, autopurge_missing_checks INTEGER, comment TEXT)");
+	db.execute("CREATE TABLE mysql_aws_rds_bgd_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, green_writer_hostgroup INTEGER, green_reader_hostgroup INTEGER, active INTEGER, writer_is_also_reader INTEGER, check_interval_ms INTEGER, check_timeout_ms INTEGER, comment TEXT)");
+	db.execute("CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INTEGER, max_num_online_servers INTEGER, autocommit INTEGER, free_connections_pct INTEGER, init_connect TEXT, multiplex INTEGER, connection_warming INTEGER, throttle_connections_per_sec INTEGER, ignore_session_variables TEXT, hostgroup_settings TEXT, servers_defaults TEXT, comment TEXT)");
+	db.execute("CREATE TABLE mysql_servers_ssl_params (hostname TEXT, port INTEGER, username TEXT, ssl_ca TEXT, ssl_cert TEXT, ssl_key TEXT, ssl_capath TEXT, ssl_crl TEXT, ssl_crlpath TEXT, ssl_cipher TEXT, tls_version TEXT, comment TEXT)");
+	db.execute("CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, check_type TEXT, comment TEXT)");
+	db.execute("CREATE TABLE pgsql_hostgroup_attributes (hostgroup_id INTEGER, max_num_online_servers INTEGER, autocommit INTEGER, free_connections_pct INTEGER, init_connect TEXT, multiplex INTEGER, connection_warming INTEGER, throttle_connections_per_sec INTEGER, ignore_session_variables TEXT, hostgroup_settings TEXT, servers_defaults TEXT, comment TEXT)");
+	db.execute("CREATE TABLE pgsql_servers_ssl_params (hostname TEXT, port INTEGER, username TEXT, ssl_ca TEXT, ssl_cert TEXT, ssl_key TEXT, ssl_crl TEXT, ssl_crlpath TEXT, ssl_protocol_version_range TEXT, comment TEXT)");
+}
+
 /** Inserts one configuration row into main.mysql_servers or main.pgsql_servers. */
 void insert_config_row(SQLite3DB& db, bool mysql, uint32_t hostgroup,
 	const std::string& hostname, uint16_t port, int weight) {
@@ -196,6 +212,58 @@ bool shun(bool mysql, const std::string& hostname, uint16_t port) {
 
 std::set<uint32_t> as_set(const std::vector<uint32_t>& values) {
 	return std::set<uint32_t>(values.begin(), values.end());
+}
+
+/** "hostgroup:hostname" of every row of main.mysql_servers or main.pgsql_servers, sorted. */
+std::vector<std::string> saved_servers(SQLite3DB& db, bool mysql) {
+	char* error = nullptr;
+	int cols = 0, affected = 0;
+	SQLite3_result* raw = nullptr;
+	db.execute_statement(mysql
+		? "SELECT hostgroup_id, hostname FROM main.mysql_servers ORDER BY hostgroup_id, hostname"
+		: "SELECT hostgroup_id, hostname FROM main.pgsql_servers ORDER BY hostgroup_id, hostname",
+		&error, &cols, &affected, &raw);
+	if (error) { diag("saved_servers failed: %s", error); free(error); }
+	std::unique_ptr<SQLite3_result> rows(raw);
+	std::vector<std::string> values;
+	if (rows) for (const auto* row : rows->rows)
+		values.push_back(std::string(row->fields[0]) + ":" + row->fields[1]);
+	return values;
+}
+
+/**
+ * A save from runtime into main (Admin SAVE ... FROM RUNTIME, and the save that
+ * follows a Cluster pull) leaves the configuration rows of claimed hostgroups
+ * as they are: the live discovered servers there are runtime state, never
+ * configuration. Claim A holds 901/902; 99 is unclaimed.
+ */
+void test_save_keeps_claimed_configuration(bool mysql, uint16_t port) {
+	const char* label = mysql ? "MySQL" : "PostgreSQL";
+	SQLite3DB save_db;
+	char memory_db[] = ":memory:";
+	save_db.open(memory_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	create_server_save_schema(save_db);
+	insert_config_row(save_db, mysql, 901, "configured-writer.example", port, 1);
+	insert_config_row(save_db, mysql, 902, "configured-reader.example", port, 1);
+	insert_config_row(save_db, mysql, 99, "old-plain.example", port, 1);
+	SQLite3DB* admin_db = GloAdmin->admindb;
+	GloAdmin->admindb = &save_db;
+	if (mysql) {
+		GloAdmin->mysql_servers_wrlock();
+		GloAdmin->save_mysql_servers_runtime_to_database(false);
+		GloAdmin->mysql_servers_wrunlock();
+	} else {
+		GloAdmin->pgsql_servers_wrlock();
+		GloAdmin->save_pgsql_servers_runtime_to_database(false);
+		GloAdmin->pgsql_servers_wrunlock();
+	}
+	GloAdmin->admindb = admin_db;
+	const auto saved = saved_servers(save_db, mysql);
+	const std::vector<std::string> expected {"99:peer-plain.example",
+		"901:configured-writer.example", "902:configured-reader.example"};
+	ok(saved == expected && row_status(mysql, 901, "writer.example", port) == "ONLINE",
+		"%s: a save from runtime keeps the configuration rows of claimed hostgroups, never writes "
+		"their live discovered servers, and saves the runtime rows of unclaimed hostgroups", label);
 }
 
 /** Pure rules: which hostgroups a reload keeps, before any HGM is involved. */
@@ -464,7 +532,7 @@ void test_merge_ignores_offline_hard(ProxySQL_ServerProtocol protocol, uint16_t 
 } // namespace
 
 int main() {
-	plan(8 + 2 * 5 + 2 * 2 + 2 * (17 + 5));
+	plan(8 + 2 * 5 + 2 * 2 + 2 * (18 + 5));
 	test_init_minimal();
 	test_retained_hostgroup_rules();
 	test_retain_rows_on_hgm_tables(true);
@@ -581,6 +649,7 @@ int main() {
 			GloVars.checksums_values.pgsql_servers.checksum;
 		ok(advertised != nullptr && peer_checksum == advertised,
 			"%s: after a pull the advertised runtime checksum equals the peer checksum", label);
+		test_save_keeps_claimed_configuration(mysql, port);
 
 		// Claim A removed, claim B kept, across one install. The configuration
 		// row left in 901 shows the hostgroup returning to configuration ownership.
