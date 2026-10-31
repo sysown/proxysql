@@ -601,9 +601,10 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR) FORCE
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
+	pgsql_stable_io_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	str_ends_with_unit-t \
-	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
+	query_cache_unit-t pgsql_query_cache_allocation_unit-t pgsql_result_flush_allocation_unit-t pgsql_scheduler_contract_unit-t query_processor_unit-t digest_stats_unit-t \
 	gtid_local_cache_unit-t gtid_writer_fallback_route_unit-t mysql_resultset_add_row2_unit-t \
 	protocol_unit-t auth_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
@@ -702,6 +703,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
 UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
+UNIT_TESTS += worker_scheduler_cost_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
@@ -1383,6 +1385,10 @@ $(AI_GENAI_UNIT_TESTS): %: %.cpp $(GENAI_TEST_ARCHIVE) $(TEST_HELPERS_OBJ) $(LIB
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 ifeq ($(UNAME_S),Linux)
+# Reproduce the worker check-to-wait window without production test hooks.
+genai_thread_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZNSt18condition_variable4waitERSt11unique_lockISt5mutexE \
+	-Wl,--wrap=_ZNSt18condition_variable10notify_allEv -Wl,--wrap=pthread_mutex_lock
+
 # Let the RSA unit test observe the exact flock attempt without a production hook.
 caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
 
@@ -1454,12 +1460,21 @@ aws_iam_kill_helper_unit-t: ALLOW_MULTI_DEF += \
 # libproxysql.a so their wrappers can reach core-library calls.
 # AWS IAM wrap tests also need the static archive for their --wrap link flags
 # to reach core-library calls (same requirement as caching_sha2_rsa_unit-t).
-worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
+worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb
+ifeq ($(PROXYSQL31),1)
+worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13PgSQL_Session7handlerEb
+else
+worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
+endif
+worker_scheduler_cost_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb
 
-STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
+pgsql_result_flush_allocation_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=free -Wl,--wrap=PQgetCopyData
+
+STATIC_LIBPROXYSQL_TESTS := genai_thread_unit-t pgsql_result_flush_allocation_unit-t caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
 	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
+STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive
 
@@ -1476,6 +1491,23 @@ vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERS
 
 # This test includes the cache source to inject allocator failure locally.
 pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
+
+# The allocation fixture includes the protocol source for failure injection.
+# Compile libpq's private-header access separately so its configuration macros
+# never cross into ProxySQL's headers. The other platforms skip these probes.
+PGSQL_RESULT_LIBPQ_FIXTURE_OBJ :=
+ifeq ($(UNAME_S),Linux)
+PGSQL_RESULT_LIBPQ_FIXTURE_OBJ := $(ODIR)/pgsql_result_libpq_fixture.o
+$(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ): pgsql_result_libpq_fixture.cpp pgsql_result_libpq_fixture.h | $(ODIR)
+	$(CXX) -c -o $@ $< $(OPT) $(IDIRS)
+endif
+
+pgsql_result_flush_allocation_unit-t: pgsql_result_flush_allocation_unit-t.cpp \
+	$(PROXYSQL_PATH)/lib/PgSQL_Protocol.cpp $(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ) \
+	$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ) $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

@@ -5,6 +5,7 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
 DEPS_PATH := $(PROXYSQL_PATH)/deps
+include $(PROXYSQL_PATH)/common_mk/tsan_dependencies.mk
 NPROCS ?= 1
 ifeq ($(UNAME_S),Linux)
 	NPROCS := $(shell nproc)
@@ -169,9 +170,9 @@ curl/curl/lib/.libs/libcurl.a: $(OPENSSL_BUILD_STAMP) Makefile
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && sed -i '' 's/as_fn_error \$$? "one or more libs available at link-time are not available run-time/echo "Skipped check: one or more libs available at link-time are not available run-time/' configure
-	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
+	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
 else
-	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
+	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
 endif
 # libcurl.a is linked into the shared libtap, which on aarch64 fails with non-PIC
 # objects. -fPIC is appended to the caller's CFLAGS for configure, whose generated
@@ -466,9 +467,9 @@ postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP) \
 	cd postgresql/postgresql && patch -p0 < ../scram_verifier_auth.patch
 	cd postgresql/postgresql && patch -p0 < ../result_formats.patch
 ifeq ($(UNAME_S),Darwin)
-	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="-L$$(brew --prefix icu4c)/lib -L$(SSL_LDIR)" CPPFLAGS="-I$$(brew --prefix icu4c)/include" PKG_CONFIG_PATH="$$(brew --prefix icu4c)/lib/pkgconfig:$$PKG_CONFIG_PATH" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline --with-icu
+	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$$(brew --prefix icu4c)/lib -L$(SSL_LDIR)" CPPFLAGS="-I$$(brew --prefix icu4c)/include" PKG_CONFIG_PATH="$$(brew --prefix icu4c)/lib/pkgconfig:$$PKG_CONFIG_PATH" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline --with-icu
 else
-	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="-L$(SSL_LDIR)" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline
+	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline
 endif
 	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0 libpq.a
 
@@ -485,7 +486,7 @@ libusual/libusual/.libs/libusual.a: $(OPENSSL_BUILD_STAMP) libusual/tls_free_nam
 	cd libusual && tar -zxf libusual-*.tar.gz
 	cd libusual/libusual && patch -p1 < ../tls_free_namespace.patch
 	cd libusual/libusual && ./autogen.sh
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" $(LIBUSUAL_LIBS) ./configure --with-openssl="$(SSL_PATH)" --disable-shared
+	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" $(LIBUSUAL_LIBS) ./configure --with-openssl="$(SSL_PATH)" --disable-shared
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
 
 libusual: libusual/libusual/.libs/libusual.a

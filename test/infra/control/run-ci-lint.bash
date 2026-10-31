@@ -27,6 +27,8 @@ run_check "Test staged CI workflow behavior" \
 	python3 -m unittest discover -s .github/scripts/tests
 run_check "Check AI TAP shard split" \
 	python3 test/tap/groups/test_ai_group_shards.py
+run_check "Check MySQL 8.4 TAP timeout partitions" \
+	python3 test/tap/groups/test_mysql84_group_shards.py
 run_check "Check MySQLX unit group registration" \
 	python3 test/tap/groups/test_mysqlx_group_registration.py
 run_check "Check TAP Makefile dependency graph" \
@@ -37,6 +39,8 @@ run_check "Check every TAP source is registered in groups.json" \
 	python3 test/tap/groups/check_groups.py --source
 run_check "Check cluster simulator coverage contract" \
 	test/infra/control/test-cluster-simulator-coverage.bash
+run_check "Check cluster launch, endpoints and direct polling sizes" \
+	python3 test/infra/control/test_cluster_size.py
 run_check "Check no-infra source asset restoration" \
 	test/infra/control/test-no-infra-source-assets.bash
 run_check "Check coverage collector invariants" \
@@ -96,5 +100,10 @@ run_check "Check superseded PR cancellation trigger" \
 
 run_check "Test CI skip-label gates" \
     python3 -m unittest discover -s test/infra/control -p test_ci_skip_label.py
+run_check "Test unit binary timeout and sanitizer failures" \
+    python3 -m unittest discover -s test/infra/control -p test_unit_runner_timeout.py
+
+run_check "Test dependency artifact and TSAN source build policies" \
+    python3 -m unittest discover -s test/infra/control -p 'test_dependency_artifact_*.py'
 
 echo ">>> CI lint suite: OK"

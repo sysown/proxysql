@@ -183,7 +183,11 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 
 
 MySQL_Connection * MySrvConnList::get_random_MyConn(
-	MySQL_Session *sess, bool ff, MySQLBackendAuthType requested_type)
+	MySQL_Session *sess, bool ff, MySQLBackendAuthType requested_type
+#ifdef PROXYSQL31
+    , Pool_Acquire_Mode mode
+#endif
+)
 {
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
@@ -213,6 +217,24 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(
 			needs_warming = true;
 		}
 	}
+#ifdef PROXYSQL31
+    if (mode == Pool_Acquire_Mode::EstablishedOnly) {
+        if (needs_warming) return nullptr;
+        // Speculation may reuse a compatible established connection, but must
+        // never warm, evict, reset credentials, or allocate a new connection.
+        if (l && !ff && sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
+            get_random_MyConn_inner_search(0, l, conn_found_idx, connection_quality_level,
+                                          number_of_matching_session_variables, sess->client_myds->myconn, requested_type);
+            if (connection_quality_level >= 2) {
+                auto *candidate = static_cast<MySQL_Connection*>(conns->index(conn_found_idx));
+                if (candidate->fd >= 0 && candidate->mysql && candidate->healthy && candidate->reusable &&
+                    candidate->async_state_machine == ASYNC_IDLE)
+                    return static_cast<MySQL_Connection*>(conns->remove_index_fast(conn_found_idx));
+            }
+        }
+        return nullptr;
+    }
+#endif
 	if (l && ff==false && needs_warming==false) {
 		i=rand_fast()%l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {

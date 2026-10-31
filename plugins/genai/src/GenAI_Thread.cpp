@@ -325,12 +325,18 @@ void GenAI_Threads_Handler::init(unsigned int num, size_t stack) {
 }
 
 void GenAI_Threads_Handler::shutdown() {
-	if (shutdown_ == 1) {
-		return; // Already shutting down
+	{
+		// Pair the predicate update with worker_loop's condition-variable
+		// mutex. An atomic flag alone does not prevent notify_all() from
+		// racing between a worker's predicate check and its wait.
+		std::lock_guard<std::mutex> lock(queue_mutex_);
+		if (shutdown_ == 1) {
+			return; // Already shutting down
+		}
+		shutdown_ = 1;
 	}
 
 	proxy_info("Shutting down GenAI module\n");
-	shutdown_ = 1;
 
 	// Wake up listener
 	if (event_fd_ >= 0) {

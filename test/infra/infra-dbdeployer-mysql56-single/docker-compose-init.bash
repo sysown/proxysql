@@ -16,7 +16,7 @@ set -o pipefail
 SUDO=""
 if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
 
-[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-600} "${BASH_SOURCE}" "$@"
+[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-900} "${BASH_SOURCE}" "$@"
 
 pushd $(dirname $0) &>/dev/null
 trap 'popd &>/dev/null' EXIT
@@ -101,7 +101,7 @@ fi
 
 CONTAINER="${COMPOSE_PROJECT}-dbdeployer1-1"
 echo -n "Waiting for dbdeployer to finish deployment..."
-MAX_WAIT=120
+MAX_WAIT=600
 COUNT=0
 while ! docker exec "${CONTAINER}" test -f /tmp/dbdeployer_ready 2>/dev/null; do
     if [ $COUNT -ge $MAX_WAIT ]; then
