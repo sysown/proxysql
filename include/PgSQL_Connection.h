@@ -1157,6 +1157,13 @@ private:
 	// pause and let the client catch up. Shared by the libpq and native result
 	// loops so both honour pgsql-threshold_resultset_size the same way.
 	bool suspend_resultset_fetch(uint64_t processed_bytes) const;
+	// A notice callback cannot unwind through libpq's C-owned temporaries. Once
+	// one fails, this connection is doomed: neither result cleanup nor reset()
+	// clears the failure. The C++ parser boundary raises it after C cleanup.
+	bool libpq_notice_failed = false;
+	void check_libpq_notice_failure() const;
+	template<class Operation>
+	auto libpq_parse(Operation operation) -> decltype(operation());
 	static void notice_handler_cb(void* arg, const PGresult* result);
 	static void unhandled_notice_cb(void* arg, const PGresult* result);
 	void init_query_result();

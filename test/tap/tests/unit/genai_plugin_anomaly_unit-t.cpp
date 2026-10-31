@@ -31,6 +31,11 @@
  */
 class Anomaly_Detector_TestHelper {
 public:
+	static bool statistics_mutex_is_live(Anomaly_Detector& d) {
+		const int rc = pthread_mutex_trylock(&d.user_stats_mutex);
+		if (rc == 0) pthread_mutex_unlock(&d.user_stats_mutex);
+		return rc == 0;
+	}
 	static std::string normalize_query(Anomaly_Detector& d, const std::string& query) {
 		return d.normalize_query(query);
 	}
@@ -169,10 +174,13 @@ static void test_analyze_pipeline_runs_without_vector_db() {
 	ok(r.risk_score >= 0.0 && r.risk_score <= 1.0,
 	   "analyze() returns a risk_score in [0, 1] (got %.3f)", r.risk_score);
 	d.close();
+	ok(Anomaly_Detector_TestHelper::statistics_mutex_is_live(d),
+	   "close preserves the statistics mutex until destruction");
+	d.close(); // Explicit close and destruction must remain safe to repeat.
 }
 
 int main() {
-	plan(25);
+	plan(26);
 
 	test_init_minimal();
 

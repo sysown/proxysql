@@ -31,6 +31,10 @@ class PgSQL_Backend_Msg_Framer {
     ~PgSQL_Backend_Msg_Framer() { free(buf); }
     void feed(const unsigned char* data, size_t len);
     PgSQL_Frame_Result next(PgSQL_Backend_Msg& out);
+    // Consume only complete adjacent DataRows, leaving other/invalid/incomplete
+    // frames for next(). Does not feed or move storage; outstanding views stay valid.
+    size_t coalesce_data_rows(size_t max_bytes, unsigned int& rows);
+    size_t buffered_bytes() const { return len - pos; }
     void reset();
     // True when every fed byte has been framed out. reset() throws away whatever is
     // left, so callers that reset between queries must not do so while a partially

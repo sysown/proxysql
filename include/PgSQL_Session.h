@@ -17,6 +17,7 @@
 #include "PgSQL_Variables.h"
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_Extq_Batch.h"
+#include "PgSQL_Scheduler.h"
 #ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
 #endif // PROXYSQL31
@@ -708,6 +709,11 @@ public:
 	bool offline_fatal_pending = false;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
+	PgSQL_Pool_Acquire_Mode pool_acquire_mode = PgSQL_Pool_Acquire_Mode::Normal;
+	bool established_checkout_unavailable = false;
+	bool scheduler_managed = false;
+	bool yield_after_release = false;
+	bool continuation_queued = false;
 	bool last_pool_ff{ false };
 	bool last_pool_gtid{ false };
 	int last_pool_max_lag_ms{ -1 };
@@ -812,7 +818,16 @@ public:
 	//void set_unhealthy();
 
 	void set_status(enum session_status e);
+#ifdef PROXYSQL31
+	// io_only drains deferred readiness for a parked connection waiter without
+	// retrying pool checkout or advancing its query state machine.
+	int handler(bool io_only = false);
+	PgSQL_Session_Run_Result run_step(PgSQL_Pool_Acquire_Mode mode = PgSQL_Pool_Acquire_Mode::Normal,
+		bool io_only = false);
+	void note_backend_release(unsigned int hostgroup);
+#else
 	int handler();
+#endif
 
 	void (*handler_function) (PgSQL_Session* sess, void*, PtrSize_t* pkt);
 	//PgSQL_Backend* find_backend(int);

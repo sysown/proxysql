@@ -3443,6 +3443,22 @@ void PgSQL_Connection::fetch_result_start() {
 	ps_result.data = NULL;
 }
 
+void PgSQL_Connection::check_libpq_notice_failure() const {
+	if (libpq_notice_failed) throw PgSQL_Query_Result::AllocationError{};
+}
+
+// Only the input parsers can deliver backend notices: PQconsumeInput and the
+// send/flush calls do not parse input. Keep this boundary around PQisBusy,
+// PQgetResult and PQgetCopyData. An operation returning owned storage must
+// secure it in the connection or an RAII object before the post-call check.
+template<class Operation>
+auto PgSQL_Connection::libpq_parse(Operation operation) -> decltype(operation()) {
+	check_libpq_notice_failure();
+	auto result = operation();
+	check_libpq_notice_failure();
+	return result;
+}
+
 void PgSQL_Connection::fetch_result_cont(short event) {
 	PROXY_TRACE();
 	if (native_mode) {
@@ -3453,6 +3469,7 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 		native_fetch_result_cont(event);
 		return;
 	}
+	check_libpq_notice_failure();
 	async_exit_status = PG_EVENT_NONE;
 
 	// Avoid fetching a new result if one is already available.
@@ -3471,14 +3488,14 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 			return;
 		case 1:
 			// we already have data available in buffer
-			if (PQisBusy(pgsql_conn) == 0) {
+			if (libpq_parse([&] { return PQisBusy(pgsql_conn); }) == 0) {
 				result_type = 1;
-				pgsql_result = PQgetResult(pgsql_conn);
+				libpq_parse([&] { return pgsql_result = PQgetResult(pgsql_conn); });
 
 				if (!pgsql_result &&
 					query.extended_query_info &&
 					(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) != 0) {
-					pgsql_result = PQgetResult(pgsql_conn);
+					libpq_parse([&] { return pgsql_result = PQgetResult(pgsql_conn); });
 				}
 				return;
 			}
@@ -3503,7 +3520,7 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 		result_type = 2;
 		return;
 	case 1:
-		if (PQisBusy(pgsql_conn)) {
+		if (libpq_parse([&] { return PQisBusy(pgsql_conn); })) {
 			async_exit_status = PG_EVENT_READ;
 			return;
 		}
@@ -3513,12 +3530,12 @@ void PgSQL_Connection::fetch_result_cont(short event) {
 		return;
 	}
 	result_type = 1;
-	pgsql_result = PQgetResult(pgsql_conn);
+	libpq_parse([&] { return pgsql_result = PQgetResult(pgsql_conn); });
 
 	if (!pgsql_result &&
 		query.extended_query_info &&
 		(query.extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) != 0) {
-		pgsql_result = PQgetResult(pgsql_conn);
+		libpq_parse([&] { return pgsql_result = PQgetResult(pgsql_conn); });
 	}
 }
 
@@ -3962,6 +3979,24 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 					}
 				}
 				if (pause_after(t)) return;
+				continue;
+			}
+
+			// For simple-query DataRows, preserve and copy a bounded span of the
+			// original wire bytes instead of rebuilding and copying each message.
+			// All special messages above and all extended-query paths keep their
+			// existing ordering and side effects. The complete buffered byte count
+			// is an upper bound: batch only if no row inside it could trigger the
+			// existing fetch/throttle pause. Otherwise retain the per-row path.
+			const unsigned int row_size = 5U + msg.payload_len;
+			if (msg.type == 'D' && row_size <= PGSQL_RESULTSET_BUFLEN &&
+				!is_error_present() && (!processed_bytes ||
+				!suspend_resultset_fetch(*processed_bytes + row_size + native_framer.buffered_bytes()))) {
+				unsigned int rows = 1;
+				const unsigned int extra = (unsigned int)native_framer.coalesce_data_rows(
+					PGSQL_RESULTSET_BUFLEN - row_size, rows);
+				count_bytes(query_result->add_native_data_rows(msg.payload - 5, row_size + extra, rows));
+				if (pause_after('D')) return;
 				continue;
 			}
 
@@ -4476,6 +4511,9 @@ void PgSQL_Connection::set_is_client() {
 }
 
 bool PgSQL_Connection::is_connection_in_reusable_state() const {
+	// A failed notice makes the response unusable without a PostgreSQL error.
+	// Do not treat this known allocation failure as an unexplained dead backend.
+	if (libpq_notice_failed) return false;
 	// Native only, and it has to answer before the check below: a connection that
 	// never finished connecting is unusable but has no error recorded against it.
 	// libpq falls through on purpose, so a dead libpq connection with no error
@@ -5335,6 +5373,7 @@ void PgSQL_Connection::reset_session_cont(short event) {
 		native_reset_session_cont();
 		return;
 	}
+	check_libpq_notice_failure();
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6, "event=%d\n", event);
 	async_exit_status = PG_EVENT_NONE;
 	if (event & POLLOUT) {
@@ -5354,12 +5393,12 @@ void PgSQL_Connection::reset_session_cont(short event) {
 		return;
 	}
 
-	if (PQisBusy(pgsql_conn)) {
+	if (libpq_parse([&] { return PQisBusy(pgsql_conn); })) {
 		async_exit_status = PG_EVENT_READ;
 		return;
 	}
 
-	pgsql_result = PQgetResult(pgsql_conn);
+	libpq_parse([&] { return pgsql_result = PQgetResult(pgsql_conn); });
 }
 
 void PgSQL_Connection::ping_start() {
@@ -5621,6 +5660,7 @@ const char* PgSQL_Connection::get_pg_backend_state() const {
 }
 
 bool PgSQL_Connection::handle_copy_out(const PGresult* result, uint64_t* processed_bytes) {
+	check_libpq_notice_failure();
 
 	if (new_result == true) {
 		const unsigned int bytes_recv = query_result->add_copy_out_response_start(result);
@@ -5629,14 +5669,19 @@ bool PgSQL_Connection::handle_copy_out(const PGresult* result, uint64_t* process
 		is_copy_out = true;
 	}
 
-	char* buffer = NULL;
 	int copy_data_len = 0;
 
-	while ((copy_data_len = PQgetCopyData(pgsql_conn, &buffer, 1)) > 0) {
-		const unsigned int bytes_recv = query_result->add_copy_out_row(buffer, copy_data_len);
+	for (;;) {
+		auto buffer = libpq_parse([&] {
+			char* data = nullptr;
+			copy_data_len = PQgetCopyData(pgsql_conn, &data, 1);
+			return std::unique_ptr<char, decltype(&PQfreemem)>(data, PQfreemem);
+		});
+		if (copy_data_len <= 0) break;
+		// Own the libpq row both when a preceding notice failed and when the
+		// result buffer needs a flush while serializing this row.
+		const unsigned int bytes_recv = query_result->add_copy_out_row(buffer.get(), copy_data_len);
 		update_bytes_recv(bytes_recv);
-		PQfreemem(buffer);
-		buffer = NULL;
 		*processed_bytes += bytes_recv;	// issue #527 : this variable will store the amount of bytes processed during this event
 		if (
 			(*processed_bytes > (unsigned int)pgsql_thread___threshold_resultset_size * 8)
@@ -5666,6 +5711,10 @@ bool PgSQL_Connection::handle_copy_out(const PGresult* result, uint64_t* process
 void PgSQL_Connection::notice_handler_cb(void* arg, const PGresult* result) {
 	assert(arg);
 	PgSQL_Connection* conn = (PgSQL_Connection*)arg;
+	// libpq may deliver more notices before the parser returns. The first
+	// failure already makes this response unusable; keep returning so libpq
+	// can free every notice's local PGresult and PQExpBuffer.
+	if (conn->libpq_notice_failed) return;
 	if (conn->query_result == nullptr) {
 		// Notice received without active query_result. This can happen when:
 		// - RESET SESSION is in progress (DISCARD ALL or ROLLBACK)
@@ -5675,8 +5724,13 @@ void PgSQL_Connection::notice_handler_cb(void* arg, const PGresult* result) {
 			(result ? PQresultErrorMessage(result) : "unknown notice"));
 		return;
 	}
-	const unsigned int bytes_recv = conn->query_result->add_notice(result);
-	conn->update_bytes_recv(bytes_recv);
+	try {
+		const unsigned int bytes_recv = conn->query_result->add_notice(result);
+		conn->update_bytes_recv(bytes_recv);
+	} catch (const PgSQL_Query_Result::AllocationError&) {
+		conn->libpq_notice_failed = true;
+		conn->healthy = false;
+	}
 }
 
 void PgSQL_Connection::unhandled_notice_cb(void* arg, const PGresult* result) {

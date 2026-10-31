@@ -341,6 +341,10 @@ struct ColumnMetadata {
 
 class PgSQL_Query_Result {
 public:
+	// Only result-buffer allocation failures use this signal. The session handler
+	// catches it and closes the session without allocating another response.
+	struct AllocationError {};
+
 	PgSQL_Query_Result();
 	~PgSQL_Query_Result();
 
@@ -503,6 +507,8 @@ public:
 	 * @return The number of bytes appended to the query result.
 	 */
 	unsigned int add_native_backend_message(char type, const unsigned char* payload, uint32_t payload_len);
+	// Validated contiguous DataRows including their original wire headers.
+	unsigned int add_native_data_rows(const unsigned char* wire, unsigned int size, unsigned int rows);
 
     /**
      * @brief Adds the start of a COPY OUT response to the packet.
@@ -663,8 +669,8 @@ private:
 	 * This method checks if there is enough space in the internal `buffer`
 	 * to store the requested `size` of data. If there is space, it returns
 	 * a pointer to the available location and updates `buffer_used`.
-	 * Otherwise, it flushes the buffer to `PSarrayOUT`, allocates a new
-	 * buffer, and returns a pointer to the available location.
+	 * Otherwise, it flushes the buffer to `PSarrayOUT`, retains or replaces
+	 * the accumulation buffer, and returns a pointer to the available location.
 	 *
 	 * @param size The number of bytes of space to reserve.
 	 *
@@ -679,10 +685,12 @@ private:
 	/**
 	 * @brief Flushes the internal buffer to the PSarrayOUT.
 	 *
-	 * This method moves the data currently stored in the internal `buffer`
-	 * to the `PSarrayOUT` (a `PtrSizeArray`). It then resizes the
-	 * `buffer` to the default size `PGSQL_RESULTSET_BUFLEN` and resets
-	 * `buffer_used` to 0.
+	 * For small results, this method copies the occupied bytes into a separate
+	 * packet owned by `PSarrayOUT`, retaining the accumulation buffer for reuse.
+	 * Larger buffers are handed to `PSarrayOUT` without copying and replaced
+	 * with a new `PGSQL_RESULTSET_BUFLEN` allocation. Both paths reset
+	 * `buffer_used` to 0. Allocation failure throws `AllocationError` before
+	 * changing the buffer or output queue, preserving their bytes and ownership.
 	 *
 	 * @note This method is used when the internal `buffer` is full and
 	 *       needs to be flushed to release the memory and continue adding

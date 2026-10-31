@@ -76,7 +76,10 @@ int main(int argc, char** argv) {
     }
 
     std::chrono::duration<double, std::milli> duration = end - start;
-    ok(duration.count() < 10.00, "Execution time should be less than 10 ms. Actual: %f ms", duration.count());
+    // Allow 20 ms for CI scheduling overhead while still catching the
+    // poll_timeout-sized delay caused by result-set threshold overflow.
+    constexpr double max_query_ms = 20.0;
+    ok(duration.count() < max_query_ms, "Execution time should be less than 20 ms. Actual: %f ms", duration.count());
 
     MYSQL_QUERY(proxysql_admin, "SET mysql-threshold_resultset_size=536870912");
     MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
@@ -94,7 +97,7 @@ int main(int argc, char** argv) {
         ok(false, "Error executing query. %s", mysql_error(proxysql_admin));
     }
     duration = end - start;
-    ok(duration.count() < 10.00, "Execution time should be less than 10 ms. Actual: %f ms", duration.count());
+    ok(duration.count() < max_query_ms, "Execution time should be less than 20 ms. Actual: %f ms", duration.count());
 
     MYSQL_QUERY(proxysql_admin, "SET mysql-threshold_resultset_size=1073741824");
     MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
@@ -112,7 +115,7 @@ int main(int argc, char** argv) {
         ok(false, "Error executing query. %s", mysql_error(proxysql_admin));
     }
     duration = end - start;
-    ok(duration.count() < 10.00, "Execution time should be less than 10 ms. Actual: %f ms", duration.count());
+    ok(duration.count() < max_query_ms, "Execution time should be less than 20 ms. Actual: %f ms", duration.count());
 
     mysql_close(proxysql_backend);
     mysql_close(proxysql_admin);

@@ -57,6 +57,12 @@ EXTRA=""
 # in-build working set fits the runner's ~14 GB free disk.
 # CI-mysqlx, the only consumer of -tap-mysqlx, never runs them.
 [[ "${SKIP_GENAI_UNIT_TESTS:-}" == "1" ]] && EXTRA="$EXTRA SKIP_GENAI_UNIT_TESTS=1"
+if [[ "${WITHTSAN:-0}" == "1" ]]; then
+    # Each TSAN job starts from source, even when its workspace contains a
+    # normal build or a dependency bundle from a previous run.
+    export DEPS_MODE=source
+    ${MAKE} ${EXTRA} cleanall
+fi
 ${MAKE} ${MAKEOPT} ${EXTRA} ${deps_target}
 ${MAKE} ${MAKEOPT} ${EXTRA} ${build_target}
 

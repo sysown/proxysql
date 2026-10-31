@@ -9,6 +9,7 @@ on:
       - deps/duckdb/**
       - deps/libssl/**
       - common_mk/openssl_flags.mk
+      - common_mk/tsan_dependencies.mk
       - deps/Makefile
       - Makefile
       - docker-compose.yml
@@ -21,6 +22,7 @@ on:
       - deps/duckdb/**
       - deps/libssl/**
       - common_mk/openssl_flags.mk
+      - common_mk/tsan_dependencies.mk
       - deps/Makefile
       - Makefile
       - docker-compose.yml

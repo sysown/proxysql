@@ -228,7 +228,14 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
 	PtrArray *cached_connections;
-	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = mysql_threads
+	template<class, class, class, class> friend class Worker_Scheduler;
+#ifdef PROXYSQL31
+    bool collecting_releases = false;
+    bool refreshing_waiter_deadlines = false;
+    std::vector<unsigned> released_hostgroups;
+    std::deque<MySQL_Session*> session_continuations;
+#endif
+    unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = mysql_threads
 #ifdef PROXYSQL31
 	std::shared_ptr<const MySQLServerVersionByInterfaceMap>
 		server_version_by_interface_snapshot_ {
@@ -295,8 +302,8 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 	ProxySQL_Poll<MySQL_Data_Stream> mypolls;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Lists waiter_lists;
-	// Incremented by every process_all_sessions() call; see handled_in_pass.
-	unsigned long long sessions_pass { 0 };
+	// Conservative lower bound: zero is unknown, ~0ULL means no deadline.
+	unsigned long long waiter_deadline_hint { 0 };
 	unsigned long long last_b_rearm_us = 0;
 #endif // PROXYSQL31
 	pthread_t thread_id;
@@ -372,6 +379,9 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
 #ifdef PROXYSQL31
   void enter_waiter(MySQL_Session *sess, unsigned hid);
   void leave_waiter(MySQL_Session *sess, bool restore_client = true);
+    void queue_session_continuation(MySQL_Session *sess);
+    void cancel_session_continuation(MySQL_Session *sess);
+    void close_scheduled_session(unsigned index);
   void drop_from_poll(MySQL_Data_Stream *ds);
 #endif // PROXYSQL31
   struct pollfd * get_pollfd(unsigned int i);
@@ -387,8 +397,16 @@ class __attribute__((aligned(64))) MySQL_Thread : public Base_Thread
   void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
 	void Get_Memory_Stats();
 	MySQL_Connection * get_MyConn_local(unsigned int, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQLBackendAuthType requested_type = MySQLBackendAuthType::PASSWORD);
-	void push_MyConn_local(MySQL_Connection *);
+	void push_MyConn_local(MySQL_Connection *
+#ifdef PROXYSQL31
+        , MySQL_Session *releasing_session = nullptr
+#endif
+    );
 	void return_local_connections();
+#ifdef PROXYSQL31
+    /** @brief Publish only one hostgroup's cached connections for normal checkout recovery. */
+    void return_local_connections(unsigned int hostgroup);
+#endif
 	void Scan_Sessions_to_Kill(PtrArray *mysess);
 	void Scan_Sessions_to_Kill_All();
 };
