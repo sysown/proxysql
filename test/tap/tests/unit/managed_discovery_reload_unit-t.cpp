@@ -320,6 +320,47 @@ void test_retained_hostgroup_rules() {
 		std::set<uint32_t>({921, 922, 923, 924}) &&
 		proxysql_server_reload_retained_hostgroups({bgd}, {bgd_moved}).empty(),
 		"rules: blue/green claims keep their green hostgroups and a moved green pair keeps nothing");
+	// Claim validation ignores the fields of another monitor kind, so a plugin
+	// may leave anything there: they are not part of the claim identity.
+	auto a_other_fields = a;
+	a_other_fields.role_monitor.domain_name = ".ignored.example";
+	a_other_fields.role_monitor.aurora_port = 3399;
+	a_other_fields.role_monitor.green_writer_hostgroup = 941;
+	a_other_fields.role_monitor.green_reader_hostgroup = 942;
+	auto aurora_green = aurora;
+	aurora_green.role_monitor.green_writer_hostgroup = 943;
+	auto none_claim = role_claim(mysql, 951, 952);
+	none_claim.role_monitor.kind = ProxySQL_ServerRoleMonitor::none;
+	auto none_other_fields = none_claim;
+	none_other_fields.role_monitor.domain_name = ".ignored.example";
+	none_other_fields.role_monitor.green_reader_hostgroup = 953;
+	ok(as_set(proxysql_server_reload_retained_hostgroups({a}, {a_other_fields})) ==
+		std::set<uint32_t>({901, 902}) &&
+		as_set(proxysql_server_reload_retained_hostgroups({aurora}, {aurora_green})) ==
+		std::set<uint32_t>({931, 932}) &&
+		as_set(proxysql_server_reload_retained_hostgroups({none_claim}, {none_other_fields})) ==
+		std::set<uint32_t>({951, 952}),
+		"rules: Aurora and blue/green fields of a claim of another kind are not part of its identity");
+}
+
+/** MySQL gtid_port is an operator setting: an edit in a retained hostgroup is counted. */
+void test_reload_counts_gtid_port_edit() {
+	SQLite3DB db;
+	char memory_db[] = ":memory:";
+	db.open(memory_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	db.execute(MYHGM_MYSQL_SERVERS);
+	db.execute(MYHGM_MYSQL_SERVERS_INCOMING);
+	db.execute("INSERT INTO mysql_servers VALUES (901,'gtid.example',3306,0,5,0,0,1000,0,1,0,'',1901)");
+	db.execute("INSERT INTO mysql_servers VALUES (902,'same.example',3306,7000,5,0,0,1000,0,1,0,'',1902)");
+	db.execute("INSERT INTO mysql_servers_incoming VALUES (901,'gtid.example',3306,7000,5,0,0,1000,0,1,0,'')");
+	db.execute("INSERT INTO mysql_servers_incoming VALUES (902,'same.example',3306,7000,5,0,0,1000,0,1,0,'')");
+	std::vector<ProxySQL_ServerReloadOverride> overrides;
+	std::string error;
+	ok(proxysql_collect_server_reload_overrides(db, ProxySQL_ServerProtocol::mysql, {901, 902},
+			overrides, error) &&
+		overrides.size() == 1 && overrides[0].hostgroup_id == 901 &&
+		overrides[0].ignored == 0 && overrides[0].changed == 1,
+		"MySQL rows: a gtid_port edit to a live server counts as a change, an equal gtid_port does not");
 }
 
 /** The incoming-table rewrite on plain HGM tables, including OFFLINE_HARD rows. */
@@ -532,9 +573,10 @@ void test_merge_ignores_offline_hard(ProxySQL_ServerProtocol protocol, uint16_t 
 } // namespace
 
 int main() {
-	plan(8 + 2 * 5 + 2 * 2 + 2 * (18 + 5));
+	plan(9 + 1 + 2 * 5 + 2 * 2 + 2 * (18 + 5));
 	test_init_minimal();
 	test_retained_hostgroup_rules();
+	test_reload_counts_gtid_port_edit();
 	test_retain_rows_on_hgm_tables(true);
 	test_retain_rows_on_hgm_tables(false);
 	test_retain_rows_ignore_offline_hard(true);

@@ -155,8 +155,10 @@ bool proxysql_is_server_inventory_managed_locked(ProxySQL_ServerProtocol protoco
 // the live rows of hostgroups held by managed discovery claims instead of
 // replacing them, as a desired set keeps the rows of the other claims.
 // Returns the hostgroups of the claims present and unchanged in both sets:
-// same hostgroups, monitor kind, writer placement, Aurora domain and port.
-// A removed or changed claim keeps nothing; monitor tuning alone is no change.
+// same hostgroups (the green pair too for blue/green), monitor kind, writer
+// placement, and for Aurora claims the domain and port. Fields of another
+// monitor kind are ignored. A removed or changed claim keeps nothing; monitor
+// tuning alone is no change.
 std::vector<uint32_t> proxysql_server_reload_retained_hostgroups(
 	const std::vector<ProxySQL_ServerHostgroupClaim>& current,
 	const std::vector<ProxySQL_ServerHostgroupClaim>& next);
@@ -170,7 +172,7 @@ struct ProxySQL_ServerReloadOverride {
 	uint64_t ignored {0};
 	// Incoming servers that are live with another weight, compression,
 	// max_connections, max_replication_lag, use_ssl, max_latency_ms, comment,
-	// or an OFFLINE_SOFT/OFFLINE_HARD status on either side. Other status
+	// gtid_port (MySQL), or an OFFLINE_SOFT/OFFLINE_HARD status on either side. Other status
 	// differences (ONLINE/SHUNNED) belong to the monitors and are not counted.
 	uint64_t changed {0};
 };

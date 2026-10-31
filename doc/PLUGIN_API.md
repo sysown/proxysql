@@ -282,20 +282,22 @@ outside every claim are still replaced by the reload. If keeping the live rows
 fails, the change is rolled back, the error is logged and the reload replaces
 the claimed hostgroups as it does for unclaimed ones.
 
-The reload never rejects ignored rows (#6448). Once per claimed hostgroup it
-logs a warning with two counts, naming the rows "configured" (Admin LOAD,
-managed install, plugin publication) or "peer" (Cluster pull): servers that are
-not live, and live servers whose weight, compression, max_connections,
-max_replication_lag, use_ssl, max_latency_ms, comment or `OFFLINE_SOFT` /
-`OFFLINE_HARD` status differ. Such operator edits, for example
+The reload never rejects ignored rows (#6448). For each claimed hostgroup
+with at least one ignored row it logs one warning with two counts, naming the
+rows "configured" (Admin LOAD, managed install, plugin publication) or "peer"
+(Cluster pull): servers that are not live, and live servers whose weight,
+compression, max_connections, max_replication_lag, use_ssl, max_latency_ms,
+comment, `gtid_port` (MySQL) or `OFFLINE_SOFT` / `OFFLINE_HARD` status differ.
+A claimed hostgroup without ignored rows logs nothing. Such operator edits, for example
 `UPDATE mysql_servers SET status='OFFLINE_SOFT'` followed by `LOAD`, have no
 effect on a claimed hostgroup; ONLINE/SHUNNED differences belong to the
 monitors and are not counted.
 
 The reload of a managed discovery install keeps only the claims that the
 install leaves unchanged: same hostgroups (including the blue/green pair),
-role monitor kind, `writer_is_also_reader`, Aurora `domain_name` and
-`aurora_port`. A removed or changed claim keeps nothing; a change of monitor
+role monitor kind, `writer_is_also_reader`, and for Aurora claims
+`domain_name` and `aurora_port`. Fields of another monitor kind are ignored,
+as claim validation ignores them. A removed or changed claim keeps nothing; a change of monitor
 tuning alone keeps the rows. Releasing the claims keeps nothing. Core cannot
 see that an unchanged claim now points at another database cluster: a
 controller that re-targets the same hostgroups must release or change the claim
@@ -303,8 +305,8 @@ in a separate install, or accept that the old servers stay until its next
 desired set replaces them.
 
 The runtime snapshot published to the controller still carries the
-configuration rows only; a controller can read the live rows with
-`proxysql_current_server_runtime_rows()`.
+configuration rows only; the live rows are not exposed through the plugin
+service table.
 
 A save from runtime into Admin MEMORY follows the same rule: discovered
 servers are runtime state, never configuration. `SAVE MYSQL|PGSQL SERVERS FROM

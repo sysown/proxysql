@@ -2992,16 +2992,18 @@ namespace {
 
 // The claim fields that decide which servers a claimed pair holds and where
 // they are placed. Monitor tuning (intervals, lag limits, check type) is not
-// part of it: tuning a claim must not interrupt its servers.
+// part of it: tuning a claim must not interrupt its servers. Fields of another
+// monitor kind are ignored, as claim validation ignores them: the green pair
+// is part of managed_claim_hostgroups() only for blue/green claims, and the
+// Aurora domain and port count only for Aurora claims.
 bool same_claim_identity(const ProxySQL_ServerHostgroupClaim& lhs,
 	const ProxySQL_ServerHostgroupClaim& rhs) {
 	const auto& l = lhs.role_monitor;
 	const auto& r = rhs.role_monitor;
-	return managed_claim_hostgroups(lhs) == managed_claim_hostgroups(rhs) &&
-		l.kind == r.kind && l.writer_is_also_reader == r.writer_is_also_reader &&
-		l.domain_name == r.domain_name && l.aurora_port == r.aurora_port &&
-		l.green_writer_hostgroup == r.green_writer_hostgroup &&
-		l.green_reader_hostgroup == r.green_reader_hostgroup;
+	if (managed_claim_hostgroups(lhs) != managed_claim_hostgroups(rhs) ||
+		l.kind != r.kind || l.writer_is_also_reader != r.writer_is_also_reader) return false;
+	return l.kind != ProxySQL_ServerRoleMonitor::mysql_aws_aurora ||
+		(l.domain_name == r.domain_name && l.aurora_port == r.aurora_port);
 }
 
 std::string hostgroup_list(const std::vector<uint32_t>& hostgroups) {
@@ -3075,7 +3077,8 @@ bool proxysql_collect_server_reload_overrides(SQLite3DB& db, ProxySQL_ServerProt
 	const std::string operator_states = "(" + offline_soft + "," + offline_hard + ")";
 	const std::string edited = "t1.weight<>t2.weight OR t1.compression<>t2.compression"
 		" OR t1.max_connections<>t2.max_connections OR t1.max_replication_lag<>t2.max_replication_lag"
-		" OR t1.use_ssl<>t2.use_ssl OR t1.max_latency_ms<>t2.max_latency_ms OR t1.comment<>t2.comment"
+		" OR t1.use_ssl<>t2.use_ssl OR t1.max_latency_ms<>t2.max_latency_ms OR t1.comment<>t2.comment" +
+		std::string(mysql ? " OR t1.gtid_port<>t2.gtid_port" : "") +
 		" OR (t1.status<>t2.status AND (t1.status IN " + operator_states +
 		" OR t2.status IN " + operator_states + "))";
 	const std::string query = "SELECT t2.hostgroup_id,"
