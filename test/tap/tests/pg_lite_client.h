@@ -141,6 +141,8 @@ public:
     
     void disconnect();
     bool isConnected() const;
+    // Startup "options" for the next connect(), e.g. "-c work_mem=4MB".
+    void setOptions(const std::string& options) { options_ = options; }
     inline int getSocket() const { return sock_; }
     inline int getLastAuthType() const { return last_auth_type_; }
 
@@ -225,6 +227,7 @@ private:
 	int timeout_ms_ = 0;
     std::string user_;
     std::string dbname_;
+    std::string options_;
     int last_auth_type_ = 0;
 
     // Persisted stepwise-SASL state between saslBegin() and saslFinish() (see the two-phase

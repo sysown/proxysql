@@ -11,9 +11,25 @@
  * up failed, not lost), and RESET on a locked session whose backend was started with other settings. A reply sent after the batch ended reaches libpq "while idle", which it
  * reports as a notice, so every notice on the probe connections is counted: the probe statements raise
  * none of their own.
+ *
+ * The refusals ProxySQL answers itself (an invalid SET value, RESET ALL, COPY, DISCARD ALL, a bad
+ * pg_terminate_backend() parameter, RESET on a locked session, a query rule's error_msg) and a backend's
+ * own error are also sent with no Sync and closed by a simple Query, an implicit Sync: the client must get
+ * one ReadyForQuery, after the Query. With another statement and a Sync behind them, the error carries the
+ * one ReadyForQuery. A Flush or a FunctionCall in the middle of a unit is refused too, and only the Sync
+ * after it may be answered with a ReadyForQuery.
+ *
+ * A matrix then varies the rest: where in the unit the error comes (Parse, Bind, Describe, Execute, after a
+ * statement that ran, before one queued behind it), what the closing simple Query is (one that fails itself,
+ * an empty one, several statements, one ProxySQL answers, BEGIN), a Sync after the Query, inside a
+ * transaction, units back to back on one connection, and in native mode the path that sends one message at
+ * a time and the one that cuts the batch short before a statement ProxySQL handles itself.
  */
 
 #include <poll.h>
+#include <ctime>
+#include <fstream>
+#include <functional>
 #include <string>
 #include <sstream>
 #include <chrono>
@@ -155,8 +171,8 @@ static std::string current_value(PGconn* conn, const std::string& q) {
 }
 
 // Reads one batch's replies up to its ReadyForQuery as message types, e.g. "2Z(T)" or "EZ(E)". Anything
-// that arrives after it within the read timeout is appended as "+<type>".
-static std::string raw_batch(PgConnection& c) {
+// that arrives after it within the read timeout is appended as "+<type>". 'err' gets the first error's message.
+static std::string raw_batch(PgConnection& c, std::string* err = nullptr) {
 	std::string out;
 	char type = 0;
 	std::vector<uint8_t> body;
@@ -166,6 +182,11 @@ static std::string raw_batch(PgConnection& c) {
 			if (type == 'N' || type == 'S') continue;
 			out += type;
 			if (type == 'Z' && body.empty() == false) out += std::string("(") + (char)body[0] + ")";
+			if (type == 'E' && err && err->empty()) {
+				for (size_t i = 0; i < body.size() && body[i]; i += strlen((const char*)&body[i + 1]) + 2) {
+					if (body[i] == 'M') *err = (const char*)&body[i + 1];
+				}
+			}
 		}
 		c.readMessage(type, body);
 		out += std::string("+") + type;
@@ -173,6 +194,77 @@ static std::string raw_batch(PgConnection& c) {
 		if (std::string(e.what()) != "Read timed out") out += std::string("<") + e.what() + ">";
 	}
 	return out;
+}
+
+// Parse/Bind/Execute of a statement that fails, on a new connection ('lock' first locks it to its
+// hostgroup), and of 'behind' when given, then either a simple Query, which closes the unit with an
+// implicit Sync, or ('pipelined') another statement and a Sync. The client must get one ReadyForQuery:
+// after the Query, "...ETDCZ(I)", or with the error, "...EZ(I)", the statements queued behind it discarded.
+// Nothing may follow it. An extra one leaves the client a reply out of step for the rest of the session, a
+// missing one leaves it waiting.
+static void check_refusal(const std::string& q, const std::string& expected_err, bool pipelined,
+	const std::vector<PgConnection::Param>& params = {}, bool lock = false, const std::string& behind = "") {
+	PgConnection c(1000);
+	std::string r, err;
+	try {
+		c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+		if (lock) {
+			c.sendQuery("SET extq_test.lock_probe = 'on'");
+			raw_batch(c);
+		}
+		c.prepareStatement("", q, false);
+		c.bindStatement("", "", params, {}, false);
+		c.executePortal("", 0, false);
+		if (behind.empty() == false) {
+			c.prepareStatement("", behind, false);
+			c.bindStatement("", "", {}, {}, false);
+			c.executePortal("", 0, false);
+		}
+		if (pipelined) {
+			c.prepareStatement("", "SELECT 2", false);
+			c.bindStatement("", "", {}, {}, false);
+			c.executePortal("", 0, false);
+			c.sendSync();
+		} else {
+			c.sendQuery("SELECT 13");
+		}
+		r = raw_batch(c, &err);
+	} catch (const std::exception& e) {
+		r += std::string("<") + e.what() + ">";
+	}
+	const std::string end = pipelined ? "EZ(I)" : "TDCZ(I)";
+	const bool one_ready = r.size() >= end.size() && r.compare(r.size() - end.size(), end.size(), end) == 0;
+	ok(err.find(expected_err) != std::string::npos && one_ready, "'%s' fails%s%s, then %s: one ReadyForQuery: "
+		"replies '%s' (expected ...%s, nothing after), error '%s'", q.c_str(), behind.empty() ? "" : " before ",
+		behind.c_str(), pipelined ? "another statement and Sync" : "a simple Query (implicit Sync)", r.c_str(),
+		pipelined ? "EZ(I)" : "ETDCZ(I)", err.c_str());
+}
+
+static void pbe(PgConnection& c, const std::string& q) {
+	c.prepareStatement("", q, false);
+	c.bindStatement("", "", {}, {}, false);
+	c.executePortal("", 0, false);
+}
+
+// Sends the messages 'send' writes on a new connection, started with 'options' and after 'before' as a
+// simple Query when given, and returns the replies as raw_batch() reads them.
+static std::string run_unit(const std::function<void(PgConnection&)>& send, const std::string& options = "",
+	const std::string& before = "") {
+	PgConnection c(1000);
+	std::string r;
+	try {
+		c.setOptions(options);
+		c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+		if (before.empty() == false) {
+			c.sendQuery(before);
+			raw_batch(c);
+		}
+		send(c);
+		r = raw_batch(c);
+	} catch (const std::exception& e) {
+		r += std::string("<") + e.what() + ">";
+	}
+	return r;
 }
 
 // The servers of a hostgroup, each as SQL values ready for an INSERT into pgsql_servers.
@@ -230,7 +322,7 @@ int main(int argc, char** argv) {
 	if (cl.getEnv())
 		return exit_status();
 
-	plan(25);
+	plan(75);
 
 	PGConnPtr admin = createNewConnection(ADMIN);
 	PGConnPtr setup = createNewConnection(BACKEND);
@@ -242,6 +334,14 @@ int main(int argc, char** argv) {
 	const bool native = current_value(admin.get(), "SELECT variable_value FROM runtime_global_variables "
 		"WHERE variable_name='pgsql-use_native_backend_protocol'") == "true";
 	diag("Backend protocol: %s", native ? "native" : "libpq");
+	const std::string hg = current_value(admin.get(), "SELECT default_hostgroup FROM runtime_pgsql_users "
+		"WHERE username='" + std::string(cl.pgsql_username) + "' LIMIT 1");
+	const std::vector<std::string> servers = server_rows(admin.get(), hg);
+	std::fstream proxysql_log;
+	if (open_file_and_seek_end(get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log", proxysql_log) != EXIT_SUCCESS) {
+		BAIL_OUT("Cannot open the ProxySQL log");
+		return exit_status();
+	}
 
 	const int rule_id = 9733;
 	const int route_rule_id = 9734;
@@ -346,6 +446,36 @@ int main(int argc, char** argv) {
 			skip(2, "named portals are native mode only");
 		}
 
+		// Native mode sends the unit as one batch, and the rule's error on its second Parse fails the batch
+		// on the backend. After an implicit Sync the backend's ReadyForQuery for it is not the client's: the
+		// client's comes after its simple Query.
+		{
+			PgConnection c(1000);
+			std::string r2, err;
+			try {
+				c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+				for (const std::string& q : { std::string("SELECT 1"), blocked }) {
+					c.prepareStatement("", q, false);
+					c.bindStatement("", "", {}, {}, false);
+					c.executePortal("", 0, false);
+				}
+				c.sendQuery("SELECT 13");
+				r2 = raw_batch(c, &err);
+			} catch (const std::exception& e) {
+				r2 += std::string("<") + e.what() + ">";
+			}
+			const bool one_ready = r2.size() >= 7 && r2.compare(r2.size() - 7, 7, "TDCZ(I)") == 0;
+			ok(err == "blocked by rule" && one_ready, "Batched unit, blocked second Parse, then a simple Query (implicit "
+				"Sync): one ReadyForQuery, after the Query: replies '%s' (expected ...ETDCZ(I), nothing after), error '%s'",
+				r2.c_str(), err.c_str());
+		}
+
+		// The simple Query that closes a failed unit is refused by the rule: its own error ends with the
+		// one ReadyForQuery.
+		r = run_unit([&](PgConnection& c) { pbe(c, "SELECT 1/(random()*0)::int"); c.sendQuery(blocked); });
+		ok(r == "12EEZ(I)", "Failed unit, then a simple Query the rule refuses: replies '%s' (expected 12EEZ(I), "
+			"nothing after)", r.c_str());
+
 		exec_ok(admin.get(), "DELETE FROM pgsql_query_rules WHERE rule_id=" + std::to_string(rule_id));
 		exec_ok(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME");
 	}
@@ -400,6 +530,185 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	{
+		const std::vector<std::pair<std::string, std::string>> refusals = {
+			{ "SET DateStyle = 'extq_bogus_style'", "invalid value for parameter" },
+			{ "RESET ALL", "RESET ALL is not supported in pipeline mode" },
+			{ "COPY extq_copy_probe FROM STDIN", "Feature not supported" },
+			{ "DISCARD ALL", "DISCARD ALL is not supported" },
+			{ "SELECT 1/0", "division by zero" },
+		};
+		for (const bool pipelined : { false, true }) {
+			for (const auto& [q, expected] : refusals) {
+				check_refusal(q, expected, pipelined);
+			}
+			check_refusal("SELECT pg_terminate_backend($1)", "PID must be a positive integer", pipelined,
+				{ { std::string("0"), 0 } });
+			// Native mode sends the part before the SET, which ProxySQL handles itself, as its own batch with
+			// no Sync. Failing, it gets the Sync ProxySQL adds.
+			check_refusal("SELECT 1/0", "division by zero", pipelined, {}, false, "SET DateStyle = 'ISO'");
+		}
+
+		// A message ProxySQL does not support (a Flush, a FunctionCall) in the middle of a unit: its error
+		// must not carry a ReadyForQuery of its own. The client's Sync gets the only one.
+		for (const char type : { 'H', 'F' }) {
+			PgConnection c(1000);
+			std::string r, err;
+			try {
+				c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+				c.prepareStatement("", "SELECT 1", false);
+				c.bindStatement("", "", {}, {}, false);
+				c.executePortal("", 0, false);
+				c.sendMessage(type, {});
+				c.sendSync();
+				r = raw_batch(c, &err);
+			} catch (const std::exception& e) {
+				r += std::string("<") + e.what() + ">";
+			}
+			ok(r == "EZ(I)" && err.find("Feature not supported") != std::string::npos,
+				"'%c' refused in the middle of a unit, then Sync: one ReadyForQuery, the Sync's: replies '%s' "
+				"(expected EZ(I), nothing after), error '%s'", type, r.c_str(), err.c_str());
+		}
+	}
+
+	{
+		// The matrix. Replies as raw_batch() reads them: 1 ParseComplete, 2 BindComplete, T RowDescription,
+		// D DataRow, C CommandComplete, I EmptyQueryResponse, E ErrorResponse, Z(s) ReadyForQuery, "+x" what
+		// came after it. The closing Query gets the one ReadyForQuery, a Sync after it gets its own.
+		// The constant in "SELECT 1/0" is folded at Bind, so that one is a Bind error; this one fails at Execute.
+		// An expected value starting with "..." is checked as the end of the replies: before a Bind error
+		// ProxySQL sends its own BindComplete, which PostgreSQL does not (a separate issue).
+		static const std::string exec_err = "SELECT 1/(random()*0)::int";
+		using Send = std::function<void(PgConnection&)>;
+		// Untracked: the session's first message is not batched. It stays that way while that Parse goes to the
+		// backend; a Parse ProxySQL answers itself lets the rest batch, so these texts are new to this run.
+		const std::string unbatched = "-c work_mem=4MB";
+		const std::string fresh = " /* extq_one_at_a_time_" + std::to_string(time(nullptr)) + "_";
+		struct Case { const char* label; std::string options; std::string before; Send send; std::string expected; };
+		const std::vector<Case> cases = {
+			// Where the error comes.
+			{ "backend Parse error", "", "", [](PgConnection& c) {
+				pbe(c, "SELEC 1"); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+			{ "backend Bind error (a parameter missing)", "", "", [](PgConnection& c) {
+				c.prepareStatement("", "SELECT $1::int", false);
+				c.bindStatement("", "", {}, {}, false);
+				c.executePortal("", 0, false);
+				c.sendQuery("SELECT 13"); }, "...ETDCZ(I)" },
+			{ "backend Bind error (a folded constant)", "", "", [](PgConnection& c) {
+				pbe(c, "SELECT 1/0"); c.sendQuery("SELECT 13"); }, "...ETDCZ(I)" },
+			{ "backend Execute error", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendQuery("SELECT 13"); }, "12ETDCZ(I)" },
+			{ "backend Execute error after a statement that ran", "", "", [](PgConnection& c) {
+				pbe(c, "SELECT 1"); pbe(c, exec_err); c.sendQuery("SELECT 13"); }, "12DC12ETDCZ(I)" },
+			{ "backend Execute error, a statement queued behind it", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); }, "12ETDCZ(I)" },
+			{ "failing Parse alone", "", "", [](PgConnection& c) {
+				c.prepareStatement("", "SELEC 1", false); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+			{ "Describe of a statement that does not exist", "", "", [](PgConnection& c) {
+				c.describeStatement("extq_no_stmt", false); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+			{ "Bind of a statement that does not exist", "", "", [](PgConnection& c) {
+				c.bindStatement("extq_no_stmt", "", {}, {}, false);
+				c.executePortal("", 0, false);
+				c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+			{ "Execute of a portal that does not exist", "", "", [](PgConnection& c) {
+				c.executePortal("extq_no_portal", 0, false); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+			{ "Describe of the portal, then its Execute fails", "", "", [](PgConnection& c) {
+				c.prepareStatement("", exec_err, false);
+				c.bindStatement("", "", {}, {}, false);
+				c.describePortal("", false);
+				c.executePortal("", 0, false);
+				c.sendQuery("SELECT 13"); },
+				// libpq gives ProxySQL the columns only with rows, so its RowDescription is lost (a separate issue).
+				native ? "12TETDCZ(I)" : "...ETDCZ(I)" },
+			{ "Flush refused mid-unit, then the simple Query", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendMessage('H', {}); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+			// What closes the unit.
+			{ "closing Query fails itself", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendQuery("SELECT 1/0"); }, "12EEZ(I)" },
+			{ "closing Query is empty", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendQuery(""); }, "12EIZ(I)" },
+			{ "closing Query has two statements", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendQuery("SELECT 1; SELECT 2"); }, "12ETDCTDCZ(I)" },
+			{ "closing Query is a SET", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendQuery("SET DateStyle = 'ISO'"); }, "12ECZ(I)" },
+			{ "closing Query is BEGIN", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendQuery("BEGIN"); }, "12ECZ(T)" },
+			{ "a Sync after the closing Query", "", "", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendQuery("SELECT 13"); c.sendSync(); }, "12ETDCZ(I)+Z" },
+			// Inside a transaction.
+			{ "in a transaction, backend error", "", "BEGIN", [](PgConnection& c) {
+				pbe(c, exec_err); c.sendQuery("SELECT 13"); }, "12EEZ(E)" },
+			{ "in a transaction, ProxySQL's own error", "", "BEGIN", [](PgConnection& c) {
+				c.bindStatement("extq_no_stmt", "", {}, {}, false);
+				c.executePortal("", 0, false);
+				c.sendQuery("SELECT 13"); }, "EEZ(E)" },
+			{ "in a transaction, no error", "", "BEGIN", [](PgConnection& c) {
+				pbe(c, "SELECT 1"); c.sendQuery("SELECT 13"); }, "12DCTDCZ(T)" },
+			// Native mode, one message at a time.
+			{ "one at a time, Parse error", unbatched, "", [&](PgConnection& c) {
+				pbe(c, "SELEC 1" + fresh + "1 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); }, "ETDCZ(I)" },
+			{ "one at a time, Execute error", unbatched, "", [&](PgConnection& c) {
+				pbe(c, exec_err + fresh + "2 */"); c.sendQuery("SELECT 13"); }, "12ETDCZ(I)" },
+			{ "one at a time, Execute error after a statement that ran", unbatched, "", [&](PgConnection& c) {
+				pbe(c, "SELECT 1" + fresh + "3 */"); pbe(c, exec_err + fresh + "3b */"); c.sendQuery("SELECT 13"); },
+				"12DC12ETDCZ(I)" },
+			{ "one at a time, Execute error, a statement queued behind it", unbatched, "", [&](PgConnection& c) {
+				pbe(c, exec_err + fresh + "4 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); }, "12ETDCZ(I)" },
+			{ "one at a time, Execute error, a statement queued behind it, then Sync", unbatched, "", [&](PgConnection& c) {
+				pbe(c, exec_err + fresh + "5 */"); pbe(c, "SELECT 2"); c.sendSync(); }, "12EZ(I)" },
+			{ "one at a time, no error", unbatched, "", [&](PgConnection& c) {
+				pbe(c, "SELECT 1" + fresh + "6 */"); c.sendQuery("SELECT 13"); }, "12DCTDCZ(I)" },
+			// Native mode, the batch cut short before a statement ProxySQL handles, the error after it.
+			{ "error after a SET that cuts the batch", "", "", [](PgConnection& c) {
+				pbe(c, "SELECT 1"); pbe(c, "SET DateStyle = 'ISO'"); pbe(c, exec_err); c.sendQuery("SELECT 13"); },
+				"12DC12C12ETDCZ(I)" },
+		};
+		for (const Case& k : cases) {
+			const std::string got = run_unit(k.send, k.options, k.before);
+			const bool tail = k.expected.rfind("...", 0) == 0;
+			const std::string want = tail ? k.expected.substr(3) : k.expected;
+			const bool good = tail ? got.size() >= want.size() && got.compare(got.size() - want.size(), want.size(), want) == 0 :
+				got == want;
+			ok(good, "Matrix, %s: replies '%s' (expected %s, nothing after)", k.label, got.c_str(), k.expected.c_str());
+		}
+
+		// Native mode only: the one-at-a-time path really ran. The error with a statement queued behind it
+		// goes out Flush-terminated there, and ProxySQL logs the Sync it adds, once per backend connection,
+		// so the pool is emptied first.
+		if (native) {
+			reload_servers(admin.get(), hg, servers);
+			get_matching_lines(proxysql_log, "__skip_to_end__");
+			r = run_unit([&](PgConnection& c) { pbe(c, exec_err + fresh + "7 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13"); },
+				unbatched);
+			const bool logged = wait_for_log_match(proxysql_log, ".*native extq: mid-frame stmt-step error.*");
+			ok(r == "12ETDCZ(I)" && logged, "Matrix, one at a time: the path ran (Sync added after the error: %s), "
+				"replies '%s' (expected 12ETDCZ(I))", logged ? "logged" : "NOT logged", r.c_str());
+		} else {
+			skip(1, "the one-at-a-time path is native mode only");
+		}
+
+		// Units back to back on one connection: what the failed one leaves behind must not change the next.
+		PgConnection c(1000);
+		std::string r1, r2, r3;
+		try {
+			c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+			pbe(c, exec_err);
+			c.sendQuery("SELECT 13");
+			r1 = raw_batch(c);
+			pbe(c, "SELECT 5");
+			c.sendSync();
+			r2 = raw_batch(c);
+			pbe(c, "SELECT 6");
+			c.sendQuery("SELECT 7");
+			r3 = raw_batch(c);
+		} catch (const std::exception& e) {
+			r3 += std::string("<") + e.what() + ">";
+		}
+		ok(r1 == "12ETDCZ(I)" && r2 == "12DCZ(I)" && r3 == "12DCTDCZ(I)", "Matrix, units back to back: failed unit "
+			"then Query '%s', unit then Sync '%s', unit then Query '%s' (expected 12ETDCZ(I), 12DCZ(I), 12DCTDCZ(I))",
+			r1.c_str(), r2.c_str(), r3.c_str());
+	}
+
 	// A Parse over max_allowed_packet. Runtime only: the harness reloads variables before the next test.
 	const std::string max_packet = current_value(admin.get(),
 		"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-max_allowed_packet'");
@@ -428,25 +737,28 @@ int main(int argc, char** argv) {
 		// backend's own default is not the client's, so ProxySQL refuses it. One backend at a time makes the
 		// next client get the one the first client started, so no other session may hold it.
 		setup.reset();
-		const std::string hg = current_value(admin.get(), "SELECT default_hostgroup FROM runtime_pgsql_users "
-			"WHERE username='" + std::string(cl.pgsql_username) + "' LIMIT 1");
-		const std::vector<std::string> servers = server_rows(admin.get(), hg);
-		bool ready = servers.empty() == false && reload_servers(admin.get(), hg, servers, "1");
-		const std::string pool = current_value(admin.get(), "SELECT GROUP_CONCAT(status || ' used=' || ConnUsed || "
-			"' free=' || ConnFree, '; ') FROM stats_pgsql_connection_pool WHERE hostgroup=" + hg);
-		std::string stale_datestyle;
-		if (ready) {
-			PGConnPtr stale = createNewConnection(BACKEND, "-c DateStyle=SQL,\\\\ DMY");
-			if (stale) {
-				PGresult* res = PQexec(stale.get(), "SHOW DateStyle");
-				stale_datestyle = PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1 ?
-					PQgetvalue(res, 0, 0) : std::string("ERROR: ") + PQresultErrorMessage(res);
-				PQclear(res);
-			} else {
-				stale_datestyle = "no connection";
+		std::string pool, stale_datestyle;
+		// Empties the pool, then has a client started with DateStyle 'SQL, DMY' leave its backend there, the
+		// only one. Each RESET case needs a fresh one: in libpq mode the refusal drops the backend it was
+		// given, and the next one is started with the defaults.
+		auto stale_backend = [&]() {
+			if (reload_servers(admin.get(), hg, servers, "1") == false) return false;
+			pool = current_value(admin.get(), "SELECT GROUP_CONCAT(status || ' used=' || ConnUsed || "
+				"' free=' || ConnFree, '; ') FROM stats_pgsql_connection_pool WHERE hostgroup=" + hg);
+			{
+				PGConnPtr stale = createNewConnection(BACKEND, "-c DateStyle=SQL,\\\\ DMY");
+				if (stale) {
+					PGresult* res = PQexec(stale.get(), "SHOW DateStyle");
+					stale_datestyle = PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1 ?
+						PQgetvalue(res, 0, 0) : std::string("ERROR: ") + PQresultErrorMessage(res);
+					PQclear(res);
+				} else {
+					stale_datestyle = "no connection";
+				}
 			}
-		}
-		ready = ready && stale_datestyle == "SQL, DMY" && wait_free_connections(admin.get(), hg, 1);
+			return stale_datestyle == "SQL, DMY" && wait_free_connections(admin.get(), hg, 1);
+		};
+		bool ready = servers.empty() == false && stale_backend();
 		if (ready) {
 			PGConnPtr conn8 = probe_connection();
 			exec_ok(conn8.get(), "SET extq_test.lock_probe = 'on'");
@@ -459,6 +771,14 @@ int main(int argc, char** argv) {
 			ok(false, "RESET on a locked session: setup failed (hostgroup '%s', %zu server(s), pool '%s', stale DateStyle '%s')",
 				hg.c_str(), servers.size(), pool.c_str(), stale_datestyle.c_str());
 			ok(false, "RESET refused: not run");
+		}
+		for (const char* reset : { "RESET DateStyle", "RESET ALL" }) {
+			if (ready && stale_backend()) {
+				check_refusal(reset, "hostgroup is locked", false, {}, true);
+			} else {
+				ok(false, "%s on a locked session, implicit Sync: setup failed (stale DateStyle '%s')", reset,
+					stale_datestyle.c_str());
+			}
 		}
 		if (servers.empty() == false) {
 			reload_servers(admin.get(), hg, servers);

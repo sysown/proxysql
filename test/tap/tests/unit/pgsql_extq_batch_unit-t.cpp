@@ -128,11 +128,13 @@ static void test_own_parse() {
 		"own parse: the error belongs to the client's Bind entry");
 }
 
-// The Sync added before a simple Query: its ReadyForQuery is dropped unless the batch failed.
+// The Sync added before a simple Query: its ReadyForQuery is dropped, error or not. The client gets
+// the simple Query's own.
 static void test_implicit_sync() {
 	PgSQL_Extq_Registry reg;
+	reg.implicit_sync();
 	reg.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
-	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::DROP, 1));
+	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 1));
 	std::string out;
 	reg.start(out);
 	feed(reg, 'C', std::string("INSERT 0 1\0", 11), out);
@@ -141,11 +143,21 @@ static void test_implicit_sync() {
 	ok(ev.size() == 1 && ev[0].affected_rows == 1, "implicit sync: affected rows from CommandComplete");
 
 	PgSQL_Extq_Registry reg2;
+	reg2.implicit_sync();
 	reg2.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
-	reg2.push(slot(Extq_Kind::SYNC, Extq_Reply::DROP, 1));
+	reg2.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 1));
 	reg2.start(out);
 	feed(reg2, 'E', "err", out);
-	ok(feed(reg2, 'Z', "I", out) == Extq_Verdict::RELAY, "implicit sync: ReadyForQuery relayed after an error");
+	ok(feed(reg2, 'Z', "I", out) == Extq_Verdict::DROP && reg2.complete(), "implicit sync: ReadyForQuery dropped after an error");
+
+	// A part of the unit sent without a Sync, which fails: the Sync sent after the error is not the client's.
+	PgSQL_Extq_Registry reg3;
+	reg3.implicit_sync();
+	reg3.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
+	reg3.start(out);
+	feed(reg3, 'E', "err", out);
+	reg3.sync_sent();
+	ok(feed(reg3, 'Z', "I", out) == Extq_Verdict::DROP && reg3.complete(), "implicit sync: flush-ended error's ReadyForQuery dropped");
 }
 
 // A batch sent without a Sync (cut short before a SET, or by a local error).
@@ -270,14 +282,14 @@ static void test_substitute() {
 }
 
 int main() {
-	plan(46);
+	plan(47);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 	test_plain_unit();             // 8
 	test_local_reply_ordering();   // 3
 	test_error_skips_rest();       // 5
 	test_own_parse();              // 5
-	test_implicit_sync();          // 3
+	test_implicit_sync();          // 4
 	test_flush_ended();            // 5
 	test_substitute_skipped();     // 1
 	test_passthrough_and_bad();    // 5

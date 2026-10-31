@@ -288,6 +288,10 @@ void PgConnection::sendStartupPacket() {
     writeStringToBuffer(packet, user_);
     writeStringToBuffer(packet, "database");
     writeStringToBuffer(packet, dbname_);
+    if (!options_.empty()) {
+        writeStringToBuffer(packet, "options");
+        writeStringToBuffer(packet, options_);
+    }
 
     // Final null terminator
     packet.push_back(0);

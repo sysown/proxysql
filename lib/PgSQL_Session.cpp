@@ -2699,11 +2699,13 @@ __implicit_sync:
 						default:
 							// Before the frame reset, which can drop a mid-batch backend.
 							const char txn_state = txn_state_for_local_error();
+							// Also before it: with a unit being built the client still owes its Sync, and that
+							// Sync gets the ReadyForQuery. A Flush never gets one.
+							const bool send_ready_packet = is_extended_query_ready_for_query() && c != 'H';
 							reset_extended_query_frame();
 							proxy_error("Not implemented yet. Message type:'0x%02X'\n", c);
 							client_myds->setDSS_STATE_QUERY_SENT_NET();
 
-							bool send_ready_packet = is_extended_query_ready_for_query() && c != 'H';
 							client_myds->myprot.generate_error_packet(true, send_ready_packet, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 								false, true, NULL, txn_state);
 							l_free(pkt.size, pkt.ptr);
@@ -3696,11 +3698,13 @@ handler_again:
 					if (status == PROCESSING_STMT_PREPARE) {
 						// Before the frame reset, which can drop a mid-batch backend.
 						const char txn_state = txn_state_for_local_error();
+						// Also before it, which clears the implicit-Sync flag: after an implicit Sync the
+						// ReadyForQuery comes once the simple Query that closed the unit has run.
+						const bool send_ready_packet = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0;
 						reset_extended_query_frame();
 						proxy_error("'%s' command is not supported in Extended Query protocol mode. Use Simple Query mode to run this command\n",
 							query_to_match ? query_to_match : "");
 						client_myds->setDSS_STATE_QUERY_SENT_NET();
-						bool send_ready_packet = is_extended_query_ready_for_query();
 						client_myds->myprot.generate_error_packet(true, send_ready_packet, "Feature not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 							false, true, NULL, txn_state);
 						RequestEnd(myds, true);
@@ -5229,6 +5233,9 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 			// Asked before the frame reset below can drop a mid-batch backend. Only the
 			// pipelined refusal uses it: the in-transaction one settles the state itself.
 			const char queued_txn_state = in_txn_block ? 'I' : txn_state_for_local_error();
+			// The reset also clears the implicit-Sync flag: after an implicit Sync the ReadyForQuery
+			// comes once the simple Query that closed the unit has run.
+			const bool queued_ready = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0;
 			// Throws the frame away, and with it the backend connection when the backend
 			// is mid-batch: it never saw this error and concluding the batch would commit
 			// the work the client is about to be told failed.
@@ -5270,7 +5277,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 					explicit_txn ? 'E' : 'I');
 			} else {
 				proxy_error("DISCARD ALL is not supported when pipelined with further statements before Sync. Send it as the only statement before Sync, or use Simple Query mode\n");
-				client_myds->myprot.generate_error_packet(true, is_extended_query_ready_for_query(),
+				client_myds->myprot.generate_error_packet(true, queued_ready,
 					"DISCARD ALL is not supported in pipeline mode",
 					PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, queued_txn_state);
 			}
@@ -6648,8 +6655,9 @@ void PgSQL_Session::send_parameter_error_response(const char* error_message, PGS
 	std::string full_error = std::string("invalid input syntax for integer: \"") + 
 		(error_message ? error_message : "parameter error") + "\"";
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
-	// Generate and send error packet using PostgreSQL protocol
-	client_myds->myprot.generate_error_packet(true, is_extended_query_ready_for_query(), 
+	// The client's Sync is already in, so the error carries the unit's ReadyForQuery even with messages
+	// still queued behind it: they are discarded.
+	client_myds->myprot.generate_error_packet(true, true,
 		full_error.c_str(), error_code, false, true, NULL, txn_state_for_local_error());
 	
 	RequestEnd(NULL, true);
@@ -8742,7 +8750,11 @@ int PgSQL_Session::extq_after_message(int rc, unsigned int out_before, enum sess
 		// ProxySQL's own error: PostgreSQL would skip the rest of the unit and fail its transaction,
 		// explicit or implicit. The backend is made to fail at this same point, so the work before it
 		// ends as it would there, including a BEGIN earlier in this unit that has not run yet.
+		// The reset clears the implicit-Sync flag, which extq_render() needs to drop the batch's
+		// ReadyForQuery: after an implicit Sync the client's comes once its simple Query has run.
+		const uint8_t implicit = extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT;
 		reset_extended_query_frame(true);
+		extended_query_phase |= implicit;
 		return extq_finish(true);
 	}
 	if (extended_query_frame.empty()) {
@@ -8781,7 +8793,10 @@ int PgSQL_Session::extq_fail_on_backend(unsigned int out_before) {
 	}
 	bool error = true;
 	std::string bytes = extq_take_replies(out_before, error);
+	// Kept across the reset for extq_render(), as in extq_after_message().
+	const uint8_t implicit = extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT;
 	reset_extended_query_frame(true);
+	extended_query_phase |= implicit;
 	extq_entries.emplace_back();
 	PgSQL_Extq_Entry& e = extq_entries.back();
 	e.local = std::move(bytes);
@@ -8946,11 +8961,14 @@ bool PgSQL_Session::extq_render(PgSQL_Connection* myconn) {
 			pg_build_flush(extq_out);
 		}
 	}
+	if (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) {
+		// The Sync added before a simple Query, or the one sent after an error in a part of its unit:
+		// its ReadyForQuery is not the client's.
+		extq_registry.implicit_sync();
+	}
 	if (extq_sync) {
-		// The Sync added before a simple Query: its ReadyForQuery is not the client's.
-		const bool implicit = (extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) != 0;
 		pg_build_sync(extq_out);
-		extq_registry.push({ Extq_Kind::SYNC, implicit ? Extq_Reply::DROP : Extq_Reply::RELAY, (uint32_t)extq_entries.size(), std::string() });
+		extq_registry.push({ Extq_Kind::SYNC, Extq_Reply::RELAY, (uint32_t)extq_entries.size(), std::string() });
 	} else {
 		pg_build_flush(extq_out);
 	}
@@ -9242,7 +9260,7 @@ int  PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_S
 	PROXY_TRACE();
 	if (session_type != PROXYSQL_SESSION_PGSQL) { // only PgSQL module supports prepared statement!!
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_error_packet(true, false, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+		client_myds->myprot.generate_error_packet(true, true, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 			false, true);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -9347,7 +9365,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_P
 	if (session_type != PROXYSQL_SESSION_PGSQL) { // only PgSQL module supports prepared statement!!
 		l_free(pkt.size, pkt.ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_error_packet(true, false, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+		client_myds->myprot.generate_error_packet(true, true, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 			false, true);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -9375,7 +9393,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_D
 	if (session_type != PROXYSQL_SESSION_PGSQL) { // only PgSQL module supports prepared statement!!
 		l_free(pkt.size, pkt.ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_error_packet(true, false, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+		client_myds->myprot.generate_error_packet(true, true, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 			false, true);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -9403,7 +9421,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_C
 	if (session_type != PROXYSQL_SESSION_PGSQL) { // only PgSQL module supports prepared statement!!
 		l_free(pkt.size, pkt.ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_error_packet(true, false, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+		client_myds->myprot.generate_error_packet(true, true, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 			false, true);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -9430,7 +9448,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_B
 	if (session_type != PROXYSQL_SESSION_PGSQL) { // only PgSQL module supports prepared statement!!
 		l_free(pkt.size, pkt.ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_error_packet(true, false, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+		client_myds->myprot.generate_error_packet(true, true, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 			false, true);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;
@@ -9458,7 +9476,7 @@ bool PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_E
 	if (session_type != PROXYSQL_SESSION_PGSQL) { // only PgSQL module supports prepared statement!!
 		l_free(pkt.size, pkt.ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_error_packet(true, false, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
+		client_myds->myprot.generate_error_packet(true, true, "Prepared statements not supported", PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED,
 			false, true);
 		client_myds->DSS = STATE_SLEEP;
 		status = WAITING_CLIENT_DATA;

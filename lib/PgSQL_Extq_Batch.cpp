@@ -9,6 +9,7 @@ void PgSQL_Extq_Registry::clear() {
 	aborted_ = false;
 	need_sync_ = false;
 	sync_sent_ = false;
+	implicit_sync_ = false;
 	saw_param_desc_ = false;
 	rows_ = 0;
 	affected_rows_ = UINT64_MAX;
@@ -99,8 +100,8 @@ Extq_Verdict PgSQL_Extq_Registry::on_message(char type, const unsigned char* pay
 	}
 	answered_ = true;
 	if (aborted_) {
-		// After an error only the ReadyForQuery that ends the batch may come. The client gets it:
-		// it follows the error the client was given.
+		// After an error only the ReadyForQuery that ends the batch may come. The client gets it,
+		// after the error it was given, unless a simple Query closed the unit.
 		if (type != 'Z') {
 			return Extq_Verdict::BAD;
 		}
@@ -110,7 +111,7 @@ Extq_Verdict PgSQL_Extq_Registry::on_message(char type, const unsigned char* pay
 			return Extq_Verdict::BAD;
 		}
 		complete_ = true;
-		return Extq_Verdict::RELAY;
+		return implicit_sync_ ? Extq_Verdict::DROP : Extq_Verdict::RELAY;
 	}
 	if (slots_.empty()) {
 		return Extq_Verdict::BAD;
@@ -169,7 +170,7 @@ Extq_Verdict PgSQL_Extq_Registry::on_message(char type, const unsigned char* pay
 		if (type == 'Z') {
 			complete_ = true;
 			slots_.pop_front();
-			return partial;
+			return implicit_sync_ ? Extq_Verdict::DROP : Extq_Verdict::RELAY;
 		}
 		break;
 	}

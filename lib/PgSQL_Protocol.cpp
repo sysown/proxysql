@@ -1665,12 +1665,16 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 	char txn_state) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
+	PgSQL_Data_Stream* ds = myds ? *myds : nullptr;
+	// sending needs the data stream to write to
+	assert(!send || ds);
 
-	if (send) {
-		if (ready == fatal)
-			ready = !ready;
-	}
-
+	// A FATAL error closes the connection, so it never gets a ReadyForQuery. Neither does an error in an
+	// extended-query unit closed by a simple Query (implicit Sync): the client gets one ReadyForQuery,
+	// once that Query has run, or it reads the next replies one request late.
+	if (fatal || (ds && ds->sess &&
+		(ds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT)))
+		ready = false;
 
 	PG_pkt pgpkt{};
 
@@ -1689,8 +1693,8 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 
 	auto buff = pgpkt.detach();
 	if (send) {
-		(*myds)->PSarrayOUT->add((void*)buff.first, buff.second);
-		switch ((*myds)->DSS) {
+		ds->PSarrayOUT->add((void*)buff.first, buff.second);
+		switch (ds->DSS) {
 		case STATE_SERVER_HANDSHAKE:
 		case STATE_CLIENT_HANDSHAKE:
 		// A TLS client is still in STATE_SSL_INIT when its startup packet arrives, because nothing
@@ -1701,12 +1705,12 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 		case STATE_QUERY_SENT_DS:
 		case STATE_QUERY_SENT_NET:
 		case STATE_ERR:
-			(*myds)->DSS = STATE_ERR;
+			ds->DSS = STATE_ERR;
 			break;
 		case STATE_OK:
 			break;
 		case STATE_SLEEP:
-			if ((*myds)->sess->session_fast_forward) { // see issue #733
+			if (ds->sess->session_fast_forward) { // see issue #733
 				break;
 			}
 		default:
@@ -1722,8 +1726,8 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 	}
 
 	if (track) {
-		if (*myds && (*myds)->sess && (*myds)->sess->thread) {
-			(*myds)->sess->thread->status_variables.stvar[st_var_generated_pkt_err]++;
+		if (ds && ds->sess && ds->sess->thread) {
+			ds->sess->thread->status_variables.stvar[st_var_generated_pkt_err]++;
 		}
 	}
 }
