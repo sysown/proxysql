@@ -21,6 +21,10 @@
  * multi-statement Simple Query (issue #6438):
  *   - pgsql_stmt_skip_lead() / pgsql_digest_next_stmt() / pgsql_digest_has_stmt_keyword()
  *   - pgsql_text_has_word(), for the part of a digest the scan cannot follow
+ *
+ * And unterminated dollar-quoted strings ("SELECT $ab$ x$$"), which used to make the
+ * tokenizer loop forever. Those cases run in a forked child under alarm(), so a hang is
+ * reported as a failure instead of stalling the test run.
  */
 
 #include "tap.h"
@@ -30,10 +34,17 @@
 #include "proxysql.h"
 #include "c_tokenizer.h"
 
+#include <cerrno>
+#include <csignal>
 #include <cstring>
 #include <cstdlib>
+#include <functional>
 #include <string>
 #include <vector>
+
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 // Thread-local variables used by pgsql_query_digest_first_stage and
 // pgsql_query_digest_and_first_comment_2 (which call get_pgsql_options internally).
@@ -1089,11 +1100,156 @@ static void test_stage_helpers_keep_comment_no_char_lost() {
 }
 
 // ============================================================================
+// 19. Unterminated dollar-quoted strings
+// ============================================================================
+
+/**
+ * @brief Runs 'fn' in a forked child under a time limit and returns its result in 'out'.
+ *
+ * An unterminated dollar-quoted string such as "SELECT $ab$ x$$" used to make the
+ * tokenizer loop forever without consuming input. Running every case in a child that
+ * alarm() kills turns such a hang into a reported failure instead of a stuck test run,
+ * and a crash in one case does not stop the others.
+ *
+ * @return true if the child finished in time and exited normally; 'out' then holds the
+ *   string 'fn' returned. Otherwise 'out' says how the child ended.
+ */
+static bool run_time_limited(const std::function<std::string()>& fn, std::string& out) {
+	int fds[2];
+	if (pipe(fds) != 0) {
+		out = std::string("pipe() failed: ") + strerror(errno);
+		return false;
+	}
+	fflush(nullptr);
+	const pid_t child = fork();
+	if (child == 0) {
+		close(fds[0]);
+		const struct rlimit no_core = {0, 0};
+		setrlimit(RLIMIT_CORE, &no_core);
+		alarm(5);
+		const std::string r = fn();
+		size_t done = 0;
+		while (done < r.size()) {
+			const ssize_t n = write(fds[1], r.data() + done, r.size() - done);
+			if (n <= 0) _exit(2);
+			done += (size_t)n;
+		}
+		_exit(0);
+	}
+	close(fds[1]);
+	if (child < 0) {
+		close(fds[0]);
+		out = std::string("fork() failed: ") + strerror(errno);
+		return false;
+	}
+	// read() returns 0 once the child exits, including when alarm() kills it.
+	std::string r;
+	char chunk[256];
+	for (;;) {
+		const ssize_t n = read(fds[0], chunk, sizeof(chunk));
+		if (n > 0) { r.append(chunk, (size_t)n); continue; }
+		if (n < 0 && errno == EINTR) continue;
+		break;
+	}
+	close(fds[0]);
+	int status = 0;
+	pid_t waited = -1;
+	do {
+		waited = waitpid(child, &status, 0);
+	} while (waited == -1 && errno == EINTR);
+	if (waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+		out = r;
+		return true;
+	}
+	if (waited == child && WIFSIGNALED(status) && WTERMSIG(status) == SIGALRM) {
+		out = "(hung: no result after 5s)";
+	} else if (waited == child && WIFSIGNALED(status)) {
+		out = "(killed by signal " + std::to_string(WTERMSIG(status)) + ")";
+	} else {
+		out = "(child failed, status " + std::to_string(status) + ")";
+	}
+	return false;
+}
+
+static std::string one_it_digest_str(const char* query) {
+	std::string q(query);
+	char* first_comment = nullptr;
+	char* r = pgsql_query_digest_and_first_comment_one_it(&q[0], (int)q.size(), &first_comment, nullptr);
+	std::string ret(r ? r : "(null)");
+	free(r);
+	if (first_comment) free(first_comment);
+	return ret;
+}
+
+static std::string full_digest_str(const char* query) {
+	char* r = pgsql_query_full_digest(query);
+	std::string ret(r ? r : "(null)");
+	free(r);
+	return ret;
+}
+
+// Inside a dollar-quoted string the tokenizer looks for the closing "$tag$". Once fewer
+// bytes remain than the delimiter needs, it returned without consuming anything and kept
+// the tag. If the next byte was a '$' that starts "$$" or "$tag$", it went straight back
+// into the dollar-quote state and made no progress, forever: one Simple Query or Parse
+// with such text hung a PgSQL worker thread. An unterminated dollar-quoted string must
+// now end the digest, like an unterminated quoted literal does ("SELECT 'abc" -> "select").
+static void test_digest_unterminated_dollar_quote() {
+	const struct { const char* query; const char* expected; } cases[] = {
+		{ "SELECT $abc$ x$$",          "select" },
+		{ "SELECT $ab$ $$",            "select" },
+		{ "SELECT $abcd$ $ab$",        "select" },
+		{ "SELECT $a$ $$",             "select" },
+		{ "$a$$$",                     "" },
+		{ "UNLISTEN ch; SELECT $q$$$", "unlisten ch; select" },
+		// The unterminated string's tail used to be copied into the digest ("select cret").
+		{ "SELECT $abc$ secret",       "select" },
+	};
+	for (const auto& c : cases) {
+		std::string d;
+		const bool finished = run_time_limited([&c]() { return digest_query(c.query); }, d);
+		ok(finished && d == c.expected,
+			"unterminated dollar quote: '%s' digests to '%s' (got '%s')", c.query, c.expected, d.c_str());
+	}
+
+	// The same state is reached through the other entry points of the tokenizer.
+	std::string d;
+	bool finished = run_time_limited([]() { return one_it_digest_str("SELECT $ab$ x$$"); }, d);
+	ok(finished, "unterminated dollar quote: single-iteration digest finishes (got '%s')", d.c_str());
+	finished = run_time_limited([]() { return full_digest_str("SELECT 1 AS listen, $a$ $$"); }, d);
+	ok(finished && d == "select ? as listen,",
+		"unterminated dollar quote: full digest finishes (got '%s')", d.c_str());
+	// LISTEN gate with no digest (query_digests off or the query over the length limit):
+	// the query mentions the word, so it is digested in full.
+	finished = run_time_limited([]() {
+		return std::string(pgsql_query_has_stmt_keyword(NULL, "SELECT 1 AS listen, $a$ $$", "LISTEN") ? "1" : "0");
+	}, d);
+	ok(finished && d == "0", "unterminated dollar quote: LISTEN gate finishes, no LISTEN statement (got '%s')", d.c_str());
+	finished = run_time_limited([]() {
+		return std::string(pgsql_query_has_stmt_keyword(NULL, "SELECT 1; LISTEN ch; SELECT $ab$ $$", "LISTEN") ? "1" : "0");
+	}, d);
+	ok(finished && d == "1", "unterminated dollar quote: LISTEN gate finishes, LISTEN statement found (got '%s')", d.c_str());
+
+	// Terminated dollar-quoted strings are still replaced by '?', also when they hold
+	// "$$" or another tag, or are followed by more of the query.
+	const struct { const char* query; const char* expected; } terminated[] = {
+		{ "SELECT $a$x$a$, $b$ $$ $b$",         "select ?,?" },
+		{ "SELECT $t_1$x $t$ $$x$t_1$ FROM t",  "select ? from t" },
+		{ "SELECT $$a$b$$, 'x', $q$$q$",        "select ?,?,?" },
+	};
+	for (const auto& c : terminated) {
+		finished = run_time_limited([&c]() { return digest_query(c.query); }, d);
+		ok(finished && d == c.expected,
+			"terminated dollar quote: '%s' digests to '%s' (got '%s')", c.query, c.expected, d.c_str());
+	}
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(131 + 14 + 18 + 13 + 6);
+	plan(131 + 14 + 18 + 13 + 6 + 14);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -1208,6 +1364,9 @@ int main() {
 
 	// 18. keep_comment in the stage / single-iteration helpers (6 tests, issue #6454)
 	test_stage_helpers_keep_comment_no_char_lost(); // 6
+
+	// 19. Unterminated dollar-quoted strings (14 tests)
+	test_digest_unterminated_dollar_quote(); // 14
 
 	test_cleanup_minimal();
 	return exit_status();

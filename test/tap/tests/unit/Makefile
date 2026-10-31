@@ -627,13 +627,13 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_decompress_payload_unit-t \
 	mysql_resolution_unit-t \
 	mariadb_tls_server_name_unit-t \
-	pgsql_variables_validator_unit-t \
+	pgsql_variables_validator_unit-t pgsql_startup_options_escape_unit-t \
 	pgsql_set_tracked_vars_regexp_unit-t \
 	pgsql_set_transaction_regexp_unit-t \
-	proxysql_utils_unit-t startup_gate_unit-t cluster_plugin_set_hash_unit-t \
+	proxysql_utils_unit-t startup_gate_unit-t startup_gate_admin_lock_unit-t cluster_plugin_set_hash_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
-	pgsql_txn_state_unit-t \
+	pgsql_txn_state_unit-t pgsql_txn_end_classifier_unit-t \
 	pgsql_midbatch_reset_refused_unit-t \
 	pgsql_local_error_txn_state_unit-t \
 	pgsql_conn_liveness_unit-t \
@@ -679,8 +679,8 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \
-	connection_max_age_unit-t \
-	cluster_sync_unit-t \
+	connection_max_age_unit-t latency_awareness_selection_unit-t \
+	cluster_sync_unit-t cluster_admin_lock_order_unit-t \
 	parsersql_unit-t parsersql_v30_flow_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
