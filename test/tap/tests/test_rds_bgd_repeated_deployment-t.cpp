@@ -76,25 +76,6 @@ int cleanup(MYSQL* admin, RDS_BGD_Simulator& sim) {
 	return EXIT_SUCCESS;
 }
 
-vector<RDS_BGD_Topology_Row> topology_with_reader_pair(RDS_BGD_Cluster& cluster, string status) {
-	vector<RDS_BGD_Topology_Row> rows = cluster.get_topology(status);
-	rows.push_back({
-		cluster.blue_readers[0].hostname,
-		cluster.blue_readers[0].hostname,
-		cluster.blue_readers[0].port,
-		"BLUE_GREEN_DEPLOYMENT_SOURCE",
-		status,
-	});
-	rows.push_back({
-		cluster.green_readers[0].hostname,
-		cluster.green_readers[0].hostname,
-		cluster.green_readers[0].port,
-		"BLUE_GREEN_DEPLOYMENT_TARGET",
-		status,
-	});
-	return rows;
-}
-
 vector<RDS_BGD_Topology_Row> target_only_completed(RDS_BGD_Cluster& cluster) {
 	vector<RDS_BGD_Topology_Row> rows {{
 		cluster.green_writer.hostname,
@@ -115,12 +96,13 @@ int configure_read_only_values(RDS_BGD_Simulator& sim, RDS_BGD_Cluster& cluster)
 		return EXIT_FAILURE;
 	}
 
-	if (bgd_set_host_read_only_1(sim, cluster.blue_readers[0]) != EXIT_SUCCESS) {
-		return EXIT_FAILURE;
+	for (RDS_BGD_Host& reader : cluster.blue_readers) {
+		if (bgd_set_host_read_only_1(sim, reader) != EXIT_SUCCESS)
+			return EXIT_FAILURE;
 	}
-
-	if (bgd_set_host_read_only_1(sim, cluster.green_readers[0]) != EXIT_SUCCESS) {
-		return EXIT_FAILURE;
+	for (RDS_BGD_Host& reader : cluster.green_readers) {
+		if (bgd_set_host_read_only_1(sim, reader) != EXIT_SUCCESS)
+			return EXIT_FAILURE;
 	}
 
 	return EXIT_SUCCESS;
@@ -134,6 +116,20 @@ int set_default_hostgroup(MYSQL* admin, int hostgroup) {
 
 	int rc = execute_all(admin, queries);
 	return rc;
+}
+
+int prefer_blue_reader(MYSQL* admin, BGD_Hostgroups& hg,
+	RDS_BGD_Cluster& cluster, size_t preferred) {
+	vector<string> queries;
+	for (size_t i = 0; i < cluster.blue_readers.size(); ++i) {
+		queries.push_back(
+			"UPDATE mysql_servers SET weight=" + to_string(i == preferred ? 1000000 : 1) +
+			" WHERE hostgroup_id=" + to_string(hg.blue_reader) +
+			" AND hostname=" + bgd_sql_quote(cluster.blue_readers[i].hostname) +
+			" AND port=" + to_string(cluster.blue_readers[i].port));
+	}
+	queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
+	return execute_all(admin, queries);
 }
 
 rc_t<string> connect_and_echo(CommandLine& cl) {
@@ -158,10 +154,15 @@ bool runtime_green_membership_matches(
 		"(SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=" + to_string(hg.green_reader) +
 		" AND hostname=" + bgd_sql_quote(present.green_readers[0].hostname) + " AND port=3306 AND use_ssl=" +
 		to_string(use_ssl) + ")=1 AND "
+		"(SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=" + to_string(hg.green_reader) +
+		" AND hostname=" + bgd_sql_quote(present.green_readers[1].hostname) + " AND port=3306 AND use_ssl=" +
+		to_string(use_ssl) + ")=1 AND "
 		"(SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=" + to_string(hg.green_writer) +
 		" AND hostname=" + bgd_sql_quote(absent.green_writer.hostname) + " AND port=3306)=0 AND "
 		"(SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=" + to_string(hg.green_reader) +
-		" AND hostname=" + bgd_sql_quote(absent.green_readers[0].hostname) + " AND port=3306)=0";
+		" AND hostname=" + bgd_sql_quote(absent.green_readers[0].hostname) + " AND port=3306)=0 AND "
+		"(SELECT COUNT(*) FROM runtime_mysql_servers WHERE hostgroup_id=" + to_string(hg.green_reader) +
+		" AND hostname=" + bgd_sql_quote(absent.green_readers[1].hostname) + " AND port=3306)=0";
 
 	auto [rc, rows] = mysql_query_ext_rows(admin, query);
 	if (rc != EXIT_SUCCESS || rows.size() != 1 || rows[0].size() != 1) {
@@ -180,12 +181,16 @@ int replace_green_membership(
 			" AND hostname=" + bgd_sql_quote(old_deployment.green_writer.hostname) + " AND port=3306",
 		"DELETE FROM mysql_servers WHERE hostgroup_id=" + to_string(hg.green_reader) +
 			" AND hostname=" + bgd_sql_quote(old_deployment.green_readers[0].hostname) + " AND port=3306",
+		"DELETE FROM mysql_servers WHERE hostgroup_id=" + to_string(hg.green_reader) +
+			" AND hostname=" + bgd_sql_quote(old_deployment.green_readers[1].hostname) + " AND port=3306",
 	};
 	if (execute_all(admin, delete_queries) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Host> green_servers { new_deployment.green_writer, new_deployment.green_readers[0] };
+	vector<RDS_BGD_Host> green_servers {
+		new_deployment.green_writer, new_deployment.green_readers[0], new_deployment.green_readers[1]
+	};
 	if (bgd_admin_add_servers(admin, new_deployment, hg, green_servers, true, 1) != EXIT_SUCCESS) {
 		return EXIT_FAILURE;
 	}
@@ -198,7 +203,7 @@ int replace_green_membership(
 int publish_writer_lifecycle(
 	MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state, RDS_BGD_Cluster& cluster, string deployment)
 {
-	vector<RDS_BGD_Topology_Row> initiated = topology_with_reader_pair(cluster, "SWITCHOVER_INITIATED");
+	vector<RDS_BGD_Topology_Row> initiated = bgd_topology_with_readers(cluster, "SWITCHOVER_INITIATED");
 	if (sim.topology_update(cluster.get_endpoints(), initiated) != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_INITIATED topology for deployment %s", deployment.c_str());
 		return EXIT_FAILURE;
@@ -209,7 +214,7 @@ int publish_writer_lifecycle(
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> progress = topology_with_reader_pair(cluster, "SWITCHOVER_IN_PROGRESS");
+	vector<RDS_BGD_Topology_Row> progress = bgd_topology_with_readers(cluster, "SWITCHOVER_IN_PROGRESS");
 	if (sim.topology_update(cluster.get_endpoints(), progress) != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_PROGRESS topology for deployment %s", deployment.c_str());
 		return EXIT_FAILURE;
@@ -220,7 +225,7 @@ int publish_writer_lifecycle(
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> post = topology_with_reader_pair(cluster, "SWITCHOVER_IN_POST_PROCESSING");
+	vector<RDS_BGD_Topology_Row> post = bgd_topology_with_readers(cluster, "SWITCHOVER_IN_POST_PROCESSING");
 	if (sim.topology_update(cluster.get_endpoints(), post) != EXIT_SUCCESS) {
 		diag("Error: failed to publish SWITCHOVER_IN_POST_PROCESSING topology for deployment %s", deployment.c_str());
 		return EXIT_FAILURE;
@@ -275,7 +280,7 @@ int publish_reader_cleanup(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& stat
  * - Complete writer and reader switchover, then publish empty topology.
  * - Verify NONE and baseline blue-writer placement.
  */
-int test_deployment_a(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
+int test_deployment_a(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
 	RDS_BGD_Cluster& deployment = state.deployment_a;
 	BGD_Hostgroups& hg = state.hostgroups;
 
@@ -285,20 +290,28 @@ int test_deployment_a(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Topology_Row> available = topology_with_reader_pair(deployment, "AVAILABLE");
+	vector<RDS_BGD_Topology_Row> available = bgd_topology_with_readers(deployment, "AVAILABLE");
 	int topology_rc = sim.topology_update(deployment.get_endpoints(), available);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for deployment A");
 		return EXIT_FAILURE;
 	}
 
-	vector<RDS_BGD_Host> blue_servers { deployment.blue_writer, deployment.blue_readers[0] };
-	vector<RDS_BGD_Host> green_servers { deployment.green_writer, deployment.green_readers[0] };
+	vector<RDS_BGD_Host> blue_servers {
+		deployment.blue_writer, deployment.blue_readers[0], deployment.blue_readers[1]
+	};
+	vector<RDS_BGD_Host> green_servers {
+		deployment.green_writer, deployment.green_readers[0], deployment.green_readers[1]
+	};
 	int admin_rc = bgd_admin_setup(
 		admin, deployment, hg, BGD_Admin_Mode::explicit_configuration, blue_servers, green_servers, 0, 0
 	);
 	if (admin_rc != EXIT_SUCCESS) {
 		diag("Error: failed to configure BGD hostgroups 1400-1403 for deployment A");
+		return EXIT_FAILURE;
+	}
+	if (prefer_blue_reader(admin, hg, deployment, 0) != EXIT_SUCCESS) {
+		diag("Error: failed to prefer the first blue reader for deployment A");
 		return EXIT_FAILURE;
 	}
 
@@ -307,12 +320,30 @@ int test_deployment_a(MYSQL* admin, RDS_BGD_Simulator& sim, TestState& state) {
 		diag("Error: BGD status for wHG 1400 did not reach AVAILABLE for deployment A");
 		return EXIT_FAILURE;
 	}
+	vector<RDS_BGD_Topology_Row> rollback_probe =
+		bgd_topology_with_readers(deployment, "SWITCHOVER_IN_PROGRESS");
+	if (sim.topology_update(deployment.get_endpoints(), rollback_probe) != EXIT_SUCCESS ||
+		bgd_wait_for_status(admin, hg, "WRITER_SWITCHOVER_IN_PROGRESS", kTimeoutSeconds) != EXIT_SUCCESS ||
+		sim.topology_update(deployment.get_endpoints(), available) != EXIT_SUCCESS ||
+		bgd_wait_for_status(admin, hg, "AVAILABLE", kTimeoutSeconds) != EXIT_SUCCESS) {
+		diag("Error: two-pair deployment A did not roll back to AVAILABLE");
+		return EXIT_FAILURE;
+	}
+	ok(true, "two-pair deployment A rolls back to AVAILABLE before switchover");
 
 	int writer_rc = publish_writer_lifecycle(admin, sim, state, deployment, "A");
 	if (writer_rc != EXIT_SUCCESS) {
 		diag("Error: failed to complete writer switchover for deployment A");
 		return EXIT_FAILURE;
 	}
+	if (set_default_hostgroup(admin, hg.blue_reader) != EXIT_SUCCESS) {
+		diag("Error: failed to route a deployment A reader connection");
+		return EXIT_FAILURE;
+	}
+	auto [reader_route_rc, reader_route] = connect_and_echo(cl);
+	ok(reader_route_rc == EXIT_SUCCESS &&
+		reader_route.find(deployment.green_readers[0].ip) != string::npos,
+		"deployment A pins the first blue reader to its paired green reader");
 
 	int reader_rc = publish_reader_cleanup(admin, sim, state, deployment, "A");
 	if (reader_rc != EXIT_SUCCESS) {
@@ -354,8 +385,12 @@ int test_deployment_b(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, Tes
 		diag("Error: failed to replace deployment A green rows with deployment B rows");
 		return EXIT_FAILURE;
 	}
+	if (prefer_blue_reader(admin, hg, deployment_b, 1) != EXIT_SUCCESS) {
+		diag("Error: failed to prefer the second blue reader for deployment B");
+		return EXIT_FAILURE;
+	}
 
-	vector<RDS_BGD_Topology_Row> available = topology_with_reader_pair(deployment_b, "AVAILABLE");
+	vector<RDS_BGD_Topology_Row> available = bgd_topology_with_readers(deployment_b, "AVAILABLE");
 	int topology_rc = sim.topology_update(deployment_b.get_endpoints(), available);
 	if (topology_rc != EXIT_SUCCESS) {
 		diag("Error: failed to publish AVAILABLE topology for deployment B");
@@ -389,6 +424,14 @@ int test_deployment_b(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, Tes
 		diag("Error: failed to complete writer switchover for deployment B");
 		return EXIT_FAILURE;
 	}
+	if (set_default_hostgroup(admin, hg.blue_reader) != EXIT_SUCCESS) {
+		diag("Error: failed to route a deployment B reader connection");
+		return EXIT_FAILURE;
+	}
+	auto [reader_route_rc, reader_route] = connect_and_echo(cl);
+	ok(reader_route_rc == EXIT_SUCCESS &&
+		reader_route.find(deployment_b.green_readers[1].ip) != string::npos,
+		"deployment B pins the second blue reader to its paired green reader");
 
 	int user_rc = set_default_hostgroup(admin, hg.blue_writer);
 	if (user_rc != EXIT_SUCCESS) {
@@ -412,7 +455,7 @@ int test_deployment_b(CommandLine& cl, MYSQL* admin, RDS_BGD_Simulator& sim, Tes
 }
 
 int main() {
-	plan(5);
+	plan(8);
 
 	CommandLine cl {};
 	MYSQL* admin = nullptr;
@@ -427,7 +470,7 @@ int main() {
 	// Simulator: publish deployment A topology through writer and reader completion, then delete it.
 	// ProxySQL: configure BGD hostgroups 1400-1403 for deployment A.
 	// Verify: deployment A cleanup reaches NONE and restores blue-writer placement.
-	if (test_deployment_a(admin, sim, state) != EXIT_SUCCESS) {
+	if (test_deployment_a(cl, admin, sim, state) != EXIT_SUCCESS) {
 		goto exit_cleanup;
 	}
 

@@ -392,7 +392,10 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 		const auto& claim = claims[index];
 		claim_by_hostgroup.emplace(claim.writer_hostgroup, index);
 		claim_by_hostgroup.emplace(claim.reader_hostgroup, index);
-		if (claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green) {
+		if (claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green ||
+			(claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_replication &&
+			 (claim.role_monitor.green_writer_hostgroup != 0 ||
+			  claim.role_monitor.green_reader_hostgroup != 0))) {
 			claim_by_hostgroup.emplace(claim.role_monitor.green_writer_hostgroup, index);
 			claim_by_hostgroup.emplace(claim.role_monitor.green_reader_hostgroup, index);
 		}
@@ -410,7 +413,10 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 		const auto& claim = claims[index];
 		if (delegated.count(claim.writer_hostgroup) == 0 ||
 			delegated.count(claim.reader_hostgroup) == 0 ||
-			(claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green &&
+			((claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green ||
+			  (claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_replication &&
+			   (claim.role_monitor.green_writer_hostgroup != 0 ||
+			    claim.role_monitor.green_reader_hostgroup != 0))) &&
 			 (delegated.count(claim.role_monitor.green_writer_hostgroup) == 0 ||
 			  delegated.count(claim.role_monitor.green_reader_hostgroup) == 0))) {
 			error = "delegated hostgroups contain an incomplete discovery claim";
