@@ -5745,6 +5745,43 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 		return 0;
 	}
 
+	// The fast-forward handoff requeues this command as the first packet. If
+	// another command is already queued, reject the replication command before
+	// changing session state so the remaining packets can be handled in order.
+	if (client_myds->PSarrayIN->len) {
+		// A client can trigger this warning repeatedly; log at most once per 10s.
+		static std::atomic<time_t> last_warning{0};
+		const time_t now = time(NULL);
+		time_t previous = last_warning.load(std::memory_order_relaxed);
+		if (now - previous >= 10 && last_warning.compare_exchange_strong(
+			previous, now, std::memory_order_relaxed)) {
+			proxy_warning("Rejecting pipelined replication command %u from client %s:%d\n",
+				(unsigned int)c, client_myds->addr.addr ? client_myds->addr.addr : "", client_myds->addr.port);
+		}
+		// Reassembled multi-packet commands keep the first header, not the last
+		// packet's sequence ID. Compute the next ID from the logical payload size;
+		// pkt_sid may instead belong to a later pipelined command.
+		const uint8_t response_sequence = static_cast<uint8_t>(
+			static_cast<mysql_hdr*>(pkt.ptr)->pkt_id + 1 + (pkt.size - sizeof(mysql_hdr)) / 0xffffff);
+		l_free(pkt.size, pkt.ptr);
+		pkt = {};
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, response_sequence, 1815, (char *)"HY000",
+			(char *)"Replication commands cannot be pipelined with other client packets");
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		// COM_QUIT tears down the session before the normal writeout epilogue.
+		// Attempt to send the rejection first; as with other teardown paths, a
+		// nonblocking socket may still leave bytes pending under backpressure.
+		const PtrSize_t* next = client_myds->PSarrayIN->index(0);
+		if (next->size == sizeof(mysql_hdr) + 1 &&
+			*(static_cast<unsigned char*>(next->ptr) + sizeof(mysql_hdr)) == _MYSQL_COM_QUIT) {
+			client_myds->array2buffer_full();
+			client_myds->write_to_net();
+		}
+		return 0;
+	}
+
 	// In this switch we handle commands that download binlog events from MySQL
 	// servers. For these commands a lot of the features provided by ProxySQL
 	// aren't useful, like multiplexing, query parsing, etc. For this reason,
