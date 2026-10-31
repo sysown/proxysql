@@ -515,6 +515,10 @@ private:
 	// caller must fall back to the current terminate-the-session flow (e.g.
 	// admin var off, result transfer already started, or a preflight failed).
 	bool handler_minus1_PoisonTransaction(PgSQL_Data_Stream* myds);
+	// Whether the work a failed backend left unfinished holds a COMMIT whose reply never reached
+	// the client: it may have taken effect before the backend died. The client is then
+	// disconnected, as PostgreSQL does.
+	bool commit_unanswered();
 	// While tx_poisoned, classify a 'Q' packet and either clear the poison
 	// and synthesize a ROLLBACK response (for plain whole-transaction
 	// ROLLBACK / COMMIT / ABORT / END) or reject with ERROR 25P02
@@ -528,6 +532,10 @@ private:
 	// The client ended a poisoned transaction (ROLLBACK/COMMIT, either protocol): roll it
 	// back -- tracked SET variables, then any backend still holding it -- and clear the poison.
 	void end_poisoned_transaction();
+	// A backend that holds session state is not dropped when a poisoned transaction ends: it is
+	// sent a ROLLBACK instead, as soon as the session is idle. Starts that rollback; returns true
+	// if the session changed status to run it.
+	bool start_poison_rollback();
 	void handler_minus1_LogErrorDuringQuery(PgSQL_Connection* myconn);
 	bool handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int& handler_ret);
 	void handler_minus1_GenerateErrorMessage(PgSQL_Data_Stream* myds);
@@ -618,14 +626,16 @@ public:
 	// the query intake path short-circuits before query rules:
 	//   plain ROLLBACK / ABORT -> synthesize
 	//     CommandComplete('ROLLBACK') + ReadyForQuery('I'), clear flag.
-	//   plain COMMIT / END -> same ROLLBACK response + NoticeResponse carrying the
-	//     "there is no transaction in progress" warning, clear flag.
+	//   plain COMMIT / END -> the same ROLLBACK response (PostgreSQL turns a COMMIT in
+	//     an aborted transaction into a silent rollback), clear flag.
 	//   anything else (including ROLLBACK TO SAVEPOINT and RELEASE SAVEPOINT)
 	//     -> reply ERROR 25P02 + ReadyForQuery('E'), stay poisoned.
 	// The same holds over the extended protocol (poisoned_extq). An error ProxySQL
 	// raises itself inside a transaction poisons the session too
 	// (txn_state_for_local_error()).
 	bool tx_poisoned{ false };
+	// A backend of the session is owed a ROLLBACK (PgSQL_Connection::rollback_pending).
+	bool poison_rollback_pending{ false };
 	// An extended-query frame received while tx_poisoned, classified message by message
 	// by classify_poisoned_extq_message(). A frame that only prepares, binds to the
 	// unnamed portal and executes plain ROLLBACK / COMMIT / ABORT / END (plus Describe and

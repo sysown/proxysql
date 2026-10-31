@@ -22,8 +22,9 @@
  *     a pipelined second statement).
  *   * Word-boundary in the classifier — "ROLLBACKET" does not trigger recovery.
  *   * ROLLBACK (plain), ROLLBACK WORK, and COMMIT recover the session. COMMIT
- *     emits an additional NoticeResponse at SQLSTATE 25P01 carrying the
- *     "there is no transaction in progress" warning, matching PG native.
+ *     answers with the ROLLBACK command tag and no notice, as PG native does
+ *     (the 25P01 "no transaction in progress" warning is only for a COMMIT
+ *     outside any transaction).
  *   * Post-recovery queries hit a different backend PID (poison path destroyed
  *     the pool connection, a fresh one was acquired on the next query).
  *   * Three stats counters increment with EXACT expected deltas.
@@ -31,6 +32,34 @@
  *     is_in_transaction(), not the disconnect heuristic).
  *   * Admin variable off → mid-tx backend kill terminates the client session
  *     (pre-feature fallback), and none of the tx-poisoned counters move.
+ *   * A COMMIT (or PREPARE TRANSACTION) whose backend dies before answering is
+ *     never answered 25P02: it may have committed, so the client is
+ *     disconnected, over the simple and extended protocol, in a multi-statement
+ *     query and in a pipeline. A pipelined COMMIT the backend confirmed is
+ *     reported OK or the client disconnected, never answered 25P02. Without a
+ *     COMMIT in flight (a pipeline, an SQL PREPARE) the session is still
+ *     poisoned. Run with the libpq and the native backend protocol.
+ *   * A backend that dies holding session state (session advisory lock, temp
+ *     table, SQL PREPARE, WITH HOLD cursor, temp sequence, LISTEN) disconnects
+ *     the client instead of poisoning: the state is gone. A savepoint and a
+ *     transaction advisory lock still poison, and so do a tracked SET and state
+ *     released again (pg_advisory_unlock_all, DISCARD TEMP, CLOSE ALL). The state
+ *     may be taken in the killed transaction, an earlier one or over the extended
+ *     protocol; an untracked SET counts. A multiplex=0 rule alone is no state: the
+ *     client is still poisoned. Run with both protocols.
+ *   * An error ProxySQL raises itself inside a transaction (a query rule's error_msg,
+ *     which poisons the session with the backend alive. Ending it
+ *     (ROLLBACK or COMMIT, simple or extended protocol) rolls the backend back instead
+ *     of dropping it, so a session advisory lock survives and the work is not committed.
+ *     The next statement may go to another hostgroup or be pipelined right behind
+ *     the ROLLBACK (over either protocol), and SET values changed in the transaction are
+ *     back afterwards. Run with both protocols.
+ *   * A COMMIT in flight is still found without a usable digest: with query_digests
+ *     and commands_stats off, and in a query longer than query_digests_max_query_length.
+ *     A long query without a COMMIT is not a reason to disconnect.
+ *   * Cases F and G run in four TLS variants per backend protocol: the client talks TLS
+ *     to the proxy or not, the proxy talks TLS to the backend or not. Each variant checks,
+ *     from PostgreSQL's side, that the backend leg is what it was set to.
  *
  * Flakiness-resistance measures:
  *   * The killer thread polls pg_stat_activity up to ~6 s in 100 ms ticks for
@@ -46,6 +75,10 @@
  */
 
 #include <unistd.h>
+#include <poll.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <openssl/ssl.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -56,21 +89,26 @@
 #include <chrono>
 #include <atomic>
 #include <vector>
+#include <functional>
 
 #include "libpq-fe.h"
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "pgsql_native_tier.h"
 
 CommandLine cl;
 
+// Whether the clients opened by open_proxy() use TLS: the TLS variants of cases F and G turn it on.
+static bool g_client_tls = false;
+
 static PGconn* open_conn(const char* host, int port,
                          const char* user, const char* password,
-                         const char* label) {
+                         const char* label, const char* sslmode = "disable") {
 	std::stringstream ss;
 	ss << "host=" << host << " port=" << port;
 	ss << " user=" << user << " password=" << password;
-	ss << " sslmode=disable";
+	ss << " sslmode=" << sslmode;
 	PGconn* c = PQconnectdb(ss.str().c_str());
 	if (PQstatus(c) != CONNECTION_OK) {
 		diag("Connection to %s (%s:%d user=%s) failed: %s",
@@ -83,7 +121,26 @@ static PGconn* open_conn(const char* host, int port,
 
 // Drive the admin interface (PgSQL-protocol admin port, 6132 by default) to
 // toggle the preserve_client_on_broken_backend_in_tx boolean.
+static bool set_admin_var(const char* var, const char* value);
+
 static bool set_admin_bool(const char* var, bool value) {
+	return set_admin_var(var, value ? "true" : "false");
+}
+
+// The value of a PgSQL admin variable ("" if it cannot be read).
+static std::string get_admin_var(const char* var) {
+	PGconn* admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
+	                          cl.admin_username, cl.admin_password, "ProxySQL admin (PgSQL protocol)");
+	if (!admin) return "";
+	const std::string q = std::string("SELECT variable_value FROM global_variables WHERE variable_name='pgsql-") + var + "'";
+	PGresult* r = PQexec(admin, q.c_str());
+	std::string out = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : "";
+	PQclear(r);
+	PQfinish(admin);
+	return out;
+}
+
+static bool set_admin_var(const char* var, const char* value) {
 	PGconn* admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
 	                          cl.admin_username, cl.admin_password,
 	                          "ProxySQL admin (PgSQL protocol)");
@@ -94,7 +151,7 @@ static bool set_admin_bool(const char* var, bool value) {
 	char q[256];
 	snprintf(q, sizeof(q),
 	         "UPDATE global_variables SET variable_value='%s' WHERE variable_name='pgsql-%s'",
-	         value ? "true" : "false", var);
+	         value, var);
 	PGresult* r = PQexec(admin, q);
 	bool ok1 = (PQresultStatus(r) == PGRES_COMMAND_OK);
 	PQclear(r);
@@ -275,6 +332,43 @@ struct KillResult {
 	int victim_pid = -1;            // the PID that got killed (-1 if not found)
 };
 
+// Runs send() while a killer thread finds the backend whose running query holds `marker`
+// and terminates it. The caller keeps whatever send() got back.
+template <typename F>
+static KillResult run_with_kill(const std::string& marker, F send) {
+	KillResult out;
+	std::atomic<bool> did_kill{false};
+	std::atomic<int> victim{-1};
+	std::thread killer([&did_kill, &victim, marker]() {
+		int pid = poll_for_marked_backend_pid(marker.c_str(), /*timeout_ms*/ 6000);
+		if (pid <= 0) {
+			diag("poll_for_marked_backend_pid: no backend found with marker=%s within 6s",
+			     marker.c_str());
+			return;
+		}
+		victim.store(pid);
+		if (!terminate_backend(pid)) {
+			diag("terminate_backend(%d) returned false", pid);
+			return;
+		}
+		did_kill.store(true);
+	});
+
+	send();
+	killer.join();
+	out.kill_delivered = did_kill.load();
+	out.victim_pid = victim.load();
+	return out;
+}
+
+static std::string new_marker() {
+	char marker[96];
+	snprintf(marker, sizeof(marker),
+	         "txp_recov_marker_%ld_%d_%ld",
+	         (long)time(nullptr), (int)getpid(), (long)rand());
+	return marker;
+}
+
 // Execute a Simple Query that we arrange to be interrupted mid-flight by a
 // superuser pg_terminate_backend. The test uses this to drive the session
 // into the poisoned state. The caller owns the returned PGresult.
@@ -285,10 +379,8 @@ struct KillResult {
 // "ProxySQL emitted no ERROR because the feature regressed" from "ProxySQL
 // emitted no ERROR because the kill never fired on this flaky run".
 static KillResult run_poisoning_query(PGconn* cli, const char* in_tx_sql, int sleep_secs = 5) {
-	char marker[96];
-	snprintf(marker, sizeof(marker),
-	         "txp_recov_marker_%ld_%d_%ld",
-	         (long)time(nullptr), (int)getpid(), (long)rand());
+	const std::string marker_str = new_marker();
+	const char* marker = marker_str.c_str();
 	// The victim query embeds the marker so pg_stat_activity can find it, and
 	// the `in_tx_sql` parameter lets callers substitute what gets executed
 	// (poison variants exercise different verbs).
@@ -306,29 +398,9 @@ static KillResult run_poisoning_query(PGconn* cli, const char* in_tx_sql, int sl
 		query = buf;
 	}
 
-	KillResult out;
-	std::atomic<bool> did_kill{false};
-	std::atomic<int> victim{-1};
-	std::string local_marker(marker);
-	std::thread killer([&did_kill, &victim, local_marker]() {
-		int pid = poll_for_marked_backend_pid(local_marker.c_str(), /*timeout_ms*/ 6000);
-		if (pid <= 0) {
-			diag("poll_for_marked_backend_pid: no backend found with marker=%s within 6s",
-			     local_marker.c_str());
-			return;
-		}
-		victim.store(pid);
-		if (!terminate_backend(pid)) {
-			diag("terminate_backend(%d) returned false", pid);
-			return;
-		}
-		did_kill.store(true);
-	});
-
-	out.pgresult = PQexec(cli, query.c_str());
-	killer.join();
-	out.kill_delivered = did_kill.load();
-	out.victim_pid = victim.load();
+	PGresult* res = nullptr;
+	KillResult out = run_with_kill(marker_str, [cli, &query, &res]() { res = PQexec(cli, query.c_str()); });
+	out.pgresult = res;
 	return out;
 }
 
@@ -504,7 +576,7 @@ static void case_A_rollback_recovery() {
 	   expected_rejected);
 }
 
-// Case B: COMMIT-on-poisoned emits the 25P01 warning notice and recovers.
+// Case B: COMMIT-on-poisoned recovers with the ROLLBACK tag and no notice, like PG native.
 static void case_B_commit_recovery() {
 	Counters before = read_counters();
 
@@ -542,20 +614,16 @@ static void case_B_commit_recovery() {
 	   PQresStatus(st), cmd_tag ?: "(null)", (int)PQtransactionStatus(cli));
 	PQclear(r);
 
-	// Verify the NoticeResponse emitted by the COMMIT-on-poisoned path carries
-	// SQLSTATE 25P01 (no_active_sql_transaction) — NOT 00000, NOT 57P01.
-	bool commit_notice_ok = false;
+	// PostgreSQL turns a COMMIT in an aborted transaction into a silent rollback. Its
+	// "there is no transaction in progress" warning (25P01) is only for a COMMIT outside
+	// any transaction, so no notice may follow the COMMIT here.
+	std::string commit_notices;
 	for (size_t i = notices_before_commit; i < bag.items.size(); ++i) {
-		const auto& n = bag.items[i];
-		if (n.severity == "WARNING" && n.sqlstate == "25P01"
-		    && n.message.find("no transaction in progress") != std::string::npos) {
-			commit_notice_ok = true;
-			break;
-		}
+		commit_notices += bag.items[i].sqlstate + " ";
 	}
-	ok(commit_notice_ok,
-	   "case B: COMMIT-on-poisoned emits NoticeResponse with severity=WARNING sqlstate=25P01 "
-	   "\"there is no transaction in progress\"");
+	ok(commit_notices.empty(),
+	   "case B: COMMIT-on-poisoned emits no notice, as PostgreSQL does (notices after the COMMIT: '%s')",
+	   commit_notices.c_str());
 
 	PQfinish(cli);
 
@@ -660,6 +728,833 @@ static void case_D_admin_off() {
 	   before.total, after.total, before.recovered, after.recovered, before.rejected, after.rejected);
 }
 
+// --------------------------------------------------------------------------
+// Case E: a COMMIT whose backend dies before answering is never reported as
+// aborted. The backend can die after the commit is durable, so the outcome is
+// unknown: the client must be disconnected, as PostgreSQL itself would leave it,
+// not told 25P02 and invited to run the work again. The COMMIT is held in flight
+// by a deferred constraint trigger that sleeps; killing the backend there needs
+// no server-wide setting. Run once per backend protocol.
+// --------------------------------------------------------------------------
+
+static const int BACKEND_HG = 0;
+static const int CASE_E_CHECKS = 9;
+
+static PGconn* open_admin() {
+	return open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port,
+	                 cl.admin_username, cl.admin_password, "ProxySQL admin (PgSQL protocol)");
+}
+
+static PGconn* open_proxy() {
+	return open_conn(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_password, "ProxySQL",
+	                 g_client_tls ? "require" : "disable");
+}
+
+static bool exec_ok(PGconn* c, const std::string& sql) {
+	PGresult* r = PQexec(c, sql.c_str());
+	const bool ok_ = PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
+	if (!ok_) diag("'%s' failed: %s", sql.c_str(), PQerrorMessage(c));
+	PQclear(r);
+	return ok_;
+}
+
+static bool is_sqlstate(const PGresult* r, const char* code) {
+	const char* s = r ? PQresultErrorField(r, PG_DIAG_SQLSTATE) : nullptr;
+	return s && strcmp(s, code) == 0;
+}
+
+// The SQLSTATE a request was answered with ("" for none, as when the connection is lost).
+static std::string answer_sqlstate(PGresult* r) {
+	const char* s = r ? PQresultErrorField(r, PG_DIAG_SQLSTATE) : nullptr;
+	std::string out = s ? s : "";
+	PQclear(r);
+	return out;
+}
+
+// The backend server rows as INSERTs recreating every column, so re-inserting them drops every
+// pooled backend connection: a pooled one keeps the protocol it was opened with.
+static std::vector<std::string> read_servers(PGconn* admin, int hg = BACKEND_HG, bool* failed = nullptr) {
+	std::vector<std::string> rows;
+	PGresult* res = PQexec(admin, ("SELECT * FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(hg)).c_str());
+	if (failed) *failed = PQresultStatus(res) != PGRES_TUPLES_OK;
+	if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+		std::string cols;
+		for (int c = 0; c < PQnfields(res); c++) cols += std::string(c ? "," : "") + PQfname(res, c);
+		for (int i = 0; i < PQntuples(res); i++) {
+			std::string ins = "INSERT INTO pgsql_servers (" + cols + ") VALUES (";
+			for (int c = 0; c < PQnfields(res); c++) {
+				if (c) ins += ",";
+				if (PQgetisnull(res, i, c)) { ins += "NULL"; continue; }
+				ins += "'";
+				for (const char* v = PQgetvalue(res, i, c); *v; v++) ins += (*v == '\'') ? "''" : std::string(1, *v);
+				ins += "'";
+			}
+			rows.push_back(ins + ")");
+		}
+	}
+	PQclear(res);
+	return rows;
+}
+
+static bool flush_backend_pool(PGconn* admin, const std::vector<std::string>& saved) {
+	if (saved.empty()) return false;
+	if (!exec_ok(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(BACKEND_HG))) return false;
+	if (!exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+	for (const auto& ins : saved) {
+		if (!exec_ok(admin, ins)) return false;
+	}
+	if (!exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+	usleep(200000);
+	return true;
+}
+
+// A table whose rows hold COMMIT (and PREPARE TRANSACTION) in a deferred trigger that sleeps,
+// and a plain one. Made through ProxySQL so the test user owns them.
+static bool create_commit_fixtures() {
+	PGconn* c = open_proxy();
+	if (!c) return false;
+	const bool made =
+		exec_ok(c, "DROP TABLE IF EXISTS txp_commit_slow") &&
+		exec_ok(c, "DROP TABLE IF EXISTS txp_commit_plain") &&
+		exec_ok(c, "CREATE TABLE txp_commit_slow (id text)") &&
+		exec_ok(c, "CREATE TABLE txp_commit_plain (id text)") &&
+		exec_ok(c, "CREATE OR REPLACE FUNCTION txp_commit_slow_trg() RETURNS trigger LANGUAGE plpgsql "
+		           "AS $$ BEGIN PERFORM pg_sleep(5); RETURN NULL; END $$") &&
+		exec_ok(c, "CREATE CONSTRAINT TRIGGER txp_commit_slow_t AFTER INSERT ON txp_commit_slow "
+		           "DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION txp_commit_slow_trg()");
+	PQfinish(c);
+	return made;
+}
+
+static void drop_commit_fixtures() {
+	PGconn* c = open_proxy();
+	if (!c) return;
+	exec_ok(c, "DROP TABLE IF EXISTS txp_commit_slow");
+	exec_ok(c, "DROP TABLE IF EXISTS txp_commit_plain");
+	exec_ok(c, "DROP FUNCTION IF EXISTS txp_commit_slow_trg()");
+	PQfinish(c);
+	// A server with prepared transactions enabled keeps one if a kill missed it.
+	PGconn* direct = open_conn(cl.pgsql_server_host, cl.pgsql_server_port,
+	                           cl.pgsql_server_username, cl.pgsql_server_password, "PG-direct (superuser)");
+	if (!direct) return;
+	PGresult* r = PQexec(direct, "SELECT 1 FROM pg_prepared_xacts WHERE gid = 'txp_commit_gid'");
+	const bool left = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1;
+	PQclear(r);
+	if (left) exec_ok(direct, "ROLLBACK PREPARED 'txp_commit_gid'");
+	PQfinish(direct);
+}
+
+static long long count_plain_rows(const std::string& id) {
+	PGconn* c = open_proxy();
+	if (!c) return -1;
+	const char* params[1] = { id.c_str() };
+	PGresult* r = PQexecParams(c, "SELECT count(*) FROM txp_commit_plain WHERE id = $1", 1, nullptr, params, nullptr, nullptr, 0);
+	long long n = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? atoll(PQgetvalue(r, 0, 0)) : -1;
+	PQclear(r);
+	PQfinish(c);
+	return n;
+}
+
+struct PipeResult {
+	ExecStatusType status;
+	std::string sqlstate;
+	std::string cmd;
+};
+
+// Sends the statements as one pipeline ending in a single Sync and collects every result,
+// stopping at the Sync or when the connection is lost.
+static std::vector<PipeResult> run_pipeline(PGconn* cli, const std::vector<std::string>& stmts) {
+	std::vector<PipeResult> out;
+	if (PQenterPipelineMode(cli) != 1) return out;
+	for (const auto& s : stmts) PQsendQueryParams(cli, s.c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0);
+	PQpipelineSync(cli);
+	for (int nulls = 0; nulls < 64; ) {
+		PGresult* r = PQgetResult(cli);
+		if (r == nullptr) {
+			if (PQstatus(cli) != CONNECTION_OK) break;
+			nulls++;
+			continue;
+		}
+		const ExecStatusType st = PQresultStatus(r);
+		if (st == PGRES_PIPELINE_SYNC) { PQclear(r); break; }
+		const char* s = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+		out.push_back({ st, s ? s : "", PQcmdStatus(r) ? PQcmdStatus(r) : "" });
+		PQclear(r);
+		if (PQstatus(cli) != CONNECTION_OK) break;
+	}
+	if (PQstatus(cli) == CONNECTION_OK) PQexitPipelineMode(cli);
+	return out;
+}
+
+// Opens a session inside a transaction whose COMMIT will run the sleeping trigger.
+static PGconn* begin_slow_commit_txn(const char* row) {
+	PGconn* cli = open_proxy();
+	if (!cli) return nullptr;
+	if (!exec_ok(cli, "BEGIN") ||
+	    !exec_ok(cli, std::string("INSERT INTO txp_commit_slow VALUES ('") + row + "')")) {
+		PQfinish(cli);
+		return nullptr;
+	}
+	return cli;
+}
+
+// One COMMIT-like request killed in flight: the client must be disconnected and must not be
+// told 25P02. send() returns the SQLSTATE the request was answered with.
+template <typename F>
+static void check_commit_disconnects(const char* mode, const char* label, F send) {
+	PGconn* cli = begin_slow_commit_txn(label);
+	if (!cli) { ok(0, "case E [%s] %s: setup failed", mode, label); return; }
+	const std::string marker = new_marker();
+	std::string answer;
+	KillResult kr = run_with_kill(marker, [&]() { answer = send(cli, marker); });
+	const bool disconnected = PQstatus(cli) != CONNECTION_OK;
+	ok(kr.kill_delivered && disconnected && answer != "25P02",
+	   "case E [%s] %s killed in flight: client disconnected, not told 25P02 (kill=%d, connection=%s, sqlstate=%s)",
+	   mode, label, kr.kill_delivered, disconnected ? "lost" : "OK", answer.empty() ? "(none)" : answer.c_str());
+	PQfinish(cli);
+}
+
+static void case_E_unanswered_commit(const char* mode) {
+	// COMMIT over the simple protocol.
+	check_commit_disconnects(mode, "COMMIT", [](PGconn* c, const std::string& m) {
+		return answer_sqlstate(PQexec(c, ("COMMIT /* " + m + " */").c_str()));
+	});
+	// PREPARE TRANSACTION makes the work durable too. Its deferred triggers run before the
+	// server checks max_prepared_transactions, so this holds where prepared transactions are off.
+	check_commit_disconnects(mode, "PREPARE TRANSACTION", [](PGconn* c, const std::string& m) {
+		return answer_sqlstate(PQexec(c, ("PREPARE TRANSACTION 'txp_commit_gid' /* " + m + " */").c_str()));
+	});
+	// A COMMIT that is not the first statement of the query.
+	check_commit_disconnects(mode, "INSERT; COMMIT", [](PGconn* c, const std::string& m) {
+		return answer_sqlstate(PQexec(c, ("INSERT INTO txp_commit_plain VALUES ('multi'); COMMIT /* " + m + " */").c_str()));
+	});
+	// COMMIT over the extended protocol: a native connection sends it as a batch.
+	check_commit_disconnects(mode, "extended COMMIT", [](PGconn* c, const std::string& m) {
+		return answer_sqlstate(PQexecParams(c, ("COMMIT /* " + m + " */").c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0));
+	});
+	// A COMMIT among several pipelined statements: 25P02 for any of them would be the poison.
+	check_commit_disconnects(mode, "pipelined INSERT + COMMIT", [](PGconn* c, const std::string& m) {
+		for (const auto& r : run_pipeline(c, { "INSERT INTO txp_commit_plain VALUES ('pipelined')", "COMMIT /* " + m + " */" })) {
+			if (r.sqlstate == "25P02") return r.sqlstate;
+		}
+		return std::string();
+	});
+
+	// A COMMIT the backend confirmed, then a later statement of the same pipeline killed. A native
+	// connection holds the batch's replies until it ends: the client must still learn that the
+	// COMMIT succeeded, or be disconnected, never be answered 25P02 for it.
+	{
+		const std::string confirmed = std::string("confirmed_") + mode;
+		const std::string lost = std::string("lost_") + mode;
+		PGconn* cli = open_proxy();
+		const bool setup = cli && exec_ok(cli, "BEGIN") &&
+			exec_ok(cli, "INSERT INTO txp_commit_plain VALUES ('" + confirmed + "')");
+		if (!setup) {
+			ok(0, "case E [%s] confirmed COMMIT then killed statement: setup failed", mode);
+			emit_fail_fill(1, "case E confirmed COMMIT setup failed");
+		} else {
+			const std::string marker = new_marker();
+			std::vector<PipeResult> res;
+			KillResult kr = run_with_kill(marker, [&]() {
+				res = run_pipeline(cli, {
+					"COMMIT", "BEGIN",
+					"INSERT INTO txp_commit_plain VALUES ('" + lost + "')",
+					"SELECT pg_sleep(5), '" + marker + "'" });
+			});
+			const bool commit_ok = !res.empty() && res[0].status == PGRES_COMMAND_OK && res[0].cmd == "COMMIT";
+			const bool commit_aborted = !res.empty() && res[0].sqlstate == "25P02";
+			const bool disconnected = PQstatus(cli) != CONNECTION_OK;
+			ok(kr.kill_delivered && (commit_ok || (disconnected && !commit_aborted)),
+			   "case E [%s] confirmed COMMIT then killed statement: COMMIT %s, connection %s (kill=%d)",
+			   mode, commit_ok ? "reported OK" : (commit_aborted ? "answered 25P02" : "unanswered"),
+			   disconnected ? "lost" : "OK", kr.kill_delivered);
+			ok(count_plain_rows(confirmed) == 1 && count_plain_rows(lost) == 0,
+			   "case E [%s] confirmed COMMIT then killed statement: the committed row is there, the later one is not",
+			   mode);
+		}
+		if (cli) PQfinish(cli);
+	}
+
+	// Controls: without a COMMIT in flight the session is still poisoned. A pipeline, and an SQL
+	// PREPARE, which only creates a statement.
+	{
+		PGconn* cli = open_proxy();
+		bool poisoned = false;
+		bool killed = false;
+		if (cli && exec_ok(cli, "BEGIN")) {
+			const std::string marker = new_marker();
+			std::vector<PipeResult> res;
+			KillResult kr = run_with_kill(marker, [&]() {
+				res = run_pipeline(cli, {
+					"INSERT INTO txp_commit_plain VALUES ('control')",
+					"SELECT pg_sleep(5), '" + marker + "'" });
+			});
+			killed = kr.kill_delivered;
+			for (const auto& r : res) poisoned = poisoned || r.sqlstate == "25P02";
+			poisoned = poisoned && PQstatus(cli) == CONNECTION_OK;
+			if (PQstatus(cli) == CONNECTION_OK) exec_ok(cli, "ROLLBACK");
+		}
+		ok(killed && poisoned, "case E [%s] pipeline without a COMMIT: still poisoned (25P02, connection kept)", mode);
+		if (cli) PQfinish(cli);
+	}
+	{
+		PGconn* cli = open_proxy();
+		bool poisoned = false;
+		bool killed = false;
+		if (cli && exec_ok(cli, "BEGIN")) {
+			KillResult kr = run_poisoning_query(cli, "SELECT pg_sleep(5); PREPARE txp_commit_stmt AS SELECT 1");
+			killed = kr.kill_delivered;
+			poisoned = is_sqlstate(kr.pgresult, "25P02") && PQstatus(cli) == CONNECTION_OK;
+			PQclear(kr.pgresult);
+			if (PQstatus(cli) == CONNECTION_OK) exec_ok(cli, "ROLLBACK");
+		}
+		ok(killed && poisoned, "case E [%s] SQL PREPARE in flight: still poisoned (25P02, connection kept)", mode);
+		if (cli) PQfinish(cli);
+	}
+}
+
+// --------------------------------------------------------------------------
+// Case F: session state (a session advisory lock, a temp table, an SQL PREPARE, a WITH HOLD
+// cursor, a temp sequence, LISTEN) dies with the backend. Poisoned, the client would go on as if
+// it still existed, and another session can take its lock: it must be disconnected instead, as
+// PostgreSQL would leave it. State a rollback ends anyway still poisons. Run once per protocol.
+// --------------------------------------------------------------------------
+
+static const int CASE_F_CHECKS = 16;
+
+// Prepares a client for a case F check: SQL run before the BEGIN, the BEGIN, then SQL inside it.
+typedef std::function<bool(PGconn*)> Prepare;
+
+static Prepare sql_steps(std::vector<std::string> before_begin, std::vector<std::string> in_txn = {}) {
+	return [before_begin, in_txn](PGconn* c) {
+		bool ready = true;
+		for (const auto& s : before_begin) ready = ready && exec_ok(c, s);
+		ready = ready && exec_ok(c, "BEGIN");
+		for (const auto& s : in_txn) ready = ready && exec_ok(c, s);
+		return ready;
+	};
+}
+
+// Runs `prepare`, kills the backend in a statement of the open transaction, and checks the client
+// was disconnected (state that died with the backend) or poisoned (nothing was lost).
+static void check_kill_in_txn(const char* mode, const char* label, bool expect_disconnect, const Prepare& prepare) {
+	PGconn* cli = open_proxy();
+	if (!cli || !prepare(cli)) {
+		ok(0, "case F [%s] %s: setup failed", mode, label);
+		if (cli) PQfinish(cli);
+		return;
+	}
+	KillResult kr = run_poisoning_query(cli, nullptr);
+	const bool alive = PQstatus(cli) == CONNECTION_OK;
+	const std::string answer = answer_sqlstate(kr.pgresult);
+	const bool as_expected = expect_disconnect ? (!alive && answer != "25P02") : (alive && answer == "25P02");
+	ok(kr.kill_delivered && as_expected,
+	   "case F [%s] %s, backend killed in a transaction: client %s (kill=%d, connection=%s, sqlstate=%s)",
+	   mode, label, expect_disconnect ? "disconnected, not told 25P02" : "poisoned, connection kept",
+	   kr.kill_delivered, alive ? "OK" : "lost", answer.empty() ? "(none)" : answer.c_str());
+	if (alive) exec_ok(cli, "ROLLBACK");
+	PQfinish(cli);
+}
+
+// A parameterised statement, sent over the extended protocol.
+static bool exec_params_ok(PGconn* c, const char* sql, const char* param) {
+	PGresult* r = PQexecParams(c, sql, 1, nullptr, &param, nullptr, nullptr, 0);
+	const bool ok_ = PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
+	if (!ok_) diag("'%s' failed: %s", sql, PQerrorMessage(c));
+	PQclear(r);
+	return ok_;
+}
+
+static void case_F_session_state(const char* mode, bool native) {
+	auto dies = [mode](const char* label, std::vector<std::string> setup) {
+		check_kill_in_txn(mode, label, true, sql_steps(std::move(setup)));
+	};
+	dies("session advisory lock", { "SELECT pg_advisory_lock(72510)" });
+	dies("temp table", { "CREATE TEMP TABLE txp_f_tmp (x int)" });
+	dies("SQL PREPARE", { "PREPARE txp_f_stmt AS SELECT 1" });
+	dies("WITH HOLD cursor", { "BEGIN", "DECLARE txp_f_cur CURSOR WITH HOLD FOR SELECT 1", "COMMIT" });
+	dies("temp sequence", { "CREATE TEMP SEQUENCE txp_f_seq" });
+	// A libpq backend connection refuses LISTEN.
+	if (native) {
+		dies("LISTEN", { "LISTEN txp_f_channel" });
+	} else {
+		skip(1, "case F [%s] LISTEN: refused on a libpq backend connection", mode);
+	}
+
+	// Control: a savepoint and a transaction advisory lock end with the rollback anyway.
+	check_kill_in_txn(mode, "savepoint + transaction advisory lock", false,
+		sql_steps({}, { "SAVEPOINT txp_f_sp", "SELECT pg_advisory_xact_lock(72511)" }));
+
+	// When the state is taken: in the transaction that is killed, in an earlier one that
+	// committed, or over the extended protocol.
+	check_kill_in_txn(mode, "advisory lock taken inside the killed transaction", true,
+		sql_steps({}, { "SELECT pg_advisory_lock(72512)" }));
+	dies("advisory lock taken in an earlier committed transaction",
+		{ "BEGIN", "SELECT pg_advisory_lock(72513)", "COMMIT" });
+	check_kill_in_txn(mode, "advisory lock taken over the extended protocol", true,
+		[](PGconn* c) { return exec_params_ok(c, "SELECT pg_advisory_lock($1::bigint)", "72515") && exec_ok(c, "BEGIN"); });
+
+	// A SET the proxy cannot replay on a new backend is lost too; one it tracks is not, so the
+	// client is still poisoned and not disconnected for it.
+	dies("untracked custom variable (SET)", { "SET txp_f.setting = 1" });
+	check_kill_in_txn(mode, "tracked SET (search_path)", false, sql_steps({ "SET search_path TO public" }));
+
+	// A multiplex=0 rule only says "do not share this connection"; no state is held, so the client
+	// is still poisoned and not disconnected.
+	check_kill_in_txn(mode, "multiplex=0 rule hit, no session state", false,
+		sql_steps({ "SELECT 1 AS txp_f_mux_off" }));
+
+	// Releasing the state makes the poison safe again.
+	check_kill_in_txn(mode, "session advisory lock released with pg_advisory_unlock_all", false,
+		sql_steps({ "SELECT pg_advisory_lock(72516)", "SELECT pg_advisory_unlock_all()" }));
+	check_kill_in_txn(mode, "temp table dropped with DISCARD TEMP", false,
+		sql_steps({ "CREATE TEMP TABLE txp_f_tmp2 (x int)", "DISCARD TEMP" }));
+	check_kill_in_txn(mode, "WITH HOLD cursor closed with CLOSE ALL", false,
+		sql_steps({ "BEGIN", "DECLARE txp_f_cur2 CURSOR WITH HOLD FOR SELECT 1", "COMMIT", "CLOSE ALL" }));
+}
+
+// --------------------------------------------------------------------------
+// Case G: an error ProxySQL raises itself inside a transaction (a query
+// rule's error_msg) poisons the session while the backend is alive. The backend holds the client's
+// session advisory lock, which PostgreSQL would keep: ending the poisoned transaction must roll it
+// back, not drop the connection, and a COMMIT must not commit the work. Run once per protocol.
+// --------------------------------------------------------------------------
+
+static const int CASE_G_CHECKS = 9;
+static const int RULE_G_ID = 7901;
+// Case G provokes a ProxySQL-made error with the query rule above: a DISCARD ALL in a transaction is
+// now refused by the backend, not by ProxySQL.
+static const char* const kRuleError = "SELECT 1 AS txp_g_blocked";
+static const int RULE_F_MUX_ID = 7902;
+static const int RULE_G_HG_ID = 7903;
+static const int HG_G = 1;
+
+// The first value of a one-row result, "" on error.
+static std::string scalar(PGconn* c, const std::string& sql) {
+	PGresult* r = PQexec(c, sql.c_str());
+	std::string out = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : "";
+	PQclear(r);
+	return out;
+}
+
+static bool fails(PGconn* c, const char* sql) {
+	PGresult* r = PQexec(c, sql);
+	const bool failed = PQresultStatus(r) == PGRES_FATAL_ERROR;
+	PQclear(r);
+	return failed;
+}
+
+// Takes advisory lock `key` (with pg_try_advisory_lock if `try_lock`), opens a transaction that inserts
+// a row, provokes an error of ProxySQL's with `provoke`, ends the poisoned transaction with `end`. Then
+// checks the row is gone and the session still holds the lock: pg_advisory_unlock answers true only for
+// a lock the session holds.
+static void check_lock_survives(const char* mode, const char* label, long key, bool try_lock,
+                                const char* provoke, const std::function<bool(PGconn*)>& end,
+                                const std::function<bool(PGconn*)>& after = nullptr) {
+	PGconn* cli = open_proxy();
+	const std::string k = std::to_string(key);
+	bool ready = cli && exec_ok(cli, "CREATE TABLE IF NOT EXISTS txp_g_rows (x int)") &&
+	             exec_ok(cli, "DELETE FROM txp_g_rows");
+	ready = ready && (try_lock ? scalar(cli, "SELECT pg_try_advisory_lock(" + k + ")") == "t"
+	                           : exec_ok(cli, "SELECT pg_advisory_lock(" + k + ")"));
+	ready = ready && exec_ok(cli, "BEGIN") && exec_ok(cli, "INSERT INTO txp_g_rows VALUES (1)");
+	if (!ready) {
+		ok(0, "case G [%s] %s: setup failed", mode, label);
+		if (cli) PQfinish(cli);
+		return;
+	}
+	const bool provoked = fails(cli, provoke);
+	const bool ended = end(cli) && (!after || after(cli));
+	const bool alive = PQstatus(cli) == CONNECTION_OK;
+	const bool kept_lock = alive && scalar(cli, "SELECT pg_advisory_unlock(" + k + ")") == "t";
+	const bool rolled_back = alive && scalar(cli, "SELECT count(*) FROM txp_g_rows") == "0";
+	ok(provoked && ended && alive && kept_lock && rolled_back,
+	   "case G [%s] %s: session kept its advisory lock and the work was rolled back (error=%d, ended=%d, alive=%d, lock=%d, rows_gone=%d)",
+	   mode, label, provoked, ended, alive, kept_lock, rolled_back);
+	if (alive) exec_ok(cli, "DROP TABLE IF EXISTS txp_g_rows");
+	if (cli) PQfinish(cli);
+}
+
+// A client may send its next statements without waiting for the answer to the ROLLBACK that ends a
+// poisoned transaction. They must run after the rollback of the backend, not inside the transaction the
+// client was told is over: the INSERT would be reported done, then thrown away with the old transaction.
+// Timing decides whether they were read in the same batch, so the sequence is repeated.
+static void check_pipelined_behind_rollback(const char* mode) {
+	const char* label = "statements pipelined behind the ROLLBACK run after the rollback";
+	const int rounds = 6;
+	PGconn* cli = open_proxy();
+	if (!cli || !exec_ok(cli, "CREATE TABLE IF NOT EXISTS txp_g_rows (x int)")) {
+		ok(0, "case G [%s] %s: setup failed", mode, label);
+		if (cli) PQfinish(cli);
+		return;
+	}
+	int good = 0;
+	for (int round = 0; round < rounds; round++) {
+		bool ready = exec_ok(cli, "DELETE FROM txp_g_rows") && exec_ok(cli, "SELECT pg_advisory_lock(72608)") &&
+		             exec_ok(cli, "BEGIN") && exec_ok(cli, "INSERT INTO txp_g_rows VALUES (1)");
+		if (!ready || !fails(cli, kRuleError)) break;
+		const char* stmts[] = { "ROLLBACK", "INSERT INTO txp_g_rows VALUES (2)", "COMMIT", "SELECT pg_advisory_unlock(72608)" };
+		bool sent = PQenterPipelineMode(cli) == 1;
+		for (const char* q : stmts) {
+			sent = sent && PQsendQueryParams(cli, q, 0, nullptr, nullptr, nullptr, nullptr, 0) == 1 && PQpipelineSync(cli) == 1;
+		}
+		std::string unlocked;
+		for (int syncs = 0; sent && syncs < 4;) {
+			PGresult* r = PQgetResult(cli);
+			if (r == nullptr) {
+				// The proxy ended the session: PQgetResult then returns NULL for ever.
+				if (PQstatus(cli) != CONNECTION_OK) sent = false;
+				continue;
+			}
+			if (PQresultStatus(r) == PGRES_PIPELINE_SYNC) syncs++;
+			else if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) unlocked = PQgetvalue(r, 0, 0);
+			PQclear(r);
+		}
+		while (sent) {
+			PGresult* r = PQgetResult(cli);
+			if (r == nullptr) break;
+			PQclear(r);
+		}
+		if (PQstatus(cli) == CONNECTION_OK) PQexitPipelineMode(cli);
+		// Only the INSERT after the ROLLBACK is committed; the one inside the old transaction is not.
+		if (sent && unlocked == "t" && scalar(cli, "SELECT coalesce(string_agg(x::text, ',' ORDER BY x), 'none') FROM txp_g_rows") == "2") good++;
+	}
+	ok(good == rounds, "case G [%s] %s (%d of %d rounds right)", mode, label, good, rounds);
+	if (PQstatus(cli) == CONNECTION_OK) exec_ok(cli, "DROP TABLE IF EXISTS txp_g_rows");
+	PQfinish(cli);
+}
+
+// A Simple Query message as raw bytes: libpq cannot send a second one before the first is answered.
+static std::string simple_query_msg(const std::string& sql) {
+	std::string m(1, 'Q');
+	const uint32_t len = htonl((uint32_t)(sql.size() + 5));
+	m.append((const char*)&len, 4);
+	m += sql;
+	m.push_back('\0');
+	return m;
+}
+
+// The connection's own TLS session, if it has one: raw bytes must go through it.
+static SSL* conn_ssl(PGconn* c) { return PQsslInUse(c) ? (SSL*)PQgetssl(c) : nullptr; }
+
+static bool send_raw(PGconn* c, const std::string& wire) {
+	SSL* ssl = conn_ssl(c);
+	size_t off = 0;
+	while (off < wire.size()) {
+		const ssize_t n = ssl ? SSL_write(ssl, wire.data() + off, (int)(wire.size() - off))
+		                      : send(PQsocket(c), wire.data() + off, wire.size() - off, 0);
+		if (n <= 0) return false;
+		off += (size_t)n;
+	}
+	return true;
+}
+
+// Reads backend messages straight off the socket until `ready` ReadyForQuery have arrived. The value of
+// the first column of the last DataRow goes to *last_value. Only for a connection with nothing pending.
+static bool read_raw_until_ready(PGconn* c, int ready, std::string* last_value) {
+	const int fd = PQsocket(c);
+	std::string buf;
+	while (ready > 0) {
+		while (buf.size() >= 5 && ready > 0) {
+			uint32_t len;
+			memcpy(&len, buf.data() + 1, 4);
+			len = ntohl(len);
+			if (buf.size() < 1 + (size_t)len) break;
+			if (buf[0] == 'D' && len >= 10) {
+				int32_t vlen;
+				memcpy(&vlen, buf.data() + 7, 4);
+				vlen = (int32_t)ntohl((uint32_t)vlen);
+				if (vlen >= 0 && (size_t)vlen + 11 <= 1 + (size_t)len) last_value->assign(buf.data() + 11, vlen);
+			}
+			if (buf[0] == 'Z') ready--;
+			buf.erase(0, 1 + (size_t)len);
+		}
+		if (ready == 0) break;
+		SSL* ssl = conn_ssl(c);
+		// Bytes TLS has already decrypted are not on the socket any more.
+		struct pollfd pfd = { fd, POLLIN, 0 };
+		if (!(ssl && SSL_pending(ssl) > 0) && poll(&pfd, 1, 10000) <= 0) return false;
+		char tmp[4096];
+		const ssize_t n = ssl ? SSL_read(ssl, tmp, sizeof(tmp)) : recv(fd, tmp, sizeof(tmp), 0);
+		if (n <= 0) return false;
+		buf.append(tmp, (size_t)n);
+	}
+	return true;
+}
+
+// The same as check_pipelined_behind_rollback(), over the simple protocol: four Simple Queries in one write.
+static void check_simple_pipelined_behind_rollback(const char* mode) {
+	const char* label = "simple queries pipelined behind the ROLLBACK run after the rollback";
+	const int rounds = 6;
+	PGconn* cli = open_proxy();
+	if (!cli || !exec_ok(cli, "CREATE TABLE IF NOT EXISTS txp_g_rows (x int)")) {
+		ok(0, "case G [%s] %s: setup failed", mode, label);
+		if (cli) PQfinish(cli);
+		return;
+	}
+	int good = 0;
+	for (int round = 0; round < rounds; round++) {
+		bool ready = exec_ok(cli, "DELETE FROM txp_g_rows") && exec_ok(cli, "SELECT pg_advisory_lock(72609)") &&
+		             exec_ok(cli, "BEGIN") && exec_ok(cli, "INSERT INTO txp_g_rows VALUES (1)");
+		if (!ready || !fails(cli, kRuleError)) break;
+		const std::string wire = simple_query_msg("ROLLBACK") + simple_query_msg("INSERT INTO txp_g_rows VALUES (2)") +
+		                         simple_query_msg("COMMIT") + simple_query_msg("SELECT pg_advisory_unlock(72609)");
+		std::string unlocked;
+		const bool sent = send_raw(cli, wire) && read_raw_until_ready(cli, 4, &unlocked);
+		if (!sent) break;
+		if (unlocked == "t" && scalar(cli, "SELECT coalesce(string_agg(x::text, ',' ORDER BY x), 'none') FROM txp_g_rows") == "2") good++;
+	}
+	ok(good == rounds, "case G [%s] %s (%d of %d rounds right)", mode, label, good, rounds);
+	if (PQstatus(cli) == CONNECTION_OK) exec_ok(cli, "DROP TABLE IF EXISTS txp_g_rows");
+	PQfinish(cli);
+}
+
+// SET values changed in the poisoned transaction are put back by the rollback, on the proxy and on the backend.
+static void check_set_values_after_rollback(const char* mode) {
+	const char* label = "SET values changed in the transaction are back after the rollback";
+	PGconn* cli = open_proxy();
+	std::string sp0, wm0;
+	bool ready = cli && exec_ok(cli, "SET search_path TO public") && exec_ok(cli, "SELECT pg_advisory_lock(72606)");
+	if (ready) { sp0 = scalar(cli, "SHOW search_path"); wm0 = scalar(cli, "SHOW work_mem"); }
+	ready = ready && !sp0.empty() && !wm0.empty() && exec_ok(cli, "BEGIN") &&
+	        exec_ok(cli, "SET search_path TO pg_catalog") && exec_ok(cli, "SET work_mem = '9MB'");
+	if (!ready) {
+		ok(0, "case G [%s] %s: setup failed", mode, label);
+		if (cli) PQfinish(cli);
+		return;
+	}
+	const bool provoked = fails(cli, kRuleError);
+	const bool ended = exec_ok(cli, "ROLLBACK");
+	const std::string sp1 = scalar(cli, "SHOW search_path"), wm1 = scalar(cli, "SHOW work_mem");
+	const bool kept_lock = scalar(cli, "SELECT pg_advisory_unlock(72606)") == "t";
+	ok(provoked && ended && sp1 == sp0 && wm1 == wm0 && kept_lock,
+	   "case G [%s] %s (search_path '%s' -> '%s', work_mem '%s' -> '%s', lock=%d)",
+	   mode, label, sp0.c_str(), sp1.c_str(), wm0.c_str(), wm1.c_str(), kept_lock);
+	PQfinish(cli);
+}
+
+static void case_G_local_error_keeps_session_state(const char* mode, PGconn* admin) {
+	auto simple = [](const char* sql) { return [sql](PGconn* c) { return exec_ok(c, sql); }; };
+	auto extended = [](const char* sql) {
+		return [sql](PGconn* c) {
+			PGresult* r = PQexecParams(c, sql, 0, nullptr, nullptr, nullptr, nullptr, 0);
+			const bool ok_ = PQresultStatus(r) == PGRES_COMMAND_OK;
+			PQclear(r);
+			return ok_;
+		};
+	};
+	check_lock_survives(mode, "query rule error, ended by ROLLBACK", 72601, false, kRuleError, simple("ROLLBACK"));
+	check_lock_survives(mode, "query rule error, ended by COMMIT", 72602, false, kRuleError, simple("COMMIT"));
+	check_lock_survives(mode, "query rule error, ended by ROLLBACK over the extended protocol", 72603, false,
+	                    "SELECT 1 AS txp_g_blocked", extended("ROLLBACK"));
+	check_lock_survives(mode, "query rule error, ended by COMMIT", 72604, false, "SELECT 1 AS txp_g_blocked", simple("COMMIT"));
+	check_lock_survives(mode, "lock taken with pg_try_advisory_lock", 72605, true, kRuleError, simple("ROLLBACK"));
+	check_set_values_after_rollback(mode);
+	check_pipelined_behind_rollback(mode);
+	check_simple_pipelined_behind_rollback(mode);
+
+	// The next statement goes to another hostgroup: the rollback must not wait for it, or a COMMIT would
+	// find the abandoned transaction still open on the first hostgroup and commit its work.
+	// The TAP seed config has servers in this hostgroup: they are put back afterwards.
+	bool snap_failed = false;
+	const std::vector<std::string> hg_saved = read_servers(admin, HG_G, &snap_failed);
+	if (snap_failed) diag("case G [%s]: cannot read hostgroup %d; it is left alone", mode, HG_G);
+	const bool hg_ok = !snap_failed &&
+		exec_ok(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id = " + std::to_string(HG_G)) &&
+		exec_ok(admin, "INSERT INTO pgsql_servers (hostgroup_id, hostname, port, use_ssl) SELECT " + std::to_string(HG_G) +
+			", hostname, port, use_ssl FROM pgsql_servers WHERE hostgroup_id = " + std::to_string(BACKEND_HG) + " LIMIT 1") &&
+		exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME") &&
+		exec_ok(admin, "DELETE FROM pgsql_query_rules WHERE rule_id = " + std::to_string(RULE_G_HG_ID)) &&
+		exec_ok(admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, destination_hostgroup, apply) VALUES (" +
+			std::to_string(RULE_G_HG_ID) + ", 1, 'txp_g_hg', " + std::to_string(HG_G) + ", 1)") &&
+		exec_ok(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	if (hg_ok) {
+		check_lock_survives(mode, "next statement on another hostgroup, then a stray COMMIT", 72607, false,
+		                    kRuleError, simple("ROLLBACK"),
+		                    [](PGconn* c) { return exec_ok(c, "SELECT 1 AS txp_g_hg") && exec_ok(c, "COMMIT"); });
+	} else {
+		ok(0, "case G [%s] another hostgroup: cannot set up the second hostgroup", mode);
+	}
+	exec_ok(admin, "DELETE FROM pgsql_query_rules WHERE rule_id = " + std::to_string(RULE_G_HG_ID));
+	exec_ok(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	if (!snap_failed) {
+		exec_ok(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id = " + std::to_string(HG_G));
+		for (const auto& ins : hg_saved) exec_ok(admin, ins);
+		exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	}
+}
+
+// --------------------------------------------------------------------------
+// Case H: a COMMIT that may have taken effect is still found when the digest cannot be used: there is
+// none with query_digests and commands_stats off, and the one of a query longer than
+// query_digests_max_query_length is cut. Run once per backend protocol.
+// --------------------------------------------------------------------------
+
+static const int CASE_H_CHECKS = 5;
+
+static void case_H_digest_unusable(const char* mode) {
+	const std::string digests0 = get_admin_var("query_digests");
+	const std::string stats0 = get_admin_var("commands_stats");
+	const std::string cap0 = get_admin_var("query_digests_max_query_length");
+
+	const std::string off = std::string(mode) + ", no digest";
+	if (set_admin_var("query_digests", "false") && set_admin_var("commands_stats", "false")) {
+		check_commit_disconnects(off.c_str(), "COMMIT", [](PGconn* c, const std::string& m) {
+			return answer_sqlstate(PQexec(c, ("COMMIT /* " + m + " */").c_str()));
+		});
+		check_commit_disconnects(off.c_str(), "extended COMMIT", [](PGconn* c, const std::string& m) {
+			return answer_sqlstate(PQexecParams(c, ("COMMIT /* " + m + " */").c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0));
+		});
+		check_commit_disconnects(off.c_str(), "INSERT; COMMIT", [](PGconn* c, const std::string& m) {
+			return answer_sqlstate(PQexec(c, ("INSERT INTO txp_commit_plain VALUES ('nodigest'); COMMIT /* " + m + " */").c_str()));
+		});
+	} else {
+		emit_fail_fill(3, "case H: cannot turn the digests off");
+	}
+	if (!digests0.empty()) set_admin_var("query_digests", digests0.c_str());
+	if (!stats0.empty()) set_admin_var("commands_stats", stats0.c_str());
+
+	const std::string cut = std::string(mode) + ", digest cut";
+	if (set_admin_var("query_digests_max_query_length", "64")) {
+		const std::string pad(200, 'x');
+		// The COMMIT is past the end of the digest.
+		check_commit_disconnects(cut.c_str(), "COMMIT past the cut", [&pad](PGconn* c, const std::string& m) {
+			return answer_sqlstate(PQexec(c, ("INSERT INTO txp_commit_plain VALUES ('cut'); /* " + pad + " */ COMMIT /* " + m + " */").c_str()));
+		});
+		// Control: a long query that cannot commit is no reason to disconnect.
+		PGconn* cli = open_proxy();
+		bool poisoned = false;
+		bool killed = false;
+		if (cli && exec_ok(cli, "BEGIN")) {
+			KillResult kr = run_poisoning_query(cli, ("SELECT pg_sleep(5) /* " + pad + " */").c_str());
+			killed = kr.kill_delivered;
+			poisoned = is_sqlstate(kr.pgresult, "25P02") && PQstatus(cli) == CONNECTION_OK;
+			PQclear(kr.pgresult);
+			if (PQstatus(cli) == CONNECTION_OK) exec_ok(cli, "ROLLBACK");
+		}
+		ok(killed && poisoned, "case H [%s] long query without a COMMIT: still poisoned (25P02, connection kept)", cut.c_str());
+		if (cli) PQfinish(cli);
+	} else {
+		emit_fail_fill(2, "case H: cannot shorten the digest");
+	}
+	if (!cap0.empty()) set_admin_var("query_digests_max_query_length", cap0.c_str());
+}
+
+// Whether the backend leg of a proxy session is TLS, as PostgreSQL itself sees it: "true", "false", or ""
+// if it could not be told.
+static std::string backend_leg_tls() {
+	PGconn* cli = open_proxy();
+	if (!cli) return "";
+	const std::string marker = new_marker();
+	std::string seen;
+	std::thread watcher([&seen, &marker]() {
+		PGconn* direct = open_conn(cl.pgsql_server_host, cl.pgsql_server_port,
+		                           cl.pgsql_server_username, cl.pgsql_server_password, "PG-direct (superuser)");
+		if (!direct) return;
+		const char* params[1] = { marker.c_str() };
+		for (int i = 0; i < 40 && seen.empty(); i++) {
+			PGresult* r = PQexecParams(direct,
+				"SELECT coalesce(s.ssl::text, '') FROM pg_stat_activity a LEFT JOIN pg_stat_ssl s USING (pid) "
+				"WHERE a.state = 'active' AND a.query LIKE '%' || $1 || '%' AND a.pid <> pg_backend_pid()",
+				1, nullptr, params, nullptr, nullptr, 0);
+			if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) >= 1) seen = PQgetvalue(r, 0, 0);
+			PQclear(r);
+			if (seen.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
+		PQfinish(direct);
+	});
+	PQclear(PQexec(cli, ("SELECT pg_sleep(2), '" + marker + "'").c_str()));
+	watcher.join();
+	PQfinish(cli);
+	return seen;
+}
+
+// Cases F and G run in four variants per backend protocol: the client talks TLS to the proxy or not, and
+// the proxy talks TLS to the backend or not. Each variant also checks, from PostgreSQL's side, that the
+// backend leg is what it was set to.
+static const int VARIANT_CHECKS = 1 + CASE_F_CHECKS + CASE_G_CHECKS;
+static const int PER_MODE_CHECKS = CASE_E_CHECKS + CASE_H_CHECKS + 4 * VARIANT_CHECKS;
+
+// Re-creates the backend rows with use_ssl set as asked. The pool is emptied first: a pooled connection
+// keeps the TLS setting it was opened with.
+static bool set_backend_tls(PGconn* admin, const std::vector<std::string>& servers, bool tls) {
+	return flush_backend_pool(admin, servers) &&
+	       exec_ok(admin, std::string("UPDATE pgsql_servers SET use_ssl = ") + (tls ? "1" : "0") +
+	                      " WHERE hostgroup_id = " + std::to_string(BACKEND_HG)) &&
+	       exec_ok(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+}
+
+static void cases_E_F_G_all_modes() {
+	PGconn* admin = open_admin();
+	if (!admin || !create_commit_fixtures()) {
+		ok(0, "case E/F/G: admin connection and fixtures");
+		emit_fail_fill(2 * PER_MODE_CHECKS - 1, "case E/F/G aborted on setup");
+		if (admin) PQfinish(admin);
+		return;
+	}
+	const bool native_supported = pgsql_native_supported(admin);
+	PGresult* r = PQexec(admin,
+		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-use_native_backend_protocol'");
+	const std::string orig_native = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : "";
+	PQclear(r);
+	const std::vector<std::string> servers = read_servers(admin);
+	// Case G's query rule: an error of ProxySQL's, with the backend alive. Case F's: multiplex=0.
+	const bool rule_ok = exec_ok(admin, "DELETE FROM pgsql_query_rules WHERE rule_id = " + std::to_string(RULE_G_ID)) &&
+		exec_ok(admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, error_msg, apply) VALUES (" +
+			std::to_string(RULE_G_ID) + ", 1, 'txp_g_blocked', 'blocked by a query rule', 1)") &&
+		exec_ok(admin, "DELETE FROM pgsql_query_rules WHERE rule_id = " + std::to_string(RULE_F_MUX_ID)) &&
+		exec_ok(admin, "INSERT INTO pgsql_query_rules (rule_id, active, match_pattern, multiplex, apply) VALUES (" +
+			std::to_string(RULE_F_MUX_ID) + ", 1, 'txp_f_mux_off', 0, 1)") &&
+		exec_ok(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+
+	for (const bool native : { false, true }) {
+		const char* mode = native ? "native" : "libpq";
+		if (native && !native_supported) {
+			skip(PER_MODE_CHECKS, "native backend protocol is unavailable on this tier");
+			continue;
+		}
+		if ((native_supported && !set_admin_bool("use_native_backend_protocol", native)) ||
+		    !flush_backend_pool(admin, servers)) {
+			emit_fail_fill(PER_MODE_CHECKS, "case E/F/G: cannot switch the backend protocol");
+			continue;
+		}
+		case_E_unanswered_commit(mode);
+		case_H_digest_unusable(mode);
+		for (const bool client_tls : { false, true }) {
+			for (const bool backend_tls : { true, false }) {
+				const std::string variant = std::string(mode) + (client_tls ? ", client TLS" : ", client plain") +
+				                            (backend_tls ? ", backend TLS" : ", backend plain");
+				if (!set_backend_tls(admin, servers, backend_tls)) {
+					emit_fail_fill(VARIANT_CHECKS, ("case F/G [" + variant + "]: cannot set the backend TLS").c_str());
+					continue;
+				}
+				g_client_tls = client_tls;
+				const std::string leg = backend_leg_tls();
+				ok(leg == (backend_tls ? "true" : "false"),
+				   "case F/G [%s]: PostgreSQL sees the backend leg as ssl=%s (expected %s)", variant.c_str(),
+				   leg.empty() ? "(unknown)" : leg.c_str(), backend_tls ? "true" : "false");
+				case_F_session_state(variant.c_str(), native);
+				if (rule_ok) {
+					case_G_local_error_keeps_session_state(variant.c_str(), admin);
+				} else {
+					emit_fail_fill(CASE_G_CHECKS, "case G: cannot install the query rule");
+				}
+				g_client_tls = false;
+			}
+		}
+	}
+
+	if (native_supported && !orig_native.empty()) {
+		set_admin_bool("use_native_backend_protocol", orig_native == "true");
+	}
+	flush_backend_pool(admin, servers);
+	exec_ok(admin, "DELETE FROM pgsql_query_rules WHERE rule_id IN (" + std::to_string(RULE_G_ID) + ", " +
+	               std::to_string(RULE_F_MUX_ID) + ", " + std::to_string(RULE_G_HG_ID) + ")");
+	exec_ok(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
+	drop_commit_fixtures();
+	PQfinish(admin);
+}
+
 int main(int /*argc*/, char** /*argv*/) {
 	// Plan breakdown:
 	// case A: 8 assertions (BEGIN, ERR shape, notice shape, no-57P01-in-notice,
@@ -670,8 +1565,13 @@ int main(int /*argc*/, char** /*argv*/) {
 	// case B ok() count = 3
 	// case C ok() count = 1
 	// case D ok() count = 2
-	// Total = 17
-	plan(17);
+	// case E ok() count = CASE_E_CHECKS per backend protocol (libpq, native)
+	// case F and G run in 4 TLS variants per backend protocol (libpq, native), each with
+	//   1 check of the backend leg + CASE_F_CHECKS + CASE_G_CHECKS: VARIANT_CHECKS
+	// case H: CASE_H_CHECKS per backend protocol
+	// PER_MODE_CHECKS = CASE_E_CHECKS + CASE_H_CHECKS + 4 * VARIANT_CHECKS
+	// Total = 17 + 2 * PER_MODE_CHECKS
+	plan(17 + 2 * PER_MODE_CHECKS);
 
 	srand((unsigned int)time(nullptr) ^ (unsigned int)getpid());
 
@@ -694,6 +1594,9 @@ int main(int /*argc*/, char** /*argv*/) {
 	case_B_commit_recovery();
 	case_C_autocommit_no_poison();
 	case_D_admin_off();
+	// case D left the admin variable off; cases E and F need the poison on.
+	set_admin_bool("preserve_client_on_broken_backend_in_tx", true);
+	cases_E_F_G_all_modes();
 
 	return exit_status();
 }
