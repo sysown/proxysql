@@ -61,7 +61,7 @@ mysql_variables=
 # https://github.com/sysown/proxysql/wiki/Global-variables#mysql-monitor_username-mysql-monitor_password
 	monitor_username="monitor"
 	monitor_password="monitor"
-	monitor_history=600000
+	monitor_history=7200000
 	monitor_connect_interval=60000
 	monitor_ping_interval=10000
 	monitor_read_only_interval=1500
