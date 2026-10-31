@@ -2790,8 +2790,9 @@ int PgSQL_Connection::native_relay_async_messages(PtrSizeArray* out) {
 
 void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, uint32_t len) {
 	// ErrorResponse: series of (field-type-byte, NUL-terminated value), terminated
-	// by a zero field-type byte. Extract Severity('S'), SQLSTATE('C'), Message('M').
+	// by a zero field-type byte. Extract Severity('S'/'V'), SQLSTATE('C'), Message('M').
 	std::string severity = "ERROR";
+	bool has_nonlocalized_severity = false;
 	std::string sqlstate = "08000"; // connection_exception default
 	std::string message  = "native handshake error";
 	if (error_info.ext_info) {
@@ -2805,9 +2806,12 @@ void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, ui
 		std::string val((const char*)vstart, (const char*)(payload + i));
 		if (i < len) i++; // skip the NUL
 		switch (ftype) {
-			case 'S': // Severity (localized)
-			case 'V': // Severity (non-localized) — prefer if present
-				if (ftype == 'V' || severity == "ERROR") severity = val;
+			case 'S': // Severity (localized), used only when 'V' is absent
+				if (!has_nonlocalized_severity) severity = val;
+				break;
+			case 'V': // Severity (non-localized) — fields can arrive in either order
+				severity = val;
+				has_nonlocalized_severity = true;
 				break;
 			case 'C': sqlstate = val; break;
 			case 'M': message = val; break;

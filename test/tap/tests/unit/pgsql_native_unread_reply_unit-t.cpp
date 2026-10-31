@@ -117,6 +117,34 @@ static void test_error_response_does_not_abort_the_cycle() {
 	destroy(c);
 }
 
+static void test_error_severity_field_order() {
+	// PostgreSQL's 'S' field may be localized, while 'V' is always English.
+	// The non-localized severity must win regardless of the order on the wire.
+	struct severity_case {
+		const char* payload;
+		size_t len;
+		PGSQL_ERROR_SEVERITY expected;
+		const char* label;
+	};
+	static const char localized_first[] = "SFEHLER\0" "VERROR\0" "C22012\0" "Mdivision by zero\0";
+	static const char nonlocalized_first[] = "VERROR\0" "SFEHLER\0" "C22012\0" "Mdivision by zero\0";
+	static const char fatal_first[] = "VFATAL\0" "SSCHWERWIEGEND\0" "C08006\0" "Mconnection failed\0";
+	static const char legacy[] = "SERROR\0" "C22012\0" "Mdivision by zero\0";
+	const severity_case cases[] = {
+		{localized_first, sizeof(localized_first), PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR, "localized before non-localized"},
+		{nonlocalized_first, sizeof(nonlocalized_first), PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR, "non-localized before localized"},
+		{fatal_first, sizeof(fatal_first), PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL, "non-localized fatal before localized"},
+		{legacy, sizeof(legacy), PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR, "English severity without V"},
+	};
+	for (const severity_case& tc : cases) {
+		PgSQL_Connection* c = make_live_native_conn();
+		c->native_fill_error_from_E((const unsigned char*)tc.payload, (uint32_t)tc.len);
+		ok(c->is_error_present() && c->get_error_severity() == tc.expected,
+		   "native severity: %s is classified as %s", tc.label, PgSQL_Error_Helper::get_severity(tc.expected));
+		destroy(c);
+	}
+}
+
 // The same through the drain itself: the 'E' is recorded and the drain goes on to the
 // 'Z' that ends the cycle.
 static void test_error_response_drains_to_ready_for_query() {
@@ -178,7 +206,7 @@ static void test_flags_cleared_at_step_start_and_free() {
 }
 
 int main() {
-	plan(12);
+	plan(16);
 	test_init_minimal();
 
 	test_clean_conn_is_reusable();                  // 1
@@ -186,6 +214,7 @@ int main() {
 	test_unread_framer_is_not_reusable();           // 1
 	test_listen_conn_keeps_buffered_notification(); // 2
 	test_error_response_does_not_abort_the_cycle(); // 1
+	test_error_severity_field_order();              // 4
 	test_error_response_drains_to_ready_for_query(); // 1
 	test_fatal_and_violation_abort_the_cycle();     // 3
 	test_flags_cleared_at_step_start_and_free();    // 2
