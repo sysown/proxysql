@@ -8446,6 +8446,54 @@ bool save_memory_server_rows_to_disk_scoped(SQLite3DB* db, const char* table,
 	return finish(db->execute("COMMIT"));
 }
 
+/**
+ * Hostgroups whose configuration rows a save from runtime leaves untouched
+ * (sorted, unique): with PROXYSQL40, those of the active managed discovery
+ * claims of `protocol`. Discovered servers are runtime state, never
+ * configuration, and a server reload ignores configuration rows in these
+ * hostgroups. Empty for a refresh of the runtime_* tables, which show the live
+ * rows, and without PROXYSQL40.
+ */
+std::vector<uint32_t> server_save_excluded_hostgroups(bool runtime_tables, bool mysql) {
+#ifdef PROXYSQL40
+	if (runtime_tables) return {};
+	return normalized_hostgroups(proxysql_server_reload_retained_hostgroups(
+		mysql ? ProxySQL_ServerProtocol::mysql : ProxySQL_ServerProtocol::pgsql));
+#else
+	(void)runtime_tables;
+	(void)mysql;
+	return {};
+#endif
+}
+
+/** DELETE of a save from runtime that keeps the rows of `excluded` hostgroups. */
+std::string server_save_delete_sql(const std::string& table, const std::vector<uint32_t>& excluded) {
+	std::string sql = "DELETE FROM main." + table;
+	if (!excluded.empty()) sql += " WHERE hostgroup_id NOT IN " + hostgroup_predicate(excluded);
+	return sql;
+}
+
+/**
+ * Drops the dumped server rows of `excluded` hostgroups (column 0 is
+ * hostgroup_id) and fixes rows_count, which the bulk insert relies on.
+ */
+void drop_server_rows_in_hostgroups(SQLite3_result* rows, const std::vector<uint32_t>& excluded) {
+	if (rows == nullptr || excluded.empty()) return;
+	const std::set<uint32_t> skipped(excluded.begin(), excluded.end());
+	std::vector<SQLite3_row*> kept;
+	kept.reserve(rows->rows.size());
+	for (SQLite3_row* row : rows->rows) {
+		if (row != nullptr && row->fields != nullptr && row->fields[0] != nullptr &&
+			skipped.count(static_cast<uint32_t>(strtoul(row->fields[0], nullptr, 10))) != 0) {
+			delete row;
+			continue;
+		}
+		kept.push_back(row);
+	}
+	rows->rows.swap(kept);
+	rows->rows_count = static_cast<int>(rows->rows.size());
+}
+
 } // namespace
 
 bool ProxySQL_Admin::save_mysql_servers_runtime_to_database_scoped(
@@ -8512,14 +8560,18 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	string StrQuery;
 	SQLite3_result *resultset=NULL;
 	// dump mysql_servers
+	// A save into main (Admin SAVE FROM RUNTIME, Cluster pulls) keeps the rows of
+	// managed discovery hostgroups: their live servers are not configuration.
+	const std::vector<uint32_t> excluded_hostgroups = server_save_excluded_hostgroups(_runtime, true);
 	if (_runtime) {
-		query=(char *)"DELETE FROM main.runtime_mysql_servers";
+		StrQuery = "DELETE FROM main.runtime_mysql_servers";
 	} else {
-		query=(char *)"DELETE FROM main.mysql_servers";
+		StrQuery = server_save_delete_sql("mysql_servers", excluded_hostgroups);
 	}
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute(query);
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", StrQuery.c_str());
+	admindb->execute(StrQuery.c_str());
 	resultset=MyHGM->dump_table_mysql("mysql_servers");
+	drop_server_rows_in_hostgroups(resultset, excluded_hostgroups);
 	if (resultset) {
 		char *query1=NULL;
 		char *query32=NULL;
@@ -8913,15 +8965,19 @@ void ProxySQL_Admin::save_pgsql_servers_runtime_to_database(bool _runtime) {
 	string StrQuery;
 	SQLite3_result* resultset = NULL;
 	// dump pgsql_servers
+	// A save into main (Admin SAVE FROM RUNTIME, Cluster pulls) keeps the rows of
+	// managed discovery hostgroups: their live servers are not configuration.
+	const std::vector<uint32_t> excluded_hostgroups = server_save_excluded_hostgroups(_runtime, false);
 	if (_runtime) {
-		query = (char*)"DELETE FROM main.runtime_pgsql_servers";
+		StrQuery = "DELETE FROM main.runtime_pgsql_servers";
 	}
 	else {
-		query = (char*)"DELETE FROM main.pgsql_servers";
+		StrQuery = server_save_delete_sql("pgsql_servers", excluded_hostgroups);
 	}
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute(query);
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", StrQuery.c_str());
+	admindb->execute(StrQuery.c_str());
 	resultset = PgHGM->dump_table_pgsql("pgsql_servers");
+	drop_server_rows_in_hostgroups(resultset, excluded_hostgroups);
 	if (resultset) {
 		int rc;
 		sqlite3_stmt* statement1 = NULL;
@@ -9123,7 +9179,7 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers,
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
 	const mysql_servers_v2_checksum_t& peer_mysql_server_v2, bool hgm_acquire_lock,
-	bool emit_runtime_install) {
+	bool emit_runtime_install, const std::vector<uint32_t>* retained_hostgroups) {
 	// make sure that the caller has called mysql_servers_wrlock()
 #ifdef PROXYSQL40
 	// Lock order: Admin servers lock -> runtime install -> HGM. Taken before the
@@ -9131,8 +9187,13 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	std::optional<ProxySQL_ServerRuntimeInstallLock> install_lock;
 	if (emit_runtime_install) install_lock.emplace(ProxySQL_ServerProtocol::mysql);
 	std::optional<ProxySQL_ServerRuntimeSnapshot> publication;
+	// Managed discovery claims own their hostgroups: the commit keeps their live rows.
+	const std::vector<uint32_t> retained = retained_hostgroups != nullptr ? *retained_hostgroups :
+		proxysql_server_reload_retained_hostgroups(ProxySQL_ServerProtocol::mysql);
 #else
 	(void)emit_runtime_install;
+	(void)retained_hostgroups;
+	const std::vector<uint32_t> retained {};
 #endif
 	char *error=NULL;
 	int cols=0;
@@ -9361,7 +9422,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	MyHGM->commit(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
 		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
-		false, true, hgm_acquire_lock
+		false, true, hgm_acquire_lock, retained,
+		peer_runtime_mysql_server.value.empty() && peer_mysql_server_v2.value.empty() ? "configured" : "peer"
 	);
 #ifdef PROXYSQL40
 	if (publication) publish_server_runtime(std::move(*publication));
@@ -9403,7 +9465,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 
 void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_t& incoming_pgsql_servers,
 	const runtime_pgsql_servers_checksum_t& peer_runtime_pgsql_server, const pgsql_servers_v2_checksum_t& peer_pgsql_server_v2,
-	bool emit_runtime_install) {
+	bool emit_runtime_install, const std::vector<uint32_t>* retained_hostgroups) {
 	// make sure that the caller has called pgsql_servers_wrlock()
 #ifdef PROXYSQL40
 	// Lock order: Admin servers lock -> runtime install -> HGM. Taken before the
@@ -9411,8 +9473,13 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	std::optional<ProxySQL_ServerRuntimeInstallLock> install_lock;
 	if (emit_runtime_install) install_lock.emplace(ProxySQL_ServerProtocol::pgsql);
 	std::optional<ProxySQL_ServerRuntimeSnapshot> publication;
+	// Managed discovery claims own their hostgroups: the commit keeps their live rows.
+	const std::vector<uint32_t> retained = retained_hostgroups != nullptr ? *retained_hostgroups :
+		proxysql_server_reload_retained_hostgroups(ProxySQL_ServerProtocol::pgsql);
 #else
 	(void)emit_runtime_install;
+	(void)retained_hostgroups;
+	const std::vector<uint32_t> retained {};
 #endif
 	char* error = NULL;
 	int cols = 0;
@@ -9531,7 +9598,8 @@ void ProxySQL_Admin::load_pgsql_servers_to_runtime(const incoming_pgsql_servers_
 	PgHGM->commit(
 		{ runtime_pgsql_servers, peer_runtime_pgsql_server },
 		{ incoming_pgsql_servers_v2, peer_pgsql_server_v2 },
-		false, true
+		false, true, retained,
+		peer_runtime_pgsql_server.value.empty() && peer_pgsql_server_v2.value.empty() ? "configured" : "peer"
 	);
 #ifdef PROXYSQL40
 	if (publication) publish_server_runtime(std::move(*publication));

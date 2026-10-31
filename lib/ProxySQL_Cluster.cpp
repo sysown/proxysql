@@ -1941,7 +1941,7 @@ bool proxysql_snapshot_installed_builtin_server_topology(
 void proxysql_cluster_install_v1_runtime_post_fetch(
 		ProxySQL_ServerProtocol protocol, SQLite3_result* core_rows,
 		const std::function<void(SQLite3_result*)>& stage_core_rows,
-		const std::function<void(SQLite3_result*)>& commit_core_rows) {
+		const std::function<void(SQLite3_result*, const std::vector<uint32_t>&)>& commit_core_rows) {
 	if (core_rows == nullptr) return;
 	// Lock order: Admin servers lock -> runtime install -> HGM.
 	ProxySQL_ServerRuntimeInstallLock install_lock(protocol);
@@ -1961,8 +1961,11 @@ void proxysql_cluster_install_v1_runtime_post_fetch(
 	// as on every other HGM install path (Admin LOAD, the non-PROXYSQL40 pull)
 	// and as in v3.0.11. Catching it here would let the pull continue as if it
 	// succeeded after a partial HGM commit, and persist that state.
+	// Peer rows never replace the local rows of managed discovery hostgroups:
+	// each node discovers them itself.
+	const std::vector<uint32_t> retained = proxysql_server_reload_retained_hostgroups(protocol);
 	stage_core_rows(core_rows);
-	commit_core_rows(core_rows);
+	commit_core_rows(core_rows, retained);
 	proxysql_publish_server_runtime(std::move(snapshot));
 }
 #endif
@@ -2090,9 +2093,9 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						proxysql_cluster_install_v1_runtime_post_fetch(
 							ProxySQL_ServerProtocol::mysql, runtime_mysql_servers_resultset.release(),
 							[](SQLite3_result* rows) { MyHGM->servers_add(rows); },
-							[&](SQLite3_result* rows) {
+							[&](SQLite3_result* rows, const std::vector<uint32_t>& retained) {
 								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
-								MyHGM->commit({ rows, peer_runtime_mysql_server }, { nullptr, {} }, true, true);
+								MyHGM->commit({ rows, peer_runtime_mysql_server }, { nullptr, {} }, true, true, true, retained, "peer");
 							});
 						#else
 						MyHGM->servers_add(runtime_mysql_servers_resultset.get());
@@ -3657,9 +3660,9 @@ void ProxySQL_Cluster::pull_runtime_pgsql_servers_from_peer(const runtime_pgsql_
 				proxysql_cluster_install_v1_runtime_post_fetch(
 					ProxySQL_ServerProtocol::pgsql, runtime_pgsql_servers_resultset.release(),
 					[](SQLite3_result* rows) { PgHGM->servers_add(rows); },
-					[&](SQLite3_result* rows) {
+					[&](SQLite3_result* rows, const std::vector<uint32_t>& retained) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_pgsql_servers from peer %s:%d\n", hostname, port);
-						PgHGM->commit({ rows, { expected_runtime_checksum, peer_runtime_pgsql_server.epoch } }, { nullptr, {} }, true, true);
+						PgHGM->commit({ rows, { expected_runtime_checksum, peer_runtime_pgsql_server.epoch } }, { nullptr, {} }, true, true, retained, "peer");
 					});
 				#else
 				PgHGM->servers_add(runtime_pgsql_servers_resultset.get());

@@ -261,12 +261,84 @@ hostgroup placement. The desired set supplies initial placement for a new
 endpoint. A claim with monitor kind `none` leaves placement under plugin
 control. In both cases, core preserves the effective runtime status of an
 existing endpoint. The desired row status initializes only a new endpoint.
+A runtime row in `OFFLINE_HARD` belongs to a server being removed (it lingers
+until its used connections end) and counts as absent: its status and placement
+are not preserved, and it is not kept in other claims. An endpoint live only
+as `OFFLINE_HARD` takes the desired row and status.
 
 An installed discovery controller with active claims owns the complete runtime
 server inventory for its protocol. A desired set replaces its selected claimed
 pair, preserves rows in other active claims, and removes runtime rows outside
 all active claims. This convergence changes runtime only; it does not remove
 rows from Admin MEMORY or disk.
+
+A server reload follows the same ownership rule from the other side.
+`LOAD MYSQL|PGSQL SERVERS TO RUNTIME`, a plugin configuration publication and
+a Cluster pull keep the live runtime rows of hostgroups held by active claims
+(except `OFFLINE_HARD` rows) and ignore configuration or peer rows in those
+hostgroups. Kept servers are not re-created, their status and connection pools
+survive, and the controller does not need to republish them. Hostgroups
+outside every claim are still replaced by the reload. If keeping the live rows
+fails, the change is rolled back, the error is logged and the reload replaces
+the claimed hostgroups as it does for unclaimed ones.
+
+The reload never rejects ignored rows (#6448). For each claimed hostgroup
+with at least one ignored row it logs one warning with two counts, naming the
+rows "configured" (Admin LOAD, managed install, plugin publication) or "peer"
+(Cluster pull): servers that are not live, and live servers whose weight,
+compression, max_connections, max_replication_lag, use_ssl, max_latency_ms,
+comment, `gtid_port` (MySQL) or `OFFLINE_SOFT` / `OFFLINE_HARD` status differ.
+A claimed hostgroup without ignored rows logs nothing. Such operator edits, for example
+`UPDATE mysql_servers SET status='OFFLINE_SOFT'` followed by `LOAD`, have no
+effect on a claimed hostgroup; ONLINE/SHUNNED differences belong to the
+monitors and are not counted.
+
+The reload of a managed discovery install keeps only the claims that the
+install leaves unchanged: same hostgroups (including the blue/green pair),
+role monitor kind, `writer_is_also_reader`, and for Aurora claims
+`domain_name` and `aurora_port`. Fields of another monitor kind are ignored,
+as claim validation ignores them. A removed or changed claim keeps nothing; a change of monitor
+tuning alone keeps the rows. Releasing the claims keeps nothing. Core cannot
+see that an unchanged claim now points at another database cluster: a
+controller that re-targets the same hostgroups must release or change the claim
+in a separate install, or accept that the old servers stay until its next
+desired set replaces them.
+
+The runtime snapshot published to the controller still carries the
+configuration rows only; the live rows are not exposed through the plugin
+service table.
+
+A save from runtime into Admin MEMORY follows the same rule: discovered
+servers are runtime state, never configuration. `SAVE MYSQL|PGSQL SERVERS FROM
+RUNTIME` and the save that follows a Cluster v1 or v2 pull (with
+`cluster_mysql_servers_save_to_disk` / `cluster_pgsql_servers_save_to_disk`)
+leave the `mysql_servers` / `pgsql_servers` rows of hostgroups held by active
+claims as they are, and save the runtime rows of every other hostgroup. After a
+v1 pull those hostgroups keep the node's own rows; after a v2 pull they keep the
+peer's configuration rows, which the pull wrote before loading. The
+`runtime_mysql_servers` / `runtime_pgsql_servers` tables still show the live
+rows. The scoped save of a desired set with `memory` or `memory_and_disk`
+persistence is a separate path and still writes the rows it materializes.
+
+Limits of this rule:
+
+- Cluster: a node that installs a ready-made runtime resultset (Cluster v1 and
+  v2 pulls, plugin configuration publication and restore) still stores and
+  serves that resultset to its peers, with its checksum, although its runtime
+  differs in claimed hostgroups. A peer without an active claim that pulls from
+  it installs those rows, which are the source rows of that pull, not the live
+  rows of the node it pulls from. The served rows are not rebuilt from the live
+  table on purpose: a pulling peer installs them only if they hash to the
+  advertised checksum, and changing that checksum restarts the epoch-driven
+  pulls between nodes whose claimed rows differ.
+- Startup: the boot-time load runs before plugins start, so it installs the
+  saved configuration rows, as before. A controller that restarts while
+  discovery fails therefore serves the saved rows of its hostgroups, if any;
+  with runtime-only discovery they stay empty until the first desired set, as
+  before this rule.
+- Manager retirement: the active manager is unpublished before its controllers
+  release their claims. A reload in that window keeps nothing, which the
+  release that follows would also do.
 
 These structures changed layout, so core accepts server-discovery controller
 registration only from ABI-16 plugins. Build the controller and core from

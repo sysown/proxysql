@@ -732,6 +732,7 @@ UNIT_TESTS += \
 	managed_configuration_contract_unit-t \
 	managed_configuration_lifecycle_unit-t \
 	managed_configuration_database_unit-t \
+	managed_discovery_reload_unit-t \
 	managed_discovery_unit-t \
 	managed_runtime_mysql_unit-t \
 	managed_runtime_pgsql_unit-t \
@@ -1516,6 +1517,12 @@ managed_configuration_lifecycle_unit-t: managed_configuration_lifecycle_unit-t.c
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -ldl -pthread -o $@
 
 managed_discovery_unit-t: managed_discovery_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+managed_discovery_reload_unit-t: managed_discovery_reload_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \

@@ -717,11 +717,19 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 */
 	std::string gen_global_pgsql_servers_v2_checksum(uint64_t servers_v2_hash);
 	void refresh_pgsql_servers_v2_checksum();
+	/**
+	 * @param retained_hostgroups With PROXYSQL40, hostgroups whose live rows (OFFLINE_HARD excluded)
+	 *  replace the staged rows, so their servers survive the commit unchanged. Used by server
+	 *  reloads for the hostgroups of managed discovery claims.
+	 * @param reload_source Names the staged rows in the reload warnings: "configured" or "peer".
+	 */
 	bool commit(
 		const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers = {},
 		const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2 = {},
 		bool only_commit_runtime_pgsql_servers = true,
-		bool update_version = false
+		bool update_version = false,
+		const std::vector<uint32_t>& retained_hostgroups = {},
+		const char* reload_source = "configured"
 	);
 	/**
 	 * @brief Extracted from 'commit'. Performs the following actions:
@@ -906,7 +914,9 @@ private:
 	bool commit_locked(
 		const peer_runtime_pgsql_servers_t& peer_runtime_pgsql_servers,
 		const peer_pgsql_servers_v2_t& peer_pgsql_servers_v2,
-		bool only_commit_runtime_pgsql_servers, bool update_version);
+		bool only_commit_runtime_pgsql_servers, bool update_version,
+		const std::vector<uint32_t>& retained_hostgroups = {},
+		const char* reload_source = "configured");
 	void finish_commit(unsigned long long started_at);
 	/**
 	 * @brief Rebuilds 'hostgroup_server_mapping' when its inputs changed.

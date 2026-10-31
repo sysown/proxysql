@@ -1684,7 +1684,9 @@ bool MySQL_HostGroups_Manager::commit(
 	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 	bool only_commit_runtime_mysql_servers,
 	bool update_version,
-	bool acquire_lock
+	bool acquire_lock,
+	const std::vector<uint32_t>& retained_hostgroups,
+	const char* reload_source
 ) {
 	// if only_commit_runtime_mysql_servers is true, mysql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_mysql_servers) {
@@ -1696,7 +1698,7 @@ bool MySQL_HostGroups_Manager::commit(
 	unsigned long long curtime1=monotonic_time();
 	if (acquire_lock) wrlock();
 	const bool result = commit_locked(peer_runtime_mysql_servers, peer_mysql_servers_v2,
-		only_commit_runtime_mysql_servers, update_version);
+		only_commit_runtime_mysql_servers, update_version, retained_hostgroups, reload_source);
 	if (acquire_lock) wrunlock();
 	finish_commit(curtime1, acquire_lock);
 	return result;
@@ -1706,7 +1708,9 @@ bool MySQL_HostGroups_Manager::commit_locked(
 	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
 	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
 	bool only_commit_runtime_mysql_servers,
-	bool update_version
+	bool update_version,
+	const std::vector<uint32_t>& retained_hostgroups,
+	const char* reload_source
 ) {
 	// purge table
 	purge_mysql_servers_table();
@@ -1716,6 +1720,20 @@ bool MySQL_HostGroups_Manager::commit_locked(
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 	mydb->execute("DELETE FROM mysql_servers");
 	generate_mysql_servers_table();
+#ifdef PROXYSQL40
+	// Under the same lock as the comparison below, so the kept rows are exactly
+	// the live ones: no kept server is removed, re-created or changes status.
+	if (!proxysql_retain_server_reload_rows(*mydb, ProxySQL_ServerProtocol::mysql,
+		retained_hostgroups, reload_source)) {
+		// The helper rolled back and logged the SQLite error: the staged rows
+		// are untouched and this commit replaces the claimed hostgroups.
+		proxy_warning("MySQL servers commit replaces managed discovery hostgroups: their discovered"
+			" servers return when discovery publishes them again\n");
+	}
+#else
+	(void)retained_hostgroups;
+	(void)reload_source;
+#endif
 
 	char *error=NULL;
 	int cols=0;

@@ -419,6 +419,10 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 			desired_by_claim[claim_by_hostgroup.at(row.hostgroup_id)][entry.first].push_back(row);
 	}
 	for (const auto& row : current.servers) {
+		// OFFLINE_HARD is the removed state: the row lingers only until its used
+		// connections end. It is absent here, so its status and placement are
+		// never copied and it is never kept in another claim.
+		if (row.status == "OFFLINE_HARD") continue;
 		if (delegated.count(row.hostgroup_id) == 0) {
 			if (claim_by_hostgroup.count(row.hostgroup_id) != 0) merged.push_back(row);
 			continue;
