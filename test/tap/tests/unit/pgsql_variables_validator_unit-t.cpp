@@ -3,9 +3,12 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Variables_Validator.h"
+#include "libpq-fe.h"
 
+#include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <string>
 
 // Helper: validate and check transformed value
 static void assert_validates(const pgsql_variable_validator& v, const char* input,
@@ -165,6 +168,35 @@ static void test_client_encoding_valid() {
     assert_validates(pgsql_variable_validator_client_encoding, "UTF8", true, "UTF8", "encoding");
     assert_validates(pgsql_variable_validator_client_encoding, "utf8", true, "UTF8", "encoding");  // uppercased
     assert_validates(pgsql_variable_validator_client_encoding, "LATIN1", true, "LATIN1", "encoding");
+    // Any spelling PostgreSQL accepts is stored as its standard name. asyncpg sends the
+    // quotes as part of the value, and keeping them broke the SET sent to the backend.
+    assert_validates(pgsql_variable_validator_client_encoding, "'utf-8'", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "\"utf8\"", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "utf-8", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "iso88591", true, "LATIN1", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "unicode", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "'UNICODE'", true, "UTF8", "encoding");
+    // PostgreSQL keeps exactly "UNICODE" as written, for old JDBC drivers.
+    assert_validates(pgsql_variable_validator_client_encoding, "UNICODE", true, "UNICODE", "encoding");
+}
+
+// pg_encoding_to_char() returns "" past the last encoding id.
+static int count_encodings() {
+    int n = 0;
+    while (*pg_encoding_to_char(n)) n++;
+    return n;
+}
+
+// Every encoding PostgreSQL knows, by its standard name and lower-cased in quotes as asyncpg
+// sends it, must be stored as the standard name.
+static void test_client_encoding_every_encoding(int count) {
+    for (int enc = 0; enc < count; enc++) {
+        const std::string name = pg_encoding_to_char(enc);
+        std::string quoted = "'" + name + "'";
+        std::transform(quoted.begin(), quoted.end(), quoted.begin(), ::tolower);
+        assert_validates(pgsql_variable_validator_client_encoding, name.c_str(), true, name.c_str(), "encoding");
+        assert_validates(pgsql_variable_validator_client_encoding, quoted.c_str(), true, name.c_str(), "encoding");
+    }
 }
 
 static void test_client_encoding_invalid() {
@@ -174,7 +206,11 @@ static void test_client_encoding_invalid() {
 }
 
 int main() {
-    plan(75);
+    const int encodings = count_encodings();
+    if (encodings == 0) {
+        BAIL_OUT("pg_encoding_to_char() returned no encodings");
+    }
+    plan(89 + 4 * encodings);
     test_init_minimal();
 
     test_bool_true_values();                // 12 (6 inputs x 2 assertions each)
@@ -193,7 +229,8 @@ int main() {
     test_search_path_valid();               // 4 (2 inputs x 2)
     test_search_path_quoted();              // 2
     test_search_path_invalid();             // 1
-    test_client_encoding_valid();           // 6 (3 inputs x 2)
+    test_client_encoding_valid();           // 20 (10 inputs x 2)
+    test_client_encoding_every_encoding(encodings); // 4 per encoding (2 spellings x 2)
     test_client_encoding_invalid();         // 1
 
     // Note: assert_validates calls ok() once for validate result,
