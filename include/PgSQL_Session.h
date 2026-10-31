@@ -147,7 +147,6 @@ enum ExtendedQueryPhase : uint8_t {
 	EXTQ_PHASE_IDLE						= 0x00,	// No extended query activity
 	EXTQ_PHASE_BUILDING					= 0x01,	// Collecting extended query messages (Parse/Bind/etc.)
 	EXTQ_PHASE_EXECUTING_SYNC_CLIENT	= 0x02,	// Executing after client-initiated Sync
-	EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT	= 0x04,	// Executing after implicit Sync (injected)
 	EXTQ_PHASE_PROCESSING_PARSE			= 0x08,	// Processing Parse message after Sync
 	EXTQ_PHASE_PROCESSING_DESCRIBE		= 0x10,	// Processing Describe message after Sync
 	EXTQ_PHASE_PROCESSING_CLOSE			= 0x20,	// Processing Close message after Sync
@@ -290,6 +289,26 @@ private:
 	// everywhere extended_query_phase goes back to IDLE: miss one and the next batch's
 	// lone DISCARD ALL is refused for work an already-finished batch did.
 	bool extq_backend_used { false };
+	// The batch built by extq_sync_step(false): its ReadyForQuery is not the client's.
+	bool extq_sync_drop_ready { false };
+	// A client Flush splits the messages between two Syncs (a "group") into segments. The segment
+	// being run ends with a Flush: the backend gets a Flush, the client no ReadyForQuery.
+	bool extq_flush_segment { false };
+	// A Flush was served since the group started: its Bind, routing and portals carry over to the
+	// next segment, and the connection stays with the session until the group ends.
+	bool extq_group_open { false };
+	// The held connection carries this group's work that no Sync concluded. Kept by the session
+	// because the connection's own flag does not survive everything (leaving libpq pipeline mode).
+	bool extq_group_holds_work { false };
+	// Something beyond a Parse or a statement's Describe went to a backend in this segment.
+	bool extq_segment_effects { false };
+	// A simple Query went to the connection holding the group's work: it runs in the group's
+	// transaction and ends it, and the group with it once the Query is over (RequestEnd).
+	bool extq_query_ends_group { false };
+	// An error ended the group before the client's Sync. PostgreSQL ignores everything up to that
+	// Sync, then answers it with one ReadyForQuery; extq_discard_status is its transaction state.
+	bool extq_discard_until_sync { false };
+	char extq_discard_status { 'I' };
 #ifdef PROXYSQL31
 	// Candidate frame: Bind, optional Describe(portal), Execute, client Sync.
 	uint8_t extended_cache_frame_stage { 0 };
@@ -319,7 +338,8 @@ private:
 		bool error = false;               // made the backend's error too, by a Parse that fails there
 		std::string name;                 // the client's statement name
 		std::string portal;               // a named portal: its Bind, Close, Execute or Describe
-		uint32_t max_rows = 0;            // a named Execute: its row limit
+		bool portal_bound = false;        // the unnamed portal, left suspended and still bound: used by name
+		uint32_t max_rows = 0;            // an Execute: its row limit
 		std::shared_ptr<const PgSQL_STMT_Global_info> stmt;
 		std::unique_ptr<const PgSQL_Bind_Message> bind;  // Execute: the client's Bind, which it carries
 		std::string bind_bytes;           // Describe('P'): the Bind of the portal, sent before it
@@ -427,6 +447,34 @@ private:
 	int extq_unit_done(PgSQL_Data_Stream* myds);
 	void extq_unit_failed(PgSQL_Data_Stream* myds);
 	void extq_clear();
+	// Whether a backend connection held by this session still owes a ReadyForQuery: it carries
+	// extended-query work that no Sync has concluded yet.
+	bool extq_held_unsynced() const;
+	// Whether a reply ProxySQL gives itself may end with a ReadyForQuery. Not while a held backend
+	// still has unsynced work: the client's ReadyForQuery must come from the Sync that concludes it.
+	bool local_reply_gets_ready() const;
+	// Sends a Sync to the held connection with unsynced work and returns the status that runs it.
+	// relay: the client's own Sync, whose reply (a ReadyForQuery, or the error of a failed commit)
+	// goes to the client; otherwise ProxySQL's, whose ReadyForQuery is dropped.
+	enum session_status extq_sync_step(bool relay);
+	// Whether the message being handled, the last one queued, ends the group with a Sync.
+	bool extq_last_message_gets_sync(bool has_effects);
+	// A segment the client ended with Flush that leaves nothing on the backend worth keeping: it can
+	// end with a Sync instead, and its connection go back to the pool.
+	bool extq_segment_releasable();
+	// A segment ended by the client's Flush is done: the group stays open, the session waits for
+	// the client.
+	void extq_segment_done();
+	// The group is over (its Sync answered): what carried over between segments is reset.
+	void extq_group_end();
+	// From now until the client's Sync every message is dropped; the Sync gets ReadyForQuery(status).
+	void extq_enter_discard(char status);
+	// The backend whose connection holds extended-query work no Sync concluded, or nullptr.
+	PgSQL_Backend* extq_held_backend();
+	// A simple Query ProxySQL answered or refused itself while a connection holds the group's work.
+	void extq_end_group_after_local_query(unsigned int out_before);
+	// A simple Query that joined a group needs a tracked variable set first: refused instead.
+	void extq_refuse_query_variable_sync(PgSQL_Data_Stream* myds);
 	int handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg);
 	int handle_post_sync_describe_message(PgSQL_Describe_Message* describe_msg);
 	int handle_post_sync_close_message(PgSQL_Close_Message* close_msg);
@@ -529,6 +577,9 @@ private:
 	// The extended-query counterpart, called for each Parse/Bind/Describe/Close/Execute
 	// queued while tx_poisoned: may the frame end the transaction? (see poisoned_extq)
 	void classify_poisoned_extq_message();
+	// A client Flush while tx_poisoned. True when the Flush was answered; false when the segment
+	// runs as for any Flush.
+	bool poisoned_flush();
 	// The client ended a poisoned transaction (ROLLBACK/COMMIT, either protocol): roll it
 	// back -- tracked SET variables, then any backend still holding it -- and clear the poison.
 	void end_poisoned_transaction();
@@ -601,8 +652,11 @@ public:
 	}
 
 	inline bool is_extended_query_ready_for_query() const {
-		return extended_query_frame.empty() &&
-			((extended_query_phase & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) == 0);
+		return extended_query_frame.empty() && extq_flush_segment == false;
+	}
+
+	inline bool is_extq_flush_segment() const {
+		return extq_flush_segment;
 	}
 
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, bool no_quote = false, bool set_transaction = false);

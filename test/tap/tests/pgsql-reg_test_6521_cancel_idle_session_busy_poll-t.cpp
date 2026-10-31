@@ -143,8 +143,8 @@ static bool pq_cancel(PGconn* conn) {
 	return sent;
 }
 
-// Parse/Bind/Execute with no Sync, then a simple Query, which closes the unit with an implicit Sync.
-// Returns the type of each reply up to the first ReadyForQuery, e.g. "ETDCZ".
+// Parse/Bind/Execute with no Sync, then a simple Query and a Sync. After an error the Query is ignored,
+// as in PostgreSQL. Returns the type of each reply up to the first ReadyForQuery, e.g. "EZ".
 static std::string unit_then_simple_query(const char* sql) {
 	std::string out;
 	try {
@@ -154,6 +154,7 @@ static std::string unit_then_simple_query(const char* sql) {
 		c.bindStatement("", "", {}, {}, false);
 		c.executePortal("", 0, false);
 		c.sendQuery("SELECT 13");
+		c.sendSync();
 		char type = 0;
 		do {
 			std::vector<uint8_t> buf;
@@ -310,7 +311,7 @@ static void cancel_while_waiting_checks(PGconn* admin, bool native, int hg, int 
 		ok(msg.find("Max connect timeout") != std::string::npos, "[%s] extended statement times out waiting for a connection: '%s'", mode, msg.c_str());
 		ok(next_statement_works(victim.get()), "[%s] the session runs its next statement after the timeout", mode);
 		const std::string got = unit_then_simple_query("SELECT 1 AS conn_wait");
-		ok(got == "ETDCZ", "[%s] timeout, then the simple Query that closed the unit: one ReadyForQuery, after the Query: '%s'", mode, got.c_str());
+		ok(got == "EZ", "[%s] timeout, then a simple Query and Sync: the Query ignored, one ReadyForQuery, the Sync's: '%s'", mode, got.c_str());
 		drain(holder.get());
 		exec_ok(admin, "SET pgsql-connect_timeout_server_max=" + saved);
 		exec_ok(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
@@ -328,7 +329,7 @@ static void cancel_while_waiting_checks(PGconn* admin, bool native, int hg, int 
 		exec_ok(admin, "UPDATE pgsql_query_rules SET destination_hostgroup=" + std::to_string(dead_hg + 1) + " WHERE rule_id=" + std::to_string(WAIT_RULE_ID + 1));
 		exec_ok(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 		const std::string got = unit_then_simple_query("SELECT 1 AS conn_dead");
-		ok(got == "ETDCZ", "[%s] refused connection, then the simple Query that closed the unit: one ReadyForQuery, after the Query: '%s'", mode, got.c_str());
+		ok(got == "EZ", "[%s] refused connection, then a simple Query and Sync: the Query ignored, one ReadyForQuery, the Sync's: '%s'", mode, got.c_str());
 	}
 	{
 		// Inside a transaction, a statement routed to another hostgroup fails there: cancelled or timed

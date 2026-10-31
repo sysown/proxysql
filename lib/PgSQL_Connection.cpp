@@ -868,9 +868,9 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_RESYNC_START);
 			}
 
-			// The backend is in sync again. After an implicit Sync the client's ReadyForQuery comes
-			// once the simple Query that closed the unit has run, after an error too.
-			if (myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) {
+			// The backend is in sync again. In a part ended with Flush the client's ReadyForQuery comes
+			// with its own Sync.
+			if (myds->sess->is_extq_flush_segment()) {
 				NEXT_IMMEDIATE(fetch_result_end_st);
 			}
 		}
@@ -3907,7 +3907,8 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				// Sync error recovery above).
 				if (t == 'Z') {
 					const bool has_error = (query_result->get_result_packet_type() & PGSQL_QUERY_RESULT_ERROR) != 0;
-					const bool implicit = (myds->sess->get_extended_query_phase() & EXTQ_PHASE_EXECUTING_SYNC_IMPLICIT) != 0;
+					// Not the client's after an error in a part ended with Flush: its Sync comes later.
+					const bool implicit = myds->sess->is_extq_flush_segment();
 					if (implicit || (!myds->sess->is_extended_query_frame_empty() && !has_error)) {
 						// An implicit Sync before a simple query ends the backend
 						// extended cycle, but the client awaits the simple query's
@@ -4655,6 +4656,17 @@ void PgSQL_Connection::stmt_describe_start() {
 		const PgSQL_Extended_Query_Info* extended_query_info = query.extended_query_info;
 		switch (extended_query_info->stmt_type) {
 		case 'P': // Portal
+			// The unnamed portal is bound only when its Execute is sent. Described on its own, its
+			// Bind goes first; the backend's BindComplete is not passed on (the client already got
+			// one).
+			if (extended_query_info->bind_msg && extended_query_info->stmt_client_portal_name &&
+				extended_query_info->stmt_client_portal_name[0] == '\0') {
+				const PtrSize_t& raw = extended_query_info->bind_msg->get_raw_pkt();
+				if (!pg_build_bind_rename(native_outbuf, (const unsigned char*)raw.ptr, raw.size, query.backend_stmt_name)) {
+					set_error(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, "invalid Bind message", false);
+					return;
+				}
+			}
 			pg_build_describe(native_outbuf, 'P', extended_query_info->stmt_client_portal_name);
 			native_stmt_step = PG_Native_Stmt_Step::DESCRIBE_P;
 			break;
@@ -4922,9 +4934,9 @@ void PgSQL_Connection::stmt_execute_start() {
 		// Execute(portal, max_rows) — NO Bind. A Describe('P', portal) is folded in
 		// first exactly when the client asked for the portal's RowDescription
 		// (PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL, set by the Describe->Execute peek).
-		// max_rows is honored on the wire for NAMED portals only (the unnamed path below
-		// always emits 0 — invariant 2). A resume Execute after PortalSuspended is just
-		// another Execute on the same portal and takes this same path.
+		// max_rows goes on the wire as the client sent it, here and on the unnamed path
+		// below. A resume Execute after PortalSuspended is just another Execute on the
+		// same portal and takes this same path.
 		native_stmt_reset_step();
 		const PgSQL_Extended_Query_Info* eqi = query.extended_query_info;
 		if ((eqi->flags & PGSQL_EXTENDED_QUERY_FLAG_DESCRIBE_PORTAL) != 0) {
@@ -5025,7 +5037,8 @@ void PgSQL_Connection::stmt_execute_start() {
 		// did not ask for Describe, preserving its original response shape.
 		pg_build_describe(native_outbuf, 'P', "");
 
-		pg_build_execute(native_outbuf, "", 0); // unnamed portal, max_rows 0 (parity phase)
+		// The unnamed portal with the client's row limit: PostgreSQL suspends it there (PortalSuspended).
+		pg_build_execute(native_outbuf, "", extended_query_info->max_rows);
 
 		const bool use_flush =
 			(extended_query_info->flags & PGSQL_EXTENDED_QUERY_FLAG_SYNC) == 0;
@@ -5452,6 +5465,15 @@ unsigned int PgSQL_Connection::get_memory_usage() const {
 	// TODO: need to create new function in libpq
 	unsigned int memory_bytes = (16 * 1024) * 2; //PSgetMemoryUsage(pgsql_conn);
 	return /*sizeof(PGconn) +*/ memory_bytes;
+}
+
+bool PgSQL_Connection::leave_pipeline_mode() {
+	if (native_mode || PQpipelineStatus(pgsql_conn) == PQ_PIPELINE_OFF) return true;
+	if (PQexitPipelineMode(pgsql_conn) == 0) {
+		set_error_from_PQerrorMessage();
+		return false;
+	}
+	return true;
 }
 
 char PgSQL_Connection::get_transaction_status_char() {
@@ -5999,8 +6021,8 @@ int PgSQL_Connection::async_perform_resync(short event) {
 			}
 		}
 		// We just needed to know if the query was successful, not. 
-		// We discard the result.
-		if (query_result) {
+		// We discard the result, unless it answers the client's own Sync.
+		if (query_result && resync_relay == false) {
 			assert(!query_result_reuse);
 			query_result->clear();
 			query_result_reuse = query_result;
@@ -6013,7 +6035,10 @@ int PgSQL_Connection::async_perform_resync(short event) {
 		// (PQconsumeInput in fetch_result_cont()) that resync_failed has always missed too;
 		// fetch_result_start() resets error state before this drain runs for both modes,
 		// so it can't be a stale leftover here.
-		if (resync_failed || is_error_present()) {
+		// For the client's own Sync, an error the backend sent on a healthy connection (a commit
+		// that failed) is the client's answer, not a failed resync.
+		if (resync_failed || (is_error_present() &&
+			(resync_relay == false || is_connection_in_reusable_state() == false))) {
 			return -1;
 		} else {
 			async_state_machine = ASYNC_IDLE;

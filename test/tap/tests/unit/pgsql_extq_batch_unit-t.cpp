@@ -128,11 +128,11 @@ static void test_own_parse() {
 		"own parse: the error belongs to the client's Bind entry");
 }
 
-// The Sync added before a simple Query: its ReadyForQuery is dropped, error or not. The client gets
-// the simple Query's own.
-static void test_implicit_sync() {
+// A ReadyForQuery that is not the client's -- the Sync added before a simple Query, or the recovery
+// Sync after an error in a part the client ended with Flush -- is dropped, error or not.
+static void test_drop_ready() {
 	PgSQL_Extq_Registry reg;
-	reg.implicit_sync();
+	reg.drop_ready();
 	reg.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
 	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 1));
 	std::string out;
@@ -143,7 +143,7 @@ static void test_implicit_sync() {
 	ok(ev.size() == 1 && ev[0].affected_rows == 1, "implicit sync: affected rows from CommandComplete");
 
 	PgSQL_Extq_Registry reg2;
-	reg2.implicit_sync();
+	reg2.drop_ready();
 	reg2.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
 	reg2.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 1));
 	reg2.start(out);
@@ -152,12 +152,20 @@ static void test_implicit_sync() {
 
 	// A part of the unit sent without a Sync, which fails: the Sync sent after the error is not the client's.
 	PgSQL_Extq_Registry reg3;
-	reg3.implicit_sync();
+	reg3.drop_ready();
 	reg3.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
 	reg3.start(out);
 	feed(reg3, 'E', "err", out);
 	reg3.sync_sent();
 	ok(feed(reg3, 'Z', "I", out) == Extq_Verdict::DROP && reg3.complete(), "implicit sync: flush-ended error's ReadyForQuery dropped");
+
+	// Without drop_ready() the same ReadyForQuery is the client's.
+	PgSQL_Extq_Registry reg4;
+	reg4.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
+	reg4.start(out);
+	feed(reg4, 'E', "err", out);
+	reg4.sync_sent();
+	ok(feed(reg4, 'Z', "I", out) == Extq_Verdict::RELAY && reg4.complete(), "drop_ready: without it the ReadyForQuery is relayed");
 }
 
 // A batch sent without a Sync (cut short before a SET, or by a local error).
@@ -281,21 +289,42 @@ static void test_substitute() {
 	ok(feed(reg2, '1', "", out) == Extq_Verdict::BAD, "substitute: a failing Parse that succeeds is a protocol violation");
 }
 
+// A batch holding only the client's Sync, sent to a connection that holds the group's unsynced work:
+// its ReadyForQuery is relayed, and a commit that fails at that Sync relays its error first.
+static void test_sync_only_batch() {
+	PgSQL_Extq_Registry reg;
+	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 0));
+	std::string out;
+	reg.start(out);
+	ok(out.empty() && reg.complete() == false, "sync only: nothing due before the backend answers");
+	ok(feed(reg, 'Z', "I", out) == Extq_Verdict::RELAY && reg.complete() && events(reg).empty(),
+		"sync only: ReadyForQuery relayed, complete, no statement event");
+	PgSQL_Extq_Registry fail;
+	fail.push(slot(Extq_Kind::SYNC, Extq_Reply::RELAY, 0));
+	out.clear();
+	fail.start(out);
+	ok(feed(fail, 'E', std::string("SERROR\0C23503\0\0", 15), out) == Extq_Verdict::RELAY && fail.complete() == false,
+		"sync only: a failed commit's error is relayed, ReadyForQuery still owed");
+	ok(feed(fail, 'Z', "I", out) == Extq_Verdict::RELAY && fail.complete(),
+		"sync only: then its ReadyForQuery is relayed");
+}
+
 int main() {
-	plan(47);
+	plan(52);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 	test_plain_unit();             // 8
 	test_local_reply_ordering();   // 3
 	test_error_skips_rest();       // 5
 	test_own_parse();              // 5
-	test_implicit_sync();          // 4
+	test_drop_ready();             // 5
 	test_flush_ended();            // 5
 	test_substitute_skipped();     // 1
 	test_passthrough_and_bad();    // 5
 	test_all_local();              // 1
 	test_suspended_execute();      // 4
 	test_substitute();             // 5
+	test_sync_only_batch();        // 4
 	test_cleanup_minimal();
 	return exit_status();
 }

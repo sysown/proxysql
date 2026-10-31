@@ -9,7 +9,7 @@ void PgSQL_Extq_Registry::clear() {
 	aborted_ = false;
 	need_sync_ = false;
 	sync_sent_ = false;
-	implicit_sync_ = false;
+	drop_ready_ = false;
 	saw_param_desc_ = false;
 	rows_ = 0;
 	affected_rows_ = UINT64_MAX;
@@ -111,7 +111,7 @@ Extq_Verdict PgSQL_Extq_Registry::on_message(char type, const unsigned char* pay
 			return Extq_Verdict::BAD;
 		}
 		complete_ = true;
-		return implicit_sync_ ? Extq_Verdict::DROP : Extq_Verdict::RELAY;
+		return drop_ready_ ? Extq_Verdict::DROP : Extq_Verdict::RELAY;
 	}
 	if (slots_.empty()) {
 		return Extq_Verdict::BAD;
@@ -170,7 +170,7 @@ Extq_Verdict PgSQL_Extq_Registry::on_message(char type, const unsigned char* pay
 		if (type == 'Z') {
 			complete_ = true;
 			slots_.pop_front();
-			return implicit_sync_ ? Extq_Verdict::DROP : Extq_Verdict::RELAY;
+			return drop_ready_ ? Extq_Verdict::DROP : Extq_Verdict::RELAY;
 		}
 		break;
 	}

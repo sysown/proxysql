@@ -669,6 +669,9 @@ public:
 	// Whether the backend has not finished with this connection; callers use it to decide if the
 	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and pgsql_conn is
 	// always NULL there, so without this branch every one of those guards was dead.
+	// libpq refuses a simple Query in pipeline mode. Leaving it sends nothing and commits nothing: the
+	// backend keeps the transaction the extended messages opened, and the Query joins it. Native: no-op.
+	bool leave_pipeline_mode();
 	bool is_pipeline_active() {
 		if (native_mode) return native_unsynced_work;
 		return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF);
@@ -1086,6 +1089,9 @@ public:
 	bool is_client_connection; // true if this is a client connection, false if it is a server connection
 	bool exit_pipeline_mode; // true if it is safe to exit pipeline mode
 	bool resync_failed; // true if the last resync attempt failed
+	// The resync carries the client's own Sync: its reply is kept for the client, and an error from
+	// the backend (a commit that fails) is reported like any query error, not as a broken connection.
+	bool resync_relay = false;
 
 	PgSQL_STMT_Local* local_stmts;
 	PgSQL_SrvC *parent;

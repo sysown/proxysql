@@ -525,6 +525,7 @@ endif
 # it is empty on Darwin where the linker has no such flag).
 PG_LITE_CLIENT_TESTS := \
 	pgsql-extended_query_protocol_test-t \
+	pgsql-extended_query_flush-t \
 	pgsql-reg_test_5273_bind_parameter_format-t \
 	pgsql-reg_test_5899_bind_zero_param_formats-t \
 	pgsql-reg_test_5300_threshold_resultset_deadlock-t \
