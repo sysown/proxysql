@@ -337,6 +337,7 @@
   "pgsql-reg_test_6429_monitor_interval_overflow-t" : [ "legacy-g4" ],
   "pgsql-reg_test_6521_cancel_idle_session_busy_poll-t" : [ "legacy-g4" ],
   "pgsql-reg_test_6564_quoted_client_encoding-t" : [ "legacy-g4","set_parser_algorithm_3-g1" ],
+  "pgsql-reg_test_6569_timezone_validation-t" : [ "legacy-g4","set_parser_algorithm_3-g1" ],
   "pgsql-reg_test_oversized_length_prefix-t" : [ "legacy-g4" ],
   "pgsql-retry_guard_in_txn_on_broken_backend-t" : [ "legacy-g2" ],
   "pgsql-scram_cache_invalidation-t" : [ "legacy-g4","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4" ],
