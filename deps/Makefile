@@ -105,26 +105,7 @@ default: $(targets)
 include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
 
 
-OPENSSL_BUILD_STAMP := libssl/openssl/.proxysql-build-complete
-
-$(OPENSSL_BUILD_STAMP): libssl/openssl-$(OPENSSL_VERSION).tar.gz \
-		libssl/openssl-$(OPENSSL_VERSION).tar.gz.sha256 \
-		libssl/verify-source.bash Makefile
-	cd libssl && ./verify-source.bash
-	rm -rf libssl/openssl-$(OPENSSL_VERSION)
-	cd libssl && tar --no-same-owner -zxf openssl-$(OPENSSL_VERSION).tar.gz
-	cd libssl/openssl && CC=$(CC) CXX=$(CXX) ./config no-shared no-tests -fPIC
-	cd libssl/openssl && CC=$(CC) CXX=$(CXX) $(MAKE)
-	test -f $(LIB_SSL_PATH)
-	test -f $(LIB_CRYPTO_PATH)
-	touch $@
-
-$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH): $(OPENSSL_BUILD_STAMP)
-	@test -f $@
-
-.PHONY: libssl
-libssl: $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
-
+include $(PROXYSQL_PATH)/deps/libssl/build.mk
 
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
@@ -276,26 +257,7 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
 
 
-duckdb/duckdb/build/release/src/libduckdb_static.a:
-	cd duckdb && ./verify-source.bash
-	cd duckdb && rm -rf duckdb-*/ duckdb || true
-	cd duckdb && tar -zxf duckdb-*.tar.gz && mv duckdb-*/ duckdb
-	# DUCKDB_EXPLICIT_VERSION: deps/duckdb/duckdb/ is a bare extraction (no
-	# .git of its own) sitting inside the ProxySQL working tree, so CMake's
-	# `git describe` walks up and picks up *ProxySQL's* tags/commit instead
-	# of failing, silently making duckdb_library_version() report ProxySQL's
-	# version (e.g. "v3.0.11-dev802") instead of DuckDB's. Force it to the
-	# pinned version explicitly. On a version bump, update this alongside
-	# duckdb-<version>.tar.gz and required_root in verify-source.bash.
-	cd duckdb/duckdb && cmake -S . -B build/release \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DBUILD_UNITTESTS=OFF \
-		-DBUILD_SHELL=OFF \
-		-DENABLE_SANITIZER=OFF \
-		-DBUILD_EXTENSIONS="" \
-		-DDUCKDB_EXPLICIT_VERSION=v1.4.5
-	cd duckdb/duckdb && CC=${CC} CXX=${CXX} cmake --build build/release -j$(shell nproc 2>/dev/null || echo 4)
-	@test -f $@ || { echo "ERROR: duckdb build did not produce $@" >&2; exit 1; }
+include $(PROXYSQL_PATH)/deps/duckdb/build.mk
 
 duckdb: duckdb/duckdb/build/release/src/libduckdb_static.a
 
@@ -589,3 +551,12 @@ cleanall:
 	cd zstd && rm -rf zstd-*/ || true
 	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 .PHONY: cleanall
+
+# Probe and prepare inside the same Make environment as the real dependency
+# targets. The CI cache action persists only the verified compressed bundles.
+.PHONY: dependency-artifact-keys dependency-artifact-prepare
+dependency-artifact-keys:
+	@python3 "$(PROXYSQL_PATH)/deps/artifacts/ci.py" keys --root "$(PROXYSQL_PATH)"
+
+dependency-artifact-prepare:
+	+@python3 "$(PROXYSQL_PATH)/deps/artifacts/ci.py" prepare --root "$(PROXYSQL_PATH)"

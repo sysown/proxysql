@@ -9,6 +9,7 @@ services:
     environment:
       - MAKE
       - MAKEOPT
+      - DEPS_MODE
       - CURVER
       - PKG_RELEASE
       - PROXYSQL_BUILD_TYPE
@@ -275,6 +276,34 @@ services:
       service: ubuntu24_build
     environment:
       - PKG_RELEASE=dbg-ubuntu24
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+####################################################################################################
+  ubuntu26_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-ubuntu26-v4.0.0
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=ubuntu26
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  ubuntu26_clang_build:
+    extends:
+      service: ubuntu26_build
+    image: proxysql/packaging:build-clang-ubuntu26-v4.0.0
+    environment:
+      - PKG_RELEASE=ubuntu26-clang
+
+  ubuntu26_dbg_build:
+    extends:
+      service: ubuntu26_build
+    environment:
+      - PKG_RELEASE=dbg-ubuntu26
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################

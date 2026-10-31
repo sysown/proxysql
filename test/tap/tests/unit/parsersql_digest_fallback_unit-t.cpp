@@ -1,6 +1,9 @@
 /**
  * @file parsersql_digest_fallback_unit-t.cpp
  * @brief Parser failures retain token digests and cannot bypass digest rules.
+ *
+ * Parser mode always produces a digest when *-query_digests=1, so a statement
+ * ParserSQL cannot parse is still matched against digest rules (test_routing).
  */
 #include "tap.h"
 #include "test_globals.h"
@@ -28,8 +31,13 @@ static bool matches(const QP_rule_t& rule, const SQP_par_t& qp, const char* sql,
 		"127.0.0.1", nullptr, 6033, qp.digest, qp.digest_text, sql, nullptr, engine);
 }
 
+static const char* expected_digest(const char*, const char* expected) {
+	return expected;
+}
+
 static void test_routing(const char* dialect, DigestInit initialize, const char* sql,
 	const char* expected) {
+	expected = expected_digest(dialect, expected);
 	SQP_par_t qp {};
 	initialize(&qp, sql, std::strlen(sql));
 	for (int engine : {1, 2}) {
@@ -48,24 +56,26 @@ static void test_routing(const char* dialect, DigestInit initialize, const char*
 	release_digest(qp);
 }
 
-// Missing metadata must not turn a digest-constrained rule into a catch-all.
+// Without a digest (*-query_digests=0: hash 0, text NULL) the digest criteria
+// are not applicable and the other criteria decide, as in v3.0.11. An empty
+// digest text is a real digest and is matched like any other.
 static void test_missing_digest_rules() {
 	for (int engine : {1, 2}) {
 		SQP_par_t qp {};
 		QP_rule_t rule {};
 		rule.proxy_port = -1;
 		rule.digest = 123;
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Missing hash cannot satisfy a digest rule (%d)", engine);
+		ok(matches(rule, qp, "/* no SQL */", engine), "A missing hash skips the digest criterion (%d)", engine);
 		rule.digest = 0;
 		rule.match_digest = const_cast<char*>("^SELECT");
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Missing text cannot satisfy a digest regex (%d)", engine);
+		ok(matches(rule, qp, "/* no SQL */", engine), "Missing text skips the digest regex (%d)", engine);
 		qp.digest_text = qp.buf;
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Empty text cannot satisfy a digest regex (%d)", engine);
+		ok(!matches(rule, qp, "/* no SQL */", engine), "Empty text does not satisfy a digest regex (%d)", engine);
 		rule.negate_match_pattern = true;
 		qp.digest_text = nullptr;
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Missing text cannot satisfy a negated digest regex (%d)", engine);
+		ok(matches(rule, qp, "/* no SQL */", engine), "Missing text skips a negated digest regex (%d)", engine);
 		qp.digest_text = qp.buf;
-		ok(!matches(rule, qp, "/* no SQL */", engine), "Empty text cannot satisfy a negated digest regex (%d)", engine);
+		ok(matches(rule, qp, "/* no SQL */", engine), "Empty text satisfies a negated digest regex (%d)", engine);
 		rule.match_digest = nullptr;
 		ok(matches(rule, qp, "/* no SQL */", engine), "Unconstrained rules still match without digest metadata (%d)", engine);
 	}
@@ -93,10 +103,11 @@ static void test_digests(const char* dialect, DigestInit initialize) {
 	for (const auto& c : cases) {
 		SQP_par_t qp {};
 		initialize(&qp, c.sql, std::strlen(c.sql));
-		ok(qp.digest_text && std::strcmp(qp.digest_text, c.expected) == 0,
+		const char* expected = expected_digest(dialect, c.expected);
+		ok(qp.digest_text && std::strcmp(qp.digest_text, expected) == 0,
 			"%s normalizes complete input even without a complete AST: %s (got: %s)",
 			dialect, c.sql, qp.digest_text ? qp.digest_text : "NULL");
-		ok(qp.digest == SpookyHash::Hash64(c.expected, std::strlen(c.expected), 0),
+		ok(qp.digest == SpookyHash::Hash64(expected, std::strlen(expected), 0),
 			"%s hashes the expected token digest: %s", dialect, c.sql);
 		release_digest(qp);
 	}
@@ -129,9 +140,10 @@ static void test_pgsql_protocol_terminator() {
 		SQP_par_t qp {};
 		// PgSQL_Query_Info passes a length including the wire terminator.
 		parsersql_digest_init_pgsql(&qp, c.sql, std::strlen(c.sql) + 1);
-		ok(qp.digest_text && std::strcmp(qp.digest_text, c.expected) == 0,
+		const char* expected = expected_digest("PostgreSQL", c.expected);
+		ok(qp.digest_text && std::strcmp(qp.digest_text, expected) == 0,
 			"PostgreSQL wire terminator does not change normalized SQL: %s", c.sql);
-		ok(qp.digest == SpookyHash::Hash64(c.expected, std::strlen(c.expected), 0),
+		ok(qp.digest == SpookyHash::Hash64(expected, std::strlen(expected), 0),
 			"PostgreSQL wire terminator does not change the digest hash: %s", c.sql);
 		release_digest(qp);
 	}
@@ -174,8 +186,12 @@ static void test_fallback_options(const char* dialect, DigestInit initialize,
 	initialize(&qp, commented.data(), commented.size());
 	ok(qp.digest_text && std::strcmp(qp.digest_text, "alter table t discard tablespace") == 0,
 		"%s fallback honors lowercase normalization", dialect);
+#ifdef PROXYSQL31
 	ok(qp.first_comment && std::strstr(qp.first_comment, "routehint"),
 		"%s fallback preserves first-comment metadata", dialect);
+#else
+	ok(qp.first_comment == nullptr, "%s v3.0 fallback does not enable first-comment hints", dialect);
+#endif
 	release_digest(qp);
 	lowercase = saved_lowercase;
 }

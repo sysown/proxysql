@@ -17,7 +17,7 @@ static uint16_t be16_at(const std::string& s, size_t off) {
 }
 
 int main(int, char**) {
-    plan(65);
+    plan(69);
 
     // --- pg_native_build_copyfail ---
     std::string out;
@@ -138,6 +138,36 @@ int main(int, char**) {
         ok(be16_at(b, off) == 1, "bind(broadcast fmt): n_param_formats == 1");
         off += 2;
         ok(be16_at(b, off) == 1, "bind(broadcast fmt): single broadcast format value == 1");
+    }
+
+    // --- pg_build_bind_rename ---
+    // The copy must equal a Bind built with the new name from the start.
+    {
+        const uint16_t pfmts[2] = { 0, 1 };
+        const char* pvals[2] = { "abc", nullptr };
+        const int32_t plens[2] = { 3, 0 };
+        const uint16_t rfmts[1] = { 1 };
+        std::string client, expect, got = "x";
+        pg_build_bind(client, "myportal", "client_stmt", pfmts, 2, pvals, plens, 2, rfmts, 1);
+        pg_build_bind(expect, "myportal", "proxysql_7", pfmts, 2, pvals, plens, 2, rfmts, 1);
+        const bool r = pg_build_bind_rename(got, (const unsigned char*)client.data(), client.size(), "proxysql_7");
+        ok(r && got == "x" + expect, "bind_rename: new name, length fixed, the rest copied, appended to out");
+
+        client.clear(); expect.clear(); got.clear();
+        pg_build_bind(client, "", "", nullptr, 0, nullptr, nullptr, 0, nullptr, 0);
+        pg_build_bind(expect, "", "proxysql_8", nullptr, 0, nullptr, nullptr, 0, nullptr, 0);
+        ok(pg_build_bind_rename(got, (const unsigned char*)client.data(), client.size(), "proxysql_8") && got == expect,
+           "bind_rename: empty portal and statement name");
+
+        // The statement name runs to the end of the buffer with no NUL.
+        const std::string no_nul("B\0\0\0\x0bp\0abc", 10);
+        got = "x";
+        ok(!pg_build_bind_rename(got, (const unsigned char*)no_nul.data(), no_nul.size(), "s") && got == "x",
+           "bind_rename: a statement name with no NUL is refused, out untouched");
+
+        ok(!pg_build_bind_rename(got, (const unsigned char*)client.data(), 4, "s") &&
+           !pg_build_bind_rename(got, (const unsigned char*)"P\0\0\0\x06\0\0", 7, "s") && got == "x",
+           "bind_rename: a message cut inside its header, or not a Bind, is refused");
     }
 
     // --- pg_build_describe ---

@@ -2501,10 +2501,6 @@ static void run_pgsql_monitor(PgSQL_Thread* pgsql_thread, unsigned int& variable
 	uint64_t cur_intv_start = 0;
 	tasks_intvs_t next_intvs {};
 	vector<task_batch_t> tasks_batches {};
-#ifdef PROXYSQL40
-	uint64_t read_only_wake_epoch = proxysql_server_read_only_monitor_epoch(
-		ProxySQL_ServerProtocol::pgsql);
-#endif
 
 	while (GloPgMon->shutdown.load(std::memory_order_acquire) == false) {
 		if (!GloPTH) { break; }
@@ -2519,15 +2515,6 @@ static void run_pgsql_monitor(PgSQL_Thread* pgsql_thread, unsigned int& variable
 		if (!pgsql_thread___monitor_enabled) { break; }
 
 		cur_intv_start = monotonic_time();
-
-#ifdef PROXYSQL40
-		const uint64_t current_wake_epoch = proxysql_server_read_only_monitor_epoch(
-			ProxySQL_ServerProtocol::pgsql);
-		if (current_wake_epoch != read_only_wake_epoch) {
-			read_only_wake_epoch = current_wake_epoch;
-			next_intvs.next_readonly_at = 0;
-		}
-#endif
 
 		uint64_t closest_intv {
 			std::min({

@@ -471,6 +471,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 		size_t assignments;
 	};
 	std::optional<PendingTrackedSet> pending_tracked_set;
+#ifndef PROXYSQL31
+	std::optional<UserVariableSetAnalysis> pending_user_variable_set;
+#endif
 	bool current_query_user_variable_unsafe_fallback { false };
 	bool current_query_user_variable_context_change { false };
 	bool user_variable_tracking_latched { false };

@@ -103,6 +103,7 @@ ifeq ($(CURVER_CHECK),0)
 endif
 
 export CURVER
+export DEPS_MODE ?= auto
 export PROXYSQL40
 export PROXYSQL31
 export PROXYSQLFFTO
@@ -460,7 +461,7 @@ amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10
 amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
 amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg fedora44 fedora44-clang fedora44-dbg
 amd64-opensuse: opensuse16 opensuse16-clang opensuse16-dbg
-amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
+amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg ubuntu26 ubuntu26-clang ubuntu26-dbg
 amd64-tarball: tarball-almalinux9
 amd64-pkglist:
 	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
@@ -472,7 +473,7 @@ arm64-centos: centos9 centos10
 arm64-debian: debian12 debian13
 arm64-fedora: fedora42 fedora43 fedora44
 arm64-opensuse: opensuse16
-arm64-ubuntu: ubuntu22 ubuntu24
+arm64-ubuntu: ubuntu22 ubuntu24 ubuntu26
 arm64-tarball: tarball-almalinux9
 arm64-pkglist:
 	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'

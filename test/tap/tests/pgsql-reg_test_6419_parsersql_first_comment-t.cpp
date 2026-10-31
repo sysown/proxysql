@@ -136,6 +136,10 @@ static PGConn connect_proxy(const CommandLine& cl) {
 static bool run_checks(const CommandLine& cl, MYSQL* admin, int target, int parser, int parsing) {
 	PGConn client = connect_proxy(cl);
 	if (!client) return false;
+	const std::string version = scalar(admin, "SELECT @@version");
+	if (version.empty()) return false;
+	const bool v30 = version.rfind("3.0.", 0) == 0;
+	const bool expect_annotation = !v30 || parser == 0;
 	const std::string annotation = "/* hostgroup=" + std::to_string(target) + " */ ";
 	const char* param[] = { "6419" };
 	// Prepared statement metadata, including the first comment, is cached per query text;
@@ -148,12 +152,12 @@ static bool run_checks(const CommandLine& cl, MYSQL* admin, int target, int pars
 
 	before = queries(admin, target);
 	ok(returns_value(PQexec(client.get(), (annotation + "SELECT 1 AS a6419_simple").c_str()), "1") &&
-		queries(admin, target) > before,
+		(queries(admin, target) > before) == expect_annotation,
 		"parser=%d first_comment_parsing=%d: annotated simple query reaches hostgroup %d", parser, parsing, target);
 
 	before = queries(admin, target);
 	ok(returns_value(PQexecParams(client.get(), (annotation + "SELECT $1::int AS a6419_unnamed" + suffix).c_str(),
-		1, nullptr, param, nullptr, nullptr, 0), "6419") && queries(admin, target) > before,
+		1, nullptr, param, nullptr, nullptr, 0), "6419") && (queries(admin, target) > before) == expect_annotation,
 		"parser=%d first_comment_parsing=%d: annotated unnamed extended query reaches hostgroup %d", parser, parsing, target);
 
 	const std::string name = "s6419" + suffix;
@@ -164,7 +168,7 @@ static bool run_checks(const CommandLine& cl, MYSQL* admin, int target, int pars
 	}
 	before = queries(admin, target);
 	ok(returns_value(PQexecPrepared(client.get(), name.c_str(), 1, param, nullptr, nullptr, 0), "6419") &&
-		queries(admin, target) > before,
+		(queries(admin, target) > before) == expect_annotation,
 		"parser=%d first_comment_parsing=%d: annotated named prepared statement reaches hostgroup %d", parser, parsing, target);
 	return true;
 }

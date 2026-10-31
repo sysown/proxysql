@@ -15,7 +15,7 @@ def version(value):
     return tuple(map(int,match.groups()))
 
 def events(doc):return doc.get('on',doc.get(True,{})) or {}
-def is_automatic(doc):return 'CI-trigger' in (events(doc).get('workflow_run') or {}).get('workflows',[])
+def is_automatic(doc):return bool({'CI-trigger','CI-builds'} & set((events(doc).get('workflow_run') or {}).get('workflows',[])))
 def target(job):
     match=re.search(r'/workflows/([^/@]+)',job.get('uses',''))
     return match.group(1) if match else None

@@ -104,8 +104,165 @@ static const ClassifyCase keep_comment_cases[] = {
 	{"SELECT pg_terminate_backend /* x */ (123)", PGSQL_QUERY_TERMINATE_BACKEND},
 };
 
-// With digests enabled the parser path classifies the digest text with ParserSQL
-// and refines SELECT from it.
+// v3.0 reuses the original-query parse from digest generation (#6511). Newer tiers
+// classify the legacy digest lazily, retaining the answers from before that optimization.
+static const ClassifyCase type_cases[] = {
+	{"UPDATE t SET a = 1 WHERE b = 2", PGSQL_QUERY_UPDATE},
+	{"DELETE FROM t WHERE a = 1", PGSQL_QUERY_DELETE},
+	{"BEGIN", PGSQL_QUERY_BEGIN},
+	{"START TRANSACTION", PGSQL_QUERY_BEGIN},
+	{"COMMIT", PGSQL_QUERY_COMMIT},
+	{"ABORT", PGSQL_QUERY_ROLLBACK},
+	{"SAVEPOINT s1", PGSQL_QUERY_SAVEPOINT},
+	{"SET search_path TO public", PGSQL_QUERY_SET},
+	{"SHOW search_path", PGSQL_QUERY_SHOW},
+	{"RESET search_path", PGSQL_QUERY_RESET},
+	{"PREPARE p AS SELECT 1", PGSQL_QUERY_PREPARE},
+	{"EXECUTE p", PGSQL_QUERY_EXECUTE},
+	{"DEALLOCATE p", PGSQL_QUERY_DEALLOCATE},
+	{"GRANT SELECT ON t TO u", PGSQL_QUERY_GRANT},
+	{"TRUNCATE t", PGSQL_QUERY_TRUNCATE},
+	{"LOCK TABLE t", PGSQL_QUERY_LOCK},
+	{"EXPLAIN SELECT 1", PGSQL_QUERY_EXPLAIN},
+	{"CALL p(1)", PGSQL_QUERY_CALL},
+	{"COPY t FROM STDIN", PGSQL_QUERY_COPY},
+	{"LISTEN ch", PGSQL_QUERY_LISTEN},
+	{"NOTIFY ch", PGSQL_QUERY_NOTIFY},
+	{"VACUUM t", PGSQL_QUERY_VACUUM},
+	{"DISCARD ALL", PGSQL_QUERY_DISCARD},
+	{"DECLARE c CURSOR FOR SELECT 1", PGSQL_QUERY_UNKNOWN},
+	{"RELEASE SAVEPOINT s1", PGSQL_QUERY_RELEASE_SAVEPOINT},
+	// These still go through ParserSQL, whose answer can differ from the legacy classifier's.
+	{"CREATE TABLE t (a int)", PGSQL_QUERY_CREATE_TABLE},
+	{"CREATE INDEX i ON t (a)", PGSQL_QUERY_CREATE_TABLE},
+	{"DROP INDEX i", PGSQL_QUERY_DROP_TABLE},
+	{"ALTER TABLE t ADD COLUMN b int", PGSQL_QUERY_ALTER_TABLE},
+	{"ROLLBACK", PGSQL_QUERY_ROLLBACK},
+	{"ROLLBACK TO SAVEPOINT s1", PGSQL_QUERY_ROLLBACK},
+	// The legacy classifier cannot name these.
+	{"END", PGSQL_QUERY_COMMIT},
+	{"WITH x AS (SELECT a FROM s) INSERT INTO t SELECT * FROM x", PGSQL_QUERY_INSERT},
+	// Only newer tiers parse the '?' placeholder rather than reuse the original parse.
+#ifdef PROXYSQL31
+	{"WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", PGSQL_QUERY_UNKNOWN},
+#else
+	{"WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", PGSQL_QUERY_INSERT},
+#endif
+	{"VALUES (1)", PGSQL_QUERY_UNKNOWN},
+};
+
+// With keep_comment=1, newer tiers retain the comment in the legacy digest;
+// v3.0's native emitter omits it.
+static const ClassifyCase type_keep_comment_cases[] = {
+	{"/* c */ UPDATE t SET a = b", PGSQL_QUERY_UPDATE},
+#ifdef PROXYSQL31
+	// Parsing '?' fails; the legacy classifier stops at the kept comment.
+	{"/* c */ UPDATE t SET a = 1", PGSQL_QUERY_UNKNOWN},
+#else
+	{"/* c */ UPDATE t SET a = 1", PGSQL_QUERY_UPDATE},
+#endif
+	{"/* c */ BEGIN", PGSQL_QUERY_BEGIN},
+#ifdef PROXYSQL31
+	{"/* c */ COPY t FROM STDIN", PGSQL_QUERY_UNKNOWN},
+#else
+	// The native digest omits the comment before legacy classification.
+	{"/* c */ COPY t FROM STDIN", PGSQL_QUERY_COPY},
+#endif
+	{"/* c */ CREATE INDEX i ON t (a)", PGSQL_QUERY_CREATE_TABLE},
+};
+
+// The same with digests off, on the 32-byte query prefix.
+static const ClassifyCase type_prefix_cases[] = {
+	{"UPDATE t SET a = 1 WHERE b = 2", PGSQL_QUERY_UPDATE},
+	{"\nINSERT INTO t VALUES (1)", PGSQL_QUERY_INSERT},
+	{"CREATE INDEX i ON t (a)", PGSQL_QUERY_CREATE_TABLE},
+};
+
+static void test_parser_statement_types() {
+	pgsql_thread___query_processor_parser = 1;
+	pgsql_thread___query_digests = true;
+	for (const auto& c : type_cases) {
+		const enum PGSQL_QUERY_command got = classify(c.sql);
+		ok(got == c.expected, "parser=1 digests=1: '%s' -> %d (got %d)", c.sql, c.expected, got);
+	}
+	pgsql_thread___query_digests_keep_comment = true;
+	for (const auto& c : type_keep_comment_cases) {
+		const enum PGSQL_QUERY_command got = classify(c.sql);
+		ok(got == c.expected, "parser=1 digests=1 keep_comment=1: '%s' -> %d (got %d)", c.sql, c.expected, got);
+	}
+	pgsql_thread___query_digests_keep_comment = false;
+	pgsql_thread___query_digests = false;
+	for (const auto& c : type_prefix_cases) {
+		const enum PGSQL_QUERY_command got = classify(c.sql);
+		ok(got == c.expected, "parser=1 digests=0: '%s' -> %d (got %d)", c.sql, c.expected, got);
+	}
+	pgsql_thread___query_digests = true;
+}
+
+// Parser mode skips ParserSQL for every statement the legacy classifier names, except
+// CREATE/ALTER/DROP/ROLLBACK, because ParserSQL gives those the same answer or none (UNKNOWN).
+// They never reach ParserSQL now, so nothing else would notice a ParserSQL change that breaks
+// this. Each is parsed here directly; the expected value is ParserSQL's own answer.
+static const ClassifyCase parsersql_skip_cases[] = {
+	{"INSERT INTO t SELECT a FROM s", PGSQL_QUERY_INSERT},
+	{"UPDATE t SET a = b", PGSQL_QUERY_UPDATE},
+	{"DELETE FROM t WHERE a = b", PGSQL_QUERY_DELETE},
+	{"BEGIN", PGSQL_QUERY_BEGIN},
+	{"START TRANSACTION", PGSQL_QUERY_BEGIN},
+	{"COMMIT", PGSQL_QUERY_COMMIT},
+	{"COMMIT PREPARED 'x'", PGSQL_QUERY_COMMIT},
+	{"ABORT", PGSQL_QUERY_ROLLBACK},
+	{"SAVEPOINT s1", PGSQL_QUERY_SAVEPOINT},
+	{"SET search_path TO public", PGSQL_QUERY_SET},
+	{"SHOW search_path", PGSQL_QUERY_SHOW},
+	{"RESET search_path", PGSQL_QUERY_RESET},
+	{"PREPARE p AS SELECT a FROM t", PGSQL_QUERY_PREPARE},
+	{"PREPARE TRANSACTION 'x'", PGSQL_QUERY_PREPARE},
+	{"EXECUTE p", PGSQL_QUERY_EXECUTE},
+	{"DEALLOCATE p", PGSQL_QUERY_DEALLOCATE},
+	{"GRANT SELECT ON t TO u", PGSQL_QUERY_GRANT},
+	{"REVOKE SELECT ON t FROM u", PGSQL_QUERY_REVOKE},
+	{"TRUNCATE t", PGSQL_QUERY_TRUNCATE},
+	{"LOCK TABLE t", PGSQL_QUERY_LOCK},
+	{"EXPLAIN SELECT a FROM t", PGSQL_QUERY_EXPLAIN},
+	{"CALL p()", PGSQL_QUERY_CALL},
+	// ParserSQL knows these, but its type has no counter name: UNKNOWN.
+	{"COPY t FROM STDIN", PGSQL_QUERY_UNKNOWN},
+	{"LISTEN ch", PGSQL_QUERY_UNKNOWN},
+	{"NOTIFY ch", PGSQL_QUERY_UNKNOWN},
+	{"UNLISTEN *", PGSQL_QUERY_UNKNOWN},
+	{"DISCARD ALL", PGSQL_QUERY_UNKNOWN},
+	{"DECLARE c CURSOR FOR SELECT a FROM t", PGSQL_QUERY_UNKNOWN},
+	{"FETCH c", PGSQL_QUERY_UNKNOWN},
+	{"MOVE c", PGSQL_QUERY_UNKNOWN},
+	{"CLOSE c", PGSQL_QUERY_UNKNOWN},
+	{"MERGE INTO t USING s ON t.a = s.a WHEN MATCHED THEN DELETE", PGSQL_QUERY_UNKNOWN},
+	{"VACUUM t", PGSQL_QUERY_UNKNOWN},
+	{"ANALYZE t", PGSQL_QUERY_UNKNOWN},
+	{"CLUSTER t", PGSQL_QUERY_UNKNOWN},
+	{"REINDEX TABLE t", PGSQL_QUERY_UNKNOWN},
+	{"REFRESH MATERIALIZED VIEW v", PGSQL_QUERY_UNKNOWN},
+	{"CHECKPOINT", PGSQL_QUERY_UNKNOWN},
+	{"COMMENT ON TABLE t IS 'x'", PGSQL_QUERY_UNKNOWN},
+	{"IMPORT FOREIGN SCHEMA s FROM SERVER f INTO t", PGSQL_QUERY_UNKNOWN},
+	{"RELEASE SAVEPOINT s1", PGSQL_QUERY_UNKNOWN},
+};
+
+// A changed ParserSQL answer fails the first check. The second fails only if the change makes
+// skipping wrong: ParserSQL would now name the statement differently from the classifier.
+static void test_parsersql_skip_guard() {
+	pgsql_thread___query_processor_parser = 1;
+	pgsql_thread___query_digests = true;
+	for (const auto& c : parsersql_skip_cases) {
+		const enum PGSQL_QUERY_command parsed = parsersql_command_type_pgsql(c.sql, std::strlen(c.sql));
+		const enum PGSQL_QUERY_command got = classify(c.sql);
+		ok(parsed == c.expected, "ParserSQL answers %d for '%s' (got %d)", c.expected, c.sql, parsed);
+		ok(parsed == PGSQL_QUERY_UNKNOWN || parsed == got,
+			"skipping ParserSQL is safe for '%s': ParserSQL %d, classifier %d", c.sql, parsed, got);
+	}
+}
+
+// With digests enabled, classify using the tier's parser path and refine SELECT.
 static void test_parser_with_digests() {
 	pgsql_thread___query_processor_parser = 1;
 	pgsql_thread___query_digests = true;
@@ -114,10 +271,8 @@ static void test_parser_with_digests() {
 		ok(got == c.expected, "parser=1 digests=1: '%s' -> %s (got %s)",
 			c.sql, cmd_name(c.expected), cmd_name(got));
 	}
-	// The classification is exercised through the digest text: the tokenizer turns
-	// PostgreSQL arguments into '?' placeholders that ParserSQL cannot parse, so the
-	// refinement must promote a plain SELECT rather than trust its UNKNOWN. The
-	// adapter still reports SELECT for these statements on the raw query.
+	// The raw-query adapter reports SELECT for these statements. Refinement must
+	// handle both this result and UNKNOWN from parsing placeholders in newer tiers.
 	for (const char* sql : {"SELECT pg_cancel_backend(1234)", "SELECT pg_terminate_backend($1)",
 		"WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d"}) {
 		const enum PGSQL_QUERY_command direct = parsersql_command_type_pgsql(sql, std::strlen(sql));
@@ -194,7 +349,11 @@ int main() {
 	const size_t n_cases = sizeof(cases) / sizeof(cases[0]);
 	const size_t n_parser_only = sizeof(parser_only_cases) / sizeof(parser_only_cases[0]) +
 		sizeof(keep_comment_cases) / sizeof(keep_comment_cases[0]);
-	plan(1 + n_cases + 3 + n_parser_only + 14 * 2 + n_cases);
+	const size_t n_types = sizeof(type_cases) / sizeof(type_cases[0]) +
+		sizeof(type_keep_comment_cases) / sizeof(type_keep_comment_cases[0]) +
+		sizeof(type_prefix_cases) / sizeof(type_prefix_cases[0]);
+	const size_t n_skip = sizeof(parsersql_skip_cases) / sizeof(parsersql_skip_cases[0]);
+	plan(1 + n_cases + 3 + n_parser_only + 14 * 2 + n_cases + n_types + 2 * n_skip);
 	ok(test_init_minimal() == 0 && test_init_query_processor() == 0, "test init succeeds");
 	// Worker defaults; the legacy digest yields an empty text with a zero length limit.
 	pgsql_thread___query_digests_max_query_length = 65000;
@@ -205,6 +364,8 @@ int main() {
 	test_parser_with_digests();
 	test_parser_only_cases();
 	test_parser_without_digests();
+	test_parser_statement_types();
+	test_parsersql_skip_guard();
 	test_legacy_parity();
 
 	pgsql_thread___query_processor_parser = 0;

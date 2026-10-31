@@ -31,10 +31,6 @@ struct ProxySQL_ServerRow {
 	int32_t use_ssl {1};
 	int64_t max_latency_ms {0};
 	std::string comment;
-	// Transient reconciliation metadata. These fields are consumed by the
-	// owner-thread adapter and are never projected into a Servers table.
-	uint64_t topology_role_epoch {0};
-	bool force_topology_role {false};
 };
 
 struct ProxySQL_ServerRuntimeSnapshot {
@@ -49,6 +45,9 @@ struct ProxySQL_ServerRuntimeSnapshot {
 struct ProxySQL_ServerDesiredSet {
 	ProxySQL_ServerProtocol protocol;
 	uint64_t generation {0};
+	// An active discovery controller owns the complete protocol runtime
+	// inventory. This scope selects the claimed pair updated by this set;
+	// runtime rows in other active claims remain, and unclaimed rows do not.
 	std::vector<uint32_t> delegated_hostgroups;
 	std::vector<ProxySQL_ServerRow> servers;
 	ProxySQL_ServerPersistence persistence { ProxySQL_ServerPersistence::runtime_only };
@@ -71,14 +70,44 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 	std::vector<ProxySQL_ServerRow>& merged, std::string& error);
 #endif
 
+enum class ProxySQL_ServerRoleMonitor : uint8_t {
+	none = 0,
+	mysql_replication = 1,
+	mysql_aws_aurora = 2,
+	mysql_aws_rds_blue_green = 3,
+	pgsql_replication = 4
+};
+
+// ABI-16 role-monitor configuration. A discovery controller owns endpoint
+// inventory for its claimed pair; this configuration selects the native core
+// monitor that owns writer/reader placement and its table parameters.
+struct ProxySQL_ServerRoleMonitorConfig {
+	ProxySQL_ServerRoleMonitor kind {ProxySQL_ServerRoleMonitor::none};
+	std::string check_type {"read_only"};
+	uint16_t aurora_port {3306};
+	std::string domain_name;
+	uint32_t green_writer_hostgroup {0};
+	uint32_t green_reader_hostgroup {0};
+	uint32_t max_lag_ms {600000};
+	uint32_t check_interval_ms {1000};
+	uint32_t check_timeout_ms {800};
+	uint8_t writer_is_also_reader {0};
+	uint32_t new_reader_weight {1};
+	uint32_t add_lag_ms {30};
+	uint32_t min_lag_ms {30};
+	uint8_t lag_num_checks {1};
+	uint8_t autopurge_missing_checks {0};
+};
+
 struct ProxySQL_ServerHostgroupClaim {
 	uint32_t writer_hostgroup {0};
 	uint32_t reader_hostgroup {0};
+	ProxySQL_ServerRoleMonitorConfig role_monitor {};
 };
 
 #ifdef PROXYSQL40
 // Internal, lifetime-safe snapshots used by core monitor/HGM consumers. These
-// are not plugin service-table callbacks and do not change ABI-14.
+// are not plugin service-table callbacks.
 void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
 void proxysql_unlock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
 
@@ -102,7 +131,6 @@ std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_server_hostgroup_clai
 // without an active plugin manager). Used when a new topology cannot be read,
 // so a partial read never replaces the last complete one.
 std::vector<uint32_t> proxysql_active_server_topology_hostgroups(ProxySQL_ServerProtocol protocol);
-uint64_t proxysql_server_read_only_monitor_epoch(ProxySQL_ServerProtocol protocol);
 // Caller holds the Admin SQL mutex. Publishes policy claims and a fresh runtime
 // generation from the retained configuration snapshot, never from HGM health.
 bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
@@ -110,7 +138,17 @@ bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
  uint64_t& runtime_generation_out, std::string& error);
 std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgroup_claims(
  ProxySQL_ServerProtocol protocol);
-void proxysql_request_server_read_only_monitor(ProxySQL_ServerProtocol protocol);
+// Returns true for an active exact-pair claim. The optional output is reset to
+// zero before lookup and receives the claim's writer placement value on match.
+bool proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader = nullptr);
+// Caller holds ScopedServerDiscoveryProtocolLock. This variant deliberately
+// avoids the active-manager lifetime gate so monitor mutation cannot invert
+// the lifecycle lock order (active manager -> protocol).
+bool proxysql_is_server_inventory_managed_locked(ProxySQL_ServerProtocol protocol,
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader = nullptr);
 #endif
 
 struct ProxySQL_ServerBuiltinTopologyInputs {

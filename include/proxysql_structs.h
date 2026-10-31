@@ -345,6 +345,8 @@ enum session_status {
 	WAITING_AWS_IAM_TOKEN,
 #endif // PROXYSQL40
 	SETTING_USER_VARIABLE_CONTEXT,
+	// A buffered extended-query unit sent in one write. Append-only, as above.
+	PROCESSING_EXTQ_BATCH,
 	session_status___NONE // special marker
 };
 
@@ -916,6 +918,10 @@ struct __SQP_query_parser_t {
 	char *digest_text;
 	char *first_comment;
 	char *query_prefix;
+#ifndef PROXYSQL31
+	// Reuse the classification obtained while generating a ParserSQL digest.
+	int parsersql_command_type { -1 };
+#endif
 };
 
 struct _PtrSize_t {

@@ -517,6 +517,22 @@ static void sc_hidden_chain_batch(PgConnection& c) {
     c.execute("ROLLBACK");
 }
 
+// The opposite drift, also left by an extended-protocol batch: the deferred check fails
+// the COMMIT, the backend reports 'I', but a failed statement never reaches the tracker,
+// so it still says BEGIN. Without the fix the DISCARD ALL is refused as inside an
+// explicit transaction ('E', session poisoned) instead of as the batch's block ('I').
+static void sc_failed_commit_batch(PgConnection& c) {
+    c.execute("CREATE TEMP TABLE da_p(i int primary key)");
+    c.execute("CREATE TEMP TABLE da_c(i int references da_p deferrable initially deferred)");
+    extStep(c, "fc_begin", "BEGIN", false);
+    extStep(c, "fc_ins", "INSERT INTO da_c VALUES (1)", false);
+    extStep(c, "fc_commit", "COMMIT", false);
+    c.sendSync();
+    extStep(c, "fc_sel", "SELECT 1", false);
+    extStep(c, "fc_da", "DISCARD ALL", true);
+    c.sendSync();
+}
+
 // `todo` marks a case that fails for a reason outside this fix's scope. The assertion is
 // wrapped in todo_start()/todo_end(), so a `not ok` does not fail the run but the
 // divergence stays in the TAP output every time -- recorded rather than deleted. The
@@ -552,6 +568,7 @@ static const Case PARITY_CASES[] = {
     { "#6417 BEGIN and DISCARD ALL in the same batch",           sc_begin_same_batch,    2, nullptr },
     { "#6417 BEGIN unseen by tracker, DISCARD ALL mid-batch",    sc_hidden_txn_batch,    3, nullptr },
     { "#6417 extended COMMIT AND CHAIN, DISCARD ALL mid-batch",  sc_hidden_chain_batch,  4, nullptr },
+    { "#6417 extended COMMIT fails, DISCARD ALL mid-batch",      sc_failed_commit_batch, 4, nullptr },
 };
 
 // --------------------------------------------------------- run one leg

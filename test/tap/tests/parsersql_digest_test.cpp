@@ -19,14 +19,18 @@ static void free_parser_result(SQP_par_t& qp) {
 
 static void test_digest_storage(const char* dialect,
 	void (*initialize)(SQP_par_t*, const char*, int)) {
-	// The digest comes from the legacy tokenizer (#6454), which drops the
-	// space after a comma: "col0, col1" is normalized to "col0,col1".
+	// Stable uses the native ParserSQL emitter for this complete SELECT;
+	// newer tiers use the legacy tokenizer, which removes comma spacing.
 	std::string long_query = "SELECT ";
 	std::string long_digest = "SELECT ";
 	for (int i = 0; i < QUERY_DIGEST_BUF; ++i) {
 		if (i) {
 			long_query += ", ";
+#ifdef PROXYSQL31
 			long_digest += ",";
+#else
+			long_digest += ", ";
+#endif
 		}
 		long_query += "col" + std::to_string(i);
 		long_digest += "col" + std::to_string(i);

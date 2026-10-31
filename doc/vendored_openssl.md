@@ -1,6 +1,7 @@
 # Vendored OpenSSL maintenance
 
-ProxySQL builds against a mandatory vendored OpenSSL 3.5 LTS source archive.
+ProxySQL builds against the OpenSSL version pinned by its mandatory vendored
+OpenSSL 3.5 LTS source archive.
 The current pin is OpenSSL 3.5.7. OpenSSL 3.5 is supported upstream through
 8 April 2030; moving to another release series requires a separately reviewed
 design rather than an incidental dependency update.
@@ -9,6 +10,14 @@ This document is the supported maintenance procedure for
 [issue #6115](https://github.com/sysown/proxysql/issues/6115).
 
 ## Build selection and version checks
+
+`DEPS_MODE=auto` can restore a verified ProxySQL-produced build of that exact
+vendored dependency; `DEPS_MODE=source` uses source-origin outputs and
+`DEPS_MODE=prebuilt` requires a registered matching artifact. This preserves the
+fixed headers/static-library paths and version checks below. Follow
+[compiled dependency reuse](dependency-artifacts.md) to publish and register new
+artifacts after a pin, recipe, or toolchain change. The focused source recipe is
+`deps/libssl/build.mk`.
 
 Host- or environment-selected `OPENSSL_ROOT_DIR` is forbidden: do not export
 it or use it to select a system OpenSSL installation. CMake dependency builds

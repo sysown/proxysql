@@ -5700,11 +5700,20 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 				case PROCESSING_STMT_EXECUTE:
 					pta[13] = strdup("Execute");
 					break;
+				case PROCESSING_EXTQ_BATCH:
+					pta[13] = strdup("Execute batch");
+					break;
 				case PROCESSING_STMT_DESCRIBE:
 					pta[13] = strdup("Describe");
 					break;
 				case PROCESSING_STMT_PREPARE:
 					pta[13] = strdup("Prepare");
+					break;
+				case PROCESSING_STMT_BIND:
+					pta[13] = strdup("Bind");
+					break;
+				case PROCESSING_STMT_CLOSE:
+					pta[13] = strdup("Close");
 					break;
 				case CONNECTING_CLIENT:
 					pta[13] = strdup("Connecting client");

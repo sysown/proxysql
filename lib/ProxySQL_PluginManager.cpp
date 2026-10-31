@@ -12,10 +12,12 @@
 #include "Aws_Locality_Manager.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Thread.h"
+#include "proxysql_admin.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <climits>
 #include <cctype>
 #include <cstring>
 #include <dlfcn.h>
@@ -53,6 +55,10 @@ bool proxysql_plugin_with_admin_db_lock(bool (*body)(void*), void* opaque);
 namespace {
 
 std::atomic<ProxySQL_PluginManager*> g_active_plugin_manager { nullptr };
+// Published only while stop runs after the reader-visible manager is
+// unpublished. Protocol-locked monitor mutations use it to keep honoring
+// active inventory claims until controller retirement removes them.
+std::atomic<ProxySQL_PluginManager*> g_retiring_plugin_manager { nullptr };
 // The manager must be published before init() so plugins can register through
 // the service table, but readers must not observe command/query-hook state
 // while init_all()/start_all() are still mutating it.  Release this gate only
@@ -154,6 +160,42 @@ std::mutex g_plugin_lifecycle_mutex {};
 bool g_registry_registration_failed = false;
 std::string g_registry_registration_error {};
 bool g_registry_accepts_config_table_registration = false;
+
+void publish_configured_plugin_manager_retirement(
+	const std::unique_ptr<ProxySQL_PluginManager>& manager) {
+	std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+	g_retiring_plugin_manager.store(manager.get(), std::memory_order_release);
+	g_active_plugin_manager.store(nullptr, std::memory_order_release);
+}
+
+#ifdef PROXYSQL40
+void release_configured_plugin_server_controllers(ProxySQL_PluginManager* manager) {
+	if (manager == nullptr) return;
+	for (ProxySQL_ServerProtocol protocol : {ProxySQL_ServerProtocol::mysql,
+	                                         ProxySQL_ServerProtocol::pgsql}) {
+		try {
+			manager->uninstall_server_discovery_controller(protocol);
+		} catch (...) {
+			proxy_warning("Server discovery controller removal threw during manager retirement\n");
+		}
+	}
+}
+#endif
+
+void finish_configured_plugin_manager_retirement(
+	std::unique_ptr<ProxySQL_PluginManager>& manager) {
+	{
+		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
+		g_retiring_plugin_manager.store(nullptr, std::memory_order_release);
+	}
+#ifdef PROXYSQL40
+	// A reader can load the retiring pointer immediately before it is cleared.
+	// Fence both protocol domains before destroying the object it referenced.
+	{ ScopedServerDiscoveryProtocolLock lock(ProxySQL_ServerProtocol::mysql); }
+	{ ScopedServerDiscoveryProtocolLock lock(ProxySQL_ServerProtocol::pgsql); }
+#endif
+	manager.reset();
+}
 
 // RAII guard that sets g_registry_target to `mgr` on construction and
 // clears it on destruction.  Also resets the registration-failure sticky
@@ -435,6 +477,12 @@ bool install_server_discovery_controller_service(
 	void (*destroy)(ProxySQL_ServerDiscoveryController *), void *module_handle) {
 	if (g_registry_target == nullptr) {
 		proxy_warning("Server discovery controller installation attempted outside plugin init phase\n");
+		return false;
+	}
+	if (g_registry_callback_target.plugin == nullptr ||
+		plugin_layout_version(g_registry_callback_target.plugin) < 16u) {
+		note_registration_failure("server discovery controller",
+			"server discovery controllers require plugin ABI 16 or newer");
 		return false;
 	}
 	return g_registry_target->install_server_discovery_controller(
@@ -728,12 +776,13 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 }
 
 ProxySQL_PluginManager::~ProxySQL_PluginManager() {
-	stop_all();
-	#ifdef PROXYSQL40
-	for (ProxySQL_ServerProtocol protocol : {ProxySQL_ServerProtocol::mysql,
-	                                         ProxySQL_ServerProtocol::pgsql}) {
-		uninstall_server_discovery_controller(protocol);
+	try {
+		stop_all();
+	} catch (...) {
+		proxy_warning("Plugin shutdown threw during manager destruction\n");
 	}
+	#ifdef PROXYSQL40
+	release_configured_plugin_server_controllers(this);
 	#endif /* PROXYSQL40 */
 	// Note: g_active_plugin_manager is cleared by callers under the mutex
 	// before reset() triggers this destructor.  No unsynchronized access here.
@@ -800,7 +849,7 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// safe via the tail-append pattern -- fields the plugin didn't define
 	// are never dereferenced (see handling of register_schemas below).
 	//
-	// abi_version carries the ABI 1..15 layout-version number in its low
+	// abi_version carries the ABI 1..16 layout-version number in its low
 	// bits and PROXYSQL_PLUGIN_ABI_DEBUG_BIT as a separate, independent
 	// tag (see the long comment on PROXYSQL_PLUGIN_ABI_DEBUG_BIT in
 	// ProxySQL_Plugin.h for the dump_pkt/DSS-offset-shift mechanism this
@@ -812,7 +861,8 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	const unsigned int layout_version = plugin_layout_version(descriptor);
 	const unsigned int debug_tag = descriptor->abi_version & PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 	if (layout_version < 1u || layout_version > PROXYSQL_PLUGIN_ABI_VERSION_MAX ||
-		layout_version == 11u || layout_version == 12u) {
+		layout_version == 11u || layout_version == 12u ||
+		layout_version == 14u || layout_version == 15u) {
 		err = "unsupported plugin ABI version";
 		dlclose(handle);
 		return false;
@@ -831,8 +881,8 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// The pre-integration AWS branch used ABI 10/11/12 for a different
 	// services layout. ABI 11/12 are reserved above; ABI 10 remains valid for
 	// upstream plugins, so reject the old AWS name/version combination too.
-	if (std::strcmp(descriptor->name, "aws") == 0 && layout_version < 14u) {
-		err = "plugin 'aws' requires ABI layout 14 or newer; rebuild against the integrated core headers";
+	if (std::strcmp(descriptor->name, "aws") == 0 && layout_version < 16u) {
+		err = "plugin 'aws' requires ABI layout 16 or newer; rebuild against the integrated core headers";
 		dlclose(handle);
 		return false;
 	}
@@ -915,7 +965,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		//
 		// abi_version must be masked before this comparison: it carries
 		// PROXYSQL_PLUGIN_ABI_DEBUG_BIT in a high bit orthogonal to the
-		// ABI 1..15 layout-version number (see the contract comment next
+		// ABI 1..16 layout-version number (see the contract comment next
 		// to PROXYSQL_PLUGIN_ABI_DEBUG_BIT in ProxySQL_Plugin.h). A
 		// DEBUG-tagged ABI-1 descriptor has abi_version == 0x40000001,
 		// which satisfies a raw ">= 2u" and would wrongly dereference
@@ -1603,11 +1653,240 @@ int server_protocol_index(ProxySQL_ServerProtocol protocol) {
 	return -1;
 }
 
-bool is_nonempty_sorted_unique_subset(const std::vector<uint32_t>& installed,
+constexpr const char* MANAGED_TOPOLOGY_COMMENT = "__proxysql_plugin_managed_inventory__";
+
+class ScopedAdminServerLock {
+public:
+	explicit ScopedAdminServerLock(ProxySQL_ServerProtocol protocol) : protocol_(protocol) {
+		if (GloAdmin == nullptr) return;
+		if (protocol_ == ProxySQL_ServerProtocol::mysql) GloAdmin->mysql_servers_wrlock();
+		else GloAdmin->pgsql_servers_wrlock();
+		locked_ = true;
+	}
+	~ScopedAdminServerLock() {
+		if (!locked_) return;
+		if (protocol_ == ProxySQL_ServerProtocol::mysql) GloAdmin->mysql_servers_wrunlock();
+		else GloAdmin->pgsql_servers_wrunlock();
+	}
+	ScopedAdminServerLock(const ScopedAdminServerLock&) = delete;
+	ScopedAdminServerLock& operator=(const ScopedAdminServerLock&) = delete;
+	bool locked() const noexcept { return locked_; }
+
+private:
+	ProxySQL_ServerProtocol protocol_;
+	bool locked_ {false};
+};
+
+bool valid_mysql_replication_check_type(const std::string& check_type) {
+	return check_type == "read_only" || check_type == "innodb_read_only" ||
+		check_type == "super_read_only" || check_type == "read_only|innodb_read_only" ||
+		check_type == "read_only&innodb_read_only";
+}
+
+bool valid_managed_claim(ProxySQL_ServerProtocol protocol,
+	const ProxySQL_ServerHostgroupClaim& claim, std::string& error) {
+	auto valid_hostgroup = [&](uint32_t hostgroup) {
+		if (hostgroup <= static_cast<uint32_t>(INT_MAX)) return true;
+		error = "managed discovery hostgroup exceeds the native signed range";
+		return false;
+	};
+	if (!valid_hostgroup(claim.writer_hostgroup) ||
+		!valid_hostgroup(claim.reader_hostgroup)) return false;
+	if (claim.writer_hostgroup == claim.reader_hostgroup) {
+		error = "managed discovery writer and reader hostgroups must differ";
+		return false;
+	}
+	const auto& monitor = claim.role_monitor;
+	switch (monitor.kind) {
+		case ProxySQL_ServerRoleMonitor::none:
+			return true;
+		case ProxySQL_ServerRoleMonitor::mysql_replication:
+			if (protocol != ProxySQL_ServerProtocol::mysql ||
+				!valid_mysql_replication_check_type(monitor.check_type)) {
+				error = "invalid MySQL replication monitor claim";
+				return false;
+			}
+			return true;
+		case ProxySQL_ServerRoleMonitor::pgsql_replication:
+			if (protocol != ProxySQL_ServerProtocol::pgsql || monitor.check_type != "read_only") {
+				error = "invalid PostgreSQL replication monitor claim";
+				return false;
+			}
+			return true;
+		case ProxySQL_ServerRoleMonitor::mysql_aws_aurora:
+			if (protocol != ProxySQL_ServerProtocol::mysql || claim.reader_hostgroup == 0 ||
+				monitor.aurora_port == 0 ||
+				monitor.domain_name.size() < 2 || monitor.domain_name.front() != '.' ||
+				monitor.max_lag_ms < 10 || monitor.max_lag_ms > 600000 ||
+				monitor.check_interval_ms < 100 || monitor.check_interval_ms > 600000 ||
+				monitor.check_timeout_ms < 80 || monitor.check_timeout_ms > 3000 ||
+				monitor.writer_is_also_reader > 1 || monitor.new_reader_weight > 10000000 ||
+				monitor.add_lag_ms > 600000 || monitor.min_lag_ms > 600000 ||
+				monitor.lag_num_checks < 1 || monitor.lag_num_checks > 16 ||
+				monitor.autopurge_missing_checks > 100 ||
+				!std::all_of(monitor.domain_name.begin(), monitor.domain_name.end(), [](char ch) {
+					return std::isalnum(static_cast<unsigned char>(ch)) || ch == '.' || ch == '-';
+				})) {
+				error = "invalid MySQL Aurora monitor claim";
+				return false;
+			}
+			return true;
+		case ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green: {
+			if (!valid_hostgroup(monitor.green_writer_hostgroup) ||
+				!valid_hostgroup(monitor.green_reader_hostgroup)) return false;
+			if (protocol != ProxySQL_ServerProtocol::mysql ||
+				claim.reader_hostgroup == 0 ||
+				monitor.check_interval_ms < 100 || monitor.check_interval_ms > 600000 ||
+				monitor.check_timeout_ms < 80 || monitor.check_timeout_ms > 3000 ||
+				monitor.writer_is_also_reader > 1) {
+				error = "invalid MySQL RDS blue/green monitor claim";
+				return false;
+			}
+			const std::set<uint32_t> hostgroups {
+				claim.writer_hostgroup, claim.reader_hostgroup,
+				monitor.green_writer_hostgroup, monitor.green_reader_hostgroup
+			};
+			if (hostgroups.size() != 4) {
+				error = "RDS blue/green monitor hostgroups must be distinct";
+				return false;
+			}
+			return true;
+		}
+	}
+	error = "unknown managed discovery role monitor";
+	return false;
+}
+
+std::vector<uint32_t> managed_claim_hostgroups(const ProxySQL_ServerHostgroupClaim& claim) {
+	std::vector<uint32_t> result {claim.writer_hostgroup, claim.reader_hostgroup};
+	if (claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green) {
+		result.push_back(claim.role_monitor.green_writer_hostgroup);
+		result.push_back(claim.role_monitor.green_reader_hostgroup);
+	}
+	return result;
+}
+
+bool execute_managed_topology_sql(SQLite3DB& db, const std::string& sql, std::string& error) {
+	char* sqlite_error = nullptr;
+	int columns = 0;
+	int affected_rows = 0;
+	SQLite3_result* result = nullptr;
+	const bool ok = db.execute_statement(
+		sql.c_str(), &sqlite_error, &columns, &affected_rows, &result);
+	delete result;
+	if (ok && sqlite_error == nullptr) return true;
+	error = sqlite_error != nullptr ? sqlite_error : "managed topology SQL failed";
+	if (sqlite_error != nullptr) free(sqlite_error);
+	return false;
+}
+
+std::string insert_managed_topology_sql(const ProxySQL_ServerHostgroupClaim& claim) {
+	const auto& monitor = claim.role_monitor;
+	const std::string writer = std::to_string(claim.writer_hostgroup);
+	const std::string reader = std::to_string(claim.reader_hostgroup);
+	switch (monitor.kind) {
+		case ProxySQL_ServerRoleMonitor::none:
+			return {};
+		case ProxySQL_ServerRoleMonitor::mysql_replication:
+			return "INSERT INTO mysql_replication_hostgroups"
+				"(writer_hostgroup,reader_hostgroup,check_type,comment) VALUES(" +
+				writer + "," + reader + ",'" + monitor.check_type + "','" +
+				MANAGED_TOPOLOGY_COMMENT + "')";
+		case ProxySQL_ServerRoleMonitor::pgsql_replication:
+			return "INSERT INTO pgsql_replication_hostgroups"
+				"(writer_hostgroup,reader_hostgroup,check_type,comment) VALUES(" +
+				writer + "," + reader + ",'read_only','" + MANAGED_TOPOLOGY_COMMENT + "')";
+		case ProxySQL_ServerRoleMonitor::mysql_aws_aurora:
+			return "INSERT INTO mysql_aws_aurora_hostgroups"
+				"(writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
+				"check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,"
+				"add_lag_ms,min_lag_ms,lag_num_checks,autopurge_missing_checks,comment) VALUES(" +
+				writer + "," + reader + ",1," + std::to_string(monitor.aurora_port) + ",'" +
+				monitor.domain_name + "'," + std::to_string(monitor.max_lag_ms) + "," +
+				std::to_string(monitor.check_interval_ms) + "," +
+				std::to_string(monitor.check_timeout_ms) + "," +
+				std::to_string(monitor.writer_is_also_reader) + "," +
+				std::to_string(monitor.new_reader_weight) + "," +
+				std::to_string(monitor.add_lag_ms) + "," +
+				std::to_string(monitor.min_lag_ms) + "," +
+				std::to_string(monitor.lag_num_checks) + "," +
+				std::to_string(monitor.autopurge_missing_checks) + ",'" +
+				MANAGED_TOPOLOGY_COMMENT + "')";
+		case ProxySQL_ServerRoleMonitor::mysql_aws_rds_blue_green:
+			return "INSERT INTO mysql_aws_rds_bgd_hostgroups"
+				"(writer_hostgroup,reader_hostgroup,green_writer_hostgroup,green_reader_hostgroup,"
+				"active,writer_is_also_reader,check_interval_ms,check_timeout_ms,comment) VALUES(" +
+				writer + "," + reader + "," +
+				std::to_string(monitor.green_writer_hostgroup) + "," +
+				std::to_string(monitor.green_reader_hostgroup) + ",1," +
+				std::to_string(monitor.writer_is_also_reader) + "," +
+				std::to_string(monitor.check_interval_ms) + "," +
+				std::to_string(monitor.check_timeout_ms) + ",'" +
+				MANAGED_TOPOLOGY_COMMENT + "')";
+	}
+	return {};
+}
+
+bool replace_managed_topology_rows(SQLite3DB& db, ProxySQL_ServerProtocol protocol,
+	const std::vector<ProxySQL_ServerHostgroupClaim>& previous,
+	const std::vector<ProxySQL_ServerHostgroupClaim>& replacement,
+	std::vector<uint32_t>& installed_topology, std::string& error) {
+	if (!execute_managed_topology_sql(db, "BEGIN IMMEDIATE", error)) return false;
+	(void)previous;
+	const std::vector<std::string> managed_tables =
+		protocol == ProxySQL_ServerProtocol::mysql
+			? std::vector<std::string>{"mysql_replication_hostgroups",
+				"mysql_aws_aurora_hostgroups", "mysql_aws_rds_bgd_hostgroups"}
+			: std::vector<std::string>{"pgsql_replication_hostgroups"};
+	// The marker is core-owned. Remove every stale marked row for this
+	// protocol before installing the controller's complete replacement set.
+	// This also recovers safely after an earlier process saved a marked row to
+	// disk and restarted before normal controller teardown.
+	for (const auto& table : managed_tables) {
+		const std::string sql = "DELETE FROM " + table + " WHERE comment='" +
+			MANAGED_TOPOLOGY_COMMENT + "'";
+		if (!execute_managed_topology_sql(db, sql, error)) {
+			db.execute("ROLLBACK");
+			return false;
+		}
+	}
+	for (const auto& claim : replacement) {
+		const std::string sql = insert_managed_topology_sql(claim);
+		if (!sql.empty() && !execute_managed_topology_sql(db, sql, error)) {
+			db.execute("ROLLBACK");
+			return false;
+		}
+	}
+	ProxySQL_ServerBuiltinTopologyInputs topology_inputs {};
+	if (!proxysql_collect_active_builtin_server_topology(
+		db, protocol, topology_inputs, installed_topology, error)) {
+		db.execute("ROLLBACK");
+		return false;
+	}
+	if (!execute_managed_topology_sql(db, "COMMIT", error)) {
+		db.execute("ROLLBACK");
+		return false;
+	}
+	return true;
+}
+
+bool is_complete_managed_claim_scope(
+	const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
 	const std::vector<uint32_t>& desired) {
-	return !desired.empty() && std::is_sorted(desired.begin(), desired.end()) &&
-		std::adjacent_find(desired.begin(), desired.end()) == desired.end() &&
-		std::includes(installed.begin(), installed.end(), desired.begin(), desired.end());
+	if (desired.empty() || !std::is_sorted(desired.begin(), desired.end()) ||
+		std::adjacent_find(desired.begin(), desired.end()) != desired.end()) return false;
+	std::set<uint32_t> accepted;
+	for (const auto& claim : claims) {
+		const auto hostgroups = managed_claim_hostgroups(claim);
+		const size_t selected = std::count_if(hostgroups.begin(), hostgroups.end(),
+			[&](uint32_t hostgroup) {
+				return std::binary_search(desired.begin(), desired.end(), hostgroup);
+			});
+		if (selected != 0 && selected != hostgroups.size()) return false;
+		if (selected == hostgroups.size())
+			accepted.insert(hostgroups.begin(), hostgroups.end());
+	}
+	return accepted.size() == desired.size();
 }
 
 // A callback lease pins its module/controller object while its callback runs.
@@ -1779,7 +2058,8 @@ void ProxySQL_PluginManager::store_server_runtime_snapshot(
 			server_snapshots_[index].generation > snapshot.generation) return;
 		server_snapshots_[index] = snapshot;
 		server_snapshots_present_[index] = true;
-		controller = server_controllers_[index].controller;
+		controller = server_controller_retiring_[index] ? nullptr :
+			server_controllers_[index].controller;
 		if (controller != nullptr) ++server_callback_leases_[index];
 	}
 	if (controller == nullptr) return;
@@ -1818,8 +2098,8 @@ void ProxySQL_PluginManager::rebuild_server_delegated_hostgroups(int index) {
 	auto& delegated = server_delegated_hostgroups_[index];
 	delegated.clear();
 	for (const auto& claim : managed_server_hostgroup_claims_[index]) {
-		delegated.push_back(claim.writer_hostgroup);
-		delegated.push_back(claim.reader_hostgroup);
+		const auto hostgroups = managed_claim_hostgroups(claim);
+		delegated.insert(delegated.end(), hostgroups.begin(), hostgroups.end());
 	}
 	std::sort(delegated.begin(), delegated.end());
 	delegated.erase(std::unique(delegated.begin(), delegated.end()), delegated.end());
@@ -1833,6 +2113,26 @@ std::vector<ProxySQL_ServerHostgroupClaim> ProxySQL_PluginManager::managed_serve
 	return managed_server_hostgroup_claims_[index];
 }
 
+bool ProxySQL_PluginManager::is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader) const {
+	if (writer_is_also_reader != nullptr) *writer_is_also_reader = 0;
+	const int index = server_protocol_index(protocol);
+	if (index < 0) return false;
+	std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+	if (server_controllers_[index].controller == nullptr) return false;
+	const auto& claims = managed_server_hostgroup_claims_[index];
+	const auto claim = std::find_if(claims.begin(), claims.end(),
+		[&](const ProxySQL_ServerHostgroupClaim& candidate) {
+			return candidate.writer_hostgroup == writer_hostgroup &&
+				candidate.reader_hostgroup == reader_hostgroup;
+		});
+	if (claim == claims.end()) return false;
+	if (writer_is_also_reader != nullptr)
+		*writer_is_also_reader = claim->role_monitor.writer_is_also_reader;
+	return true;
+}
+
 bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol protocol,
 	uint64_t desired_revision, const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
 	uint64_t& runtime_generation_out, std::string& error) {
@@ -1842,39 +2142,147 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 		error = "invalid managed discovery protocol or revision";
 		return false;
 	}
-	// Same lock order as ordinary server installation and desired-set draining.
-	ScopedServerDiscoveryProtocolLock protocol_lock(protocol);
+	if (GloAdmin == nullptr || GloAdmin->admindb == nullptr) {
+		error = "Admin database is unavailable";
+		return false;
+	}
+	// Configuration publication uses Admin servers -> protocol -> runtime install
+	// -> HGM. Keep the same order while the claim-owned topology row and its
+	// runtime generation are installed as one serialized operation.
+	ScopedAdminServerLock admin_lock(protocol);
+	if (!admin_lock.locked()) {
+		error = "Admin server lock is unavailable";
+		return false;
+	}
 	ProxySQL_ServerRuntimeInstallLock install_lock(protocol);
 	ProxySQL_ServerRuntimeSnapshot snapshot {};
+	std::vector<ProxySQL_ServerHostgroupClaim> previous;
+	const ProxySQL_PluginDescriptor *claim_owner = nullptr;
 	{
 		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		if (desired_revision < managed_server_revisions_[index]) {
 			error = "stale managed discovery revision";
 			return false;
 		}
+		if (server_controllers_[index].controller == nullptr ||
+			server_controller_retiring_[index]) {
+			error = "managed discovery controller is unavailable";
+			return false;
+		}
+		claim_owner = server_controllers_[index].owner;
+		if (managed_server_claim_owner_[index] != nullptr &&
+			managed_server_claim_owner_[index] != claim_owner) {
+			error = "managed discovery claims belong to another controller";
+			return false;
+		}
 		// Start-up may install claims before any server seed exists. Otherwise
 		// retain the last explicit configuration, including its topology owners.
 		snapshot = server_snapshots_present_[index] ? server_snapshots_[index] :
 			ProxySQL_ServerRuntimeSnapshot {protocol, 0, {}, {}};
-		std::set<uint32_t> occupied(snapshot.topology_hostgroups.begin(), snapshot.topology_hostgroups.end());
-		for (const auto& claim : claims) {
-			if (claim.writer_hostgroup == claim.reader_hostgroup ||
-				!occupied.insert(claim.writer_hostgroup).second ||
-				!occupied.insert(claim.reader_hostgroup).second) {
-				error = "overlapping or invalid managed discovery hostgroup claim";
+		previous = managed_server_hostgroup_claims_[index];
+	}
+
+	std::set<uint32_t> occupied(snapshot.topology_hostgroups.begin(),
+		snapshot.topology_hostgroups.end());
+	// A previous claim-owned native row is replaceable by this same controller.
+	// Monitor kind 'none' owns no native row, so it must not hide a later user
+	// topology overlap in the retained snapshot.
+	for (const auto& claim : previous) {
+		if (claim.role_monitor.kind == ProxySQL_ServerRoleMonitor::none) continue;
+		for (uint32_t hostgroup : managed_claim_hostgroups(claim)) occupied.erase(hostgroup);
+	}
+	for (const auto& claim : claims) {
+		if (!valid_managed_claim(protocol, claim, error)) return false;
+		for (uint32_t hostgroup : managed_claim_hostgroups(claim)) {
+			if (!occupied.insert(hostgroup).second) {
+				error = "managed discovery hostgroup claim overlaps another topology owner";
 				return false;
 			}
 		}
+	}
+
+	std::vector<uint32_t> installed_topology;
+	if (!replace_managed_topology_rows(*GloAdmin->admindb, protocol,
+		previous, claims, installed_topology, error)) return false;
+	if (protocol == ProxySQL_ServerProtocol::mysql)
+		GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, false);
+	else
+		GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, false);
+
+	snapshot.topology_hostgroups = std::move(installed_topology);
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
 		snapshot.generation = proxysql_advance_server_runtime_generation(protocol);
 		managed_server_hostgroup_claims_[index] = claims;
+		managed_server_claim_owner_[index] = claims.empty() ? nullptr : claim_owner;
 		managed_server_revisions_[index] = desired_revision;
 		rebuild_server_delegated_hostgroups(index);
 	}
 	// The install lock serializes the generation.
 	runtime_generation_out = snapshot.generation;
 	install_server_runtime_snapshot(std::move(snapshot));
-	proxysql_request_server_read_only_monitor(protocol);
 	error.clear();
+	return true;
+}
+
+bool ProxySQL_PluginManager::release_managed_discovery(
+	ProxySQL_ServerProtocol protocol, const ProxySQL_PluginDescriptor *owner,
+	std::string& error) {
+	error.clear();
+	const int index = server_protocol_index(protocol);
+	if (index < 0) {
+		error = "managed discovery release is unavailable";
+		return false;
+	}
+	if (GloAdmin == nullptr || GloAdmin->admindb == nullptr) {
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		managed_server_hostgroup_claims_[index].clear();
+		managed_server_claim_owner_[index] = nullptr;
+		managed_server_revisions_[index] = 0;
+		rebuild_server_delegated_hostgroups(index);
+		return true;
+	}
+	ConfigurationLock configuration_lock;
+	ScopedAdminServerLock admin_lock(protocol);
+	if (!admin_lock.locked()) {
+		error = "Admin server lock is unavailable";
+		return false;
+	}
+	ProxySQL_ServerRuntimeInstallLock install_lock(protocol);
+	ProxySQL_ServerRuntimeSnapshot snapshot {};
+	std::vector<ProxySQL_ServerHostgroupClaim> previous;
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		if (server_controllers_[index].controller == nullptr ||
+			(owner != nullptr && server_controllers_[index].owner != owner) ||
+			(managed_server_claim_owner_[index] != nullptr &&
+			 managed_server_claim_owner_[index] != server_controllers_[index].owner)) {
+			error = "managed discovery release owner mismatch";
+			return false;
+		}
+		snapshot = server_snapshots_present_[index] ? server_snapshots_[index] :
+			ProxySQL_ServerRuntimeSnapshot {protocol, 0, {}, {}};
+		previous = managed_server_hostgroup_claims_[index];
+	}
+
+	std::vector<uint32_t> installed_topology;
+	if (!replace_managed_topology_rows(*GloAdmin->admindb, protocol,
+		previous, {}, installed_topology, error)) return false;
+	if (protocol == ProxySQL_ServerProtocol::mysql)
+		GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, false);
+	else
+		GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, false);
+
+	snapshot.topology_hostgroups = std::move(installed_topology);
+	{
+		std::lock_guard<std::mutex> lock(server_discovery_mutex_);
+		snapshot.generation = proxysql_advance_server_runtime_generation(protocol);
+		managed_server_hostgroup_claims_[index].clear();
+		managed_server_claim_owner_[index] = nullptr;
+		managed_server_revisions_[index] = 0;
+		rebuild_server_delegated_hostgroups(index);
+	}
+	install_server_runtime_snapshot(std::move(snapshot));
 	return true;
 }
 
@@ -1949,6 +2357,15 @@ bool ProxySQL_PluginManager::uninstall_server_discovery_controller(
 			server_desired_applies_inflight_[index] == 0;
 	});
 	lock.unlock();
+	std::string release_error;
+	if (!release_managed_discovery(protocol, owner, release_error)) {
+		proxy_warning("Managed discovery claim release failed: %s\n", release_error.c_str());
+		lock.lock();
+		server_controller_retiring_[index] = false;
+		lock.unlock();
+		server_discovery_cv_.notify_all();
+		return false;
+	}
 	{
 		ScopedServerDiscoveryProtocolLock protocol_lock(protocol);
 		lock.lock();
@@ -2028,7 +2445,7 @@ bool ProxySQL_PluginManager::revalidate_server_desired_set(
 		!server_controller_retiring_[index] &&
 		server_snapshots_present_[index] &&
 		server_snapshots_[index].generation == desired_set.generation &&
-		is_nonempty_sorted_unique_subset(server_delegated_hostgroups_[index],
+		is_complete_managed_claim_scope(managed_server_hostgroup_claims_[index],
 			desired_set.delegated_hostgroups);
 }
 
@@ -2042,7 +2459,7 @@ bool ProxySQL_PluginManager::begin_server_desired_set_apply(
 		server_controller_retiring_[index] ||
 		!server_snapshots_present_[index] ||
 		server_snapshots_[index].generation != desired_set.generation ||
-		!is_nonempty_sorted_unique_subset(server_delegated_hostgroups_[index],
+		!is_complete_managed_claim_scope(managed_server_hostgroup_claims_[index],
 			desired_set.delegated_hostgroups)) return false;
 	++server_desired_applies_inflight_[index];
 	return true;
@@ -2299,11 +2716,14 @@ bool proxysql_discover_configured_plugins(
 	g_active_mysql_query_hook.store(false, std::memory_order_release);
 	g_active_pgsql_query_hook.store(false, std::memory_order_release);
 #endif
-	{
-		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-		g_active_plugin_manager.store(nullptr, std::memory_order_release);
+	publish_configured_plugin_manager_retirement(manager);
+	if (manager != nullptr) {
+		(void)manager->stop_all();
+#ifdef PROXYSQL40
+		release_configured_plugin_server_controllers(manager.get());
+#endif
 	}
-	manager.reset();
+	finish_configured_plugin_manager_retirement(manager);
 
 	if (plugin_modules.empty()) {
 		return true;
@@ -2450,11 +2870,11 @@ static bool stop_configured_plugins_impl(
 	g_active_mysql_query_hook.store(false, std::memory_order_release);
 	g_active_pgsql_query_hook.store(false, std::memory_order_release);
 #endif
-	{
-		std::unique_lock<std::shared_mutex> lock(g_active_plugin_manager_mutex);
-		g_active_plugin_manager.store(nullptr, std::memory_order_release);
-	}
+	publish_configured_plugin_manager_retirement(manager);
 	const bool stop_ok = !manager || manager->stop_all();
+#ifdef PROXYSQL40
+	release_configured_plugin_server_controllers(manager.get());
+#endif
 	// The caller has drained handlers. Stop provider controllers first, then
 	// destroy web while both DSOs are still mapped, then retire the chassis.
 	if (drained_web != nullptr) {
@@ -2465,7 +2885,7 @@ static bool stop_configured_plugins_impl(
 	// pointers remain reachable. stop_all() is idempotent across failure (each
 	// plugin is marked stopped after one attempt) so the destructor's stop_all()
 	// will be a no-op.
-	manager.reset();
+	finish_configured_plugin_manager_retirement(manager);
 	if (!stop_ok) {
 		err = "plugin stop failed";
 		return false;
@@ -2539,6 +2959,27 @@ std::vector<ProxySQL_ServerHostgroupClaim> proxysql_active_managed_server_hostgr
 	ScopedActiveManagerPin pin;
 	return pin.manager() == nullptr ? std::vector<ProxySQL_ServerHostgroupClaim>{} :
 		pin.manager()->managed_server_hostgroup_claims(protocol);
+}
+
+bool proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader) {
+	if (writer_is_also_reader != nullptr) *writer_is_also_reader = 0;
+	ScopedActiveManagerPin pin;
+	return pin.manager() != nullptr && pin.manager()->is_server_inventory_managed(
+		protocol, writer_hostgroup, reader_hostgroup, writer_is_also_reader);
+}
+
+bool proxysql_is_server_inventory_managed_locked(ProxySQL_ServerProtocol protocol,
+	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
+	uint8_t* writer_is_also_reader) {
+	if (writer_is_also_reader != nullptr) *writer_is_also_reader = 0;
+	ProxySQL_PluginManager *manager =
+		g_active_plugin_manager.load(std::memory_order_acquire);
+	if (manager == nullptr)
+		manager = g_retiring_plugin_manager.load(std::memory_order_acquire);
+	return manager != nullptr && manager->is_server_inventory_managed(
+		protocol, writer_hostgroup, reader_hostgroup, writer_is_also_reader);
 }
 
 #endif /* PROXYSQL40 */

@@ -76,6 +76,7 @@ static void check_matches_legacy(const Dialect& d, const std::string& sql, const
 	const std::string parser = parser_found ? qp.first_comment : "";
 	std::string shown = sql;
 	for (char& c : shown) if (c == '\n') c = ' ';
+#ifdef PROXYSQL31
 	ok(parser_found == legacy_found && parser == legacy,
 		"%s first comment matches legacy for [%.80s] (parser: %s'%.60s', legacy: %s'%.60s')",
 		d.name, shown.c_str(), parser_found ? "" : "NULL ", parser.c_str(),
@@ -84,6 +85,13 @@ static void check_matches_legacy(const Dialect& d, const std::string& sql, const
 		ok(parser_found && parser.find(annotation) != std::string::npos,
 			"%s first comment carries annotation '%s' for [%.80s]", d.name, annotation, shown.c_str());
 	}
+#else
+	ok(!parser_found, "%s v3.0 parser mode leaves first-comment annotations unavailable", d.name);
+	if (annotation) {
+		ok(legacy_found && legacy.find(annotation) != std::string::npos,
+			"%s legacy tokenizer retains annotation '%s'", d.name, annotation);
+	}
+#endif
 	ok(qp.digest_text != nullptr, "%s still produces a digest for [%.80s]", d.name, shown.c_str());
 	release_digest(qp);
 }
@@ -143,9 +151,13 @@ static void test_pgsql(const Dialect& d) {
 	const char* sql = "/* hostgroup=20 */ SELECT * FROM t WHERE id=1";
 	SQP_par_t qp {};
 	d.parser_init(&qp, sql, std::strlen(sql) + 1);
+#ifdef PROXYSQL31
 	ok(qp.first_comment && std::strstr(qp.first_comment, "hostgroup=20"),
 		"%s first comment survives the wire terminator (got: %s)", d.name,
 		qp.first_comment ? qp.first_comment : "NULL");
+#else
+	ok(qp.first_comment == nullptr, "%s v3.0 wire framing does not enable comment extraction", d.name);
+#endif
 	release_digest(qp);
 }
 

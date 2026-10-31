@@ -1,0 +1,124 @@
+name: CI-dependency-artifacts-checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - deps/artifacts/**
+      - deps/duckdb/**
+      - deps/libssl/**
+      - common_mk/openssl_flags.mk
+      - deps/Makefile
+      - Makefile
+      - plugins/duckdb/Makefile
+      - docker-compose.yml
+      - test/infra/control/test_dependency_artifact_*.py
+      - test/infra/control/dependency-artifacts-smoke.bash
+      - test/infra/control/test-vendored-openssl*.bash
+      - test/infra/control/test-duckdb-platform-archives.bash
+      - test/infra/control/test_duckdb_archives.py
+      - .github/workflows/CI-dependency-artifacts*.yml
+  push:
+    branches: [v3.0]
+    paths:
+      - deps/artifacts/**
+      - deps/duckdb/**
+      - deps/libssl/**
+      - common_mk/openssl_flags.mk
+      - deps/Makefile
+      - Makefile
+      - plugins/duckdb/Makefile
+      - docker-compose.yml
+      - test/infra/control/test_dependency_artifact_*.py
+      - test/infra/control/dependency-artifacts-smoke.bash
+      - test/infra/control/test-vendored-openssl*.bash
+      - test/infra/control/test-duckdb-platform-archives.bash
+      - test/infra/control/test_duckdb_archives.py
+      - .github/workflows/CI-dependency-artifacts*.yml
+
+permissions:
+  contents: read
+
+jobs:
+  push-label:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.label.outputs.skip }}
+    steps:
+      - name: Check associated open PR labels
+        id: label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          skip=false
+          if [[ "$REF_TYPE" == branch ]]; then
+            labels=$(gh api --method GET --paginate "repos/${GH_REPO}/pulls" \
+              -f state=open -f per_page=100 -f "head=${GH_REPO%%/*}:${HEAD_REF}" --jq '
+              .[] | select(.state == "open" and .head.repo.full_name == env.GH_REPO and .head.ref == env.HEAD_REF)
+              | .labels[] | select((.name | ascii_downcase) == "ci:skip") | .name')
+            if [[ -n "$labels" ]]; then
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+  fixtures:
+    needs: push-label
+    if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (github.event_name != 'push' || (needs.push-label.result == 'success' && needs.push-label.outputs.skip == 'false')) }}
+    runs-on: ubuntu-24.04
+    env:
+      DEPS_ARTIFACT_CI_REQUIRED: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install workflow test dependencies
+        run: |
+          if ! python3 -c 'import yaml'; then
+            python3 -m pip install --only-binary=:all: PyYAML==6.0.2
+          fi
+          python3 -c 'import yaml'
+      - name: Artifact behavior and existing build contracts
+        run: |
+          python3 -m unittest discover -s test/infra/control -p 'test_dependency_artifact_*.py' -v
+          python3 test/infra/control/test_duckdb_archives.py
+          bash test/infra/control/test-duckdb-platform-archives.bash
+          bash test/infra/control/test-vendored-openssl-build-contract.bash
+          bash test/infra/control/test-vendored-openssl-consumers.bash
+      - name: Validate artifact shell syntax
+        run: |
+          for script in deps/artifacts/prepare.bash deps/artifacts/build.bash test/infra/control/dependency-artifacts-smoke.bash; do
+            bash -n "$script"
+          done
+
+  source-validation:
+    needs: push-label
+    if: ${{ !cancelled() && !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (github.event_name != 'push' || (needs.push-label.result == 'success' && needs.push-label.outputs.skip == 'false')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        dependency: [duckdb, openssl]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Source build and relocated runtime smoke without publication
+        env:
+          DEPENDENCY: ${{ matrix.dependency }}
+        run: |
+          python3 deps/artifacts/publish.py build --profile ubuntu24-amd64-gcc --dependency "$DEPENDENCY" \
+            --output .cache/dependency-artifacts/publication --repository "$GITHUB_REPOSITORY" \
+            --tag "dependency-artifacts-v1-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
