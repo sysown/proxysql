@@ -1046,6 +1046,10 @@ PgSQL_HostGroups_Manager::~PgSQL_HostGroups_Manager() {
 		delete myhgc;
 	}
 	delete MyHostGroups;
+	// Release the last owned snapshots after Monitor and Admin have stopped.
+	delete runtime_pgsql_servers;
+	delete incoming_pgsql_servers_v2;
+	delete pgsql_servers_to_monitor;
 	delete mydb;
 	if (admindb) {
 		delete admindb;
@@ -2658,7 +2662,7 @@ void PgSQL_SrvConnList::get_random_MyConn_inner_search(unsigned int start, unsig
 	}
 }
 
-PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, bool ff) {
+PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, bool ff, PgSQL_Pool_Acquire_Mode mode) {
 	PgSQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int conn_found_idx = 0;
@@ -2687,6 +2691,21 @@ PgSQL_Connection * PgSQL_SrvConnList::get_random_MyConn(PgSQL_Session *sess, boo
 			needs_warming = true;
 		}
 	}
+    if (mode == PgSQL_Pool_Acquire_Mode::EstablishedOnly) {
+        // Ordinary acquisition must grow the pool before speculation reuses it.
+        if (needs_warming) return nullptr;
+        if (l && !ff && sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
+            auto *client_conn = sess->client_myds->myconn;
+            get_random_MyConn_inner_search(0, l, conn_found_idx, connection_quality_level,
+                                          number_of_matching_session_variables, client_conn);
+            if (connection_quality_level >= 2) {
+                auto *candidate = static_cast<PgSQL_Connection*>(conns->index(conn_found_idx));
+                if (candidate->fd >= 0 && candidate->is_connected() && candidate->async_state_machine == ASYNC_IDLE)
+                    return static_cast<PgSQL_Connection*>(conns->remove_index_fast(conn_found_idx));
+            }
+        }
+        return nullptr;
+    }
 	if (l && ff==false && needs_warming==false) {
 		i = rand_fast() % l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
@@ -2843,7 +2862,7 @@ void PgSQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
-PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, PgSQL_Pool_Acquire_Mode mode) {
 	PgSQL_Connection * conn=NULL;
 	wrlock();
 	status.pgconnpoll_get++;
@@ -2854,7 +2873,7 @@ PgSQL_Connection * PgSQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 #endif // TEST_AURORA
 	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a PgSQL_SrvC exists. If not, we return NULL = no targets
-		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
+		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff, mode);
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
 			status.pgconnpoll_get_ok++;
@@ -4730,6 +4749,9 @@ bool PgSQL_HostGroups_Manager::reconcile_server_desired_set(
 	}
 	const unsigned long long started_at = monotonic_time();
 	proxy_info("Generating runtime pgsql servers records only.\n");
+	// The caller's protocol lock keeps claims stable. Read them before the HGM
+	// lock so the plugin-manager lifetime gate is never acquired beneath it.
+	const auto claims = proxysql_active_server_hostgroup_claims(desired_set.protocol);
 	wrlock();
 	bool result = false;
 	try {
@@ -4742,7 +4764,7 @@ bool PgSQL_HostGroups_Manager::reconcile_server_desired_set(
 			ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
 				ProxySQL_ServerProtocol::pgsql, desired_set.generation, *current_rows);
 			std::vector<ProxySQL_ServerRow> merged;
-			if (proxysql_merge_server_desired_set(current, desired_set, merged, error)) {
+			if (proxysql_merge_server_desired_set(current, desired_set, claims, merged, error)) {
 				std::unique_ptr<SQLite3_result> incoming = pgsql_desired_rows(merged);
 				servers_add(incoming.get());
 				result = commit_locked({}, {}, true, false);

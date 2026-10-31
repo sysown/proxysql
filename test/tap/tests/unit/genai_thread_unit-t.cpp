@@ -31,6 +31,80 @@
 #include <set>
 #include <cstdlib>
 
+#ifdef __linux__
+#include <csignal>
+#include <sys/wait.h>
+
+// GNU ld wraps the real condition-variable boundary, allowing shutdown to
+// run after the worker checked its predicate but before it begins waiting.
+// No requests or external AI service are needed to reproduce the lost wakeup.
+static std::atomic<bool> shutdown_probe_armed { false };
+static std::atomic<bool> shutdown_wait_window { false };
+static std::atomic<bool> shutdown_broadcast_completed { false };
+static std::atomic<std::condition_variable*> shutdown_condition { nullptr };
+static std::atomic<pthread_mutex_t*> shutdown_mutex { nullptr };
+static std::atomic<bool> shutdown_mutex_attempted { false };
+
+extern "C" int __real_pthread_mutex_lock(pthread_mutex_t*);
+extern "C" int __wrap_pthread_mutex_lock(pthread_mutex_t* mutex) {
+	if (mutex == shutdown_mutex.load()) {
+		shutdown_mutex_attempted.store(true);
+	}
+	return __real_pthread_mutex_lock(mutex);
+}
+
+extern "C" void real_condition_wait(std::condition_variable*, std::unique_lock<std::mutex>&)
+	asm("__real__ZNSt18condition_variable4waitERSt11unique_lockISt5mutexE");
+extern "C" void real_condition_broadcast(std::condition_variable*)
+	asm("__real__ZNSt18condition_variable10notify_allEv");
+extern "C" void wrap_condition_wait(std::condition_variable*, std::unique_lock<std::mutex>&)
+	asm("__wrap__ZNSt18condition_variable4waitERSt11unique_lockISt5mutexE");
+extern "C" void wrap_condition_broadcast(std::condition_variable*)
+	asm("__wrap__ZNSt18condition_variable10notify_allEv");
+
+extern "C" void wrap_condition_wait(std::condition_variable* condition, std::unique_lock<std::mutex>& lock) {
+	if (shutdown_probe_armed.exchange(false)) {
+		shutdown_condition.store(condition);
+		shutdown_mutex.store(lock.mutex()->native_handle());
+		shutdown_wait_window.store(true);
+		// Correct shutdown blocks on this mutex before notifying; regressed
+		// shutdown completes its broadcast while we still own the mutex.
+		while (!shutdown_broadcast_completed.load() && !shutdown_mutex_attempted.load()) {
+			std::this_thread::yield();
+		}
+	}
+	real_condition_wait(condition, lock);
+}
+
+extern "C" void wrap_condition_broadcast(std::condition_variable* condition) {
+	real_condition_broadcast(condition);
+	if (condition == shutdown_condition.load()) {
+		shutdown_broadcast_completed.store(true);
+	}
+}
+
+static void test_shutdown_during_worker_wait() {
+	const pid_t child = fork();
+	if (child == 0) {
+		// Bound a regressed join locally, including when run outside the suite.
+		alarm(5);
+		GenAI_Threads_Handler handler;
+		shutdown_probe_armed.store(true);
+		handler.init(1);
+		while (!shutdown_wait_window.load()) {
+			std::this_thread::yield();
+		}
+		handler.shutdown();
+		handler.shutdown(); // The lifecycle callback is idempotent.
+		_exit(0);
+	}
+	int status = 0;
+	const bool completed = child > 0 && waitpid(child, &status, 0) == child;
+	ok(completed && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+		"shutdown wakes a worker between its predicate check and condition wait (status=%d)", status);
+}
+#endif
+
 // Helper: get_variable wrapper that manages memory
 static std::string get_var(GenAI_Threads_Handler& h, const char* name) {
 	char* val = h.get_variable((char*)name);
@@ -778,7 +852,12 @@ static void test_status_variables_defaults() {
 // ============================================================
 
 int main() {
+	#ifdef __linux__
+	plan(194);
+	test_shutdown_during_worker_wait();
+#else
 	plan(193);
+#endif
 	test_init_minimal();
 
 	test_constructor_defaults();            // 31 tests

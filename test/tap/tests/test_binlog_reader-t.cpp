@@ -187,6 +187,23 @@ int reset_hostgroups_stats(MYSQL* proxysql_admin) {
 	return EXIT_SUCCESS;
 }
 
+static void log_gtid_read_failure(MYSQL* admin, uint32_t completed_updates, const string& query) {
+	diag("GTID read failed after %u/%u updates of %u rows; writer=%u reader=%u query=%s",
+		completed_updates, NUM_CHECKS, NUM_ROWS, WHG, RHG, query.c_str());
+	// The tester's later stats dump can already show caught-up replicas.
+	// Record the executed sets and recent monitor results before cleanup.
+	for (const char* probe : {
+		"SELECT hostname,port,gtid_executed,events FROM stats.stats_mysql_gtid_executed ORDER BY hostname,port",
+		"SELECT hostname,port,time_start_us,success_time_us,repl_lag,error "
+		"FROM monitor.mysql_server_replication_lag_log ORDER BY time_start_us DESC LIMIT 20"
+	}) {
+		diag("GTID failure snapshot: %s", probe);
+		if (exec_dql_query(admin, probe, true).first != EXIT_SUCCESS) {
+			diag("Unable to collect GTID failure snapshot: %s", mysql_error(admin));
+		}
+	}
+}
+
 int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 	// Check connections only performing select doesn't contribute to GITD count
 	fprintf(stderr, "\n");
@@ -550,6 +567,7 @@ int main(int argc, char** argv) {
 		rc = mysql_query(proxysql_mysql, s_query.c_str());
 		if (rc != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
+			log_gtid_read_failure(proxysql_admin, i + 1, s_query);
 			goto cleanup;
 		}
 

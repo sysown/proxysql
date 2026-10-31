@@ -79,6 +79,26 @@ class ClickHouseBuild(unittest.TestCase):
                 else:
                     self.assertIn('--whole-archive', output)
 
+    def test_tap_and_core_agree_on_clickhouse_layout(self):
+        # A missing define changes ProxySQL_GlobalVariables::global. The
+        # archive constructor must see the same layout as TAP-owned GloVars.
+        for tier in ((), ("PROXYSQL31=1",), ("PROXYSQL40=1", "PROXYSQL31=1")):
+            for setting in ((), ("PROXYSQLCLICKHOUSE=0",), ("PROXYSQLCLICKHOUSE=1",)):
+                for platform in ("Linux", "Darwin", "FreeBSD"):
+                    options = (*tier, *setting, f"UNAME_S={platform}")
+                    core = run_make(
+                        "lib", "-s", "-f", "Makefile", "-f", "-", "inspect-flags", *options,
+                        input="inspect-flags:\n\t@echo '$(MYCXXFLAGS)'\n")
+                    enabled = '-DPROXYSQLCLICKHOUSE' in core.split()
+                    for variable in ("OPT", "DEBUG_OPT"):
+                        with self.subTest(tier=tier, setting=setting,
+                                          platform=platform, mode=variable):
+                            tap = run_make(
+                                "test/tap/tests", "-s", "-f", "Makefile", "-f", "-",
+                                "inspect-flags", *options,
+                                input=f"inspect-flags:\n\t@echo '$({variable})'\n")
+                            self.assertEqual('-DPROXYSQLCLICKHOUSE' in tap.split(), enabled)
+
 
 if __name__ == '__main__':
     unittest.main()

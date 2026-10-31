@@ -605,6 +605,9 @@ bool PgSQL_Authentication::_reset(enum cred_username_type usertype) {
 bool PgSQL_Authentication::reset() {
 	_reset(USERNAME_BACKEND);
 	_reset(USERNAME_FRONTEND);
+	// Admin credentials occupy their own scope from PROXYSQL31 onward.
+	// Release their accounts before the destructor deletes the pointer array.
+	_reset(USERNAME_ADMIN);
 	return true;
 }
 

@@ -17,6 +17,10 @@ template void Base_Thread::ProcessAllSessions_Partition<MySQL_Session>();
 template void Base_Thread::ProcessAllSessions_Partition<PgSQL_Session>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<MySQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+// Called directly by PostgreSQL's readiness-only scan and housekeeping.
+template void Base_Thread::check_timing_out_session<PgSQL_Thread>(unsigned int);
+template void Base_Thread::check_for_invalid_fd<PgSQL_Thread>(unsigned int);
+template void Base_Thread::read_one_byte_from_pipe<PgSQL_Thread>(unsigned int);
 template void Base_Thread::ProcessAllMyDS_BeforePoll<MySQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_BeforePoll<PgSQL_Thread>();
 template void Base_Thread::register_session(MySQL_Thread*, MySQL_Session*, bool);
@@ -81,9 +85,9 @@ void Base_Thread::register_session(T thr, S _sess, bool up_start) {
 	}
 #ifdef PROXYSQL31
 	if constexpr (std::is_same_v<T, MySQL_Thread*>) {
-		// handled_in_pass is compared with this thread's own pass counter: a
-		// value left by the thread the session comes from (idle threads) could
-		// match it and make process_all_sessions() skip the session.
+		// Clear the retained legacy marker when moving between workers.
+		// Phased dispatch now uses to_process and the continuation queue.
+		// Keep initialization consistent with newly constructed sessions.
 		_sess->handled_in_pass = 0;
 	}
 #endif // PROXYSQL31
@@ -584,6 +588,11 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
  */
 template<typename T, typename DS>
 bool Base_Thread::move_session_to_idle_mysql_sessions(DS * myds, unsigned int n) {
+	// The poll scan admits only frontend streams with an attached session.
+	assert(myds && myds->sess);
+#ifdef PROXYSQL31
+	if (myds->sess->continuation_queued) return false;
+#endif
 	T* thr = static_cast<T*>(this);
 	unsigned long long _tmp_idle = thr->mypolls.last_recv[n] > thr->mypolls.last_sent[n] ? thr->mypolls.last_recv[n] : thr->mypolls.last_sent[n] ;
 

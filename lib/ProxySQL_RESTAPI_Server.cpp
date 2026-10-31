@@ -541,11 +541,6 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	ws->register_resource("/tsdb", tsdb_dashboard_endpoint.get(), true);
 	ws->register_resource("/Chart.bundle.js", tsdb_chart_js_endpoint.get(), true);
 #endif
-	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws.get()) !=0 ) {
-		perror("Thread creation");
-		exit(EXIT_FAILURE);
-	}
-
 	for (const auto& id_endpoint : endpoints) {
 		const std::string& endpoint_route = id_endpoint.first;
 		auto endpoint_fn = id_endpoint.second;
@@ -554,6 +549,12 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 
 		ws->register_resource(endpoint_route, endpoint_res.get(), true);
 		_endpoints.push_back({endpoint_route, std::move(endpoint_res)});
+	}
+
+	// Finish constructing and registering resources before requests can read them.
+	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws.get()) !=0 ) {
+		perror("Thread creation");
+		exit(EXIT_FAILURE);
 	}
 }
 

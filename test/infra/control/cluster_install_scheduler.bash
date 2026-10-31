@@ -36,7 +36,7 @@ SQL
 install_on_host "${PRIMARY}"
 
 # Install on all other nodes
-NUM_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+NUM_NODES=${PROXYSQL_CLUSTER_NODES:-6}
 for ((i = 1; i <= NUM_NODES; i++)); do
     install_on_host "proxy-node${i}.${INFRA_ID}"
 done
