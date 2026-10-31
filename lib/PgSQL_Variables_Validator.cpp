@@ -442,18 +442,60 @@ bool pgsql_variable_validate_client_encoding(const char* value, const params_t* 
 	}
 
 	if (transformed_value) {
-		*transformed_value = strdup(value);
-
-		if (*transformed_value) { // Ensure strdup succeeded
-			char* tmp_val = *transformed_value;
-
-			while (*tmp_val) {
-				*tmp_val = toupper((unsigned char)*tmp_val);
-				tmp_val++;
-			}
-		}
+		// Store the standard name, as PostgreSQL does (check_client_encoding()). The lookup
+		// ignores punctuation, so a value like "'utf-8'" (asyncpg) is valid, and keeping that
+		// spelling put the quotes into the SET sent to the backend. PostgreSQL keeps exactly
+		// "UNICODE" as written, because pre-9.1 JDBC drivers expect to read it back.
+		*transformed_value = strdup(strcmp(value, "UNICODE") == 0 ? value :
+			PgSQL_Connection::encoding_to_char(charset_encoding));
 	}
 
+	return true;
+}
+
+// What follows "INTERVAL", read as PostgreSQL reads it: optional spaces, then one quoted part
+// of letters, digits, "+-:." and spaces ('+02:30', '2 hours'). The part is quoted with ' in
+// "SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE", where the grammar allows only HOUR, MINUTE
+// or HOUR TO MINUTE after it, and with '' in a value sent as a string,
+// SET TimeZone = 'INTERVAL ''+02:30''', where PostgreSQL accepts nothing after it.
+static bool is_interval_literal(const char* p) {
+	while (fast_isspace((unsigned char)*p)) p++;
+	const size_t quotes = (p[0] == '\'' && p[1] == '\'') ? 2 : (p[0] == '\'' ? 1 : 0);
+	if (quotes == 0) return false;
+	p += quotes;
+	for (; *p && *p != '\''; p++) {
+		if (!isalnum((unsigned char)*p) && strchr("+-:. ", *p) == nullptr) return false;
+	}
+	if (strncmp(p, "''", quotes) != 0) return false;
+	p += quotes;
+	if (quotes == 2) return *p == '\0';
+
+	std::string unit;  // the words after the interval, upper-cased, one space between them
+	for (; *p; p++) {
+		if (fast_isspace((unsigned char)*p)) {
+			if (!unit.empty() && unit.back() != ' ') unit += ' ';
+		} else if (isalpha((unsigned char)*p)) {
+			unit += toupper((unsigned char)*p);
+		} else {
+			return false;
+		}
+	}
+	if (!unit.empty() && unit.back() == ' ') unit.pop_back();
+	return unit.empty() || unit == "HOUR" || unit == "MINUTE" || unit == "HOUR TO MINUTE";
+}
+
+// A zone name, a POSIX rule or a number of hours. PostgreSQL decides whether the zone
+// exists; this only refuses what can never be one (quotes, spaces, ';' ...), so the
+// mistake fails where the client makes it, not on a later query when ProxySQL applies it.
+bool pgsql_variable_validate_timezone(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
+	(void)params;
+	(void)session;
+	if (transformed_value) *transformed_value = nullptr;
+	if (value == nullptr || *value == '\0' || strlen(value) > 255) return false;
+	if (strncasecmp(value, "INTERVAL", 8) == 0) return is_interval_literal(value + 8);
+	for (const char* c = value; *c; c++) {
+		if (!isalnum((unsigned char)*c) && strchr("/_-+,.:<>", *c) == nullptr) return false;
+	}
 	return true;
 }
 
@@ -643,6 +685,12 @@ const pgsql_variable_validator pgsql_variable_validator_client_encoding = {
 const pgsql_variable_validator pgsql_variable_validator_search_path = {
 	.type = VARIABLE_TYPE_STRING,
 	.validate = &pgsql_variable_validate_search_path,
+	.params = {}
+};
+
+const pgsql_variable_validator pgsql_variable_validator_timezone = {
+	.type = VARIABLE_TYPE_STRING,
+	.validate = &pgsql_variable_validate_timezone,
 	.params = {}
 };
 

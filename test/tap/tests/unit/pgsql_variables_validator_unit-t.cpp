@@ -3,9 +3,12 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Variables_Validator.h"
+#include "libpq-fe.h"
 
+#include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <string>
 
 // Helper: validate and check transformed value
 static void assert_validates(const pgsql_variable_validator& v, const char* input,
@@ -165,6 +168,35 @@ static void test_client_encoding_valid() {
     assert_validates(pgsql_variable_validator_client_encoding, "UTF8", true, "UTF8", "encoding");
     assert_validates(pgsql_variable_validator_client_encoding, "utf8", true, "UTF8", "encoding");  // uppercased
     assert_validates(pgsql_variable_validator_client_encoding, "LATIN1", true, "LATIN1", "encoding");
+    // Any spelling PostgreSQL accepts is stored as its standard name. asyncpg sends the
+    // quotes as part of the value, and keeping them broke the SET sent to the backend.
+    assert_validates(pgsql_variable_validator_client_encoding, "'utf-8'", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "\"utf8\"", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "utf-8", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "iso88591", true, "LATIN1", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "unicode", true, "UTF8", "encoding");
+    assert_validates(pgsql_variable_validator_client_encoding, "'UNICODE'", true, "UTF8", "encoding");
+    // PostgreSQL keeps exactly "UNICODE" as written, for old JDBC drivers.
+    assert_validates(pgsql_variable_validator_client_encoding, "UNICODE", true, "UNICODE", "encoding");
+}
+
+// pg_encoding_to_char() returns "" past the last encoding id.
+static int count_encodings() {
+    int n = 0;
+    while (*pg_encoding_to_char(n)) n++;
+    return n;
+}
+
+// Every encoding PostgreSQL knows, by its standard name and lower-cased in quotes as asyncpg
+// sends it, must be stored as the standard name.
+static void test_client_encoding_every_encoding(int count) {
+    for (int enc = 0; enc < count; enc++) {
+        const std::string name = pg_encoding_to_char(enc);
+        std::string quoted = "'" + name + "'";
+        std::transform(quoted.begin(), quoted.end(), quoted.begin(), ::tolower);
+        assert_validates(pgsql_variable_validator_client_encoding, name.c_str(), true, name.c_str(), "encoding");
+        assert_validates(pgsql_variable_validator_client_encoding, quoted.c_str(), true, name.c_str(), "encoding");
+    }
 }
 
 static void test_client_encoding_invalid() {
@@ -173,8 +205,56 @@ static void test_client_encoding_invalid() {
     ok(r == false, "encoding: nonexistent encoding rejected");
 }
 
+// ============================================================
+// TimeZone validation
+// ============================================================
+
+static void test_timezone_valid() {
+    const char* names[] = {
+        // zone names
+        "UTC", "utc", "EST", "Europe/Berlin", "America/Argentina/Buenos_Aires", "America/Port-au-Prince", "Etc/GMT+3",
+        // POSIX rules
+        "PST8PDT", "EST5EDT,M3.2.0,M11.1.0", "UTC+3", "<-03>3", "<+0330>-3:30",
+        // hours
+        "-7", "5.5", "1e1",
+        // intervals, as the SET parser passes them on; a quoted SET string keeps '' doubled
+        "INTERVAL '+02:30'", "INTERVAL '-08:00' HOUR TO MINUTE", "interval '1' hour", "INTERVAL ''+02:30''",
+        "INTERVAL '+02:30' minute", "INTERVAL '2 hours'", "INTERVAL '1 hour 30 minutes'", "INTERVAL ''2 hours''",
+        "INTERVAL'1'",
+        // well-formed but unknown to PostgreSQL: only the backend knows its zone list
+        "Invalid/Zone", "PST",
+    };
+    for (const char* name : names) {
+        assert_validates(pgsql_variable_validator_timezone, name, true, nullptr, "timezone");
+    }
+}
+
+static void test_timezone_invalid() {
+    const std::string too_long(256, 'A');
+    const char* values[] = {
+        "'UTC'", "America/New York", "UTC\t", "UTC;", "", too_long.c_str(),
+        "INTERVAL '1''2'", "INTERVAL '1'; x", "INTERVAL '1",
+        // the grammar allows only HOUR, MINUTE or HOUR TO MINUTE after the interval
+        "INTERVAL '+02:30' DAY", "INTERVAL '+02:30' FOO", "INTERVAL '1' HOUR TO SECOND",
+        // as a string value, PostgreSQL accepts nothing after the interval
+        "INTERVAL ''-08:00'' HOUR TO MINUTE", "INTERVAL ''1'",
+        // PostgreSQL reads any value that starts with "interval" as the interval form
+        "INTERVAL+3",
+        // PostgreSQL accepts these two, but no real client sends them
+        " 5", "5 ",
+    };
+    for (const char* value : values) {
+        assert_validates(pgsql_variable_validator_timezone, value, false, nullptr, "timezone");
+    }
+}
+
 int main() {
-    plan(75);
+    const int encodings = count_encodings();
+    if (encodings == 0) {
+        BAIL_OUT("pg_encoding_to_char() returned no encodings");
+    }
+    // Include the 43 TimeZone checks alongside the dynamic encoding checks.
+    plan(132 + 4 * encodings);
     test_init_minimal();
 
     test_bool_true_values();                // 12 (6 inputs x 2 assertions each)
@@ -193,8 +273,11 @@ int main() {
     test_search_path_valid();               // 4 (2 inputs x 2)
     test_search_path_quoted();              // 2
     test_search_path_invalid();             // 1
-    test_client_encoding_valid();           // 6 (3 inputs x 2)
+    test_client_encoding_valid();           // 20 (10 inputs x 2)
+    test_client_encoding_every_encoding(encodings); // 4 per encoding (2 spellings x 2)
     test_client_encoding_invalid();         // 1
+    test_timezone_valid();                  // 26 (validate only)
+    test_timezone_invalid();                // 17
 
     // Note: assert_validates calls ok() once for validate result,
     // and once more for transform comparison when expected_transformed != nullptr.

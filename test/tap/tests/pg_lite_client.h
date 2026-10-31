@@ -141,6 +141,8 @@ public:
     
     void disconnect();
     bool isConnected() const;
+    // Startup "options" for the next connect(), e.g. "-c work_mem=4MB".
+    void setOptions(const std::string& options) { options_ = options; }
     inline int getSocket() const { return sock_; }
     inline int getLastAuthType() const { return last_auth_type_; }
 
@@ -212,6 +214,16 @@ public:
     void closePortal(const std::string& portalName, bool send_sync);
     void closeStatement(const std::string& stmtName, bool send_sync);
     void sendSync();
+    // Flush ('H'): asks for the replies so far without ending the extended-query group.
+    void sendFlush();
+    // Reads whole messages until nothing arrives for quiet_ms. A closed or broken socket throws
+    // instead of counting as quiet, so a dropped connection can never pass for "no reply".
+    std::vector<std::pair<char, std::vector<uint8_t>>> readUntilQuiet(int quiet_ms);
+    // Between these two calls every message is held and then sent in one write, as a client that
+    // pipelines several messages in one TCP segment would. A batch whose write failed is dropped here,
+    // or it would go out again with the next one.
+    void beginBuffering() { outbuf_.clear(); buffering_ = true; }
+    void endBuffering();
     void waitForMessage(char expectedType, const std::string& errorContext, bool wait_for_ready);
     void consumeInputUntilReady();
     void readMessage(char& type, std::vector<uint8_t>& buffer);
@@ -225,6 +237,9 @@ private:
 	int timeout_ms_ = 0;
     std::string user_;
     std::string dbname_;
+    std::string options_;
+    bool buffering_ = false;
+    std::vector<uint8_t> outbuf_;
     int last_auth_type_ = 0;
 
     // Persisted stepwise-SASL state between saslBegin() and saslFinish() (see the two-phase

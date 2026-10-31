@@ -35,6 +35,15 @@ class PgSQL_Backend_Protocol;
 // This bit belonged to STATUS_PGSQL_CONNECTION_HAS_WARNINGS, which was never implemented.
 #define STATUS_PGSQL_CONNECTION_LISTEN               0x00001000
 #define STATUS_PGSQL_CONNECTION_HOLD_CURSOR          0x00002000
+// State that outlives a transaction and lives only in the backend session, so it dies with
+// the connection: session advisory locks, LISTEN, temp tables and sequences, SQL PREPAREs,
+// WITH HOLD cursors and untracked SETs. Left out: the transaction-scoped flags (LOCK_TABLES,
+// ADVISORY_XACT_LOCK, HAS_SAVEPOINT), which a rollback ends anyway, and NO_MULTIPLEX, which a
+// multiplex=0 rule sets as a "do not share this connection" hint and says nothing about state.
+#define STATUS_PGSQL_CONNECTION_SESSION_STATE (STATUS_PGSQL_CONNECTION_USER_VARIABLE | \
+	STATUS_PGSQL_CONNECTION_PREPARED_STATEMENT | STATUS_PGSQL_CONNECTION_TEMPORARY_TABLE | \
+	STATUS_PGSQL_CONNECTION_ADVISORY_LOCK | STATUS_PGSQL_CONNECTION_HAS_SEQUENCES | \
+	STATUS_PGSQL_CONNECTION_LISTEN | STATUS_PGSQL_CONNECTION_HOLD_CURSOR)
 
 
 enum PgSQL_Param_Name {
@@ -373,6 +382,12 @@ public:
      */
     void reset_session_cont(short event);
 
+    // Idle-connection ping: send an empty query and wait for its ReadyForQuery.
+    // Neither prints anything; a failure only records the error, which the
+    // session logs as the one line for that connection.
+    void ping_start();
+    void ping_cont(short event);
+
     /**
      * @brief Start a resynchronization attempt for the current backend connection.
      *
@@ -516,6 +531,11 @@ public:
 
 	bool reset_session_in_txn = false;
 	bool reset_session_in_pipeline = false;
+	// The reset sends ROLLBACK only and never DISCARD ALL: it ends the transaction of a poisoned
+	// session on a backend that must keep its session state (see end_poisoned_transaction()).
+	bool reset_session_rollback_only = false;
+	// That rollback is still owed: the session starts it as soon as it is idle.
+	bool rollback_pending = false;
 
 	PGresult* get_result();
 	void next_multi_statement_result(PGresult* result);
@@ -649,6 +669,9 @@ public:
 	// Whether the backend has not finished with this connection; callers use it to decide if the
 	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and pgsql_conn is
 	// always NULL there, so without this branch every one of those guards was dead.
+	// libpq refuses a simple Query in pipeline mode. Leaving it sends nothing and commits nothing: the
+	// backend keeps the transaction the extended messages opened, and the Query joins it. Native: no-op.
+	bool leave_pipeline_mode();
 	bool is_pipeline_active() {
 		if (native_mode) return native_unsynced_work;
 		return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF);
@@ -673,6 +696,8 @@ public:
 	void set_status(bool set, uint32_t status_flag);
 	bool get_status(uint32_t status_flag);
 	bool MultiplexDisabled(bool check_delay_token = true);
+	// Whether the connection holds state that only lives in the backend session and so dies with it.
+	bool holds_session_state() const { return (status_flags & STATUS_PGSQL_CONNECTION_SESSION_STATE) != 0; }
 
 	unsigned int reorder_dynamic_variables_idx();
 	unsigned int number_of_matching_session_variables(const PgSQL_Connection* client_conn, unsigned int& not_matching);
@@ -1002,6 +1027,9 @@ public:
 	// down, so the connection is classified non-reusable instead of being pooled.
 	// See the definition in PgSQL_Connection.cpp for why the teardown is required.
 	void native_result_fatal(const char* code, const char* message);
+	// The backend closed while a reply was expected. native_result_fatal() with the
+	// FATAL the backend sent just before closing, if any, as the reason.
+	void native_result_backend_closed();
 	// A post-connect send() of `what` (e.g. "send(Query)") failed: 08006 with errno's text,
 	// then native_result_fatal(). Must be called right after native_flush_outbuf() returned
 	// false, before anything else can overwrite errno.
@@ -1061,6 +1089,9 @@ public:
 	bool is_client_connection; // true if this is a client connection, false if it is a server connection
 	bool exit_pipeline_mode; // true if it is safe to exit pipeline mode
 	bool resync_failed; // true if the last resync attempt failed
+	// The resync carries the client's own Sync: its reply is kept for the client, and an error from
+	// the backend (a commit that fails) is reported like any query error, not as a broken connection.
+	bool resync_relay = false;
 
 	PgSQL_STMT_Local* local_stmts;
 	PgSQL_SrvC *parent;

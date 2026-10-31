@@ -951,9 +951,9 @@ static ResyncProbe runLocallyClosedSyncFrame(PGconn* admin, PGconn* be_db, const
 			if (type == PgConnection::READY_FOR_QUERY) break;
 		}
 		r.completed = !errored;
-		// Polled, not a single check: the client's ReadyForQuery is sent as part of the local
-		// Close answer before the backend resync round-trip even starts, so the write's commit
-		// lands a little later (still inside the try, so `c`'s session is still alive).
+		// Polled, not a single check: the row only becomes visible to another connection once the
+		// commit is done, and a reader can see that a moment after the client's ReadyForQuery
+		// (still inside the try, so `c`'s session is still alive).
 		const auto row_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 		while (std::chrono::steady_clock::now() < row_deadline) {
 			if (insertVisible(be_db, marker)) { r.row_visible = true; break; }
@@ -1095,8 +1095,57 @@ static ResyncFailureProbe runResyncFailure(PGconn* admin, PGconn* be_db, const s
 	return r;
 }
 
+// The client's own frame ends in a message ProxySQL answers itself (a statement Close), after an
+// INSERT that breaks a foreign key PostgreSQL only checks at commit. The commit therefore fails at
+// the frame's Sync. PostgreSQL itself answers '1 2 C 3 E(23503) Z(I)': one ReadyForQuery, after the
+// error, and the connection stays usable. The client must get exactly that, in every backend mode,
+// and the row must not exist.
+struct DeferredFkProbe {
+	std::string replies;   // the frame's reply types
+	std::string followup;  // the next simple query on the same connection
+	long rows = -1;        // rows the frame left in the child table
+};
+
+static std::string replyTokens(PgConnection& c) {
+	std::string out;
+	for (const auto& m : c.readUntilQuiet(500)) {
+		std::string t;
+		if (m.first == 'S' || m.first == 'N') continue;
+		if (m.first == 'Z') t = std::string("Z(") + (m.second.empty() ? '?' : (char)m.second[0]) + ")";
+		else if (m.first == 'E') t = "E(" + errorSqlstate(m.second) + ")";
+		else if (m.first == 'C') t = "C(" + std::string(m.second.begin(), m.second.empty() ? m.second.end() : m.second.end() - 1) + ")";
+		else t = std::string(1, m.first);
+		out += (out.empty() ? "" : " ") + t;
+	}
+	return out;
+}
+
+static DeferredFkProbe runDeferredFkCommitFrame(PGconn* be_db, const std::string& marker, bool unbatched) {
+	DeferredFkProbe p;
+	try {
+		PgConnection c(5000);
+		// An untracked startup option keeps the session's first frame one message at a time.
+		if (unbatched) c.setOptions("-c work_mem=4MB");
+		c.connect(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_username, cl.pgsql_password);
+		const std::string stmt = "orphsync_fk_" + marker;
+		c.prepareStatement(stmt, "INSERT INTO orphsync_fk_child (pid, v) VALUES (42, '" + marker + "')", false);
+		c.bindStatement(stmt, "", {}, {}, false);
+		c.executePortal("", 0, false);
+		c.closeStatement(stmt, false);
+		c.sendSync();
+		p.replies = replyTokens(c);
+		c.sendQuery("SELECT 1");
+		p.followup = replyTokens(c);
+	} catch (const PgException& e) {
+		p.replies += std::string(" CLOSED:") + e.what();
+	}
+	const std::string n = execScalar(be_db, "SELECT count(*) FROM orphsync_fk_child WHERE v = '" + marker + "'");
+	p.rows = n.empty() ? -1 : atol(n.c_str());
+	return p;
+}
+
 int main(int, char**) {
-	plan(93);
+	plan(102);
 	if (cl.getEnv()) return exit_status();
 
 	auto admin = adminConn();
@@ -1142,6 +1191,13 @@ int main(int, char**) {
 		"EXECUTE FUNCTION orphsync_selfkill()"))
 		BAIL_OUT("could not create the resync-failure trigger");
 	exec(be_db.get(), std::string("GRANT ALL ON orphsync_t TO ") + cl.pgsql_username);
+	exec(be_db.get(), "DROP TABLE IF EXISTS orphsync_fk_child");
+	exec(be_db.get(), "DROP TABLE IF EXISTS orphsync_fk_parent");
+	if (!exec(be_db.get(), "CREATE TABLE orphsync_fk_parent (id int PRIMARY KEY)")
+	    || !exec(be_db.get(), "CREATE TABLE orphsync_fk_child (pid int REFERENCES orphsync_fk_parent(id) "
+		"DEFERRABLE INITIALLY DEFERRED, v text)"))
+		BAIL_OUT("could not create the deferred foreign key probe");
+	exec(be_db.get(), std::string("GRANT ALL ON orphsync_fk_parent, orphsync_fk_child TO ") + cl.pgsql_username);
 	exec(be_db.get(), std::string("GRANT USAGE ON SEQUENCE orphsync_seq TO ") + cl.pgsql_username);
 
 	// --- libpq path: the control. --------------------------------------------------------------
@@ -1450,15 +1506,11 @@ int main(int, char**) {
 		const std::string m = base + "_resyncfail_" + label;
 		const ResyncFailureProbe r = runResyncFailure(admin.get(), be_db.get(), m);
 		diag("%s resync-failure frame: %s", label, r.detail.c_str());
-		if (native) {
-			// The frame goes to the backend as one batch, its own Sync included: the commit fails
-			// there and the client learns it, as it would from PostgreSQL itself.
-			ok(r.told_failure, "%s: the client is told its frame failed -- its Sync goes out with the "
-			   "batch, so it is never told a write that was lost succeeded [%s]", label, r.detail.c_str());
-		} else {
-			ok(r.client_ok, "%s: the client's own frame still completes cleanly -- the Close is "
-			   "answered locally regardless of the backend's fate [%s]", label, r.detail.c_str());
-		}
+		// Native sends the frame as one batch with its Sync; libpq answers the Close itself and then
+		// sends the client's Sync to the backend, holding the ReadyForQuery until its reply. Either
+		// way the commit's failure reaches the client, as it would from PostgreSQL itself.
+		ok(r.told_failure, "%s: the client is told its frame failed -- it is never told a write "
+		   "that was lost succeeded [%s]", label, r.detail.c_str());
 		ok(r.insert_ran, "%s: the Execute really ran on the backend before it was killed -- "
 		   "without this the rest of this probe would prove nothing [%s]", label, r.detail.c_str());
 		ok(r.kill_fired, "%s: the resync's Sync reached the backend and killed it -- the commit "
@@ -1477,6 +1529,22 @@ int main(int, char**) {
 		   label, r.detail.c_str());
 	}
 
+	// --- a commit that fails at the frame's Sync, after a locally answered Close ----------------
+	for (int mode = 0; mode <= 2; mode++) {
+		const char* label = mode == 0 ? "libpq" : (mode == 1 ? "native" : "native-unbatched");
+		setNativeMode(admin.get(), mode != 0);
+		const std::string m = base + "_fk_" + std::to_string(mode);
+		const DeferredFkProbe p = runDeferredFkCommitFrame(be_db.get(), m, mode == 2);
+		ok(p.replies == "1 2 C(INSERT 0 1) 3 E(23503) Z(I)",
+		   "%s: a commit failing at the Sync after a locally answered Close reaches the client, with one "
+		   "ReadyForQuery after the error [got '%s']", label, p.replies.c_str());
+		ok(p.followup == "T D C(SELECT 1) Z(I)",
+		   "%s: and the same connection serves the next query [got '%s']", label, p.followup.c_str());
+		ok(p.rows == 0, "%s: and the row is not there [rows=%ld]", label, p.rows);
+	}
+
+	exec(be_db.get(), "DROP TABLE IF EXISTS orphsync_fk_child");
+	exec(be_db.get(), "DROP TABLE IF EXISTS orphsync_fk_parent");
 	exec(be_db.get(), "DROP TABLE IF EXISTS orphsync_t");
 	exec(be_db.get(), "DROP SEQUENCE IF EXISTS orphsync_seq");
 	exec(be_db.get(), "DROP SEQUENCE IF EXISTS orphsync_kill_seq");
