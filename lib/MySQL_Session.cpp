@@ -5745,6 +5745,23 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 		return 0;
 	}
 
+	// Replication owns the connection after this handoff. Further queued client
+	// commands violate that protocol and cannot be replayed as normal traffic.
+	// Close before the handoff requeues this packet and changes session state.
+	if (client_myds->PSarrayIN->len) {
+		static std::atomic<time_t> last_warning{0};
+		const time_t now = time(NULL);
+		time_t previous = last_warning.load(std::memory_order_relaxed);
+		if (now - previous >= 10 && last_warning.compare_exchange_strong(
+			previous, now, std::memory_order_relaxed)) {
+			proxy_warning("Closing client with pipelined replication command %u from %s:%d\n",
+				(unsigned int)c, client_myds->addr.addr ? client_myds->addr.addr : "", client_myds->addr.port);
+		}
+		l_free(pkt.size, pkt.ptr);
+		pkt = {};
+		return -1;
+	}
+
 	// In this switch we handle commands that download binlog events from MySQL
 	// servers. For these commands a lot of the features provided by ProxySQL
 	// aren't useful, like multiplexing, query parsing, etc. For this reason,
