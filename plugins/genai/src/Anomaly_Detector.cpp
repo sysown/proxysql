@@ -92,6 +92,7 @@ Anomaly_Detector::Anomaly_Detector() : vector_db(NULL) {
 
 Anomaly_Detector::~Anomaly_Detector() {
 	close();
+	pthread_mutex_destroy(&user_stats_mutex);
 }
 
 // ============================================================================
@@ -119,10 +120,9 @@ int Anomaly_Detector::init() {
  * @brief Close and cleanup resources
  */
 void Anomaly_Detector::close() {
-	// Clear user statistics
+	// close() may be called explicitly before destruction, or repeatedly.
+	// Keep the statistics mutex alive for the entire object's lifetime.
 	clear_user_statistics();
-
-	pthread_mutex_destroy(&user_stats_mutex);
 
 	proxy_info("Anomaly: Anomaly Detector closed\n");
 }

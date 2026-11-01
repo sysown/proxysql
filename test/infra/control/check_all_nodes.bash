@@ -8,7 +8,7 @@
 #   proxy-node1: 6042
 #   proxy-node2: 6052
 #   ...
-#   proxy-node9: 6122
+#   proxy-node6: 6092 (default)
 
 TABLES=(mysql_servers mysql_users mysql_query_rules mysql_query_rules_fast_routing global_variables proxysql_servers mysql_galera_hostgroups mysql_group_replication_hostgroups mysql_replication_hostgroups mysql_hostgroup_attributes)
 
@@ -18,8 +18,12 @@ for i in ${!TABLES[@]}; do
     ALL_TABLES+=("runtime_"${TABLES[$i]})
 done
 
-# Primary + up to 9 nodes, all on 127.0.0.1 with different ports
-PORTS="6032 6042 6052 6062 6072 6082 6092 6102 6112 6122"
+# Poll exactly the configured peers, including explicit size/disabled overrides.
+NUM_NODES=${PROXYSQL_CLUSTER_NODES:-6}
+PORTS="6032"
+for ((node = 1; node <= NUM_NODES; node++)); do
+    PORTS="${PORTS} $((6032 + node * 10))"
+done
 
 for port in ${PORTS}; do
     for i in ${!ALL_TABLES[@]}; do

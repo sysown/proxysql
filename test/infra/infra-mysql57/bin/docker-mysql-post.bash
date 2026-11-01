@@ -16,11 +16,10 @@ for i in 1 2 3; do
     CONTAINER="${COMPOSE_PROJECT}-${SERVICE}-1"
     echo -n "Waiting for container '${CONTAINER}' ..."
     
-    MAX_WAIT=120
+    # Allow the same cold-start budget as the dbdeployer infrastructures.
+    MAX_WAIT=600
     COUNT=0
     PASS_OPT=""
-    MAX_WAIT=120
-    COUNT=0
     while true; do
         if [ $COUNT -ge $MAX_WAIT ]; then echo " TIMEOUT"; docker logs "${CONTAINER}" | tail -n 20; exit 1; fi
         STATE=$(docker inspect -f '{{.State.Running}}' "${CONTAINER}" 2>/dev/null || echo "false")

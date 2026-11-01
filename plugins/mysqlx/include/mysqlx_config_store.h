@@ -12,6 +12,10 @@
 
 class SQLite3DB;
 
+// Listener binds require host:port (or [host]:port) with an explicit decimal
+// port in 1..65535. Invalid input must never select a default listener port.
+bool mysqlx_parse_bind_address(const std::string& bind, std::string& host, int& port);
+
 enum class MysqlxBackendAuthMode : uint8_t {
 	mapped = 0,
 	service_account = 1,

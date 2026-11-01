@@ -7,6 +7,9 @@ SSL_LDIR := $(SSL_PATH)
 LIB_SSL_PATH := $(SSL_LDIR)/libssl.a
 LIB_CRYPTO_PATH := $(SSL_LDIR)/libcrypto.a
 OPENSSL_STATIC_LIBS := $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
+# Configure probes and helper executables that consume instrumented static
+# OpenSSL need its sanitizer runtime, even when their own sources are ordinary.
+OPENSSL_SANITIZER_LDFLAGS := $(if $(filter 1,$(WITHTSAN)),-fsanitize=thread)
 
 ifeq ($(UNAME_S),Darwin)
 EXECUTABLE_EXPORT_FLAGS := -Wl,-export_dynamic

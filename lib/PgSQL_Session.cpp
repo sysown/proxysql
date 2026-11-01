@@ -502,6 +502,7 @@ void PgSQL_Session::reset() {
 PgSQL_Session::~PgSQL_Session() {
 #ifdef PROXYSQL31
 	if (thread) {
+		thread->cancel_session_continuation(this);
 		thread->leave_waiter(this);
 	}
 #endif // PROXYSQL31
@@ -1554,6 +1555,12 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 	// 'pgsql_thread___connect_retries_delay'. In case of 'async_connect' failing, 'pause_until' should also
 	// be set to 'pgsql_thread___connect_retries_delay'. Complementary NOTE below.
 	if (mybe->server_myds->myconn == NULL) {
+#ifdef PROXYSQL31
+		if (established_checkout_unavailable) {
+			*_rc = 1;
+			return false;
+		}
+#endif
 		pause_until = thread->curtime + pgsql_thread___connect_retries_delay * 1000;
 		*_rc = 1;
 		return false;
@@ -3168,7 +3175,45 @@ static bool can_hold_client_output(bool extended_query, PgSQL_Data_Stream* clien
 		client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN <= overflow_safe_multiply<4, unsigned int>(pgsql_thread___threshold_resultset_size);
 }
 
-int PgSQL_Session::handler() {
+#ifdef PROXYSQL31
+PgSQL_Session_Run_Result PgSQL_Session::run_step(PgSQL_Pool_Acquire_Mode mode, bool io_only) {
+	pool_acquire_mode = mode;
+	established_checkout_unavailable = false;
+	scheduler_managed = true;
+	yield_after_release = false;
+	to_process = 1;
+	const int rc = handler(io_only);
+	scheduler_managed = false;
+	pool_acquire_mode = PgSQL_Pool_Acquire_Mode::Normal;
+	if (rc == -1 || !healthy || killed) {
+		healthy = false;
+		to_process = 0;
+		return PgSQL_Session_Run_Result::Close;
+	}
+	if (rc == 1) {
+		to_process = 0;
+		return PgSQL_Session_Run_Result::Runnable;
+	}
+	if (established_checkout_unavailable) {
+		// Normal scheduling can retry later in this pass without undoing a
+		// speculative admission to the waiter list or an artificial pause.
+		to_process = 1;
+		return PgSQL_Session_Run_Result::EstablishedUnavailable;
+	}
+	to_process = 0;
+	return waiter_node.session ? PgSQL_Session_Run_Result::WaitBackend : PgSQL_Session_Run_Result::WaitIO;
+}
+void PgSQL_Session::note_backend_release(unsigned int hostgroup) {
+	if (scheduler_managed && thread && thread->waiter_lists.head(hostgroup))
+		yield_after_release = true;
+}
+#endif
+
+#ifdef PROXYSQL31
+int PgSQL_Session::handler(bool io_only) try {
+#else
+int PgSQL_Session::handler() try {
+#endif
 #if ENABLE_TIMER
 	Timer timer(thread->Timers.Sessions_Handlers);
 #endif // ENABLE_TIMER
@@ -3176,6 +3221,22 @@ int PgSQL_Session::handler() {
 	bool wrong_pass = false;
 	bool in_pending_state = false;
 	if (to_process == 0) return 0; // this should be redundant if the called does the same check
+#ifdef PROXYSQL31
+	// Preserve idle-backend error/notification handling before a frontend
+	// request can change the session state. Include pinned non-current backends.
+	if (mybes) {
+		for (unsigned i = 0; i < mybes->len; ++i) {
+			auto *backend = static_cast<PgSQL_Backend*>(mybes->index(i));
+			if (backend->server_myds && backend->server_myds->pending_poll_revents)
+				thread->consume_data_stream_readiness(backend->server_myds);
+			if (!healthy) return -1;
+		}
+	}
+	if (client_myds && client_myds->pending_poll_revents)
+		thread->consume_data_stream_readiness(client_myds);
+	if (!healthy) return -1;
+	if (io_only) return 0;
+#endif
 	if (offline_fatal_pending) {
 		writeout();
 		// Include encrypted bytes retained after a short write. The normal poll
@@ -3590,6 +3651,11 @@ handler_again:
 					query_to_match = digest_text;
 				} else {
 					query_to_match = (char*)CurrentQuery.QueryPointer;
+					// Without a digest, retain the regex for any possible COPY.
+					// Searching only the keyword is conservative across raw SQL
+					// whitespace, comments, and multiple statements.
+					if (run_match && strcasestr(query_to_match, "COPY") == NULL)
+						run_match = false;
 				}
 				if (run_match && copy_cmd_matcher->match(query_to_match, &matched)) {
 
@@ -4088,11 +4154,19 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		return handler_ret;
 	}
 
-	// previously active query has been fully processed and its response has been sent to the client.
-	// At this point, check whether deferred packets from the client exist in PSarrayIN.
-	// If so, control is redirected to get_pkts_from_client() to process them.
+	// Current-request cleanup and its nonblocking output attempt are complete.
+	// Short writes retain their bytes for POLLOUT; they do not split completion
+	// into a separate handler invocation. Only the next buffered command yields.
 	if (status == WAITING_CLIENT_DATA) {
 		if (client_myds->PSarrayIN && client_myds->PSarrayIN->len) {
+#ifdef PROXYSQL31
+			if (scheduler_managed && yield_after_release) {
+				// Let the worker dispatch released capacity to an older waiter
+				// before this client starts another request. Runnable preserves
+				// that buffered work even when no further POLLIN arrives.
+				return 1;
+			}
+#endif
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p client_myds %p . Client PSarrayIN has '%d' deferred packets, redirecting to get_pkts_from_client()\n",
 				client_myds, this, client_myds->PSarrayIN->len);
 			goto __handler_again_get_pkts_from_client;
@@ -4101,6 +4175,18 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 
 	handler_ret = 0;
 	return handler_ret;
+} catch (const PgSQL_Query_Result::AllocationError&) {
+	// A partial backend response cannot be retried or pooled. Teardown must
+	// destroy attached connections even if their last transaction status is idle.
+	healthy = false;
+	for (unsigned int i = 0; mybes && i < mybes->len; ++i) {
+		auto* backend = static_cast<PgSQL_Backend*>(mybes->index(i));
+		if (backend->server_myds && backend->server_myds->myconn)
+			backend->server_myds->myconn->healthy = false;
+	}
+	// Do not allocate an error packet while handling allocation failure.
+	proxy_error("Unable to allocate PostgreSQL result buffer; closing session %p\n", this);
+	return -1;
 }
 // end ::handler()
 
@@ -4187,6 +4273,9 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_myds->DSS = STATE_SSL_INIT;
 			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
+#ifdef PROXYSQL31
+			client_myds->tls13_handshake_complete = false;
+#endif
 			client_myds->ssl = GloVars.get_SSL_new();
 			SSL_set_fd(client_myds->ssl, client_myds->fd);
 			SSL_set_accept_state(client_myds->ssl);
@@ -5634,6 +5723,12 @@ __exit_set_destination_hostgroup:
 void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 	// Get a MySQL Connection
 
+	const auto acquire_mode =
+#ifdef PROXYSQL31
+		pool_acquire_mode;
+#else
+		PgSQL_Pool_Acquire_Mode::Normal;
+#endif
 	PgSQL_Connection* mc = NULL;
 	char uuid[64];
 	uint64_t trxid = 0;
@@ -5677,7 +5772,7 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				last_pool_gtid = true;
 				last_pool_max_lag_ms = -1;
 #endif // PROXYSQL31
-				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
+				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1, acquire_mode);
 			}
 			else {
 #ifdef PROXYSQL31
@@ -5685,8 +5780,14 @@ void PgSQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				last_pool_gtid = false;
 				last_pool_max_lag_ms = (int)qpo->max_lag_ms;
 #endif // PROXYSQL31
-				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
+				mc = PgHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms, acquire_mode);
 			}
+#ifdef PROXYSQL31
+			if (!mc && acquire_mode == PgSQL_Pool_Acquire_Mode::EstablishedOnly) {
+				established_checkout_unavailable = true;
+				return;
+			}
+#endif
 			thread->note_pool_attempt(mc == NULL);
 #ifdef STRESSTEST_POOL
 			if (mc && (loops < NUM_SLOW_LOOPS - 1)) {

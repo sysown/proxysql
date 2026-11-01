@@ -49,7 +49,13 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 #endif
 
 std::string select_query = {
-	"SELECT /*+ MAX_EXECUTION_TIME(10) */ COUNT(*) FROM test.sbtest1 a JOIN test.sbtest1 b WHERE (a.id+b.id)%2"
+	// A small join can finish before the timer, or see no rows on a lagging
+	// replica. Constant UNION rows avoid replicated fixture data and force a
+	// controlled wait after metadata. Use two rows: MySQL 5.7 folds a single
+	// derived row and reports an interrupted SLEEP as a successful value.
+	// Keep SLEEP as the predicate, rather than a comparison or SUM() argument.
+	"SELECT /*+ MAX_EXECUTION_TIME(10) */ COUNT(*) "
+	"FROM (SELECT 1 AS x UNION ALL SELECT 2) AS fixture WHERE SLEEP(1)"
 };
 
 using std::string;
@@ -83,11 +89,6 @@ int main(int argc, char** argv) {
 
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
-		return exit_status();
-	}
-
-	if (create_table_test_sbtest1(1000,mysql)) {
-		fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);
 		return exit_status();
 	}
 

@@ -5,6 +5,14 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 DEPS_PATH := $(PROXYSQL_PATH)/deps
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
+include $(PROXYSQL_PATH)/common_mk/tsan_dependencies.mk
+
+# MySQL 5.7 has no native TSAN option, so supply its runtime at link time.
+# MySQL 8.4's native option also handles its package flags and build helpers.
+ifeq ($(WITHTSAN),1)
+MYSQL57_OPENSSL_RUNTIME_FLAGS := -DCMAKE_EXE_LINKER_FLAGS="$(LDFLAGS) $(OPENSSL_SANITIZER_LDFLAGS)"
+MYSQL84_TSAN_CMAKE_FLAGS := -DWITH_TSAN=ON
+endif
 
 CMAKE3 := $(shell command -v cmake3 2>/dev/null || command -v cmake 2>/dev/null)
 OPENSSL_BUILD_STAMP_PATH := $(SSL_PATH)/.proxysql-build-complete
@@ -89,13 +97,13 @@ ifeq ($(UNAME_S),Darwin)
 	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 		-DCMAKE_C_FLAGS="-Wno-incompatible-pointer-types" \
 		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" \
-		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$(SSL_PATH) $(MYSQL57_OPENSSL_CMAKE_FLAGS)
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$(SSL_PATH) $(MYSQL57_OPENSSL_CMAKE_FLAGS) $(MYSQL57_OPENSSL_RUNTIME_FLAGS)
 else
 	cd mysql-connector-c && ln -fsT $$(ls -1d mysql-5.7.*/) mysql-connector-c
 	cd mysql-connector-c/mysql-connector-c && $(CMAKE3) . -DWITH_BOOST=./boost \
 		-DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_FLAGS="-Wno-incompatible-pointer-types" \
 		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" \
-		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$(SSL_PATH) $(MYSQL57_OPENSSL_CMAKE_FLAGS)
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DWITH_SSL=$(SSL_PATH) $(MYSQL57_OPENSSL_CMAKE_FLAGS) $(MYSQL57_OPENSSL_RUNTIME_FLAGS)
 endif
 ifeq ($(UNAME_S),Darwin)
 	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} -j1 mysqlclient mysql
@@ -120,12 +128,12 @@ ifeq ($(UNAME_S),Darwin)
 	cd mysql-connector-c-8.4.0/mysql-connector-c && patch -p0 --batch < ../../mysql-8.4.0-clang17.patch
 	cd mysql-connector-c-8.4.0/mysql-connector-c && cmake . -DFORCE_INSOURCE_BUILD=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 		-DWITHOUT_SERVER=ON -DDOWNLOAD_BOOST=1 -DWITH_BOOST=./mysql-server/downloads/ -DWITH_UNIT_TESTS=OFF \
-		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DWITH_SSL=system $(MYSQL84_OPENSSL_CMAKE_FLAGS)
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DWITH_SSL=system $(MYSQL84_OPENSSL_CMAKE_FLAGS) $(MYSQL84_TSAN_CMAKE_FLAGS)
 else
 	cd mysql-connector-c-8.4.0 && ln -fsT $$(ls -1d mysql-8.4.*/) mysql-connector-c
 	cd mysql-connector-c-8.4.0/mysql-connector-c && cmake . -DFORCE_INSOURCE_BUILD=1 -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 		-DWITHOUT_SERVER=ON -DDOWNLOAD_BOOST=1 -DWITH_BOOST=./mysql-server/downloads/ -DWITH_UNIT_TESTS=OFF \
-		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DWITH_SSL=system $(MYSQL84_OPENSSL_CMAKE_FLAGS)
+		-DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DWITH_SSL=system $(MYSQL84_OPENSSL_CMAKE_FLAGS) $(MYSQL84_TSAN_CMAKE_FLAGS)
 endif
 ifeq ($(UNAME_S),Darwin)
 	cd mysql-connector-c-8.4.0/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} -j1

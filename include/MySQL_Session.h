@@ -22,6 +22,7 @@
 #include "MySQL_Backend_Auth.h"
 #ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
+#include "Session_Scheduler.h"
 #endif // PROXYSQL31
 
 #ifndef PROXYJSON
@@ -481,8 +482,13 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
-	// process_all_sessions() pass in which handler() last ran from the first
-	// (sessions holding a backend) loop; the no-backend loop skips it.
+    Pool_Acquire_Mode pool_acquire_mode = Pool_Acquire_Mode::Normal;
+    bool established_checkout_unavailable = false;
+    bool scheduler_managed = false;
+    bool yield_after_release = false;
+    bool continuation_queued = false;
+	// Legacy pass marker retained with the session layout. Phased dispatch
+	// uses to_process and the continuation queue to prevent duplicate work.
 	unsigned long long handled_in_pass { 0 };
 	bool last_pool_ff{ false };
 	bool last_pool_gtid{ false };
@@ -734,6 +740,10 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 *   regardless of which path made the pass end.
 	 */
 	int handler();
+#ifdef PROXYSQL31
+    Session_Run_Result run_step(Pool_Acquire_Mode mode = Pool_Acquire_Mode::Normal, bool io_only = false);
+    void note_backend_release(unsigned int hostgroup);
+#endif
 	/**
 	 * @brief Whether a client packet received now must be deferred until the
 	 *   command in flight completes (pipelining, #5930).

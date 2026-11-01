@@ -959,6 +959,11 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 		delete myhgc;
 	}
 	delete MyHostGroups;
+	// Reloads replace these owned snapshots, but their final versions remain
+	// until shutdown. Monitor and Admin consumers have already stopped here.
+	delete runtime_mysql_servers;
+	delete incoming_mysql_servers_v2;
+	delete mysql_servers_to_monitor;
 	delete mydb;
 	if (admindb) {
 		delete admindb;
@@ -2959,6 +2964,9 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
  * @param gtid_uuid The GTID UUID used for GTID-based routing.
  * @param gtid_trxid The GTID transaction ID used for GTID-based routing.
  * @param max_lag_ms The maximum allowed lag in milliseconds.
+ * @param requested_type The required backend authentication type.
+ * @param mode In v3.1+, EstablishedOnly permits compatible established idle reuse;
+ *             a miss returns nullptr without creating, evicting or warming connections.
  *
  * @return A pointer to the retrieved MySQL_Connection object if successful, or nullptr if no suitable connection
  *         is available in the pool.
@@ -2969,7 +2977,11 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(
 	unsigned int _hid, MySQL_Session *sess, bool ff, char *gtid_uuid,
 	uint64_t gtid_trxid, int max_lag_ms,
-	MySQLBackendAuthType requested_type)
+	MySQLBackendAuthType requested_type
+#ifdef PROXYSQL31
+    , Pool_Acquire_Mode mode
+#endif
+)
 {
 	MySQL_Connection * conn = nullptr; // Pointer to hold the retrieved MySQL_Connection
 
@@ -2988,7 +3000,11 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(
 	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		// Attempt to get a random MySQL_Connection from the server's free connection pool
-		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff, requested_type);
+		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff, requested_type
+#ifdef PROXYSQL31
+            , mode
+#endif
+        );
 
 		// If a connection is obtained, mark it as used and update connection pool statistics
 		if (conn) {
@@ -3428,6 +3444,9 @@ bool MySQL_HostGroups_Manager::reconcile_server_desired_set(
 	}
 	const unsigned long long started_at = monotonic_time();
 	proxy_info("Generating runtime mysql servers records only.\n");
+	// The caller's protocol lock keeps claims stable. Read them before the HGM
+	// lock so the plugin-manager lifetime gate is never acquired beneath it.
+	const auto claims = proxysql_active_server_hostgroup_claims(desired_set.protocol);
 	wrlock();
 	bool result = false;
 	try {
@@ -3440,7 +3459,7 @@ bool MySQL_HostGroups_Manager::reconcile_server_desired_set(
 			ProxySQL_ServerRuntimeSnapshot current = proxysql_server_runtime_snapshot_from_rows(
 				ProxySQL_ServerProtocol::mysql, desired_set.generation, *current_rows);
 			std::vector<ProxySQL_ServerRow> merged;
-			if (proxysql_merge_server_desired_set(current, desired_set, merged, error)) {
+			if (proxysql_merge_server_desired_set(current, desired_set, claims, merged, error)) {
 				std::unique_ptr<SQLite3_result> incoming = mysql_desired_rows(merged);
 				servers_add(incoming.get());
 				result = commit_locked({}, {}, true, false);

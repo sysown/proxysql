@@ -118,7 +118,7 @@ void insert_route(SQLite3DB& db, const char* name, int dest_hg, int fallback_hg,
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(25);
+	plan(47);
 	diag("=== mysqlx_config_store_pure_unit-t starting ===");
 
 	// ====== Backend auth mode parsing (6 assertions) ======
@@ -354,6 +354,48 @@ int main() {
 		store.install_all_from_admin(*db, err);
 		ok(store.topology_generation() == 2,
 		   "topology generation survives install_all_from_admin");
+	}
+
+	// Reject bad listener ports at LOAD time without replacing a good runtime
+	// route set. In particular, :0 must never turn into a listener on 33060.
+	{
+		auto db = create_test_db();
+		insert_route(*db, "port_validation", 10, -1, "first_available", 1);
+		MysqlxConfigStore store;
+		std::string err;
+		if (!store.install_routes_from_admin(*db, err)) {
+			BAIL_OUT("cannot seed route port validation: %s", err.c_str());
+		}
+		const auto initial = store.snapshot_active_routes();
+		ok(initial.size() == 1 && initial[0].second == "127.0.0.1:6603",
+		   "valid explicit bind is installed before invalid reloads");
+		for (const char* bind : {
+			"127.0.0.1:0", "[::1]:0", "127.0.0.1", "[::1]", "",
+			"127.0.0.1:", "127.0.0.1:-1", "127.0.0.1:65536",
+			"127.0.0.1:33060junk", "127.0.0.1:+1", "127.0.0.1: 1",
+			"127.0.0.1:99999999999999", ":33060", "[::1]:",
+			"[::1]:65536", "[::1]:1junk", "[::1]junk:123", "::1:33060"
+		}) {
+			const std::string sql = "UPDATE mysqlx_routes SET bind='" + std::string(bind) + "'";
+			if (!db->execute(sql.c_str())) BAIL_OUT("cannot update bind validation fixture");
+			err.clear();
+			const bool loaded = store.install_routes_from_admin(*db, err);
+			const auto routes = store.snapshot_active_routes();
+			ok(!loaded && err.find("port_validation") != std::string::npos &&
+			   err.find("port") != std::string::npos && routes.size() == 1 &&
+			   routes[0].second == "127.0.0.1:6603",
+			   "invalid bind '%s' fails LOAD with a route error and preserves runtime (err='%s')",
+			   bind, err.c_str());
+		}
+		for (const char* bind : {"127.0.0.1:1", "127.0.0.1:65535", "[::1]:33060"}) {
+			const std::string sql = "UPDATE mysqlx_routes SET bind='" + std::string(bind) + "'";
+			if (!db->execute(sql.c_str())) BAIL_OUT("cannot update valid bind fixture");
+			err.clear();
+			const bool loaded = store.install_routes_from_admin(*db, err);
+			const auto routes = store.snapshot_active_routes();
+			ok(loaded && routes.size() == 1 && routes[0].second == bind,
+			   "valid explicit bind '%s' loads without substitution", bind);
+		}
 	}
 
 	return exit_status();

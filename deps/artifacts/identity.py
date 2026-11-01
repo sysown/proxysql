@@ -141,7 +141,22 @@ def toolchain_identity(environ):
     return facts
 
 
+def source_build_environment(environ):
+    """TSAN dependencies are built locally with instrumented C/C++ and links."""
+    environment = dict(environ)
+    if environment.get('WITHTSAN') == '1':
+        environment['DEPS_MODE'] = 'source'
+        for name in ('CFLAGS', 'CXXFLAGS', 'LDFLAGS'):
+            value = environment.get(name, '')
+            for flag in ('-fsanitize=thread', '-fno-omit-frame-pointer', '-fPIC'):
+                if flag not in shlex.split(value):
+                    value = (value + ' ' + flag).strip()
+            environment[name] = value
+    return environment
+
+
 def build_identity(dependency, root, environ):
+    environ = source_build_environment(environ)
     root = Path(root)
     conf = configuration(dependency, root)
     archive = conf['archive']
@@ -152,11 +167,20 @@ def build_identity(dependency, root, environ):
     code_dir = Path(__file__).resolve().parent
     helper = {p.name: digest_file(p) for name in ('identity.py', 'bundles.py', 'manage.py', 'prepare.bash')
               for p in [code_dir / name] if p.exists()}
+    policy = root / 'common_mk/tsan_dependencies.mk'
+    if environ.get('WITHTSAN') == '1' and policy.exists():
+        helper[policy.name] = digest_file(policy)
     setting = environ.get(conf['setting'], assignment(conf['recipe'], conf['setting']))
+    if dependency == 'duckdb' and environ.get('WITHTSAN') == '1':
+        required = ['-DENABLE_THREAD_SANITIZER=ON', '-DSKIP_EXTENSIONS=jemalloc']
+        # Match the source Make recipe's final overrides. Checking membership
+        # alone misses an earlier ON followed by a later conflicting OFF.
+        if shlex.split(setting)[-2:] != required:
+            setting += ' ' + ' '.join(required)
     flags = {key: environ.get(key, '') for key in FLAGS}
     # Custom toolchain files can include arbitrary other files. Source fallback
     # is safer than claiming that hashing the top-level file captures all inputs.
-    eligible = not (flags['CMAKE_TOOLCHAIN_FILE'] or 'CMAKE_TOOLCHAIN_FILE=' in setting or
+    eligible = environ.get('WITHTSAN') != '1' and not (flags['CMAKE_TOOLCHAIN_FILE'] or 'CMAKE_TOOLCHAIN_FILE=' in setting or
                     environ.get('CPATH') or environ.get('CPLUS_INCLUDE_PATH') or
                     environ.get('C_INCLUDE_PATH') or environ.get('LIBRARY_PATH'))
     # These settings can replace the probed compiler/flags or depend on host

@@ -29,6 +29,7 @@
 #include "test_init.h"
 #include "PgSQL_Backend_Protocol.h"
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include "tap.h"
 
@@ -62,7 +63,7 @@ static void append_msg(std::string& s, char type, size_t payload_len) {
 }
 
 int main(int, char**) {
-    plan(21);
+    plan(58);
 
     PgSQL_Backend_Msg m;
 
@@ -193,6 +194,133 @@ int main(int, char**) {
             got++;
         }
         ok(got == N && all_good, "single feed of %d messages framed in order (got %d)", N, got);
+    }
+
+    // ---------------------------------------------- DataRow coalescing budgets
+    {
+        std::string s;
+        append_msg(s, 'D', 1);                 // first row, framed by next()
+        append_msg(s, 'D', 3);                 // 8 wire bytes
+        append_msg(s, 'D', 5);                 // 10 wire bytes
+        append_msg(s, 'D', 7);                 // must remain for next()
+        PgSQL_Backend_Msg_Framer f;
+        f.feed((const unsigned char*)s.data(), s.size());
+        ok(f.next(m) == FRAME_OK && m.type == 'D' && m.payload_len == 1,
+           "coalesce: first row framed normally");
+        unsigned int rows = 7;                // caller owns the accumulated count
+        size_t bytes = f.coalesce_data_rows(18, rows);
+        ok(bytes == 18 && rows == 9,
+           "coalesce: exact wire-byte budget consumes two rows and increments existing count");
+        ok(f.buffered_bytes() == 12 && !f.empty(),
+           "coalesce: row after exact budget remains buffered");
+        ok(f.next(m) == FRAME_OK && m.type == 'D' && m.payload_len == 7,
+           "coalesce: row after exact budget remains intact for next()");
+    }
+    for (size_t budget : { size_t(0), size_t(5) }) {
+        std::string s;
+        append_msg(s, 'D', 1);                 // 6 wire bytes
+        PgSQL_Backend_Msg_Framer f;
+        f.feed((const unsigned char*)s.data(), s.size());
+        unsigned int rows = 3;
+        size_t bytes = f.coalesce_data_rows(budget, rows);
+        ok(bytes == 0 && rows == 3 && f.buffered_bytes() == s.size(),
+           "coalesce: budget %zu leaves oversized row and row count untouched", budget);
+        ok(f.next(m) == FRAME_OK && m.type == 'D' && m.payload_len == 1,
+           "coalesce: row rejected by budget %zu remains intact for next()", budget);
+    }
+
+    // ----------------------------------------- partial DataRow boundaries
+    // Exercise a split inside the next header and inside its payload. Consuming
+    // the preceding row must not consume any bytes of the incomplete frame.
+    for (size_t partial : { size_t(3), size_t(7) }) {
+        std::string s;
+        append_msg(s, 'D', 2);                 // complete 7-byte row
+        append_msg(s, 'D', 4);                 // trailing 9-byte row
+        PgSQL_Backend_Msg_Framer f;
+        f.feed((const unsigned char*)s.data(), 7 + partial);
+        unsigned int rows = 0;
+        size_t bytes = f.coalesce_data_rows(s.size(), rows);
+        ok(bytes == 7 && rows == 1 && f.buffered_bytes() == partial,
+           "coalesce: consumes complete row before %zu-byte partial frame", partial);
+        bytes = f.coalesce_data_rows(s.size(), rows);
+        ok(bytes == 0 && rows == 1 && f.buffered_bytes() == partial,
+           "coalesce: repeated call preserves %zu-byte partial frame", partial);
+        ok(f.next(m) == FRAME_NEED_MORE,
+           "coalesce: next() still awaits remainder of %zu-byte partial frame", partial);
+        f.feed((const unsigned char*)s.data() + 7 + partial, 9 - partial);
+        bytes = f.coalesce_data_rows(9, rows);
+        ok(bytes == 9 && rows == 2 && f.empty() && f.buffered_bytes() == 0,
+           "coalesce: resumes at same row after remainder of %zu-byte partial frame", partial);
+        ok(f.next(m) == FRAME_NEED_MORE,
+           "coalesce: resumed %zu-byte partial frame is consumed exactly once", partial);
+    }
+
+    // ----------------------------------------- invalid DataRow boundaries
+    // Coalescing stops before malformed lengths; next() owns error reporting.
+    for (uint32_t bad : { uint32_t(0), uint32_t(1), uint32_t(2), uint32_t(3),
+                          uint32_t(PGSQL_MAX_BACKEND_MSG_LEN + 1) }) {
+        std::string s;
+        append_msg(s, 'D', 2);
+        unsigned char hdr[5];
+        put_header(hdr, 'D', bad);
+        s.append((const char*)hdr, sizeof(hdr));
+        PgSQL_Backend_Msg_Framer f;
+        f.feed((const unsigned char*)s.data(), s.size());
+        unsigned int rows = 0;
+        size_t bytes = f.coalesce_data_rows(s.size(), rows);
+        ok(bytes == 7 && rows == 1 && f.buffered_bytes() == sizeof(hdr),
+           "coalesce: invalid declared length %u remains unconsumed", bad);
+        ok(f.next(m) == FRAME_ERROR && f.buffered_bytes() == sizeof(hdr),
+           "coalesce: next() reports invalid declared length %u", bad);
+    }
+
+    // ----------------------------------------- non-DataRow boundary
+    {
+        std::string s;
+        append_msg(s, 'D', 2);
+        append_msg(s, 'C', 3);
+        append_msg(s, 'D', 4);
+        PgSQL_Backend_Msg_Framer f;
+        f.feed((const unsigned char*)s.data(), s.size());
+        unsigned int rows = 0;
+        size_t bytes = f.coalesce_data_rows(s.size(), rows);
+        ok(bytes == 7 && rows == 1 && f.buffered_bytes() == 17,
+           "coalesce: stops before non-DataRow even when another row follows");
+        bytes = f.coalesce_data_rows(s.size(), rows);
+        ok(bytes == 0 && rows == 1 && f.buffered_bytes() == 17,
+           "coalesce: does not skip non-DataRow on repeated call");
+        ok(f.next(m) == FRAME_OK && m.type == 'C' && m.payload_len == 3,
+           "coalesce: non-DataRow remains intact for next()");
+        bytes = f.coalesce_data_rows(s.size(), rows);
+        ok(bytes == 9 && rows == 2 && f.empty(),
+           "coalesce: resumes after next() consumes non-DataRow");
+    }
+
+    // ----------------------------------------- exhausted buffer and reuse
+    {
+        std::string s;
+        append_msg(s, 'D', 2);
+        append_msg(s, 'D', 4);
+        PgSQL_Backend_Msg_Framer f;
+        f.feed((const unsigned char*)s.data(), s.size());
+        ok(f.next(m) == FRAME_OK && m.type == 'D' && m.payload_len == 2,
+           "coalesce: obtain outstanding view before draining buffer");
+        const unsigned char* first_frame = m.payload - 5;
+        unsigned int rows = 1;
+        size_t bytes = f.coalesce_data_rows(9, rows);
+        ok(bytes == 9 && rows == 2 && f.empty() && f.buffered_bytes() == 0 &&
+               memcmp(first_frame, s.data(), s.size()) == 0,
+           "coalesce: complete exhaustion resets buffer offsets and preserves outstanding views");
+        bytes = f.coalesce_data_rows(9, rows);
+        ok(bytes == 0 && rows == 2 && f.next(m) == FRAME_NEED_MORE,
+           "coalesce: empty buffer consumes no bytes or rows");
+        unsigned char good[6];
+        size_t n = put_msg(good, 'Z', "I", 1);
+        f.feed(good, n);
+        ok(f.next(m) == FRAME_OK && m.type == 'Z' && m.payload_len == 1 && m.payload[0] == 'I',
+           "coalesce: subsequent feed frames correctly after complete exhaustion");
+        ok(f.empty() && f.buffered_bytes() == 0 && f.next(m) == FRAME_NEED_MORE,
+           "coalesce: subsequent feed has no stale bytes from exhausted batch");
     }
 
     return exit_status();

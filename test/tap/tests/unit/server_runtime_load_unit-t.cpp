@@ -165,8 +165,11 @@ void test_protocol_loads(SQLite3DB& db, ProxySQL_ServerProtocol protocol) {
 	// configuration publication) used to fail as a nested installation.
 	db.execute(mysql ? "UPDATE mysql_servers SET weight=10" : "UPDATE pgsql_servers SET weight=10");
 	{
+		// Hold Admin before install, matching the loader's Admin -> install -> HGM order.
+		ScopedServerDiscoveryProtocolLock admin_lock(protocol);
 		ProxySQL_ServerRuntimeInstallLock held(protocol);
-		load(protocol);
+		if (mysql) GloAdmin->load_mysql_servers_to_runtime({}, {}, {}, true, true);
+		else GloAdmin->load_pgsql_servers_to_runtime({}, {}, {}, true);
 	}
 	ok(runtime_matches(protocol, host, "10") &&
 		proxysql_pending_server_runtime_generation(protocol) == generation + 1,
