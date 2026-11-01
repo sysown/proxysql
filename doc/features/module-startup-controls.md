@@ -1,7 +1,10 @@
 # MySQL and PostgreSQL startup controls
 
 ProxySQL starts both protocol stacks by default. Six startup permissions let an
-operator omit worker threads, Admin listeners, or monitor threads independently:
+operator omit worker threads, Admin listeners, or monitor threads independently.
+
+For the component relationships and STOP/START sequence, see the
+[architecture diagrams](../../docs/superpowers/specs/2026-10-28-module-lifecycle-refresh-design.md#architecture-diagrams).
 
 | Command-line option | Top-level configuration entry | Controls |
 | --- | --- | --- |
