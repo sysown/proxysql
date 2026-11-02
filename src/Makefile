@@ -164,7 +164,9 @@ endif
 SQLITE_VEC_OBJ := $(DEPS_PATH)/sqlite3/sqlite3/vec.o
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
+ifneq ($(NOJEMALLOC),1)
 	LIBPROXYSQLAR += $(JEMALLOC_LDIR)/libjemalloc.a
+endif
 	LIBPROXYSQLAR += $(MICROHTTPD_LDIR)/libmicrohttpd.a
 	LIBPROXYSQLAR += $(LIBHTTPSERVER_LDIR)/libhttpserver.a
 	LIBPROXYSQLAR += $(PCRE_LDIR)/libpcrecpp.a

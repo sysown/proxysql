@@ -65,6 +65,12 @@ ProxySQL_External_Scheduler::ProxySQL_External_Scheduler() {
 }
 
 ProxySQL_External_Scheduler::~ProxySQL_External_Scheduler() {
+	for (Scheduler_Row* row : Scheduler_Rows) {
+		delete row;
+	}
+#ifdef PA_PTHREAD_MUTEX
+	pthread_rwlock_destroy(&rwlock);
+#endif
 }
 
 void ProxySQL_External_Scheduler::update_table(SQLite3_result *resultset) {

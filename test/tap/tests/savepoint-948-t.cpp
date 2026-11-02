@@ -382,9 +382,12 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_query_rules");
 	MYSQL_QUERY(mysqladmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-	int MyHGM_myconnpoll_get = 0;
+	// Count successful acquisitions, including the worker-local cache. The
+	// scheduler may probe an empty established pool before normal recovery;
+	// those failed attempts do not acquire a backend or break transaction pinning.
+	int MyHGM_myconnpoll_get_ok = 0;
 	std::string q;
-	q = "SELECT * FROM stats_mysql_global WHERE variable_name IN ('MyHGM_myconnpoll_get','ConnPool_get_conn_immediate')";
+	q = "SELECT * FROM stats_mysql_global WHERE variable_name IN ('MyHGM_myconnpoll_get_ok','ConnPool_get_conn_immediate')";
 	{
 		if (mysql_query(mysqladmin, q.c_str())) {
 			fprintf(stderr,"Error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysqladmin));
@@ -394,11 +397,11 @@ int main(int argc, char *argv[]) {
 		MYSQL_ROW row;
 		while ((row = mysql_fetch_row(result)))
 		{
-			if (strcmp(row[0], "MyHGM_myconnpoll_get") == 0) {
-				MyHGM_myconnpoll_get += atoi(row[1]);
+			if (strcmp(row[0], "MyHGM_myconnpoll_get_ok") == 0) {
+				MyHGM_myconnpoll_get_ok += atoi(row[1]);
 			}
 			if (strcmp(row[0], "ConnPool_get_conn_immediate") == 0) {
-				MyHGM_myconnpoll_get += atoi(row[1]);
+				MyHGM_myconnpoll_get_ok += atoi(row[1]);
 			}
 		}
 		mysql_free_result(result);
@@ -436,28 +439,25 @@ int main(int argc, char *argv[]) {
 		}
 		MYSQL_RES *result = mysql_store_result(mysqladmin);
 		MYSQL_ROW row;
-		int MyHGM_myconnpoll_get_post = 0;
+		int MyHGM_myconnpoll_get_ok_post = 0;
 		while ((row = mysql_fetch_row(result)))
 		{
-			if (strcmp(row[0], "MyHGM_myconnpoll_get") == 0) {
-				MyHGM_myconnpoll_get_post += atoi(row[1]);
+			if (strcmp(row[0], "MyHGM_myconnpoll_get_ok") == 0) {
+				MyHGM_myconnpoll_get_ok_post += atoi(row[1]);
 			}
 			if (strcmp(row[0], "ConnPool_get_conn_immediate") == 0) {
-				MyHGM_myconnpoll_get_post += atoi(row[1]);
+				MyHGM_myconnpoll_get_ok_post += atoi(row[1]);
 			}
 		}
-		MyHGM_myconnpoll_get = MyHGM_myconnpoll_get_post - MyHGM_myconnpoll_get;
+		MyHGM_myconnpoll_get_ok = MyHGM_myconnpoll_get_ok_post - MyHGM_myconnpoll_get_ok;
 		mysql_free_result(result);
 	}
 	print_global_status(mysqladmin);
 	print_commands_stats(mysqladmin);
-	std::cerr << std::endl << "MyHGM_myconnpoll_get: " << MyHGM_myconnpoll_get << std::endl;
+	std::cerr << std::endl << "MyHGM_myconnpoll_get_ok: " << MyHGM_myconnpoll_get_ok << std::endl;
 	std::cerr << "cnt_SELECT_outside_transactions: " << cnt_SELECT_outside_transactions << std::endl;
 	std::cerr << "cnt_transactions: " << cnt_transactions << std::endl;
-	//ok((MyHGM_myconnpoll_push == cnt_transactions+cnt_SELECT_outside_transactions) , "Number of transactions [%d] , Queries outside transaction [%d] , total connections returned [%d]", cnt_transactions.load(std::memory_order_relaxed), cnt_SELECT_outside_transactions.load(std::memory_order_relaxed), MyHGM_myconnpoll_push);
-	// FIXME: until we fix the autocommit bug, we may have some minor mismatch
-	//ok((MyHGM_myconnpoll_get <= cnt_transactions+cnt_SELECT_outside_transactions && MyHGM_myconnpoll_get >= cnt_transactions+cnt_SELECT_outside_transactions-10) , "Number of transactions [%d] , Queries outside transaction [%d] , total connections returned [%d]", cnt_transactions.load(std::memory_order_relaxed), cnt_SELECT_outside_transactions.load(std::memory_order_relaxed), MyHGM_myconnpoll_get);
-	ok((MyHGM_myconnpoll_get == cnt_transactions+cnt_SELECT_outside_transactions) , "Number of transactions [%d] , Queries outside transaction [%d] , total connections returned [%d]", cnt_transactions.load(std::memory_order_relaxed), cnt_SELECT_outside_transactions.load(std::memory_order_relaxed), MyHGM_myconnpoll_get);
+	ok((MyHGM_myconnpoll_get_ok == cnt_transactions+cnt_SELECT_outside_transactions) , "Number of transactions [%d] , Queries outside transaction [%d] , successful backend acquisitions [%d]", cnt_transactions.load(std::memory_order_relaxed), cnt_SELECT_outside_transactions.load(std::memory_order_relaxed), MyHGM_myconnpoll_get_ok);
 
 
 

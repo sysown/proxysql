@@ -1,7 +1,9 @@
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <poll.h>
 #include <sstream>
 #include <string>
@@ -19,20 +21,70 @@
 CommandLine cl;
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 
-static PGConnPtr mk() {
+static std::mutex diagnostic_mutex;
+static std::atomic<unsigned> pg_errors{0};
+
+// Keep client-side SCRAM derivation from consuming the connection deadline
+// while hundreds of ASAN clients compete for CPU time. This limits
+// authentication work, not the number of connected clients or pool waiters.
+static std::mutex connect_mutex;
+static std::condition_variable connect_cv;
+static unsigned connecting = 0;
+static constexpr unsigned max_connecting = 32;
+
+static void pg_error(PGconn* c, const char* phase, int client, const char* operation,
+                     double elapsed_ms, const char* result_error = nullptr) {
+	// A broken proxy during churn can fail thousands of connects. Keep useful
+	// examples without flooding the artifact; counters still include every error.
+	const unsigned n = pg_errors.fetch_add(1);
+	if (n > 20) return;
+	std::lock_guard<std::mutex> lock(diagnostic_mutex);
+	if (n == 20) {
+		diag("further PostgreSQL error examples suppressed after 20 failures");
+		return;
+	}
+	diag("phase=%s client=%d operation=%s elapsed_ms=%.3f host=%s port=%d "
+	     "status=%d socket=%d error=%.1024s result_error=%.1024s",
+	     phase, client, operation, elapsed_ms, cl.pgsql_host, cl.pgsql_port,
+	     c ? static_cast<int>(PQstatus(c)) : -1, c ? PQsocket(c) : -1,
+	     c ? PQerrorMessage(c) : "null connection", result_error ? result_error : "");
+}
+
+static PGConnPtr mk(const char* phase, int client) {
 	std::stringstream ss;
 	ss << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port
 	   << " user=" << cl.pgsql_username << " password=" << cl.pgsql_password
 	   << " dbname=" << cl.pgsql_username
 	   << " sslmode=disable connect_timeout=5";
-	return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
+	std::unique_lock<std::mutex> lock(connect_mutex);
+	connect_cv.wait(lock, [] { return connecting < max_connecting; });
+	++connecting;
+	lock.unlock();
+	const auto start = std::chrono::steady_clock::now();
+	PGConnPtr c(PQconnectdb(ss.str().c_str()), &PQfinish);
+	const double elapsed_ms = std::chrono::duration<double, std::milli>(
+		std::chrono::steady_clock::now() - start).count();
+	lock.lock();
+	--connecting;
+	lock.unlock();
+	connect_cv.notify_one();
+	if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+		pg_error(c.get(), phase, client, "connect", elapsed_ms);
+	}
+	return c;
 }
 
-static bool select1(PGconn* c) {
+static bool select1(PGconn* c, const char* phase, int client) {
 	if (!c || PQstatus(c) != CONNECTION_OK) return false;
+	const auto start = std::chrono::steady_clock::now();
 	PGresult* r = PQexec(c, "SELECT 1");
 	const bool ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0
 		&& std::string(PQgetvalue(r, 0, 0)) == "1";
+	if (!ok) {
+		pg_error(c, phase, client, "SELECT 1",
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
+			PQresultErrorMessage(r));
+	}
 	PQclear(r);
 	return ok;
 }
@@ -129,6 +181,23 @@ static std::string sql_quote(const char* value) {
 	return out + "'";
 }
 
+static void dump_pool_state(MYSQL* admin) {
+	for (const char* query : {
+		"SELECT Variable_Name,Variable_Value FROM stats_pgsql_global "
+		"WHERE Variable_Name LIKE 'Client_Connections_%' OR Variable_Name LIKE 'Server_Connections_%' LIMIT 20",
+		"SELECT command,COUNT(*) FROM stats_pgsql_processlist GROUP BY command LIMIT 20",
+		"SELECT hostgroup || ':' || srv_host || ':' || srv_port, "
+		"'status=' || status || ' used=' || ConnUsed || ' free=' || ConnFree || "
+		"'connect_ok=' || ConnOK || 'connect_err=' || ConnERR "
+		"FROM stats_pgsql_connection_pool ORDER BY hostgroup,srv_host,srv_port LIMIT 20"
+	}) {
+		diag("failure snapshot: %s", query);
+		for (const auto& row : admin_rows2(admin, query)) {
+			diag("  %s = %s", row.first.c_str(), row.second.c_str());
+		}
+	}
+}
+
 template <typename Predicate>
 static bool wait_until(Predicate predicate, int timeout_ms = 5000) {
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
@@ -216,6 +285,8 @@ int main(int argc, char** argv) {
 		const int nqueries = 10;
 		std::atomic<int> oks{0};
 		std::atomic<int> errs{0};
+		std::atomic<int> connect_errs{0};
+		std::atomic<int> query_errs{0};
 		std::vector<int> per(nthreads, 0);
 		std::atomic<bool> hammer{true};
 		std::atomic<int> admin_fail{0};
@@ -233,32 +304,49 @@ int main(int argc, char** argv) {
 		});
 		std::vector<std::thread> ts;
 		ts.reserve(nthreads);
+		std::mutex ready_mutex;
+		std::condition_variable ready_cv;
+		int ready = 0;
 		for (int i = 0; i < nthreads; i++) {
-			ts.emplace_back([&errs, &oks, &per, i] {
-				PGConnPtr c = mk();
+			ts.emplace_back([&](int i) {
+				PGConnPtr c = mk("contention", i);
+				// Start the pool workload with all 400 frontends present. Previously
+				// early clients could finish before later clients authenticated.
+				{
+					std::unique_lock<std::mutex> lock(ready_mutex);
+					++ready;
+					if (ready == nthreads) ready_cv.notify_all();
+					ready_cv.wait(lock, [&] { return ready == nthreads; });
+				}
 				if (!c || PQstatus(c.get()) != CONNECTION_OK) {
+					connect_errs++;
 					errs++;
 					return;
 				}
 				for (int q = 0; q < nqueries; q++) {
-					if (select1(c.get())) {
+					if (select1(c.get(), "contention", i)) {
 						oks++;
 						per[i]++;
 					} else {
+						query_errs++;
 						errs++;
 					}
 				}
-			});
+			}, i);
 		}
 		for (auto& t : ts) t.join();
 		hammer.store(false);
 		admin_thr.join();
+		diag("contention failures: connect=%d query=%d (400 clients, max_connecting=%u, connect_timeout=5s)",
+			connect_errs.load(), query_errs.load(), max_connecting);
+		if (errs.load()) dump_pool_state(admin);
 		ok(errs.load() == 0 && oks.load() == nthreads * nqueries,
 			"contention: %d clients x %d SELECT 1 max_connections=20 (ok=%d err=%d)",
 			nthreads, nqueries, oks.load(), errs.load());
 		int starved = 0;
 		for (int n : per) if (n == 0) starved++;
-		ok(starved == 0, "contention fairness: every client got results (starved=%d)", starved);
+		ok(starved == 0, "contention fairness: every client got results (no_results=%d connect_failed=%d)",
+			starved, connect_errs.load());
 		ok(admin_fail.load() == 0, "admin answered during contention (fails=%d)", admin_fail.load());
 	}
 
@@ -275,7 +363,7 @@ int main(int argc, char** argv) {
 			ts.emplace_back([deadline, &errs, &reconnects, &oks, &inflight_aborts, i] {
 				unsigned rng = 1103515245u * (unsigned)i + 12345u;
 				while (std::chrono::steady_clock::now() < deadline) {
-					PGConnPtr c = mk();
+					PGConnPtr c = mk("churn", i);
 					if (!c || PQstatus(c.get()) != CONNECTION_OK) {
 						errs++;
 						continue;
@@ -286,7 +374,7 @@ int main(int argc, char** argv) {
 					bool abort_inflight = ((rng / 65536u) % 5) == 0;
 					rng = rng * 1103515245u + 12345u;
 					for (int q = 0; q < burst; q++) {
-						if (select1(c.get())) oks++;
+						if (select1(c.get(), "churn", i)) oks++;
 						else {
 							errs++;
 							break;
@@ -301,6 +389,7 @@ int main(int argc, char** argv) {
 			});
 		}
 		for (auto& t : ts) t.join();
+		if (errs.load()) dump_pool_state(admin);
 		ok(errs.load() == 0,
 			"churn: 400 clients, 5s, 0 errors (ok=%d reconnects=%d inflight_abort=%d err=%d)",
 			oks.load(), reconnects.load(), inflight_aborts.load(), errs.load());
@@ -329,8 +418,8 @@ int main(int argc, char** argv) {
 		const bool initially_drained = wait_scalar(admin, waiters_query, "0");
 		std::vector<std::thread> holders;
 		for (int i = 0; i < holder_count; i++) {
-			holders.emplace_back([&] {
-				PGConnPtr c = mk();
+			holders.emplace_back([&, i] {
+				PGConnPtr c = mk("holder", i);
 				if (!c || PQstatus(c.get()) != CONNECTION_OK) return;
 				if (wait_query(c.get(), begin.c_str(), 5000, PGRES_COMMAND_OK) &&
 					wait_query(c.get(), query.c_str(), 5000)) {
@@ -348,8 +437,8 @@ int main(int argc, char** argv) {
 		std::vector<std::thread> waiters;
 		if (saturated) for (int i = 0; i < 40; i++) {
 			const bool abort = i < 20;
-			waiters.emplace_back([&, abort] {
-				PGConnPtr c = mk();
+			waiters.emplace_back([&, abort, i] {
+				PGConnPtr c = mk("waiter", i);
 				if (!c || PQstatus(c.get()) != CONNECTION_OK) {
 					waiter_err++;
 					return;
@@ -385,8 +474,8 @@ int main(int argc, char** argv) {
 	ok(admin_exec(admin, "SELECT 1"), "admin still answers after waiter contention and churn");
 
 	{
-		PGConnPtr c = mk();
-		ok(c && PQstatus(c.get()) == CONNECTION_OK && select1(c.get()),
+		PGConnPtr c = mk("post-storm", 0);
+		ok(c && PQstatus(c.get()) == CONNECTION_OK && select1(c.get(), "post-storm", 0),
 			"new session works after storms");
 	}
 

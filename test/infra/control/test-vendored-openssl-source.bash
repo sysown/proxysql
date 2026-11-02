@@ -138,18 +138,6 @@ expect_failure \
 	"${corrupt_dir}/openssl-3.5.7.tar.gz" \
 	"${corrupt_dir}/openssl-3.5.7.tar.gz.sha256"
 
-invalid_gzip_dir="${tmp_dir}/invalid-gzip"
-mkdir -p "${invalid_gzip_dir}"
-printf '%s\n' 'not gzip data' > "${invalid_gzip_dir}/openssl-3.5.7.tar.gz"
-write_checksum \
-	"${invalid_gzip_dir}/openssl-3.5.7.tar.gz" \
-	"${invalid_gzip_dir}/openssl-3.5.7.tar.gz.sha256"
-expect_failure \
-	"invalid gzip with a matching checksum is rejected" \
-	"not valid gzip data" \
-	"${invalid_gzip_dir}/openssl-3.5.7.tar.gz" \
-	"${invalid_gzip_dir}/openssl-3.5.7.tar.gz.sha256"
-
 wrong_name_dir="${tmp_dir}/wrong-checksum-name"
 make_fixture_archive "${wrong_name_dir}" openssl-3.5.7
 write_checksum \

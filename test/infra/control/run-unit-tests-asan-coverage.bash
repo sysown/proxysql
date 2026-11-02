@@ -29,7 +29,7 @@
 # Outputs (under cwd, visible on the host via the bind mount):
 #   * coverage/lcov.info       — merged + filtered LCOV report
 #   * coverage/html/           — genhtml-rendered HTML report
-#   * unit-test-logs/<name>.log — stdout+stderr per failed test
+#   * unit-test-logs/<name>.log — stdout+stderr per test
 #
 # Exit status: 0 if all unit tests passed, 1 otherwise. Coverage
 # capture runs regardless.
@@ -45,6 +45,7 @@ cd "${REPO_ROOT}"
 # default mirrors the values the CI workflow passes through and the
 # values include/makefiles_vars.mk's WASAN block was tuned against.
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1:halt_on_error=1}"
+source "${SCRIPT_DIR}/unit-test-execution.bash"
 
 # Install runtime deps only if missing — keeps the script idempotent
 # for repeated local runs and skips the apt round-trip when re-running
@@ -95,12 +96,16 @@ for t in *-t; do
     [ -x "./${t}" ] || continue
     log="${REPO_ROOT}/unit-test-logs/${t}.log"
     echo "::group::${t}"
-    if ./"${t}" > "${log}" 2>&1; then
+    rc=0
+    proxysql_run_unit_test "${log}" "./${t}" || rc=$?
+    if [ "${rc}" -eq 0 ]; then
         PASSED=$((PASSED + 1))
         echo "PASS: ${t}"
     else
-        rc=$?
         FAILED+=("${t} (rc=${rc})")
+        if [ "${rc}" -eq 124 ] || [ "${rc}" -eq 137 ]; then
+            echo "TIMEOUT: ${t} after ${UNIT_TEST_TIMEOUT_SECONDS}s (rc=${rc})"
+        fi
         echo "FAIL: ${t} (rc=${rc})"
         tail -n 80 "${log}"
     fi

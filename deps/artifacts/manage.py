@@ -20,7 +20,7 @@ from urllib.request import urlopen
 from bundles import (collect_payload, create_bundle, restore_bundle, safe_path,
                      validate_tree, verify_archive)
 from identity import (DEPENDENCIES, FORMAT_VERSION, build_identity, configuration,
-                      fingerprint, load_json, load_registry, validate_entry, ToolchainUnavailable)
+                      fingerprint, load_json, load_registry, validate_entry, ToolchainUnavailable, source_build_environment)
 
 
 Unavailable = store.Unavailable
@@ -80,6 +80,9 @@ def write_metadata(dependency, tree, metadata):
 def prepare_dependency(dependency, root, mode, environ):
     if mode not in ('auto', 'source', 'prebuilt'):
         raise ValueError('DEPS_MODE must be auto, source, or prebuilt')
+    environ = source_build_environment(environ)
+    if environ.get('WITHTSAN') == '1':
+        mode = 'source'
     root = Path(root).resolve()
     conf = configuration(dependency, root)
     cache = root / '.cache/dependency-artifacts'

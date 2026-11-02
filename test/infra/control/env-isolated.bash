@@ -59,10 +59,10 @@ export TEST_DEPS_PATH="${WORKSPACE}/test-scripts/deps"
 export TEST_DEPS="${TEST_DEPS_PATH}"
 
 # Cluster Nodes — primary (6032) + nodes inside the ProxySQL container
-# Port scheme: primary=6032, proxy-node1=6042, proxy-node2=6052, ..., proxy-node9=6122
+# Default: primary=6032 plus six peers at 6042 through 6092.
 # From the test-runner container, reach them via the proxysql hostname
 # NOTE: primary MUST be first — test_cluster1-t expects conns[0] to be the primary
-NUM_CLUSTER_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+NUM_CLUSTER_NODES=${PROXYSQL_CLUSTER_NODES:-6}
 if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]]; then
     NUM_CLUSTER_NODES=0
 fi

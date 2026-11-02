@@ -98,6 +98,21 @@ PgSQL_Frame_Result PgSQL_Backend_Msg_Framer::next(PgSQL_Backend_Msg& out) {
     return FRAME_OK;
 }
 
+size_t PgSQL_Backend_Msg_Framer::coalesce_data_rows(size_t max_bytes, unsigned int& rows) {
+    size_t bytes = 0;
+    while (!failed && len - pos >= 5 && buf[pos] == 'D') {
+        const uint32_t msglen = be32(buf + pos + 1);
+        if (msglen < 4 || msglen > PGSQL_MAX_BACKEND_MSG_LEN) break;
+        const size_t total = 1 + (size_t)msglen;
+        if (total > len - pos || total > max_bytes - bytes) break;
+        pos += total;
+        bytes += total;
+        ++rows;
+    }
+    if (pos == len) { pos = 0; len = 0; }
+    return bytes;
+}
+
 void PgSQL_Backend_Msg_Framer::reset() { pos = 0; len = 0; failed = false; }
 
 static void pg_native_append_be32(std::string& out, uint32_t v) {

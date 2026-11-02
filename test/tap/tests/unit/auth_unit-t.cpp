@@ -645,13 +645,73 @@ static void test_pgsql_inactive_pattern() {
 		"PgSQL: inactive user removed");
 }
 
+/**
+ * @brief Reset and destruction must release credentials in every scope.
+ *
+ * Use populated attributes, comments and cached SHA1 passwords so sanitizer
+ * runs also exercise every allocation owned by a credential.
+ */
+static void test_pgsql_scope_lifecycle() {
+	const cred_username_type scopes[] = {
+		USERNAME_FRONTEND, USERNAME_BACKEND, USERNAME_ADMIN
+	};
+	const char *scope_names[] = { "frontend", "backend", "admin" };
+	char username[] = "pg_lifecycle";
+	char password[] = "lifecycle-password";
+	char attributes[] = "{\"role\":\"lifecycle\"}";
+	char comment[] = "credential lifecycle";
+	unsigned char sha1_hash[SHA_DIGEST_LENGTH];
+	SHA1(reinterpret_cast<const unsigned char*>(password), sizeof(password) - 1, sha1_hash);
+	auto populate = [&username, &password, &attributes, &comment, &sha1_hash](
+		PgSQL_Authentication &auth, cred_username_type scope) {
+		return auth.add(username, password, scope,
+			false, 0, false, false, 100, attributes, comment)
+			&& auth.set_SHA1(username, scope, sha1_hash);
+	};
+	auto missing = [&username](PgSQL_Authentication &auth, cred_username_type scope) {
+		char *found_password = auth.lookup(username, scope,
+			nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+		bool absent = found_password == nullptr;
+		free(found_password);
+		return absent;
+	};
+
+	PgSQL_Authentication auth;
+	for (unsigned int i = 0; i < 3; ++i) {
+		ok(populate(auth, scopes[i]),
+			"PgSQL: populate %s credentials and cached password", scope_names[i]);
+	}
+	auth.reset();
+	for (unsigned int i = 0; i < 3; ++i) {
+		ok(missing(auth, scopes[i]),
+			"PgSQL: reset removes %s credentials", scope_names[i]);
+	}
+	bool readded[3];
+	for (unsigned int i = 0; i < 3; ++i) {
+		readded[i] = populate(auth, scopes[i]);
+	}
+	auth.reset();
+	auth.reset();
+	for (unsigned int i = 0; i < 3; ++i) {
+		ok(readded[i] && missing(auth, scopes[i]),
+			"PgSQL: repeated reset removes re-added %s credentials", scope_names[i]);
+	}
+
+	// Leave these populated: ASan/LSan must see clean automatic destruction.
+	PgSQL_Authentication populated_at_shutdown;
+	for (unsigned int i = 0; i < 3; ++i) {
+		ok(populate(populated_at_shutdown, scopes[i]),
+			"PgSQL: populate %s credentials for destructor cleanup", scope_names[i]);
+	}
+}
+
 
 // ============================================================================
 // Main
 // ============================================================================
 
 int main() {
-	plan(69);
+	plan(81);
 
 	test_init_minimal();
 	test_init_auth();
@@ -680,6 +740,7 @@ int main() {
 	test_pgsql_del_and_reset();              // 4 tests (49-52)
 	test_pgsql_connection_counting();        // 4 tests (53-56)
 	test_pgsql_inactive_pattern();           // 2 tests (57-58)
+	test_pgsql_scope_lifecycle();            // 12 tests
 	// Note: PgSQL does not have set_clear_text_password()
 	// Note: PgSQL does not have default_schema or schema_locked
 

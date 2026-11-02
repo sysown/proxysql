@@ -80,7 +80,9 @@ public:
 	 *  permanently skipped, instead of a fixed constant that starves the tail once a
 	 *  list grows past it. */
 	template<class F>
-	void for_each_hid(F f) {
+    // The phase bodies call this every pass, including empty queues. Keep
+    // the original inline traversal after extracting those bodies to templates.
+    __attribute__((always_inline)) inline void for_each_hid(F f) {
 		std::vector<unsigned> hids;
 		hids.reserve(by_hid.size());
 		for (const auto& kv : by_hid) {

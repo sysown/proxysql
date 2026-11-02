@@ -4,6 +4,52 @@ import yaml
 from check_ci_tier_fanout import validate_routes, version
 from ci_tier_conditions import condition_allows, condition_value
 class RouteTests(unittest.TestCase):
+ def test_group_axis_requires_new_shards_only_when_product_metadata_contains_them(self):
+  rows,callers,engines=self.fixture()
+  rows[0].update(group_axis='tap_group',axes={'tap_group':['g1','g10']})
+  self.assertEqual(validate_routes(rows,callers,engines,{'g1'},{'g1'}),[])
+  errors=validate_routes(rows,callers,engines,{'g1','g10'},{'g1'})
+  self.assertTrue(any('group not executed' in error and 'g10' in error for error in errors),errors)
+  run=engines['ci-g1.yml']['jobs']['tests']['steps'][-1]
+  run['run']='export TAP_GROUP=g1\nif [ -n "${{ matrix.tap_group }}" ]; then\n  export TAP_GROUP="${{ matrix.tap_group }}"\nfi\ntest/infra/control/run-tests-isolated.bash'
+  self.assertEqual(validate_routes(rows,callers,engines,{'g1','g10'},{'g1'}),[])
+ def test_group_axis_must_preserve_existing_group_and_use_literal_group_names(self):
+  for values in (None,{'var':'GROUPS'},['g10'],['g1',False]):
+   rows,callers,engines=self.fixture()
+   rows[0].update(group_axis='tap_group',axes={'tap_group':values})
+   errors=validate_routes(rows,callers,engines,{'g1','g10'},{'g1'})
+   self.assertTrue(any('group axis' in error for error in errors),errors)
+ def test_group_axis_rejects_nonmapping_axes_without_crashing(self):
+  for axes in (None,[],['tap_group'],'tap_group',1,False):
+   with self.subTest(axes=axes):
+    rows,callers,engines=self.fixture()
+    rows[0].update(group_axis='tap_group',axes=axes)
+    errors=validate_routes(rows,callers,engines,{'g1'},{'g1'})
+    self.assertTrue(any('invalid product group axis' in error for error in errors),errors)
+    self.assertIn('lower-tier coverage lost: v30/g1',errors)
+    self.assertIn('lower-tier coverage lost: v31/g1',errors)
+ def test_tap_groups_inherit_job_environment(self):
+  for value in ['g1','${{ matrix.tap_group }}']:
+   with self.subTest(value=value):
+    rows,callers,engines=self.fixture()
+    known={'g1'}
+    if value!='g1':
+     rows[0].update(group_axis='tap_group',axes={'tap_group':['g1','g10']})
+     known.add('g10')
+    job=engines['ci-g1.yml']['jobs']['tests']
+    job['env']={'TAP_GROUP':value}
+    job['steps'][-1]['run']='test/infra/control/run-tests-isolated.bash'
+    self.assertEqual(validate_routes(rows,callers,engines,known,{'g1'}),[])
+ def test_step_tap_group_overrides_inherited_job_group(self):
+  for value,missing in [('g1','g10'),('','g1, g10')]:
+   with self.subTest(value=value):
+    rows,callers,engines=self.fixture()
+    rows[0].update(group_axis='tap_group',axes={'tap_group':['g1','g10']})
+    job=engines['ci-g1.yml']['jobs']['tests']
+    job['env']={'TAP_GROUP':'${{ matrix.tap_group }}'}
+    job['steps'][-1].update(env={'TAP_GROUP':value},run='test/infra/control/run-tests-isolated.bash')
+    errors=validate_routes(rows,callers,engines,{'g1','g10'},{'g1'})
+    self.assertIn("group not executed by ('CI-g1', 'run', 'tests') on v30/normal: "+missing,errors)
  def test_native_completion_route_preserves_automatic_coverage(self):
   rows,callers,engines=self.fixture()
   callers['CI-g1']['on']['workflow_run']['workflows']=['CI-trigger','CI-builds']

@@ -132,6 +132,8 @@ public:
 	bool is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
 		uint32_t writer_hostgroup, uint32_t reader_hostgroup,
 		uint8_t* writer_is_also_reader = nullptr) const;
+	// Caller holds the configuration, Admin servers and runtime-install locks,
+	// acquired before its active-manager lifetime pin.
 	bool install_managed_discovery(ProxySQL_ServerProtocol protocol, uint64_t desired_revision,
 		const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
 		uint64_t& runtime_generation_out, std::string& error);

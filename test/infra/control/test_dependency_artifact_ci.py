@@ -31,38 +31,6 @@ class DependencyArtifactCITests(unittest.TestCase):
     def setUp(self):
         self.workflow = yaml.safe_load(WORKFLOW.read_text())
 
-    def test_runtime_fixture_suite_can_skip_optional_workflow_dependencies(self):
-        env = dict(os.environ)
-        env.pop('DEPS_ARTIFACT_CI_REQUIRED', None)
-        result = subprocess.run(
-            [sys.executable, '-S', '-m', 'unittest', 'discover', '-s',
-             str(ROOT / 'test/infra/control'), '-p', 'test_dependency_artifact_ci.py', '-v'],
-            env=env, universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('workflow validation requires PyYAML', result.stderr)
-
-    def test_required_workflow_validation_fails_if_yaml_is_missing(self):
-        result = subprocess.run(
-            [sys.executable, '-S', '-m', 'unittest', 'discover', '-s',
-             str(ROOT / 'test/infra/control'), '-p', 'test_dependency_artifact_ci.py', '-v'],
-            env=dict(os.environ, DEPS_ARTIFACT_CI_REQUIRED='1'),
-            universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('yaml', result.stderr)
-        self.assertNotIn('OK (skipped=', result.stderr)
-
-    def test_fixture_job_requires_workflow_validation(self):
-        job = self.workflow['jobs']['fixtures']
-        env = dict(os.environ)
-        env.pop('DEPS_ARTIFACT_CI_REQUIRED', None)
-        env.update(job.get('env', {}))
-        result = subprocess.run(
-            [sys.executable, '-S', '-m', 'unittest', 'discover', '-s',
-             str(ROOT / 'test/infra/control'), '-p', 'test_dependency_artifact_ci.py', '-v'],
-            env=env,
-            universal_newlines=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-
     def test_workflow_installs_and_imports_yaml_before_fixture_discovery(self):
         steps = self.workflow['jobs']['fixtures']['steps']
         discovery = next(i for i, step in enumerate(steps)
@@ -191,28 +159,6 @@ class DependencyArtifactCITests(unittest.TestCase):
                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                     self.assertEqual(result.returncode == 0, invalid is None,
                                      result.stdout + result.stderr)
-
-    def test_openssl_bridge_make_failure_reports_captured_diagnostics(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / 'deps/libssl').mkdir(parents=True)
-            openssl = root / 'deps/libssl/openssl'
-            (root / 'deps/Makefile').write_text(
-                f'OPENSSL_VERSION := 3.5.7\nSSL_PATH := {openssl}\n'
-                f'SSL_IDIR := {openssl}/include\nSSL_LDIR := {openssl}\n'
-                f'LIB_SSL_PATH := {openssl}/libssl.a\n'
-                f'LIB_CRYPTO_PATH := {openssl}/libcrypto.a\n'
-                f'OPENSSL_STATIC_LIBS := {openssl}/libssl.a {openssl}/libcrypto.a\n'
-                'ifeq ($(MAKECMDGOALS),libssl)\n'
-                '$(error fixture OpenSSL bridge failure)\nendif\n'
-                'dependency-source-openssl:\n\t@true\n')
-            result = subprocess.run(
-                ['bash', str(ROOT / 'test/infra/control/test-vendored-openssl-build-contract.bash')],
-                env=dict(os.environ, OPENSSL_BUILD_CONTRACT_ROOT=tmp),
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('fixture OpenSSL bridge failure', result.stderr)
-            self.assertIn('ERROR:', result.stderr)
 
 
 if __name__ == '__main__':

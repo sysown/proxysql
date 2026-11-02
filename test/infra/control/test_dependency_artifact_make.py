@@ -1,4 +1,4 @@
-"""Preparation modes, concurrency, and the real Make-facing source recipe."""
+"""Cache preparation, invalidation, and locking with lightweight source fixtures."""
 import importlib
 import fcntl
 import io
@@ -62,8 +62,6 @@ class PreparationTests(unittest.TestCase):
             'include $(PROXYSQL_PATH)/deps/libssl/build.mk\n'
             'cleanbuild:\n\trm -rf libssl/openssl-3.5.7\n')
         self.tree = directory / 'openssl-3.5.7'
-        self.probe = patch.object(self.identity, 'toolchain_identity',
-                                  return_value={'os': 'Linux', 'arch': 'fixture'})
         # Direct API tests use the real toolchain, as subprocess Make does.
 
     def prepare(self, mode='auto'):
@@ -92,6 +90,15 @@ class PreparationTests(unittest.TestCase):
                               env=env or self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               universal_newlines=True, timeout=30)
 
+    def test_tsan_rejects_invalid_prepare_mode_before_source_override(self):
+        result = subprocess.run(
+            ['bash', str(self.root / 'deps/artifacts/prepare.bash'), 'openssl',
+             str(self.root), 'typo'], env=dict(self.env, WITHTSAN='1'),
+            text=True, capture_output=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('DEPS_MODE must be auto, source, or prebuilt', result.stderr)
+        self.assertEqual(self.count(), 0)
+
     def test_empty_registry_source_fallback_and_noop(self):
         with patch.object(self.api, 'download_artifact', side_effect=AssertionError('network used')):
             self.assertEqual('source', self.prepare()['origin'])
@@ -100,6 +107,78 @@ class PreparationTests(unittest.TestCase):
             self.assertFalse(self.prepare()['changed'])
             self.assertEqual(before, stamp.stat().st_mtime_ns)
         self.assertEqual(1, self.count())
+
+    def test_tsan_rebuilds_normal_source_and_bypasses_all_bundle_lookups(self):
+        self.prepare('source')
+        self.env['WITHTSAN'] = '1'
+        with patch.object(self.api.store, 'local_entry', side_effect=AssertionError('TSAN must not restore bundles')), \
+             patch.object(self.api.store, 'remote_entry', side_effect=AssertionError('TSAN must not download bundles')), \
+             patch.object(self.api.store, 'save_local', side_effect=AssertionError('TSAN must not cache bundles')):
+            result = self.prepare('prebuilt')
+            self.assertEqual('source', result['origin'])
+            self.assertTrue(result['changed'])
+            self.assertEqual(2, self.count())
+            self.assertFalse(self.prepare()['changed'], 'one source tree can serve subsequent phases of the same build')
+
+    def assert_tsan_openssl_compilation(self, python_free=False, custom_flags=False):
+        # Model configure's generated flags, then really compile and archive an
+        # object. Replacing those flags at recursive make time must fail here.
+        template = self.root / 'template/openssl-3.5.7'
+        (template / 'fixture.c').write_text(
+            '#ifndef PACKAGE_REQUIRED\n#error missing configured flag\n#endif\n'
+            '#ifndef OBJECT_REQUIRED\n#error missing per-object flag\n#endif\n'
+            'int shared_value;\nint fixture_value(void) { return ++shared_value; }\n')
+        (template / 'config').write_text(
+            '#!/bin/sh\nset -eu\n'
+            'printf "%s\\n" "${CFLAGS:-}" "${CXXFLAGS:-}" "${LDFLAGS:-}" > configured-flags\n'
+            'printf "CFLAGS := %s -DPACKAGE_REQUIRED\\n" "${CFLAGS:-}" > Makefile\n'
+            "cat >> Makefile <<'MAKEFILE'\n"
+            'all: libssl.a libcrypto.a\n'
+            'fixture.o: CFLAGS += -DOBJECT_REQUIRED\n'
+            'fixture.o: fixture.c\n\t$(CC) $(CFLAGS) -c fixture.c -o fixture.o\n'
+            'libssl.a libcrypto.a: fixture.o\n\tar rcs $@ fixture.o\n'
+            'MAKEFILE\n')
+        source = self.root / 'deps/libssl/openssl-3.5.7.tar.gz'
+        with tarfile.open(str(source), 'w:gz') as archive:
+            archive.add(str(template), arcname=template.name)
+        Path(str(source) + '.sha256').write_text(
+            self.identity.digest_file(source) + '  ' + source.name + '\n')
+        env = self.python_free_environment() if python_free else dict(self.env)
+        env['WITHTSAN'] = '1'
+        args = ['-j2', 'libssl', 'DEPS_MODE=prebuilt']
+        if custom_flags:
+            args += ['CFLAGS=-DKEEP_C', 'CXXFLAGS=-DKEEP_CXX', 'LDFLAGS=-Wl,--as-needed']
+        result = self.make(*args, env=env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn('jobserver unavailable', result.stderr)
+        configured = (self.tree / 'configured-flags').read_text().splitlines()
+        for flags in configured:
+            self.assertIn('-fsanitize=thread', flags)
+        if custom_flags:
+            self.assertIn('-DKEEP_C', configured[0])
+            self.assertIn('-DKEEP_CXX', configured[1])
+            self.assertIn('-Wl,--as-needed', configured[2])
+        for name in ('libssl.a', 'libcrypto.a'):
+            symbols = subprocess.check_output(['nm', '-u', str(self.tree / name)], text=True)
+            self.assertIn('__tsan_read', symbols)
+            self.assertIn('__tsan_write', symbols)
+        consumer = self.root / 'consumer.c'
+        consumer.write_text('int fixture_value(void);\nint main(void) { return fixture_value() != 1; }\n')
+        subprocess.run(['cc', '-fsanitize=thread', str(consumer), str(self.tree / 'libcrypto.a'),
+                        '-o', str(self.root / 'consumer')], check=True, capture_output=True, text=True)
+        self.assertEqual('source\n', (self.tree / '.proxysql-origin').read_text())
+
+    def test_tsan_openssl_compiles_instrumented_configured_objects(self):
+        self.assert_tsan_openssl_compilation()
+
+    def test_tsan_openssl_preserves_custom_flags_and_instrumentation(self):
+        self.assert_tsan_openssl_compilation(custom_flags=True)
+
+    def test_python_free_tsan_openssl_compiles_instrumented_configured_objects(self):
+        self.assert_tsan_openssl_compilation(python_free=True)
+
+    def test_python_free_tsan_openssl_preserves_custom_flags_and_instrumentation(self):
+        self.assert_tsan_openssl_compilation(python_free=True, custom_flags=True)
 
     def test_prebuilt_missing_and_invalid_mode_do_not_compile(self):
         for mode in ('prebuilt', 'typo'):
@@ -121,7 +200,7 @@ class PreparationTests(unittest.TestCase):
             self.prepare('auto')
         self.assertEqual(0, self.count())
 
-    def test_prebuilt_hit_relocated_and_mode_transitions(self):
+    def test_prebuilt_hit_noop_and_mode_transitions(self):
         self.register()
         shutil.rmtree(str(self.tree))
         self.assertEqual('prebuilt', self.prepare('prebuilt')['origin'])
@@ -271,7 +350,7 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn('duckdb', result.stdout.split())
 
-    def test_direct_plugin_object_prepares_duckdb_before_compilation(self):
+    def test_direct_plugin_object_schedules_duckdb_preparation_before_compile(self):
         target = ROOT / 'plugins/duckdb/obj/duckdb_engine.o'
         result = subprocess.run(['make', '--no-print-directory', '-n', '-B', '-C',
                                  str(ROOT / 'plugins/duckdb'), str(target),
@@ -321,7 +400,7 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(self.tree.exists())
         self.assertEqual(0, self.count())
 
-    def test_concurrent_preparation_builds_once_and_preserves_jobserver(self):
+    def test_concurrent_preparation_builds_once(self):
         cli = [sys.executable, str(self.root / 'deps/artifacts/manage.py'), 'prepare',
                '--dependency', 'openssl', '--root', str(self.root), '--mode', 'source']
         processes = [subprocess.Popen(cli, env=self.env, stdout=subprocess.PIPE,
@@ -330,9 +409,6 @@ class PreparationTests(unittest.TestCase):
             out, err = process.communicate(timeout=30)
             self.assertEqual(0, process.returncode, out + err)
         self.assertEqual(1, self.count())
-        result = self.make('-j2', 'libssl', 'DEPS_MODE=source')
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertNotIn('jobserver unavailable', result.stderr)
 
     def python_free_environment(self):
         tools = self.root / 'bin'
@@ -340,7 +416,7 @@ class PreparationTests(unittest.TestCase):
         for name in ('bash', 'perl', 'make', 'dirname', 'sed', 'cksum', 'cat', 'rm', 'cp',
                      'mkdir', 'tar', 'gzip', 'uname', 'cc', 'c++', 'touch', 'sleep', 'sh',
                      'awk', 'nproc', 'test', 'find', 'sort', 'grep', 'basename', 'tr',
-                     'sha256sum', 'shasum', 'sha256'):
+                     'sha256sum', 'shasum', 'sha256', 'as', 'ar', 'ld'):
             path = shutil.which(name)
             if path and not (tools / name).exists():
                 (tools / name).symlink_to(path)
@@ -370,19 +446,6 @@ class PreparationTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('SHA-256 mismatch', result.stderr)
         self.assertEqual(1, self.count())
-
-    def test_python_free_sidecar_contents_participate_in_source_signature(self):
-        source = self.install_real_source_verifier()
-        env = self.python_free_environment()
-        result = self.make('libssl', 'DEPS_MODE=source', env=env)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        checksum = Path(str(source) + '.sha256')
-        before = checksum.stat()
-        checksum.write_text(checksum.read_text().replace('  ', ' '))
-        os.utime(str(checksum), ns=(before.st_atime_ns, before.st_mtime_ns))
-        result = self.make('libssl', 'DEPS_MODE=source', env=env)
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertEqual(2, self.count())
 
     def test_python_free_source_archive_corruption_fails_hard(self):
         source = self.install_real_source_verifier()

@@ -86,10 +86,11 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	SQP_par_t qp;
 	qp.first_comment=NULL;
 	qp.query_prefix=NULL;
-	qp.digest_text = (char *)malloc(1024);
+	char digest_text[1024];
+	qp.digest_text = digest_text;
 	MySQL_Connection_userinfo ui;
-	char * username_buf = (char *)malloc(32);
-	char * schemaname_buf = (char *)malloc(64);
+	char username_buf[32];
+	char schemaname_buf[64];
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
 	static const char user_name_prefix[] = "user_name_";
