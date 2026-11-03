@@ -1474,6 +1474,33 @@ static void case_group_copy_in(Mode m, bool) {
 	}
 }
 
+// An error ProxySQL raises itself in a part ended with Flush leaves its ReadyForQuery to the client's
+// Sync, so the Sync gets exactly one: a pg_cancel_backend() whose parameter is not a number, and a
+// DISCARD ALL refused in a group already holding an INSERT.
+static void case_local_error_one_ready(Mode m, bool) {
+	struct Sub { const char* what; bool hold_insert; std::function<void(PgConnection&)> send; };
+	const Sub subs[] = {
+		{ "pg_cancel_backend('abc')", false, [](PgConnection& c) {
+			c.prepareStatement("", uniq() + "SELECT pg_cancel_backend($1)", false);
+			c.bindStatement("", "", { PgConnection::Param{ std::string("abc"), 0 } }, {}, false);
+			c.executePortal("", 0, false); } },
+		{ "DISCARD ALL after a held INSERT", true, [](PgConnection& c) {
+			c.prepareStatement("", uniq() + "DISCARD ALL", false);
+			c.bindStatement("", "", {}, {}, false);
+			c.executePortal("", 0, false); } },
+	};
+	for (const Sub& sub : subs) {
+		auto c = client(m);
+		if (sub.hold_insert) run(*c, [&] { insert_flush(*c, tag_for("localready", m, false)); });
+		const std::string flushed = run(*c, [&] { sub.send(*c); c->sendFlush(); });
+		const std::string synced = run(*c, [&] { c->sendSync(); });
+		const bool one = flushed.find("E(") != std::string::npos && flushed.find("Z(") == std::string::npos &&
+			synced.size() == 4 && synced.rfind("Z(", 0) == 0;
+		ok(one, "local error, then S: %s [%s]: the error at H without ReadyForQuery, one at S (H: '%s', S: '%s')",
+			sub.what, mode_name(m), flushed.c_str(), synced.c_str());
+	}
+}
+
 struct Case {
 	const char* name;
 	int checks;        // ok() calls per (mode, txn) run
@@ -1538,6 +1565,7 @@ static const std::vector<Case> CASES = {
 	{ "group tracked SET",           4,  4, false, case_group_tracked_set },
 	{ "group lock route",            3,  3, false, case_group_lock_route },
 	{ "group COPY FROM STDIN",       10, 10, false, case_group_copy_in },
+	{ "local error one ready",        2,  2, false, case_local_error_one_ready },
 };
 
 static const Mode MODES[] = { Mode::LIBPQ, Mode::NATIVE, Mode::NATIVE_UNBATCHED };

@@ -683,8 +683,11 @@ int main(int argc, char** argv) {
 		// goes out Flush-terminated there, and ProxySQL logs the Sync it adds, once per backend connection,
 		// so the pool is emptied first.
 		if (native) {
-			reload_servers(admin.get(), hg, servers);
-			get_matching_lines(proxysql_log, "__skip_to_end__");
+			if (servers.empty() == false) reload_servers(admin.get(), hg, servers);
+			// get_matching_lines() goes back to where it started when nothing matches, so the log
+			// stream is moved to its end directly: a line left by an earlier case must not count.
+			proxysql_log.clear();
+			proxysql_log.seekg(0, std::ios::end);
 			r = run_unit([&](PgConnection& c) { pbe(c, exec_err + fresh + "7 */"); pbe(c, "SELECT 2"); c.sendQuery("SELECT 13");
 				c.sendSync(); }, unbatched);
 			const bool logged = wait_for_log_match(proxysql_log, ".*native extq: mid-frame stmt-step error.*");

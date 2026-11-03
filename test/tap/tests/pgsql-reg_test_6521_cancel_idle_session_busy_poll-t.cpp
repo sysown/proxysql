@@ -287,7 +287,11 @@ static void cancel_while_waiting_checks(PGconn* admin, bool native, int hg, int 
 		PGresult* second = PQgetResult(c);
 		bool second_ok = second && PQresultStatus(second) == PGRES_TUPLES_OK && std::string(PQgetvalue(second, 0, 0)) == "2";
 		PQclear(second);
-		while (PGresult* res = PQgetResult(c)) {
+		// libpq ends each query's results with a NULL, so the second unit's PIPELINE_SYNC comes after
+		// one. Without reading it, PQexitPipelineMode() refuses and the connection stays in the pipeline.
+		for (int i = 0; i < 4; i++) {
+			PGresult* res = PQgetResult(c);
+			if (res == nullptr) continue;
 			bool sync = PQresultStatus(res) == PGRES_PIPELINE_SYNC;
 			PQclear(res);
 			if (sync) break;

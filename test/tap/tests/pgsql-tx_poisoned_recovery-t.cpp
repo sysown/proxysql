@@ -1347,7 +1347,8 @@ static void case_G_local_error_keeps_session_state(const char* mode, PGconn* adm
 	check_lock_survives(mode, "query rule error, ended by COMMIT", 72602, false, kRuleError, simple("COMMIT"));
 	check_lock_survives(mode, "query rule error, ended by ROLLBACK over the extended protocol", 72603, false,
 	                    "SELECT 1 AS txp_g_blocked", extended("ROLLBACK"));
-	check_lock_survives(mode, "query rule error, ended by COMMIT", 72604, false, "SELECT 1 AS txp_g_blocked", simple("COMMIT"));
+	check_lock_survives(mode, "query rule error, ended by COMMIT over the extended protocol", 72604, false, kRuleError,
+	                    extended("COMMIT"));
 	check_lock_survives(mode, "lock taken with pg_try_advisory_lock", 72605, true, kRuleError, simple("ROLLBACK"));
 	check_set_values_after_rollback(mode);
 	check_pipelined_behind_rollback(mode);

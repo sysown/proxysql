@@ -388,56 +388,6 @@ static void check_clients_keep_their_value() {
 		checked, wrong);
 }
 
-// INTERVAL time zones, as statements and as strings, on PostgreSQL and through ProxySQL. An
-// accepted one must show PostgreSQL's value on every later query and never reach another
-// client, which only holds if the client kept its backend connection. A refused one gets the
-// backend's error, and the session keeps working with its value.
-static void check_interval_forwarded() {
-	const std::vector<std::pair<std::string, bool>> statements = {
-		{ "SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE", true },
-		{ "SET TIME ZONE INTERVAL '+02:30' HOUR", true },
-		{ "SET TIME ZONE INTERVAL '+02:30' MINUTE", true },
-		{ "SET TIME ZONE INTERVAL '2' HOUR", true },
-		{ "SET TIME ZONE INTERVAL '30' MINUTE", true },
-		{ "SET TIME ZONE INTERVAL '2 hours'", true },
-		{ "SET TIME ZONE INTERVAL(2) '+02:30'", true },
-		{ "set session time zone interval '-08:00' hour to minute", true },
-		{ "SET TimeZone = 'INTERVAL ''+02:30'''", true },
-		{ "SET TIME ZONE 'interval ''1 hour 30 minutes'''", true },
-		{ "SET TIME ZONE INTERVAL '+02:30' DAY", false },
-		{ "SET TIME ZONE INTERVAL '+02:30' FOO", false },
-		{ "SET TIME ZONE INTERVAL '1' HOUR TO SECOND", false },
-		{ "SET TIME ZONE INTERVAL '1 day'", false },
-		{ "SET TimeZone = 'INTERVAL ''1 day'''", false },
-	};
-	for (const auto& [sql, pg_accepts] : statements) {
-		PGConn direct = connect_backend("");
-		PGConn proxy = connect_proxy("");
-		PGConn other = connect_proxy("");
-		const std::string proxy_start = shown_timezone(proxy.get());
-		const std::string other_start = shown_timezone(other.get());
-		const bool pg_ok = exec_ok(direct.get(), sql);
-		std::string error;
-		const bool proxy_ok = exec_ok(proxy.get(), sql, &error);
-		const std::string expected = pg_ok ? shown_timezone(direct.get()) : proxy_start;
-		// Each round also runs a query for the other client, so pooled connections change hands.
-		int wrong = 0;
-		for (int round = 0; round < 5; round++) {
-			if (shown_timezone(proxy.get()) != expected) wrong++;
-			if (shown_timezone(other.get()) != other_start) wrong++;
-		}
-		const bool good = direct && proxy && other && !proxy_start.empty() && !other_start.empty() && !expected.empty()
-			&& pg_ok == pg_accepts && proxy_ok == pg_accepts && wrong == 0;
-		if (!good) {
-			diag("%s: PostgreSQL %s ('%s'), ProxySQL %s %s, %d wrong values", sql.c_str(), pg_ok ? "accepted" : "refused",
-				expected.c_str(), proxy_ok ? "accepted" : "refused", error.c_str(), wrong);
-		}
-		ok(good, "%s: %s", sql.c_str(), pg_accepts
-			? "both accept it, the value stays on later queries and does not reach another client"
-			: "both refuse it and the session keeps its value");
-	}
-}
-
 static MYSQL* admin = nullptr;
 
 static bool admin_exec(const std::string& sql) {
@@ -458,6 +408,68 @@ static std::string admin_value(const std::string& sql) {
 	return ret;
 }
 
+// Backend connections in use, over the whole pool.
+static std::string conn_used() {
+	return admin_value("SELECT IFNULL(SUM(ConnUsed),0) FROM stats_pgsql_connection_pool");
+}
+
+// INTERVAL time zones, as statements and as strings, on PostgreSQL and through ProxySQL. An
+// accepted one must show PostgreSQL's value on every later query and never reach another
+// client, which only holds if the client kept its backend connection. A refused one gets the
+// backend's error, and the session keeps working with its value. Either way the client keeps
+// its backend connection while idle, which the pool's in-use count shows directly.
+static void check_interval_forwarded() {
+	const std::vector<std::pair<std::string, bool>> statements = {
+		{ "SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE", true },
+		{ "SET TIME ZONE INTERVAL '+02:30' HOUR", true },
+		{ "SET TIME ZONE INTERVAL '+02:30' MINUTE", true },
+		{ "SET TIME ZONE INTERVAL '2' HOUR", true },
+		{ "SET TIME ZONE INTERVAL '30' MINUTE", true },
+		{ "SET TIME ZONE INTERVAL '2 hours'", true },
+		{ "SET TIME ZONE INTERVAL(2) '+02:30'", true },
+		{ "set session time zone interval '-08:00' hour to minute", true },
+		{ "SET TimeZone = 'INTERVAL ''+02:30'''", true },
+		{ "SET TIME ZONE 'interval ''1 hour 30 minutes'''", true },
+		{ "SET TIME ZONE INTERVAL '+02:30' DAY", false },
+		{ "SET TIME ZONE INTERVAL '+02:30' FOO", false },
+		{ "SET TIME ZONE INTERVAL '1' HOUR TO SECOND", false },
+		{ "SET TIME ZONE INTERVAL '1 day'", false },
+		{ "SET TimeZone = 'INTERVAL ''1 day'''", false },
+	};
+	for (const auto& [sql, pg_accepts] : statements) {
+		// The previous case's connections are released once ProxySQL has seen its clients go.
+		for (int i = 0; i < 50 && conn_used() != "0"; i++) usleep(100000);
+		PGConn direct = connect_backend("");
+		PGConn proxy = connect_proxy("");
+		PGConn other = connect_proxy("");
+		const std::string proxy_start = shown_timezone(proxy.get());
+		const std::string other_start = shown_timezone(other.get());
+		const bool pg_ok = exec_ok(direct.get(), sql);
+		std::string error;
+		const bool proxy_ok = exec_ok(proxy.get(), sql, &error);
+		const std::string expected = pg_ok ? shown_timezone(direct.get()) : proxy_start;
+		// Each round also runs a query for the other client, so pooled connections change hands.
+		int wrong = 0;
+		for (int round = 0; round < 5; round++) {
+			if (shown_timezone(proxy.get()) != expected) wrong++;
+			if (shown_timezone(other.get()) != other_start) wrong++;
+		}
+		// Both clients are idle now, and the other one's connection went back to the pool after each
+		// query: a connection still in use is this client's, kept by the hostgroup lock.
+		const std::string used = conn_used();
+		const bool good = direct && proxy && other && !proxy_start.empty() && !other_start.empty() && !expected.empty()
+			&& pg_ok == pg_accepts && proxy_ok == pg_accepts && wrong == 0 && used == "1";
+		if (!good) {
+			diag("%s: PostgreSQL %s ('%s'), ProxySQL %s %s, %d wrong values, %s connections in use", sql.c_str(),
+				pg_ok ? "accepted" : "refused", expected.c_str(), proxy_ok ? "accepted" : "refused", error.c_str(), wrong,
+				used.c_str());
+		}
+		ok(good, "%s: %s, and the client keeps its backend connection", sql.c_str(), pg_accepts
+			? "both accept it, the value stays on later queries and does not reach another client"
+			: "both refuse it and the session keeps its value");
+	}
+}
+
 // A bad pgsql-default_timezone is refused, and the runtime value stays as it was.
 static void check_default_variable() {
 	const char* where = " WHERE variable_name='pgsql-default_timezone'";
@@ -467,10 +479,14 @@ static void check_default_variable() {
 		BAIL_OUT("Could not read pgsql-default_timezone");
 	}
 
+	// The admin tables are SQLite: an apostrophe in a literal is doubled, a backslash is plain text.
 	auto set_table = [&](const std::string& value) {
-		std::string escaped(value.size() * 2 + 1, '\0');
-		escaped.resize(mysql_real_escape_string(admin, &escaped[0], value.c_str(), value.size()));
-		return admin_exec("UPDATE global_variables SET variable_value='" + escaped + "'" + where);
+		std::string quoted;
+		for (char c : value) {
+			if (c == '\'') quoted += '\'';
+			quoted += c;
+		}
+		return admin_exec("UPDATE global_variables SET variable_value='" + quoted + "'" + where);
 	};
 	for (const std::string bad : { "'UTC'", "INTERVAL '+02:30'", "LOCAL" }) {
 		// If the UPDATE or the LOAD failed, an unchanged runtime value would prove nothing. The

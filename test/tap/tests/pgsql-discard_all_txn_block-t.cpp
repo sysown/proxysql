@@ -906,7 +906,12 @@ int main(int, char**) {
         if (!native_supported) {
             skip(MIXED_POOL_CHECKS, "mixed pool needs both backend protocols");
         } else {
-            if (!setNativeMode(admin, !native) || !flushBackendPool(admin, BACKEND_HG, saved_servers)) {
+            // One connection at most, and none closed while idle: the case can only run on the
+            // backend opened under the other protocol, so a fresh one cannot pass in its place.
+            const std::vector<ServerRow> one_conn = { ServerRow{ saved_servers[0].hostname, saved_servers[0].port,
+                                                                 "1", saved_servers[0].comment } };
+            if (!execAdmin(admin, "SET pgsql-free_connections_pct=100") || !setNativeMode(admin, !native) ||
+                !flushBackendPool(admin, BACKEND_HG, one_conn)) {
                 cleanup();
                 BAIL_OUT("cannot set up the mixed pool");
             }

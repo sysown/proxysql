@@ -1001,12 +1001,10 @@ struct ResyncFailureProbe {
 	bool kill_fired = false;    // the commit trigger ran, so the resync's Sync DID reach the
 	                             // backend and the backend DID die on it -- without this the
 	                             // whole scenario passes on an ordinary successful frame
-	bool client_ok = false;     // the client's own frame still completes cleanly -- Close is
-	                             // answered locally either way, so the client never sees the
-	                             // backend's death
-	bool told_failure = false;  // the client got an error or lost its connection: in native mode
-	                             // the frame's own Sync goes to the backend with the rest of the
-	                             // frame, so the commit's failure reaches the client
+	bool told_failure = false;  // the client got an error or lost its connection: the frame's
+	                             // own Sync reaches the backend (native with the rest of the frame,
+	                             // libpq after answering the Close itself), so the commit's
+	                             // failure reaches the client
 	long gauge_baseline = -1;
 	long gauge_after = -1;      // the connected-backend count returns to baseline: nothing was
 	                             // left counted as connected
@@ -1053,7 +1051,6 @@ static ResyncFailureProbe runResyncFailure(PGconn* admin, PGconn* be_db, const s
 			if (type == PgConnection::ERROR_RESPONSE) { errored = true; continue; }
 			if (type == PgConnection::READY_FOR_QUERY) break;
 		}
-		r.client_ok = !errored;
 		r.told_failure = errored;
 		// Still connected here on purpose: once this client disconnects, session teardown drops
 		// the backend connection whether or not the resync disowned it.
@@ -1084,7 +1081,7 @@ static ResyncFailureProbe runResyncFailure(PGconn* admin, PGconn* be_db, const s
 	}
 
 	if (r.detail == "not run") {
-		r.detail = std::string("client_ok=") + (r.client_ok ? "yes" : "no")
+		r.detail = std::string("told_failure=") + (r.told_failure ? "yes" : "no")
 			+ ", insert_ran=" + (r.insert_ran ? "yes" : "no")
 			+ ", kill_fired=" + (r.kill_fired ? "yes" : "no")
 			+ ", row_visible=" + (r.row_visible ? "yes" : "no")

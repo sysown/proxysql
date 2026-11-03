@@ -35,12 +35,14 @@ CommandLine cl;
 using PGConn = std::unique_ptr<PGconn, decltype(&PQfinish)>;
 using PGResult = std::unique_ptr<PGresult, decltype(&PQclear)>;
 
-static PGConn connect_to(const char* host, int port, const char* user, const char* pass, const std::string& extra) {
+static PGConn connect_to(const char* host, int port, const char* user, const char* pass, const std::string& extra,
+	std::string* error = nullptr) {
 	std::stringstream ss;
 	ss << "host=" << host << " port=" << port << " user=" << user << " password=" << pass
 	   << " sslmode=disable connect_timeout=10 " << extra;
 	PGConn conn(PQconnectdb(ss.str().c_str()), &PQfinish);
 	if (PQstatus(conn.get()) != CONNECTION_OK) {
+		if (error) *error = PQerrorMessage(conn.get());
 		diag("Connection to %s:%d with '%s' failed: %s", host, port, extra.c_str(), PQerrorMessage(conn.get()));
 		conn.reset();
 	}
@@ -51,9 +53,9 @@ static PGConn connect_proxy(const std::string& extra) {
 	return connect_to(cl.pgsql_host, cl.pgsql_port, cl.pgsql_username, cl.pgsql_password, extra);
 }
 
-static PGConn connect_backend(const std::string& extra) {
+static PGConn connect_backend(const std::string& extra, std::string* error = nullptr) {
 	return connect_to(cl.pgsql_server_host, cl.pgsql_server_port, cl.pgsql_server_username,
-		cl.pgsql_server_password, "dbname=postgres " + extra);
+		cl.pgsql_server_password, "dbname=postgres " + extra, error);
 }
 
 // Every encoding the backend knows, so the list follows its PostgreSQL version.
@@ -180,6 +182,7 @@ static void check_options_quoted() {
 }
 
 static void check_set_alias() {
+	leave_pooled_connection("LATIN1");
 	PGConn conn = connect_proxy("client_encoding=LATIN1");
 	const bool set_ok = exec_ok(conn.get(), "SET client_encoding = 'utf-8'");
 	const std::string reported = reported_encoding(conn.get());
@@ -202,6 +205,7 @@ static void check_default_after_quoted_login() {
 }
 
 static void check_unicode_kept() {
+	leave_pooled_connection("LATIN1");
 	PGConn conn = connect_proxy("client_encoding=LATIN1");
 	const bool set_ok = exec_ok(conn.get(), "SET client_encoding = 'UNICODE'");
 	const std::string reported = reported_encoding(conn.get());
@@ -222,13 +226,19 @@ static void check_every_encoding(const std::vector<std::string>& names) {
 		const std::string login = "client_encoding='\\'" + lower + "\\''";
 		const std::string label = "client_encoding='" + lower + "'";
 
-		std::string expected;
+		std::string expected, error;
 		{
-			PGConn direct = connect_backend(login);
+			PGConn direct = connect_backend(login, &error);
 			expected = reported_encoding(direct.get());
 		}
-		if (expected.empty()) {
+		// Only an encoding PostgreSQL cannot convert to the database's is skipped. Any other failure
+		// to reach it directly is a broken backend, and must not pass as a skip.
+		if (expected.empty() && error.find("conversion between") != std::string::npos) {
 			skip(1, "%s: refused by PostgreSQL itself", label.c_str());
+			continue;
+		}
+		if (expected.empty()) {
+			ok(false, "%s: PostgreSQL could not be reached directly: %s", label.c_str(), error.c_str());
 			continue;
 		}
 
