@@ -377,14 +377,10 @@ bool PgSQL_ExplicitTxnStateMgr::commit_in_digest(const char* digest) {
 	return lost != NULL;
 }
 
-bool PgSQL_ExplicitTxnStateMgr::commit_in_query(const char* digest, const char* query) {
-	// Same rule as pgsql_query_has_stmt_keyword(): the digest buffer is as long as the query up to
-	// query_digests_max_query_length, so only the digest of a longer query can have been cut short.
-	if (digest != NULL && *digest != '\0' &&
-		(query == NULL || strnlen(query, (size_t)pgsql_thread___query_digests_max_query_length + 1) <=
-			(size_t)pgsql_thread___query_digests_max_query_length)) {
-		return commit_in_digest(digest);
-	}
+bool PgSQL_ExplicitTxnStateMgr::commit_in_query(const char* query) {
+	// A stored digest can be cut without showing it: a prepared statement's was built under the
+	// query_digests_max_query_length of the moment it was parsed. This runs only after a backend
+	// failed, so the query is digested again in full rather than trusting one.
 	if (query == NULL) return true; // nothing to read: fail closed
 	char* full = pgsql_query_full_digest(query);
 	if (full == NULL) return true; // cannot be told apart: fail closed
