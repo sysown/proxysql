@@ -109,6 +109,8 @@ static const std::set<std::string> pgsql_other_variables = {
 
 static const RE2 re_inline_comment("(?U)/\\*.*\\*/");
 static const RE2 re_versioned_set_comment("^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/");
+static const RE2 re_set_time_zone_interval("(?i)^\\s*SET\\s+(?:SESSION\\s+|LOCAL\\s+)?TIME\\s+ZONE\\s+INTERVAL\\b");
+static const RE2 re_set_time_zone_local("(?i)^\\s*SET\\s+(?:SESSION\\s+)?TIME\\s+ZONE\\s+LOCAL(?:[\\s;\\x00]|--[^\\n]*)*$");
 static const RE2 re_reset_keyword("(?i)\\bRESET\\b");
 static const RE2 re_discard_keyword("(?i)\\bDISCARD\\b");
 static const RE2 re_deallocate_keyword("(?i)\\bDEALLOCATE\\b(\\s+PREPARE)?");
@@ -5144,6 +5146,13 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	{
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing SET command %s\n", nq.c_str());
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nq.c_str());
+		// An INTERVAL time zone cannot be applied again on another backend connection, so it
+		// goes to the backend as written and the client keeps that connection. Checked before
+		// parsing: some forms do not parse, and would otherwise go out without the lock.
+		if (RE2::PartialMatch(nq, re_set_time_zone_interval)) {
+			unable_to_parse_set_statement(lock_hostgroup);
+			return PgSQL_Local_Reply::NONE;
+		}
 		PgSQL_Set_Stmt_Parser parser(nq);
 		std::map<std::string, std::vector<std::string>> set = {};
 		std::vector<std::pair<std::string, std::string>> param_status = {};
@@ -5232,8 +5241,20 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 						PgSQL_Set_Stmt_Parser::unquote_if_quoted(value1);
 					}
 
+					// The string form, SET TimeZone = 'INTERVAL ''+02:30''', is forwarded the same way.
+					if (idx == PGSQL_TIMEZONE && strncasecmp(value1.c_str(), "INTERVAL", 8) == 0) {
+						unable_to_parse_set_statement(lock_hostgroup);
+						return PgSQL_Local_Reply::NONE;
+					}
+
+					// SET TIME ZONE LOCAL means SET TIME ZONE DEFAULT. Sent to the backend it would reset to the
+					// default of whichever client opened that pooled connection. Any other LOCAL value is
+					// refused by the TimeZone check, as PostgreSQL does.
+					const bool time_zone_local = idx == PGSQL_TIMEZONE && RE2::PartialMatch(nq, re_set_time_zone_local);
+
 					uint32_t current_hash = pgsql_variables.client_get_hash(this, idx);
-					if ((value1.size() == sizeof("DEFAULT") - 1) && strncasecmp(value1.c_str(), "DEFAULT", sizeof("DEFAULT") - 1) == 0) {
+					if (time_zone_local ||
+						((value1.size() == sizeof("DEFAULT") - 1) && strncasecmp(value1.c_str(), "DEFAULT", sizeof("DEFAULT") - 1) == 0)) {
 						auto [value, hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
 						if (hash == 0) {
 							if (current_hash != 0) {

@@ -1291,7 +1291,8 @@ int main(int argc, char** argv) {
         {"SET TIME ZONE 'UTC';", true, "TIME ZONE UTC"},
         {"SET TIME ZONE DEFAULT;", true, "TIME ZONE DEFAULT"},
         {"SET TIME ZONE -7;", true, "TIME ZONE numeric offset"},
-        {"SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE;", true, "TIME ZONE interval"},
+        // An INTERVAL time zone goes to the backend as written, with the hostgroup locked.
+        {"SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE;", false, "TIME ZONE interval"},
 
         // TRANSACTION ISOLATION LEVEL: only affects the current transaction (outside one,
         // PostgreSQL ignores it with a WARNING), so it is forwarded without a lock.

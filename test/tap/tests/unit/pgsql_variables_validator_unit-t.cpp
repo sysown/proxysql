@@ -211,18 +211,17 @@ static void test_client_encoding_invalid() {
 
 static void test_timezone_valid() {
     const char* names[] = {
-        // zone names
-        "UTC", "utc", "EST", "Europe/Berlin", "America/Argentina/Buenos_Aires", "America/Port-au-Prince", "Etc/GMT+3",
+        // zone names, in any case, with the optional leading ':'
+        "UTC", "utc", "Etc/UTC", "Europe/Berlin", "EUROPE/BERLIN", "America/Argentina/Buenos_Aires",
+        "America/Port-au-Prince", "Etc/GMT+3", ":UTC",
         // POSIX rules
-        "PST8PDT", "EST5EDT,M3.2.0,M11.1.0", "UTC+3", "<-03>3", "<+0330>-3:30",
-        // hours
-        "-7", "5.5", "1e1",
-        // intervals, as the SET parser passes them on; a quoted SET string keeps '' doubled
-        "INTERVAL '+02:30'", "INTERVAL '-08:00' HOUR TO MINUTE", "interval '1' hour", "INTERVAL ''+02:30''",
-        "INTERVAL '+02:30' minute", "INTERVAL '2 hours'", "INTERVAL '1 hour 30 minutes'", "INTERVAL ''2 hours''",
-        "INTERVAL'1'",
-        // well-formed but unknown to PostgreSQL: only the backend knows its zone list
-        "Invalid/Zone", "PST",
+        "PST8PDT", "EST5EDT,M3.2.0,M11.1.0", "EST5EDT,M3.2.0/2,M11.1.0/2:00:00", "CET-1CEST,M3.5.0,M10.5.0/3",
+        "EST5EDT,J60,J300", "UTC+3", "UTC+03:30", "<-03>3", "<+0330>-3:30", "<+03>3<+04>,M3.2.0,M11.1.0",
+        "<<+03>3",
+        // hours, up to just under 168, in any form strtod() reads
+        "0", "-7", "+7", "5.5", "-3.5", ".5", "5.", "1e1", "0x5", "167", "-167.99",
+        // well-formed: only the backend knows whether it has the zone (EST is gone from newer tzdata)
+        "Invalid/Zone", "PST", "EST",
     };
     for (const char* name : names) {
         assert_validates(pgsql_variable_validator_timezone, name, true, nullptr, "timezone");
@@ -233,15 +232,20 @@ static void test_timezone_invalid() {
     const std::string too_long(256, 'A');
     const char* values[] = {
         "'UTC'", "America/New York", "UTC\t", "UTC;", "", too_long.c_str(),
-        "INTERVAL '1''2'", "INTERVAL '1'; x", "INTERVAL '1",
-        // the grammar allows only HOUR, MINUTE or HOUR TO MINUTE after the interval
-        "INTERVAL '+02:30' DAY", "INTERVAL '+02:30' FOO", "INTERVAL '1' HOUR TO SECOND",
-        // as a string value, PostgreSQL accepts nothing after the interval
-        "INTERVAL ''-08:00'' HOUR TO MINUTE", "INTERVAL ''1'",
-        // PostgreSQL reads any value that starts with "interval" as the interval form
-        "INTERVAL+3",
+        // any INTERVAL, valid or not: a SET with one is forwarded before this check, and at login
+        // or as pgsql-default_timezone it cannot be applied again on another backend connection
+        "INTERVAL '+02:30'", "interval '1' hour", "INTERVAL ''+02:30''", "INTERVAL'1'", "INTERVAL '2 hours'",
+        "INTERVAL '1''2'", "INTERVAL '+02:30' DAY", "INTERVAL+3",
+        // LOCAL: SET TIME ZONE LOCAL is handled as DEFAULT, and as a value PostgreSQL refuses it
+        "LOCAL", "local",
         // PostgreSQL accepts these two, but no real client sends them
         " 5", "5 ",
+        // numbers PostgreSQL refuses as hours: 168 and over, infinity, NaN
+        "168", "-168", "1e400", "0xA8", "inf", "-inf", "Infinity", "NaN",
+        // paths that can never name a zone file
+        "/etc/localtime", ":/etc/localtime", "Europe//Rome", "../UTC", "Europe/../Europe/Rome", ".UTC", ":", "::UTC",
+        // a POSIX abbreviation opened with '<' and never closed
+        "<+03", "<+03>3<+04", "UTC<",
     };
     for (const char* value : values) {
         assert_validates(pgsql_variable_validator_timezone, value, false, nullptr, "timezone");
@@ -253,8 +257,8 @@ int main() {
     if (encodings == 0) {
         BAIL_OUT("pg_encoding_to_char() returned no encodings");
     }
-    // Include the 43 TimeZone checks alongside the dynamic encoding checks.
-    plan(132 + 4 * encodings);
+    // Include the 71 TimeZone checks alongside the dynamic encoding checks.
+    plan(160 + 4 * encodings);
     test_init_minimal();
 
     test_bool_true_values();                // 12 (6 inputs x 2 assertions each)
@@ -276,8 +280,8 @@ int main() {
     test_client_encoding_valid();           // 20 (10 inputs x 2)
     test_client_encoding_every_encoding(encodings); // 4 per encoding (2 spellings x 2)
     test_client_encoding_invalid();         // 1
-    test_timezone_valid();                  // 26 (validate only)
-    test_timezone_invalid();                // 17
+    test_timezone_valid();                  // 34 (validate only)
+    test_timezone_invalid();                // 37
 
     // Note: assert_validates calls ok() once for validate result,
     // and once more for transform comparison when expected_transformed != nullptr.

@@ -2,6 +2,7 @@
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_Session.h"
 #include "cpp.h"
+#include <cmath>
 #include <string_view>
 
 /**
@@ -453,37 +454,6 @@ bool pgsql_variable_validate_client_encoding(const char* value, const params_t* 
 	return true;
 }
 
-// What follows "INTERVAL", read as PostgreSQL reads it: optional spaces, then one quoted part
-// of letters, digits, "+-:." and spaces ('+02:30', '2 hours'). The part is quoted with ' in
-// "SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE", where the grammar allows only HOUR, MINUTE
-// or HOUR TO MINUTE after it, and with '' in a value sent as a string,
-// SET TimeZone = 'INTERVAL ''+02:30''', where PostgreSQL accepts nothing after it.
-static bool is_interval_literal(const char* p) {
-	while (fast_isspace((unsigned char)*p)) p++;
-	const size_t quotes = (p[0] == '\'' && p[1] == '\'') ? 2 : (p[0] == '\'' ? 1 : 0);
-	if (quotes == 0) return false;
-	p += quotes;
-	for (; *p && *p != '\''; p++) {
-		if (!isalnum((unsigned char)*p) && strchr("+-:. ", *p) == nullptr) return false;
-	}
-	if (strncmp(p, "''", quotes) != 0) return false;
-	p += quotes;
-	if (quotes == 2) return *p == '\0';
-
-	std::string unit;  // the words after the interval, upper-cased, one space between them
-	for (; *p; p++) {
-		if (fast_isspace((unsigned char)*p)) {
-			if (!unit.empty() && unit.back() != ' ') unit += ' ';
-		} else if (isalpha((unsigned char)*p)) {
-			unit += toupper((unsigned char)*p);
-		} else {
-			return false;
-		}
-	}
-	if (!unit.empty() && unit.back() == ' ') unit.pop_back();
-	return unit.empty() || unit == "HOUR" || unit == "MINUTE" || unit == "HOUR TO MINUTE";
-}
-
 // A zone name, a POSIX rule or a number of hours. PostgreSQL decides whether the zone
 // exists; this only refuses what can never be one (quotes, spaces, ';' ...), so the
 // mistake fails where the client makes it, not on a later query when ProxySQL applies it.
@@ -492,11 +462,30 @@ bool pgsql_variable_validate_timezone(const char* value, const params_t* params,
 	(void)session;
 	if (transformed_value) *transformed_value = nullptr;
 	if (value == nullptr || *value == '\0' || strlen(value) > 255) return false;
-	if (strncasecmp(value, "INTERVAL", 8) == 0) return is_interval_literal(value + 8);
+	// PostgreSQL reads any value starting with "interval" as an INTERVAL. Such a value cannot be
+	// applied again on another backend connection: a SET with one is forwarded to the backend
+	// and keeps its connection, but at login or as pgsql-default_timezone it is refused.
+	if (strncasecmp(value, "INTERVAL", 8) == 0) return false;
+	// LOCAL is only a keyword of SET TIME ZONE, meaning DEFAULT; as a value PostgreSQL refuses it.
+	if (strcasecmp(value, "LOCAL") == 0) return false;
 	for (const char* c = value; *c; c++) {
 		if (!isalnum((unsigned char)*c) && strchr("/_-+,.:<>", *c) == nullptr) return false;
 	}
-	return true;
+	// A value that is entirely a number is read by PostgreSQL as hours east of UTC: it
+	// refuses infinity, NaN and anything from 168 hours on.
+	char* end = nullptr;
+	const double hours = strtod(value, &end);
+	if (end != value && *end == '\0') return std::isfinite(hours) && std::fabs(hours) < 168;
+	// In a POSIX rule '<' opens a quoted abbreviation such as <+03>. PostgreSQL refuses a value
+	// whose last '<' is never closed by a '>'.
+	const char* last_lt = strrchr(value, '<');
+	if (last_lt && strchr(last_lt, '>') == nullptr) return false;
+	// A zone name is a file path under PostgreSQL's zone directory, read with one leading
+	// ':' dropped. An empty path, or one that starts at '/' or ':' or has an empty or hidden
+	// part, is never a zone.
+	const char* name = value + (value[0] == ':');
+	return name[0] != '\0' && name[0] != '/' && name[0] != ':' && name[0] != '.' &&
+		strstr(name, "//") == nullptr && strstr(name, "/.") == nullptr;
 }
 
 bool pgsql_variable_validate_search_path(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
