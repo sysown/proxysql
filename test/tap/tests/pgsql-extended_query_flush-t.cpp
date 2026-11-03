@@ -333,6 +333,76 @@ static void case_unnamed_row_limit(Mode m, bool) {
 	}
 }
 
+// An unnamed portal whose Execute finished, read in steps with row limits or all at once, stays open
+// until the group or transaction ends, as in PostgreSQL: a Describe still answers its columns and
+// another Execute returns no rows. Checked inside one Flush group, and across Syncs in an explicit
+// transaction. Native mode only: libpq mode keeps no portal between messages (by design).
+// (e)-(g): a Describe, Execute, Close or new Bind in the same batched unit as the Execute sees it in
+// the order the client sent them.
+static void case_unnamed_exhausted(Mode m, bool) {
+	if (m == Mode::LIBPQ) return;
+	{   // (a) one group, every part ended with Flush
+		auto c = client(m);
+		check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 2, false); c->sendFlush(); }), "1 2 D D s", "exhausted (a): P B E(2) H", m, false);
+		check(run(*c, [&] { c->executePortal("", 5, false); c->sendFlush(); }), "D D D C(SELECT 3)",
+			"exhausted (a): E(5) H reads the rest", m, false);
+		check(run(*c, [&] { c->describePortal("", false); c->sendFlush(); }), "T", "exhausted (a): D(P) H", m, false);
+		check(run(*c, [&] { c->executePortal("", 0, false); c->sendFlush(); }), "C(SELECT 0)", "exhausted (a): E H", m, false);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "exhausted (a): S", m, false);
+	}
+	{   // (b) an explicit transaction, every part ended with Sync
+		auto c = client(m);
+		maybe_begin(*c, true);
+		check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 2, true); }), "1 2 D D s Z(T)", "exhausted (b): P B E(2) S", m, true);
+		check(run(*c, [&] { c->executePortal("", 5, true); }), "D D D C(SELECT 3) Z(T)", "exhausted (b): E(5) S reads the rest", m, true);
+		check(run(*c, [&] { c->describePortal("", true); }), "T Z(T)", "exhausted (b): D(P) S", m, true);
+		check(run(*c, [&] { c->executePortal("", 0, true); }), "C(SELECT 0) Z(T)", "exhausted (b): E S", m, true);
+	}
+	{   // (c) no row limit: the Execute runs to the end, in one group ended with Flush
+		auto c = client(m);
+		check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 0, false); c->sendFlush(); }), "1 2 " + ALL5, "exhausted (c): P B E H", m, false);
+		check(run(*c, [&] { c->describePortal("", false); c->sendFlush(); }), "T", "exhausted (c): D(P) H", m, false);
+		check(run(*c, [&] { c->executePortal("", 0, false); c->sendFlush(); }), "C(SELECT 0)", "exhausted (c): E H", m, false);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "exhausted (c): S", m, false);
+	}
+	{   // (d) no row limit, in an explicit transaction, every part ended with Sync
+		auto c = client(m);
+		maybe_begin(*c, true);
+		check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 0, true); }), "1 2 " + ALL5 + " Z(T)", "exhausted (d): P B E S", m, true);
+		check(run(*c, [&] { c->describePortal("", true); }), "T Z(T)", "exhausted (d): D(P) S", m, true);
+		check(run(*c, [&] { c->executePortal("", 0, true); }), "C(SELECT 0) Z(T)", "exhausted (d): E S", m, true);
+	}
+	{   // (e) Describe and Execute right after the Execute, in the same segment; then Close it
+		auto c = client(m);
+		check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 0, false); c->describePortal("", false); c->executePortal("", 0, false); c->sendFlush(); }),
+			"1 2 " + ALL5 + " T C(SELECT 0)", "exhausted (e): P B E D(P) E H", m, false);
+		check(run(*c, [&] { c->closePortal("", false); c->describePortal("", false); c->sendFlush(); }), "3 E(34000)",
+			"exhausted (e): C(P) D(P) H", m, false);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "exhausted (e): S", m, false);
+	}
+	{   // (f) Closed in the same segment as its Execute: not kept
+		auto c = client(m);
+		check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 0, false); c->closePortal("", false); c->sendFlush(); }), "1 2 " + ALL5 + " 3",
+			"exhausted (f): P B E C(P) H", m, false);
+		check(run(*c, [&] { c->describePortal("", false); c->sendFlush(); }), "E(34000)", "exhausted (f): D(P) H", m, false);
+		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "exhausted (f): S", m, false);
+	}
+	{   // (g) Replaced by a new Bind, then closed, in the same unit as its Execute: not kept
+		auto c = client(m);
+		maybe_begin(*c, true);
+		check(run(*c, [&] { c->prepareStatement("", uniq() + SER, false); c->bindStatement("", "", {}, {}, false);
+				c->executePortal("", 0, false); c->bindStatement("", "", {}, {}, false); c->closePortal("", false); c->sendSync(); }),
+			"1 2 " + ALL5 + " 2 3 Z(T)", "exhausted (g): P B E B C(P) S", m, true);
+		check(run(*c, [&] { c->describePortal("", true); }), "E(34000) Z(E)", "exhausted (g): D(P) S", m, true);
+	}
+}
+
 // Row 2: a whole statement before the Flush, then the Sync alone.
 static void case_row2(Mode m, bool txn) {
 	auto c = client(m);
@@ -1417,6 +1487,7 @@ static const std::vector<Case> CASES = {
 	{ "row 1",                       2,  2, true,  case_row1 },
 	{ "describe portal, no execute", 2,  1, true,  case_describe_portal_no_execute },
 	{ "unnamed row limit",           10, 2, false, case_unnamed_row_limit },
+	{ "unnamed exhausted",           24, 0, false, case_unnamed_exhausted },
 	{ "row 2",                       2,  2, true,  case_row2 },
 	{ "row 3a",                      4,  1, true,  case_row3a },
 	{ "row 3b",                      4,  0, true,  case_row3b },

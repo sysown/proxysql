@@ -4155,7 +4155,7 @@ handler_again:
 					// client, then evict the registry entry. Eviction of an already-absent
 					// name is a harmless no-op (matches the backend's idempotent behavior).
 					PgSQL_Result_to_PgSQL_wire(myconn, myconn->myds);
-					// The empty name is the unnamed portal left suspended by a row limit.
+					// The empty name is the unnamed portal, kept after its Execute.
 					named_portals.erase(closing_portal_name);
 					closing_portal_name.clear();
 					handle_transaction_state();
@@ -4204,10 +4204,9 @@ handler_again:
 				// if the transaction ended the portal is destroyed regardless (clear wins).
 				// stmt_client_portal_name points at the stable named_portals key set by the
 				// Execute handler, so the lookup is safe here (pre-RequestEnd).
-				// The unnamed portal after a row limit: kept, under the empty name, while suspended so a
-				// later Execute can continue it; dropped once it ran to completion. The drop waits until
-				// after RequestEnd(), which logs names that point into its Bind.
-				bool drop_unnamed_portal = false;
+				// The unnamed portal, kept under the empty name after its Execute, suspended or not: as in
+				// PostgreSQL it stays open until the next unnamed Bind, a simple Query, a Close or the end
+				// of the transaction, and a finished one still answers a Describe and an Execute.
 				if (old_status == PROCESSING_STMT_EXECUTE) {
 					const char* pn = CurrentQuery.extended_query_info.stmt_client_portal_name;
 					if (pn && pn[0] != '\0') {
@@ -4215,20 +4214,16 @@ handler_again:
 						if (it != named_portals.end()) {
 							it->second.suspended = myconn->native_last_execute_suspended;
 						}
-					} else if (myconn->native_mode) {
-						if (myconn->native_last_execute_suspended) {
-							PgSQL_Portal_Entry& p = named_portals[""];
-							if (bind_waiting_for_execute) {
-								// The Execute that carried the Bind: the portal is the backend's now.
-								p.stmt_info = extq_find_stmt(bind_waiting_for_execute->data().stmt_name);
-								p.bind_msg = std::move(bind_waiting_for_execute);
-								p.bound_on_backend = true;
-								p.bound_conn = myconn;
-							}
-							p.suspended = true;
-						} else {
-							drop_unnamed_portal = true;
+					} else if (myconn->native_mode && (bind_waiting_for_execute || named_portals.count("") != 0)) {
+						PgSQL_Portal_Entry& p = named_portals[""];
+						if (bind_waiting_for_execute) {
+							// The Execute that carried the Bind: the portal is the backend's now.
+							p.stmt_info = extq_find_stmt(bind_waiting_for_execute->data().stmt_name);
+							p.bind_msg = std::move(bind_waiting_for_execute);
+							p.bound_on_backend = true;
+							p.bound_conn = myconn;
 						}
+						p.suspended = myconn->native_last_execute_suspended;
 					}
 				}
 
@@ -4282,17 +4277,13 @@ handler_again:
 				// named portal routes to the connection that holds it. Kept SEPARATE from
 				// has_pending_messages: the latter still gates the frame-drain
 				// NEXT_IMMEDIATE(PROCESSING_EXTENDED_QUERY_SYNC) below, which must not fire
-				// on an empty frame just because a portal is open. The unnamed portal about to be
-				// dropped is left out of the count only if it was recorded: one that ran to the end
-				// without pausing never was.
+				// on an empty frame just because a portal is open.
 				bool sticky_backend_connection = has_pending_messages || (group_continues && myconn->is_pipeline_active()) ||
-					(!clear_portals_at_boundary && named_portals.size() > (drop_unnamed_portal ? named_portals.count("") : 0u));
+					(!clear_portals_at_boundary && named_portals.empty() == false);
 
 				RequestEnd(myds, false);
 				if (clear_portals_at_boundary) {
 					clear_named_portals();
-				} else if (drop_unnamed_portal) {
-					named_portals.erase("");
 				}
 				finishQuery(myds, myconn, sticky_backend_connection);
 
@@ -8121,7 +8112,7 @@ int PgSQL_Session::handle_post_sync_describe_message(PgSQL_Describe_Message* des
 	// deallocation of the statement) instead of local_stmts. Task P2.
 	const PgSQL_STMT_Global_info* named_portal_stmt_info = nullptr;
 
-	// A suspended unnamed portal is described on the backend, like a named one.
+	// An unnamed portal already executed, suspended or finished, is described on the backend, like a named one.
 	PgSQL_Portal_Ref held_unnamed;
 	const bool held_unnamed_portal = stmt_type == 'P' && describe_data.stmt_name[0] == '\0' &&
 		!bind_waiting_for_execute && pgsql_thread___use_native_backend_protocol &&
@@ -8313,7 +8304,7 @@ int PgSQL_Session::handle_post_sync_close_message(PgSQL_Close_Message* close_msg
 	const PgSQL_Close_Data& close_data = close_msg->data(); // this will always be a valid pointer
 	uint8_t stmt_type = close_data.stmt_type;
 	
-	// A suspended unnamed portal is closed on the backend, like a named one, so PostgreSQL frees it now.
+	// An unnamed portal already executed is closed on the backend, like a named one, so PostgreSQL frees it now.
 	PgSQL_Portal_Ref held_unnamed;
 	const bool held_unnamed_portal = stmt_type == 'P' && close_data.stmt_name[0] == '\0' &&
 		!bind_waiting_for_execute && pgsql_thread___use_native_backend_protocol &&
@@ -8594,8 +8585,12 @@ int PgSQL_Session::handle_post_sync_bind_message(PgSQL_Bind_Message* bind_msg) {
 		return 1;
 	}
 
-	// A new unnamed Bind replaces a suspended unnamed portal: it no longer exists for the client.
+	// A new unnamed Bind replaces the unnamed portal: the old one no longer exists for the client.
 	named_portals.erase("");
+	if (extq_buffering) {
+		// Also for the rest of the unit, and an Execute earlier in it must not record its portal on settle.
+		extq_portals[""] = nullptr;
+	}
 	bind_waiting_for_execute.reset(bind_msg->release()); // release the ownership of the bind message
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	unsigned int nTxn = NumActiveTransactions();
@@ -8685,8 +8680,8 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 	bool lock_hostgroup = false;
 	const PgSQL_Execute_Data& execute_data = execute_msg->data();
 
-	// An unnamed portal left suspended by a row limit is still bound on the backend, recorded under
-	// the empty name. An Execute with no new Bind continues it, exactly as for a named portal.
+	// An unnamed portal already executed, suspended or finished, is still bound on the backend, recorded
+	// under the empty name. An Execute with no new Bind runs it by name, exactly as for a named portal.
 	PgSQL_Portal_Ref held_unnamed;
 	const bool resume_unnamed = execute_data.portal_name[0] == '\0' && !bind_waiting_for_execute &&
 		pgsql_thread___use_native_backend_protocol && extq_find_portal("", held_unnamed);
@@ -9232,10 +9227,8 @@ void PgSQL_Session::extq_buffer_message() {
 			e.bind = std::move(bind_waiting_for_execute);
 			e.stmt = extq_find_stmt(e.bind->data().stmt_name);
 			e.max_rows = eqi.max_rows;
-			if (e.max_rows > 0) {
-				// It may stop at its row limit and stay bound: a later Execute in this unit continues it.
-				extq_portals[""] = &e;
-			}
+			// The portal stays bound after it, suspended or not: a later message in this unit uses it by name.
+			extq_portals[""] = &e;
 		}
 		break;
 	case PROCESSING_STMT_BIND:
@@ -9719,9 +9712,11 @@ bool PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
 					if (it != named_portals.end()) {
 						it->second.suspended = ev.suspended;
 					}
-				} else if (ev.suspended) {
-					// The unnamed portal stopped at its row limit: kept under the empty name so a later
-					// Execute continues it. The Execute that carried its Bind hands the Bind over.
+				} else if (e.bind ? extq_portals[""] == &e : named_portals.count("") != 0) {
+					// The unnamed portal, kept under the empty name, suspended or not: it stays open until
+					// PostgreSQL destroys it, and a finished one still answers a Describe and an Execute.
+					// The Execute that carried its Bind hands the Bind over, unless a later unnamed Bind or
+					// Close in the unit already replaced or closed the portal.
 					PgSQL_Portal_Entry& p = named_portals[""];
 					if (e.bind) {
 						p.bind_msg = std::move(e.bind);
@@ -9729,10 +9724,7 @@ bool PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
 						p.bound_on_backend = true;
 						p.bound_conn = myconn;
 					}
-					p.suspended = true;
-				} else if (e.portal_bound || e.max_rows > 0) {
-					// Ran to completion: nothing left to continue.
-					named_portals.erase("");
+					p.suspended = ev.suspended;
 				}
 			}
 		} else if (ev.kind != Extq_Kind::PARSE && e.stmt && backend_stmt_is_stale(myconn, client_myds->myconn, e.stmt.get())) {
