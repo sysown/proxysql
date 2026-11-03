@@ -1467,6 +1467,11 @@ void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset PgSQL_Connection %p, server %s:%d\n", mc, mysrvc->address, mysrvc->port);
 		sess->create_new_session_and_reset_connection(this);
 	} else {
+		if (sq && mc->is_pipeline_active()) {
+			// The expected way out for a client gone after a Flush, so not a warning; traced for debugging.
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Closing PgSQL_Connection %p, server %s:%d: it holds unsynced extended-query work, which closing rolls back\n",
+				mc, mysrvc->address, mysrvc->port);
+		}
 		mc->last_time_used = sess->thread->curtime;
 		mc->send_quit = sq;
 		detach_connection();

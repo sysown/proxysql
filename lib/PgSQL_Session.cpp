@@ -9845,10 +9845,10 @@ void PgSQL_Session::extq_unit_failed(PgSQL_Data_Stream* myds) {
 }
 
 bool PgSQL_Session::extq_held_unsynced() const {
-	return const_cast<PgSQL_Session*>(this)->extq_held_backend() != nullptr;
+	return extq_held_backend() != nullptr;
 }
 
-PgSQL_Backend* PgSQL_Session::extq_held_backend() {
+PgSQL_Backend* PgSQL_Session::extq_held_backend() const {
 	for (unsigned int i = 0; mybes && i < mybes->len; i++) {
 		PgSQL_Backend* be = (PgSQL_Backend*)mybes->index(i);
 		if (be && be->server_myds && be->server_myds->myconn && be->server_myds->myconn->is_pipeline_active()) {

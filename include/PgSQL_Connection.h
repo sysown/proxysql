@@ -666,12 +666,12 @@ public:
 	unsigned int get_memory_usage() const;
 	char get_transaction_status_char();
 	inline int get_backend_pid() { return native_mode ? native_backend_pid : ((pgsql_conn) ? get_pg_backend_pid() : -1); }
-	// Whether the backend has not finished with this connection; callers use it to decide if the
-	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and pgsql_conn is
-	// always NULL there, so without this branch every one of those guards was dead.
 	// libpq refuses a simple Query in pipeline mode. Leaving it sends nothing and commits nothing: the
 	// backend keeps the transaction the extended messages opened, and the Query joins it. Native: no-op.
 	bool leave_pipeline_mode();
+	// Whether the backend has not finished with this connection; callers use it to decide if the
+	// connection is safe to pool, reuse or retry on. Native has no libpq to ask and pgsql_conn is
+	// always NULL there, so without this branch every one of those guards was dead.
 	bool is_pipeline_active() {
 		if (native_mode) return native_unsynced_work;
 		return (PQpipelineStatus(pgsql_conn) != PQ_PIPELINE_OFF);

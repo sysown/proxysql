@@ -471,7 +471,7 @@ private:
 	// From now until the client's Sync every message is dropped; the Sync gets ReadyForQuery(status).
 	void extq_enter_discard(char status);
 	// The backend whose connection holds extended-query work no Sync concluded, or nullptr.
-	PgSQL_Backend* extq_held_backend();
+	PgSQL_Backend* extq_held_backend() const;
 	// A simple Query ProxySQL answered or refused itself while a connection holds the group's work.
 	void extq_end_group_after_local_query(unsigned int out_before);
 	// A simple Query that joined a group needs a tracked variable set first: refused instead.
