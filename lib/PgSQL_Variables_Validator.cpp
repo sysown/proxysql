@@ -457,6 +457,44 @@ bool pgsql_variable_validate_client_encoding(const char* value, const params_t* 
 	return true;
 }
 
+/**
+ * @brief Tells whether a byte is an ASCII control character (0x00-0x1F or 0x7F).
+ *
+ * Tracked variable values travel to the backend inside the startup 'options' string,
+ * where whitespace control characters separate "-c name=value" tokens. Real time zone
+ * names and schema names never contain one.
+ */
+static inline bool pgsql_is_control_char(unsigned char c) {
+	return c < 0x20 || c == 0x7f;
+}
+
+/**
+ * @brief Validates a TimeZone value for PostgreSQL.
+ *
+ * ProxySQL does not try to resolve the time zone itself: the backend does that when the
+ * value is applied, and reports an error for an unknown zone. This validator only rejects
+ * values containing control characters (bytes 0x00-0x1F and 0x7F). Real time zone values
+ * ('UTC', 'America/New_York', '+02:00', 'EST5EDT,M3.2.0,M11.1.0', ...) never contain one,
+ * while a tab or newline would split the value into extra "-c" options in the startup
+ * packet sent to the backend.
+ *
+ * @param value The value to validate.
+ * @param params Unused parameter.
+ * @param session Unused parameter.
+ * @param transformed_value If not null, will be set to null (the value is kept as is).
+ * @return true if the value contains no control character, false otherwise.
+ */
+bool pgsql_variable_validate_timezone(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
+	(void)params;
+	(void)session;
+	if (transformed_value) *transformed_value = nullptr;
+	if (value == nullptr) return false;
+	for (const char* c = value; *c != '\0'; c++) {
+		if (pgsql_is_control_char((unsigned char)*c)) return false;
+	}
+	return true;
+}
+
 bool pgsql_variable_validate_search_path(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
 	(void)params;
 	(void)session;
@@ -498,6 +536,14 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 					} else {
 						break;
 					}
+				}
+				// A quoted part is copied verbatim into the value ProxySQL later sends in
+				// the backend's startup 'options', so it must not carry control bytes:
+				// a tab, newline or similar would be a token separator there. PostgreSQL
+				// tolerates them in a quoted identifier, but no real schema name uses one,
+				// so the value is rejected outright.
+				if (pgsql_is_control_char((unsigned char)*search)) {
+					break;
 				}
 				search++;
 				effective_len++;
@@ -643,6 +689,12 @@ const pgsql_variable_validator pgsql_variable_validator_client_encoding = {
 const pgsql_variable_validator pgsql_variable_validator_search_path = {
 	.type = VARIABLE_TYPE_STRING,
 	.validate = &pgsql_variable_validate_search_path,
+	.params = {}
+};
+
+const pgsql_variable_validator pgsql_variable_validator_timezone = {
+	.type = VARIABLE_TYPE_STRING,
+	.validate = &pgsql_variable_validate_timezone,
 	.params = {}
 };
 
