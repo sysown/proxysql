@@ -17,6 +17,51 @@ import unittest
 RUNNER = Path(__file__).with_name('run-unit-tests-asan-coverage.bash')
 
 
+class TimeoutCommandSelectionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.bin = Path(self.tmp.name)
+
+    def command(self, name, version):
+        path = self.bin / name
+        path.write_text('#!/bin/bash\nprintf "%s\\n" "' + version + '"\n')
+        path.chmod(0o755)
+
+    def select(self):
+        return subprocess.run(
+            ['/bin/bash', '-ec', 'source "$1"; printf "%s\\n" "$UNIT_TEST_TIMEOUT_COMMAND"',
+             'timeout-selection', str(RUNNER.with_name('unit-test-execution.bash'))],
+            env=dict(os.environ, PATH=str(self.bin), UNIT_TEST_TIMEOUT_SECONDS='1'),
+            capture_output=True, text=True, timeout=5)
+
+    def test_gnu_timeout_is_used_when_available(self):
+        self.command('timeout', 'timeout (GNU coreutils) 9.7')
+        self.command('gnutimeout', 'timeout (GNU coreutils) 9.7')
+        result = self.select()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'timeout')
+
+    def test_non_gnu_timeout_falls_back_to_gnutimeout(self):
+        self.command('timeout', 'timeout (uutils coreutils) 0.10.0')
+        self.command('gnutimeout', 'timeout (GNU coreutils) 9.7')
+        result = self.select()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'gnutimeout')
+
+    def test_homebrew_gtimeout_is_supported(self):
+        self.command('gtimeout', 'timeout (GNU coreutils) 9.7')
+        result = self.select()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'gtimeout')
+
+    def test_non_gnu_timeout_without_gnu_alternative_is_rejected(self):
+        self.command('timeout', 'timeout (uutils coreutils) 0.10.0')
+        result = self.select()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('GNU timeout', result.stderr)
+
+
 class UnitRunnerTimeoutTests(unittest.TestCase):
     runner_name = RUNNER.name
     expected_summary = '1 passed, 1 failed'
