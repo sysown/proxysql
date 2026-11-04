@@ -452,12 +452,6 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 		}
 		return std::string(row[BOOT_USER_INFO_T::HOST], lengths[BOOT_USER_INFO_T::HOST]);
 	};
-	auto import_row = [&](MYSQL_ROW row, unsigned long* lengths) -> bool {
-		if (!insert_bootstrap_user(db, stmt.get(), row, lengths, error)) {
-			return false;
-		}
-		return true;
-	};
 	for (int pass = 0; pass < 2; ++pass) {
 		mysql_data_seek(users, 0);
 		while (MYSQL_ROW row = mysql_fetch_row(users)) {
@@ -485,14 +479,14 @@ bool import_bootstrap_users(SQLite3DB* db, MYSQL_RES* users, string& error) {
 					}
 					continue;
 				}
-				if (!import_row(row, lengths)) {
+				if (!insert_bootstrap_user(db, stmt.get(), row, lengths, error)) {
 					rollback_bootstrap_users(db, error);
 					return false;
 				}
 				imported_hosts[username] = host;
 			} else {
 				// A row without a username is rejected by insert_bootstrap_user().
-				if (!import_row(row, lengths)) {
+				if (!insert_bootstrap_user(db, stmt.get(), row, lengths, error)) {
 					rollback_bootstrap_users(db, error);
 					return false;
 				}
