@@ -5745,35 +5745,21 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 		return 0;
 	}
 
-	// Switching to fast-forward hands the client socket over to the backend:
-	// enter_permanent_fast_forward() re-queues 'pkt' in PSarrayIN and expects
-	// it to be the only client packet, so that it is the first one forwarded.
-	// If the client has already sent further packets (several commands in the
-	// same write, or commands pipelined while a previous one was running), the
-	// replication command would be forwarded after them, out of order. A real
-	// replica never pipelines after these commands, so reject only this
-	// command with an error and leave the session unchanged: no state has been
-	// modified yet, and the remaining packets are processed normally by the
-	// caller's loop, each getting its own response in order.
+	// Replication owns the connection after this handoff. Further queued client
+	// commands violate that protocol and cannot be replayed as normal traffic.
+	// Close before the handoff requeues this packet and changes session state.
 	if (client_myds->PSarrayIN->len) {
-		// client-triggerable: rate limited to one message every 10 seconds
-		static std::atomic<time_t> repl_pipelined_warn_ts{0};
-		const time_t warn_now = time(NULL);
-		if (warn_now - repl_pipelined_warn_ts.load(std::memory_order_relaxed) >= 10) {
-			repl_pipelined_warn_ts.store(warn_now, std::memory_order_relaxed);
-			proxy_warning(
-				"Rejecting replication command %d from client %s:%d: followed by %u pipelined client packet(s)\n",
-				(int)c, (client_myds->addr.addr ? client_myds->addr.addr : ""), client_myds->addr.port,
-				client_myds->PSarrayIN->len);
+		static std::atomic<time_t> last_warning{0};
+		const time_t now = time(NULL);
+		time_t previous = last_warning.load(std::memory_order_relaxed);
+		if (now - previous >= 10 && last_warning.compare_exchange_strong(
+			previous, now, std::memory_order_relaxed)) {
+			proxy_warning("Closing client with pipelined replication command %u from %s:%d\n",
+				(unsigned int)c, client_myds->addr.addr ? client_myds->addr.addr : "", client_myds->addr.port);
 		}
-		l_free(pkt.size,pkt.ptr);
+		l_free(pkt.size, pkt.ptr);
 		pkt = {};
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1815,(char *)"HY000",
-			(char *)"Replication commands cannot be pipelined with other client packets");
-		client_myds->DSS=STATE_SLEEP;
-		status=WAITING_CLIENT_DATA;
-		return 0;
+		return -1;
 	}
 
 	// In this switch we handle commands that download binlog events from MySQL
@@ -5810,10 +5796,6 @@ int MySQL_Session::GPFC_Replication_SwitchToFastForward(PtrSize_t& pkt, unsigned
 int MySQL_Session::enter_permanent_fast_forward(PtrSize_t& pkt, int destination_hostgroup) {
 	session_fast_forward = SESSION_FORWARD_TYPE_PERMANENT;
 
-	// Both callers (GPFC_Replication_SwitchToFastForward() and
-	// GPFC_QueryRule_SwitchToFastForward()) reject the switch with an error
-	// when further client packets are queued, so this cannot be reached from
-	// client input; it only guards against a new caller missing that check.
 	if (client_myds->PSarrayIN->len) {
 		proxy_error("UNEXPECTED PACKET FROM CLIENT -- PLEASE REPORT A BUG\n");
 		assert(0);

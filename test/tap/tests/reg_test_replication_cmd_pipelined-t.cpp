@@ -1,327 +1,240 @@
 /**
- * @file reg_test_replication_cmd_pipelined-t.cpp
- * @brief Regression test: a replication command followed by other client packets must not abort ProxySQL.
- *
- * @details COM_REGISTER_SLAVE, COM_BINLOG_DUMP and COM_BINLOG_DUMP_GTID switch the session to
- *   permanent fast-forward. The switch re-queues the command as the first packet to forward to the
- *   backend, and used to call assert(0) ("UNEXPECTED PACKET FROM CLIENT -- PLEASE REPORT A BUG")
- *   when the client had already sent further packets. Asserts are enabled in release builds, so any
- *   authenticated client could abort the whole process by writing, for example, COM_REGISTER_SLAVE
- *   and COM_PING in a single write(), or by pipelining them behind a slow query (#5930).
- *
- *   ProxySQL now rejects only the replication command with an ERR packet (1815) and keeps the
- *   session in its previous state; the packets that follow are processed normally. The test writes
- *   raw command packets on the socket of a libmariadb connection and checks, in order:
- *   - COM_REGISTER_SLAVE + COM_PING in one write: ERR for the first, OK for the ping.
- *   - COM_BINLOG_DUMP + COM_PING in one write: ERR, then OK.
- *   - SELECT SLEEP(1) + COM_REGISTER_SLAVE + COM_PING in one write (the last two are deferred while
- *     the query runs, then replayed): resultset, ERR, OK.
- *   - Each connection remains usable afterwards (SELECT 1), and ProxySQL is still alive: a new
- *     client connection and the admin interface both answer.
- *   Without the fix the first case aborts ProxySQL and every later check fails.
- *   No binlog-capable backend is needed: the commands never reach a backend.
+ * Replication commands switch to permanent fast-forward. If another command is
+ * already queued, close the frontend before the handoff: no ERR, no replay, and
+ * no special flushing for COM_QUIT. Single commands must still reach a backend.
+ * Uses the normal TAP CommandLine fixture and a backend replication-capable user.
  */
-
 #include <cerrno>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <string>
 #include <vector>
-
 #include <poll.h>
 #include <sys/socket.h>
-#include <unistd.h>
-
 #include "mysql.h"
-
 #include "command_line.h"
 #include "tap.h"
-#include "utils.h"
 
 using std::string;
 using std::vector;
-
 namespace {
+constexpr uint8_t QUERY = 0x03, QUIT = 0x01, PING = 0x0e;
+constexpr uint8_t DUMP = 0x12, REGISTER = 0x15, GTID = 0x1e;
+constexpr int deadline_ms = 5000;
+using Clock = std::chrono::steady_clock;
 
-constexpr uint8_t kComQuery = 0x03;
-constexpr uint8_t kComPing = 0x0e;
-constexpr uint8_t kComBinlogDump = 0x12;
-constexpr uint8_t kComRegisterSlave = 0x15;
-constexpr uint16_t kErrRejected = 1815;
-constexpr int kRecvTimeoutMs = 10000;
+void append(vector<uint8_t>& b, uint8_t command, const string& body = "") {
+	size_t n = body.size() + 1;
+	b.insert(b.end(), {uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), 0, command});
+	b.insert(b.end(), body.begin(), body.end());
+}
+void le(string& b, uint64_t value, size_t n) {
+	for (size_t i = 0; i < n; ++i) b.push_back(uint8_t(value >> (8 * i)));
+}
+string body(uint8_t command) {
+	string b;
+	if (command == REGISTER) {
+		le(b, 4242, 4); b += char(7); b += "replica";
+		b += char(0); b += char(0); // empty replication user and password
+		le(b, 3306, 2); le(b, 0, 4); le(b, 0, 4);
+	} else if (command == DUMP) {
+		le(b, 4, 4); le(b, 0, 2); le(b, 4242, 4);
+		b += "proxysql-regression-missing.000001";
+	} else {
+		le(b, 0, 2); le(b, 4242, 4);
+		const string filename = "proxysql-regression-missing.000001";
+		le(b, filename.size(), 4); b += filename; le(b, 4, 8);
+		le(b, 8, 4); le(b, 0, 8); // empty GTID set
+	}
+	return b;
+}
 
-enum class RespKind { NONE, OK, ERR, RESULTSET };
-
-struct Resp {
-	RespKind kind = RespKind::NONE;
-	uint16_t err_code = 0;
-	vector<string> first_col;
+struct Packet { uint8_t sequence; vector<uint8_t> payload; };
+vector<Packet> packets(const vector<uint8_t>& bytes) {
+	vector<Packet> result;
+	for (size_t i = 0; i + 4 <= bytes.size();) {
+		const size_t n = bytes[i] | (size_t(bytes[i + 1]) << 8) | (size_t(bytes[i + 2]) << 16);
+		if (i + 4 + n > bytes.size()) break;
+		result.push_back({bytes[i + 3], vector<uint8_t>(bytes.begin() + i + 4, bytes.begin() + i + 4 + n)});
+		i += 4 + n;
+	}
+	return result;
+}
+enum class End { PACKETS, EOF_REACHED, RESET, TIMEOUT, ERROR };
+struct Wire {
+	End end = End::ERROR;
+	int error = 0;
+	vector<uint8_t> bytes;
+	bool closed() const { return end == End::EOF_REACHED || end == End::RESET; }
 };
 
-void append_cmd(vector<uint8_t>& buf, uint8_t cmd, const string& arg = "") {
-	const size_t len = 1 + arg.size();
-	buf.push_back(len & 0xff);
-	buf.push_back((len >> 8) & 0xff);
-	buf.push_back((len >> 16) & 0xff);
-	buf.push_back(0); // sequence id: every command starts a new exchange
-	buf.push_back(cmd);
-	buf.insert(buf.end(), arg.begin(), arg.end());
-}
-
-void put_le(string& s, uint64_t v, size_t n) {
-	for (size_t i = 0; i < n; i++) s.push_back(static_cast<char>((v >> (8 * i)) & 0xff));
-}
-
-/** @brief COM_REGISTER_SLAVE body: server_id, hostname, user, password, port, rank, master_id. */
-string register_slave_body() {
-	string s;
-	put_le(s, 4242, 4);
-	const string host = "replica";
-	s.push_back(static_cast<char>(host.size()));
-	s += host;
-	s.push_back(0); // user
-	s.push_back(0); // password
-	put_le(s, 3306, 2);
-	put_le(s, 0, 4);
-	put_le(s, 0, 4);
-	return s;
-}
-
-/** @brief COM_BINLOG_DUMP body: binlog_pos, flags, server_id, binlog filename. */
-string binlog_dump_body() {
-	string s;
-	put_le(s, 4, 4);
-	put_le(s, 0, 2);
-	put_le(s, 4242, 4);
-	s += "binlog.000001";
-	return s;
-}
-
-bool send_all(int fd, const vector<uint8_t>& buf) {
-	size_t sent = 0;
-	while (sent < buf.size()) {
-		ssize_t n = send(fd, buf.data() + sent, buf.size() - sent, MSG_NOSIGNAL);
-		if (n <= 0) return false;
-		sent += n;
-	}
-	return true;
-}
-
-bool recv_all(int fd, uint8_t* buf, size_t len) {
-	size_t got = 0;
-	while (got < len) {
-		struct pollfd pfd { fd, POLLIN, 0 };
-		if (poll(&pfd, 1, kRecvTimeoutMs) != 1) return false;
-		ssize_t n = recv(fd, buf + got, len - got, 0);
-		if (n <= 0) return false;
-		got += n;
-	}
-	return true;
-}
-
-bool read_packet(int fd, vector<uint8_t>& payload) {
-	uint8_t hdr[4];
-	if (!recv_all(fd, hdr, 4)) return false;
-	const size_t len = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16);
-	payload.assign(len, 0);
-	return len == 0 || recv_all(fd, payload.data(), len);
-}
-
-uint64_t lenenc_int(const vector<uint8_t>& p, size_t& pos) {
-	if (pos >= p.size()) return 0;
-	const uint8_t c = p[pos++];
-	if (c < 0xfb) return c;
-	size_t n = c == 0xfc ? 2 : (c == 0xfd ? 3 : 8);
-	uint64_t v = 0;
-	for (size_t i = 0; i < n && pos < p.size(); i++) {
-		v |= static_cast<uint64_t>(p[pos++]) << (8 * i);
-	}
-	return v;
-}
-
-/** @brief Reads one command response: OK, ERR, or a text resultset (first column only). */
-Resp read_response(int fd, bool deprecate_eof) {
-	Resp r {};
-	vector<uint8_t> p;
-	if (!read_packet(fd, p) || p.empty()) return r;
-	if (p[0] == 0x00) {
-		r.kind = RespKind::OK;
-		return r;
-	}
-	if (p[0] == 0xff) {
-		r.kind = RespKind::ERR;
-		r.err_code = p.size() >= 3 ? (p[1] | (p[2] << 8)) : 0;
-		return r;
-	}
-	size_t pos = 0;
-	const uint64_t ncols = lenenc_int(p, pos);
-	for (uint64_t i = 0; i < ncols; i++) {
-		if (!read_packet(fd, p)) return r;
-	}
-	if (!deprecate_eof) {
-		if (!read_packet(fd, p) || p.empty() || p[0] != 0xfe) return r;
-	}
+// One absolute deadline bounds the whole exchange, including partial reads.
+// wanted == 0 drains until a genuine TCP EOF/reset, never treating timeout as close.
+Wire receive(int fd, size_t wanted = 0) {
+	Wire r;
+	const auto deadline = Clock::now() + std::chrono::milliseconds(deadline_ms);
 	for (;;) {
-		if (!read_packet(fd, p) || p.empty()) return r;
-		if (p[0] == 0xfe && p.size() < 0xffffff) break;
-		if (p[0] == 0xff) {
-			r.kind = RespKind::ERR;
-			r.err_code = p.size() >= 3 ? (p[1] | (p[2] << 8)) : 0;
+		int remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+		if (remaining <= 0) { r.end = End::TIMEOUT; return r; }
+		pollfd pfd {fd, POLLIN, 0};
+		int ready = poll(&pfd, 1, remaining);
+		if (ready < 0 && errno == EINTR) continue;
+		if (ready == 0) { r.end = End::TIMEOUT; return r; }
+		if (ready < 0) { r.error = errno; return r; }
+		uint8_t chunk[4096];
+		ssize_t n = recv(fd, chunk, sizeof(chunk), MSG_DONTWAIT);
+		if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+		if (n == 0) { r.end = End::EOF_REACHED; return r; }
+		if (n < 0) {
+			r.error = errno;
+			if (errno == ECONNRESET) r.end = End::RESET;
 			return r;
 		}
-		size_t rpos = 0;
-		if (p[0] == 0xfb) {
-			r.first_col.push_back("NULL");
-			continue;
-		}
-		const uint64_t len = lenenc_int(p, rpos);
-		if (rpos + len > p.size()) return r;
-		r.first_col.emplace_back(reinterpret_cast<const char*>(p.data() + rpos), len);
-	}
-	r.kind = RespKind::RESULTSET;
-	return r;
-}
-
-string describe(const Resp& r) {
-	switch (r.kind) {
-		case RespKind::OK: return "OK";
-		case RespKind::ERR: return "ERR(" + std::to_string(r.err_code) + ")";
-		case RespKind::RESULTSET: {
-			string s = "RS[";
-			for (const auto& v : r.first_col) { s += v + ";"; }
-			return s + "]";
-		}
-		default: return "NONE(connection closed or timeout)";
+		r.bytes.insert(r.bytes.end(), chunk, chunk + n);
+		if (wanted && packets(r.bytes).size() >= wanted) { r.end = End::PACKETS; return r; }
+		if (r.bytes.size() > 65536) { r.error = EMSGSIZE; return r; }
 	}
 }
 
-string describe(const vector<Resp>& rs) {
-	string s;
-	for (const auto& r : rs) s += describe(r) + " ";
-	return s;
-}
-
-bool is_rs_value(const Resp& r, const string& v) {
-	return r.kind == RespKind::RESULTSET && r.first_col.size() == 1 && r.first_col[0] == v;
-}
-
-bool is_rejected(const Resp& r) {
-	return r.kind == RespKind::ERR && r.err_code == kErrRejected;
-}
-
-MYSQL* open_conn(const CommandLine& cl) {
-	MYSQL* mysql = mysql_init(nullptr);
-	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, nullptr, cl.port, nullptr, 0)) {
-		diag("Connection to ProxySQL failed: %s", mysql_error(mysql));
-		mysql_close(mysql);
+MYSQL* connect(const CommandLine& cl, bool admin = false) {
+	MYSQL* m = mysql_init(nullptr);
+	if (!m) return nullptr;
+	unsigned timeout = deadline_ms / 1000;
+	mysql_options(m, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+	mysql_options(m, MYSQL_OPT_READ_TIMEOUT, &timeout);
+	mysql_options(m, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+#ifdef MARIADB_BASE_VERSION
+	my_bool tls = 0;
+	mysql_options(m, MYSQL_OPT_SSL_ENFORCE, &tls);
+#else
+	mysql_ssl_mode tls = SSL_MODE_DISABLED;
+	mysql_options(m, MYSQL_OPT_SSL_MODE, &tls);
+#endif
+	// No CLIENT_SSL and no TLS options: the raw socket exchanges require plaintext.
+	if (!mysql_real_connect(m, admin ? cl.admin_host : cl.host,
+		admin ? cl.admin_username : cl.username, admin ? cl.admin_password : cl.password,
+		nullptr, admin ? cl.admin_port : cl.port, nullptr, 0) || mysql_get_ssl_cipher(m)) {
+		diag("%s connection failed or negotiated TLS: %s", admin ? "Admin" : "Client", mysql_error(m));
+		mysql_close(m);
 		return nullptr;
 	}
-	return mysql;
+	return m;
+}
+bool send_once(MYSQL* m, const vector<uint8_t>& bytes) {
+	if (!m) return false;
+	ssize_t n = send(m->net.fd, bytes.data(), bytes.size(), MSG_NOSIGNAL);
+	if (n != ssize_t(bytes.size())) diag("Single pipeline send: %zd/%zu bytes, errno=%d", n, bytes.size(), errno);
+	return n == ssize_t(bytes.size());
+}
+bool query_alive(const CommandLine& cl, bool admin) {
+	MYSQL* m = connect(cl, admin);
+	bool alive = m && mysql_query(m, "SELECT 1") == 0;
+	MYSQL_RES* result = alive ? mysql_store_result(m) : nullptr;
+	MYSQL_ROW row = result ? mysql_fetch_row(result) : nullptr;
+	alive = row && row[0] && string(row[0]) == "1";
+	if (result) mysql_free_result(result);
+	if (m) mysql_close(m);
+	return alive;
+}
+void health(const CommandLine& cl, const char* after) {
+	ok(query_alive(cl, false), "Fresh client answers after %s", after);
+	ok(query_alive(cl, true), "Admin answers after %s", after);
 }
 
-bool deprecate_eof(MYSQL* mysql) {
-	return (mysql->server_capabilities & CLIENT_DEPRECATE_EOF) && (mysql->client_flag & CLIENT_DEPRECATE_EOF);
-}
-
-/** @brief Writes 'buf' in one call on the connection socket, then reads 'n' responses. */
-vector<Resp> pipeline(MYSQL* mysql, const vector<uint8_t>& buf, size_t n) {
-	vector<Resp> resps;
-	if (!send_all(mysql->net.fd, buf)) {
-		diag("Failed to write the pipelined commands");
-		return resps;
+void closes(const CommandLine& cl, const char* name, const vector<uint8_t>& bytes, bool deferred = false) {
+	MYSQL* m = connect(cl);
+	bool sent = send_once(m, bytes);
+	Wire r = sent ? receive(m->net.fd) : Wire{};
+	bool valid = r.closed() && (deferred || r.bytes.empty());
+	if (deferred) {
+		// Allow any flushed prefix of SLEEP's resultset, including a partial last
+		// packet. A subsequent command's response restarts at sequence 1.
+		uint8_t sequence = 1;
+		for (size_t i = 0; i + 5 <= r.bytes.size(); ++sequence) {
+			const size_t n = r.bytes[i] | (size_t(r.bytes[i + 1]) << 8) | (size_t(r.bytes[i + 2]) << 16);
+			if (r.bytes[i + 3] != sequence || r.bytes[i + 4] == 0xff
+				|| (sequence == 1 && (n != 1 || r.bytes[i + 4] != 1))) valid = false;
+			if (i + 4 + n > r.bytes.size()) break;
+			i += 4 + n;
+		}
 	}
-	const bool deof = deprecate_eof(mysql);
-	for (size_t i = 0; i < n; i++) {
-		resps.push_back(read_response(mysql->net.fd, deof));
-		if (resps.back().kind == RespKind::NONE) break;
-	}
-	return resps;
+	ok(sent && valid, "%s closes without replication/PING response (end=%d, errno=%d, bytes=%zu)",
+		name, int(r.end), r.error, r.bytes.size());
+	if (m) mysql_close(m);
+	health(cl, name);
 }
-
-/** @brief Checks that the raw connection still answers a query. */
-bool conn_still_usable(MYSQL* mysql) {
-	vector<uint8_t> buf;
-	append_cmd(buf, kComQuery, "SELECT 1");
-	vector<Resp> rs = pipeline(mysql, buf, 1);
-	return rs.size() == 1 && is_rs_value(rs[0], "1");
+bool is_ok(const Packet& p) {
+	return p.sequence == 1 && !p.payload.empty() && p.payload[0] == 0;
 }
-
 } // namespace
 
-int main(int argc, char** argv) {
+int main() {
 	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
+	if (cl.getEnv()) return EXIT_FAILURE;
+	plan(24);
+	const uint8_t commands[] {REGISTER, DUMP, GTID};
+	const char* names[] {"REGISTER + PING", "BINLOG_DUMP + PING", "BINLOG_DUMP_GTID + PING"};
+	for (size_t i = 0; i < 3; ++i) {
+		vector<uint8_t> b;
+		append(b, commands[i], body(commands[i])); append(b, PING);
+		closes(cl, names[i], b);
 	}
-
-	plan(8);
-
-	// 1. COM_REGISTER_SLAVE and COM_PING in a single write.
 	{
-		MYSQL* mysql = open_conn(cl);
-		vector<uint8_t> buf;
-		append_cmd(buf, kComRegisterSlave, register_slave_body());
-		append_cmd(buf, kComPing);
-		vector<Resp> rs = mysql ? pipeline(mysql, buf, 2) : vector<Resp> {};
-		ok(rs.size() == 2 && is_rejected(rs[0]) && rs[1].kind == RespKind::OK,
-			"COM_REGISTER_SLAVE + COM_PING in one write: ERR(%u) then OK. Got: %s",
-			kErrRejected, describe(rs).c_str());
-		ok(mysql && conn_still_usable(mysql), "Connection is still usable after the rejected COM_REGISTER_SLAVE");
-		if (mysql) mysql_close(mysql);
+		vector<uint8_t> b;
+		append(b, REGISTER, body(REGISTER)); append(b, QUIT);
+		closes(cl, "REGISTER + QUIT", b);
 	}
-
-	// 2. COM_BINLOG_DUMP and COM_PING in a single write.
 	{
-		MYSQL* mysql = open_conn(cl);
-		vector<uint8_t> buf;
-		append_cmd(buf, kComBinlogDump, binlog_dump_body());
-		append_cmd(buf, kComPing);
-		vector<Resp> rs = mysql ? pipeline(mysql, buf, 2) : vector<Resp> {};
-		ok(rs.size() == 2 && is_rejected(rs[0]) && rs[1].kind == RespKind::OK,
-			"COM_BINLOG_DUMP + COM_PING in one write: ERR(%u) then OK. Got: %s",
-			kErrRejected, describe(rs).c_str());
-		ok(mysql && conn_still_usable(mysql), "Connection is still usable after the rejected COM_BINLOG_DUMP");
-		if (mysql) mysql_close(mysql);
+		vector<uint8_t> b;
+		append(b, REGISTER, body(REGISTER)); append(b, GTID, body(GTID)); append(b, PING);
+		closes(cl, "Consecutive replication commands + PING", b);
 	}
-
-	// 3. Replication command pipelined behind a running query: deferred, then replayed.
 	{
-		MYSQL* mysql = open_conn(cl);
-		vector<uint8_t> buf;
-		append_cmd(buf, kComQuery, "SELECT SLEEP(1)");
-		append_cmd(buf, kComRegisterSlave, register_slave_body());
-		append_cmd(buf, kComPing);
-		vector<Resp> rs = mysql ? pipeline(mysql, buf, 3) : vector<Resp> {};
-		ok(rs.size() == 3 && is_rs_value(rs[0], "0") && is_rejected(rs[1]) && rs[2].kind == RespKind::OK,
-			"SELECT SLEEP(1) + COM_REGISTER_SLAVE + COM_PING: resultset, ERR(%u), OK. Got: %s",
-			kErrRejected, describe(rs).c_str());
-		ok(mysql && conn_still_usable(mysql), "Connection is still usable after the deferred rejection");
-		if (mysql) mysql_close(mysql);
+		vector<uint8_t> b;
+		append(b, QUERY, "SELECT SLEEP(1)"); append(b, REGISTER, body(REGISTER)); append(b, PING);
+		closes(cl, "Deferred SLEEP + REGISTER + PING", b, true);
 	}
-
-	// 4. ProxySQL is still alive.
+	// Ordinary pipelining continues to return one response per command.
 	{
-		MYSQL* mysql = open_conn(cl);
-		bool alive = mysql && mysql_query(mysql, "SELECT 1") == 0;
-		if (alive) {
-			MYSQL_RES* res = mysql_store_result(mysql);
-			if (res) mysql_free_result(res);
+		MYSQL* m = connect(cl);
+		vector<uint8_t> b;
+		append(b, QUERY, "DO 1"); append(b, PING);
+		Wire r = send_once(m, b) ? receive(m->net.fd, 2) : Wire{};
+		auto ps = packets(r.bytes);
+		ok(r.end == End::PACKETS && ps.size() == 2 && is_ok(ps[0]) && is_ok(ps[1]),
+			"Ordinary query + PING still returns two OK responses");
+		if (m) mysql_close(m);
+	}
+	for (uint8_t command : commands) {
+		MYSQL* m = connect(cl);
+		// Replication selects the preceding query's hostgroup. Establish it before
+		// exercising an unchanged single-command handoff on this fresh connection.
+		bool routed = m && mysql_query(m, "DO 1") == 0;
+		vector<uint8_t> b;
+		append(b, command, body(command));
+		Wire r = routed && send_once(m, b) ? receive(m->net.fd, 1) : Wire{};
+		auto ps = packets(r.bytes);
+		bool reply = r.end == End::PACKETS && ps.size() == 1 && ps[0].sequence == 1 && !ps[0].payload.empty();
+		// Accept only the missing-binlog error, or MariaDB's unsupported GTID
+		// command error. ProxySQL connection/routing errors do not prove handoff.
+		if (reply && command == REGISTER) reply = is_ok(ps[0]);
+		if (reply && command != REGISTER) {
+			int error = ps[0].payload.size() >= 3 && ps[0].payload[0] == 0xff
+				? ps[0].payload[1] | (ps[0].payload[2] << 8) : 0;
+			reply = error == 1236 || (command == GTID && error == 1047);
+			if (!reply) diag("Unexpected replication response error=%d", error);
 		}
-		ok(alive, "A new client connection to ProxySQL still works");
-		if (mysql) mysql_close(mysql);
-
-		MYSQL* admin = mysql_init(nullptr);
-		bool admin_alive = mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password,
-			nullptr, cl.admin_port, nullptr, 0) && mysql_query(admin, "SELECT 1") == 0;
-		if (admin_alive) {
-			MYSQL_RES* res = mysql_store_result(admin);
-			if (res) mysql_free_result(res);
+		ok(reply, "Single replication command 0x%02x receives backend response (end=%d, bytes=%zu)",
+			command, int(r.end), r.bytes.size());
+		if (command == REGISTER) {
+			b.clear(); append(b, PING);
+			Wire ping = reply && send_once(m, b) ? receive(m->net.fd, 1) : Wire{};
+			auto response = packets(ping.bytes);
+			ok(response.size() == 1 && is_ok(response[0]), "PING after registration response works in fast-forward");
 		}
-		ok(admin_alive, "The admin interface still answers");
-		mysql_close(admin);
+		if (m) mysql_close(m);
 	}
-
+	ok(query_alive(cl, false) && query_alive(cl, true), "Client and admin remain usable after controls");
 	return exit_status();
 }
