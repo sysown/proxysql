@@ -6476,8 +6476,13 @@ bool PgSQL_Thread::Scan_Sessions_to_Kill___handle_query_cancellation(PgSQL_Sessi
 			}
 			// An idle session has nothing to cancel, and nothing there clears cancel_query:
 			// BeforePoll, which wakes at once while it is set, would spin the thread.
+			// The rollback-only reset is internal cleanup after the client's transaction
+			// has ended. It also has no client statement to cancel or flag consumer.
+			const bool internal_rollback = sess->status == RESETTING_CONNECTION_V2 &&
+				sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn &&
+				sess->mybe->server_myds->myconn->reset_session_rollback_only;
 			if (should_kill && sess->mybe && sess->mybe->server_myds &&
-				sess->status != WAITING_CLIENT_DATA) {
+				sess->status != WAITING_CLIENT_DATA && !internal_rollback) {
 				proxy_info("Query cancellation requested [Session ID=%u]\n", it->thread_id);
 				sess->mybe->server_myds->cancel_query = true;
 				sess->mybe->server_myds->kill_type = 1;
