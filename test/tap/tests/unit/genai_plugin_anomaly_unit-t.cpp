@@ -81,6 +81,23 @@ static void test_normalize_comments() {
 	ok(r.find("comment") == std::string::npos, "normalize: block comment removed");
 }
 
+static void test_normalize_line_comments() {
+	Anomaly_Detector d;
+	const char* queries[] = {
+		"SELECT 1 -- trailing comment",
+		"SELECT 1 -- first comment\nFROM t",
+		"SELECT 1 -- first comment\r\nFROM t",
+		"SELECT 1 -- first comment\rFROM t",
+		"-- first comment\nSELECT 1 -- second comment\nFROM t -- last comment",
+		"SELECT /* block comment */ 1 -- line comment\nFROM t"
+	};
+	for (size_t i = 0; i < sizeof(queries) / sizeof(queries[0]); ++i) {
+		const std::string expected = i == 0 ? "select N" : "select N from t";
+		const std::string normalized = Anomaly_Detector_TestHelper::normalize_query(d, queries[i]);
+		ok(normalized == expected, "normalize: line comment case %zu preserves following SQL", i);
+	}
+}
+
 static void test_normalize_empty() {
 	Anomaly_Detector d;
 	std::string r = Anomaly_Detector_TestHelper::normalize_query(d, "");
@@ -180,7 +197,7 @@ static void test_analyze_pipeline_runs_without_vector_db() {
 }
 
 int main() {
-	plan(26);
+	plan(32);
 
 	test_init_minimal();
 
@@ -189,6 +206,7 @@ int main() {
 	test_normalize_double_quoted_strings();
 	test_normalize_whitespace();
 	test_normalize_comments();
+	test_normalize_line_comments();
 	test_normalize_empty();
 	test_normalize_multiple_literals();
 
