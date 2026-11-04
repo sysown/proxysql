@@ -53,12 +53,16 @@ run_check "Check pre-push lint hook contract" \
 	test/infra/control/test-pre-push-lint-hook.bash
 run_check "Check package CI verification hook" \
 	test/infra/control/test-package-ci-verification.bash
+run_check "Check package release upload pagination" \
+	python3 test/infra/control/test_package_upload_pagination.py
 run_check "Check package install verifier" \
 	test/infra/control/test-verify-package-install.bash
 run_check "Check system OpenSSL audit regressions" \
 	test/infra/control/test-no-system-openssl-links-regressions.bash
 run_check "Check RE2 platform and unit linker flags" \
 	test/infra/control/test-re2-platform-link.bash
+run_check "Check RE2 system-library link mode" \
+	test/infra/control/test-re2-system-link.bash
 run_check "Check ClickHouse feature propagation and platform linker flags" \
 	python3 test/infra/control/test_clickhouse_build.py
 run_check "Check configured DuckDB static archives" \
