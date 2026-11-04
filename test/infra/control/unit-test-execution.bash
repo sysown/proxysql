@@ -5,12 +5,19 @@ if ! [[ "${UNIT_TEST_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
     echo "UNIT_TEST_TIMEOUT_SECONDS must be a positive integer" >&2
     return 1
 fi
-if command -v timeout >/dev/null 2>&1; then
-    UNIT_TEST_TIMEOUT_COMMAND=timeout
-elif command -v gtimeout >/dev/null 2>&1; then
-    UNIT_TEST_TIMEOUT_COMMAND=gtimeout # Homebrew coreutils on macOS.
-else
-    echo "The unit runner requires GNU timeout (gtimeout on macOS)" >&2
+# Ubuntu can provide uutils under the standard name. The process-group and
+# kill-after boundary below requires GNU timeout, including when both exist.
+UNIT_TEST_TIMEOUT_COMMAND=
+for UNIT_TEST_TIMEOUT_CANDIDATE in gnutimeout gtimeout timeout; do
+    if command -v "${UNIT_TEST_TIMEOUT_CANDIDATE}" >/dev/null 2>&1 && \
+       LC_ALL=C "${UNIT_TEST_TIMEOUT_CANDIDATE}" --version 2>/dev/null | grep -q '^timeout (GNU coreutils)'; then
+        UNIT_TEST_TIMEOUT_COMMAND="${UNIT_TEST_TIMEOUT_CANDIDATE}"
+        break
+    fi
+done
+unset UNIT_TEST_TIMEOUT_CANDIDATE
+if [ -z "${UNIT_TEST_TIMEOUT_COMMAND}" ]; then
+    echo "The unit runner requires GNU timeout (gnutimeout on Ubuntu or gtimeout on macOS)" >&2
     return 1
 fi
 export TSAN_OPTIONS="${TSAN_OPTIONS:-halt_on_error=1:exitcode=66}"
