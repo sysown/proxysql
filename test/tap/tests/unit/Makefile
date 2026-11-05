@@ -773,6 +773,7 @@ UNIT_TESTS += \
 	test_mysqlx_plugin_load-t \
 	test_duckdb_plugin_load-t \
 	duckdb_config_unit-t \
+	duckdb_replica_unit-t \
 	duckdb_engine_unit-t \
 	duckdb_result_unit-t \
 	duckdb_admin_schema_unit-t \
@@ -1055,6 +1056,18 @@ test_duckdb_plugin_load-t: ../test_duckdb_plugin_load-t.cpp $(TEST_HELPERS_OBJ) 
 
 duckdb_config_unit-t: duckdb_config_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+duckdb_replica_unit-t: duckdb_replica_unit-t.cpp \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica.cpp \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_types.cpp \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_values.cpp \
+		$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica.cpp \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_types.cpp \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_values.cpp \
+		$(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 

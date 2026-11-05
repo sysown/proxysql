@@ -4,6 +4,7 @@
 #include "duckdb_config.h"
 #include "duckdb_engine.h"
 #include "duckdb_listener.h"
+#include "duckdb_replica.h"
 
 #include <mutex>
 #include <string>
@@ -45,7 +46,8 @@ void log_error(const std::string& msg) {
 
 bool duckdb_register_schemas(ProxySQL_PluginServices* services) {
 	if (services == nullptr) return false;
-	return duckdb_register_admin_schema(*services);
+	return duckdb_register_admin_schema(*services) &&
+		duckdb_register_replica_admin(*services);
 }
 
 bool duckdb_init(ProxySQL_PluginServices* services) {
@@ -75,6 +77,15 @@ bool duckdb_start() {
 		log_error("duckdb: engine open failed: " + err);
 		ctx.engine.reset();
 		return false;
+	}
+
+	if (ctx.replica && ctx.services != nullptr && ctx.services->get_admindb != nullptr) {
+		if (SQLite3DB* admindb = ctx.services->get_admindb()) {
+			std::string replica_err;
+			if (!ctx.replica->load_from_admin(*admindb, replica_err)) {
+				log_error("duckdb: replica configuration not installed: " + replica_err);
+			}
+		}
 	}
 
 	ctx.listener = std::make_unique<DuckDBListener>();
@@ -112,6 +123,10 @@ bool duckdb_start() {
 // member, and stop() itself must tolerate being called twice.
 bool duckdb_stop() {
 	DuckDBPluginContext& ctx = duckdb_context();
+	// The replica thread dials MySQL and holds DuckDB connections for the
+	// snapshot and the applier. Join it before the listener and before the
+	// engine closes.
+	if (ctx.replica) ctx.replica->stop();
 	if (ctx.listener) { ctx.listener->stop(); ctx.listener.reset(); }
 	if (ctx.engine)   { ctx.engine->close(); ctx.engine.reset(); }
 	ctx.started = false;
@@ -133,13 +148,16 @@ const char* duckdb_status_json() {
 	static std::mutex status_mutex;
 	static std::string status; // must outlive the call: the ABI returns a raw pointer
 	std::lock_guard<std::mutex> lock(status_mutex);
+	const std::string replica_state = ctx.replica ? ctx.replica->status().state : "stopped";
 	if (!ctx.started || !ctx.engine) {
-		status = "{\"name\":\"duckdb\",\"state\":\"stopped\"}";
+		status = "{\"name\":\"duckdb\",\"state\":\"stopped\",\"replica\":\"" +
+			json_escape(replica_state) + "\"}";
 		return status.c_str();
 	}
 	status = "{\"name\":\"duckdb\",\"state\":\"running\",\"database_path\":\"" +
 		json_escape(ctx.engine->database_path()) + "\",\"open_connections\":" +
-		std::to_string(ctx.engine->open_connections()) + "}";
+		std::to_string(ctx.engine->open_connections()) + ",\"replica\":\"" +
+		json_escape(replica_state) + "\"}";
 	return status.c_str();
 }
 
@@ -159,6 +177,7 @@ DuckDBPluginContext& duckdb_context() {
 	static DuckDBPluginContext ctx = [] {
 		DuckDBPluginContext c {};
 		c.config_store = std::make_unique<DuckDBConfigStore>();
+		c.replica = std::make_unique<DuckDBReplica>();
 		return c;
 	}();
 	return ctx;
