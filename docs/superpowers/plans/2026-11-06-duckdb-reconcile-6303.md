@@ -66,3 +66,5 @@ MySQL8.4 documents that cascaded child changes are not logged, while our metadat
 admission/targetDDL has no FK policy. Documented as an unenforced limitation and
 immediate #6289 follow-up (metadata-based rejection and live coverage), before
 network reconnect. No FK production fix or runtime reproduction is claimed.
+
+Reconciliation committed as `86796b8b8`; draft PR: https://github.com/sysown/proxysql/pull/6591 (base v3.0, dependency #6303).

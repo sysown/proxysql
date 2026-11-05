@@ -389,7 +389,8 @@ indefinitely. Further benchmark/throughput work is also deferred by user choice.
 
 The immediate correctness task is **rejecting unsupported source FK actions**
 under #6289, using metadata rather than new SQL recognition (section 5). The
-DBTrail review brought this existing gap to attention; it has not been fixed or
+[DBTrail source review](https://github.com/dbtrail/dbtrail/tree/c9005fbc4883c6ac9f794758180db129e6f46096)
+brought this existing gap to attention; it has not been fixed or
 live-reproduced by the reconciliation. Then implement **automatic replica
 network recovery**. Today a binlog fetch failure enters sticky `error`;
 `STOP` followed by `START` resumes the durable checkpoint. Restart/crash recovery
@@ -476,7 +477,8 @@ must remove it from Main/Disk before restart; see
 Historical compatibility/typed-result design files are marked retired or
 superseded rather than representing the current implementation.
 
-A new draft PR targets `v3.0` and declares dependency on #6303. The merge keeps
+Draft [#6591](https://github.com/sysown/proxysql/pull/6591) targets `v3.0`
+and declares dependency on #6303. Reconciliation commit: `86796b8b8`. The merge keeps
 newer mainline configuration/security guards. #6303 is still an unmerged draft;
 its result changes will appear in this PR's diff until the dependency lands.
 
