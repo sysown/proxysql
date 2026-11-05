@@ -877,7 +877,9 @@ public:
 	void finishQuery(PgSQL_Data_Stream* myds, PgSQL_Connection* myconn, bool sticky_backend_connection);
 	void generate_proxysql_internal_session_json(nlohmann::json&) override;
 	bool known_query_for_locked_on_hostgroup(uint64_t);
-	void unable_to_parse_set_statement(bool*);
+	// known: a SET ProxySQL forwards on purpose because it cannot track it (an INTERVAL time zone).
+	// It locks the hostgroup all the same, but is not logged as a parse failure.
+	void unable_to_parse_set_statement(bool* lock_hostgroup, bool known = false);
 	//bool has_any_backend();
 	void detected_broken_connection(const char* file, unsigned int line, const char* func, const char* action, PgSQL_Connection* myconn, bool verbose = false);
 	void generate_status_one_hostgroup(int hid, std::string& s);

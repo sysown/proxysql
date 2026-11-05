@@ -5137,7 +5137,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		// goes to the backend as written and the client keeps that connection. Checked before
 		// parsing: some forms do not parse, and would otherwise go out without the lock.
 		if (RE2::PartialMatch(nq, re_set_time_zone_interval)) {
-			unable_to_parse_set_statement(lock_hostgroup);
+			unable_to_parse_set_statement(lock_hostgroup, true);
 			return PgSQL_Local_Reply::NONE;
 		}
 		PgSQL_Set_Stmt_Parser parser(nq);
@@ -5230,7 +5230,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 
 					// The string form, SET TimeZone = 'INTERVAL ''+02:30''', is forwarded the same way.
 					if (idx == PGSQL_TIMEZONE && strncasecmp(value1.c_str(), "INTERVAL", 8) == 0) {
-						unable_to_parse_set_statement(lock_hostgroup);
+						unable_to_parse_set_statement(lock_hostgroup, true);
 						return PgSQL_Local_Reply::NONE;
 					}
 
@@ -7229,17 +7229,19 @@ bool PgSQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 	return ret;
 }
 
-void PgSQL_Session::unable_to_parse_set_statement(bool* lock_hostgroup) {
+void PgSQL_Session::unable_to_parse_set_statement(bool* lock_hostgroup, bool known) {
 	// we couldn't parse the query
 	string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 	string digest_str = string(CurrentQuery.get_digest_text());
 	const string& nqn = (pgsql_thread___parse_failure_logs_digest == true ? digest_str : query_str);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
+	// A SET the caller forwards on purpose is no parse failure: it is logged as a lock, not as a bug to report.
+	known = known || known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest);
 	if (qpo->multiplex == -1) {
 		// we have no rule about this SET statement. We set hostgroup locking
 		if (locked_on_hostgroup < 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "SET query to cause setting lock_hostgroup: %s\n", nqn.c_str());
-			if (known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest)) {
+			if (known) {
 				proxy_info("Setting lock_hostgroup for SET query: %s\n", nqn.c_str());
 			} else {
 				if (client_myds && client_myds->addr.addr) {
@@ -7251,7 +7253,7 @@ void PgSQL_Session::unable_to_parse_set_statement(bool* lock_hostgroup) {
 			*lock_hostgroup = true;
 		} else {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "SET query to cause setting lock_hostgroup, but already set: %s\n", nqn.c_str());
-			if (known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest)) {
+			if (known) {
 				//proxy_info("Setting lock_hostgroup for SET query: %s\n", nqn.c_str());
 			} else {
 				if (client_myds && client_myds->addr.addr) {

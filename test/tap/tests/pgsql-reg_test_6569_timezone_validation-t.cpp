@@ -18,10 +18,12 @@
  * An INTERVAL time zone cannot be applied again on another backend connection. A SET with
  * one goes to the backend as written and the client keeps that connection; at login and
  * in pgsql-default_timezone it is refused. SET TIME ZONE LOCAL is handled as DEFAULT.
+ * Since forwarding it is intended, the lock is logged as such, not as a parse failure.
  */
 
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -32,6 +34,7 @@
 #include "mysql.h"
 #include "command_line.h"
 #include "tap.h"
+#include "utils.h"
 
 CommandLine cl;
 
@@ -470,6 +473,42 @@ static void check_interval_forwarded() {
 	}
 }
 
+// An INTERVAL time zone is forwarded on purpose: the SET that locks the hostgroup is logged once
+// as such, not as a parse failure asking for a bug report, and a later one on the locked session
+// logs nothing. Client A sends both forms, then client B the string form. Each line is written
+// before its SET is answered, so B's being in the log means A's are too.
+static void check_interval_lock_logged() {
+	std::fstream log;
+	if (open_file_and_seek_end(get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log", log) != EXIT_SUCCESS) {
+		BAIL_OUT("Could not open the ProxySQL log");
+	}
+	PGConn a = connect_proxy("");
+	PGConn b = connect_proxy("");
+	const bool sent = exec_ok(a.get(), "SET TIME ZONE INTERVAL '+02:30' HOUR TO MINUTE")
+		&& exec_ok(a.get(), "SET TimeZone = 'INTERVAL ''+02:30'''")
+		&& exec_ok(b.get(), "SET TimeZone = 'INTERVAL ''+02:30'''");
+	int locked = 0;
+	int bug_report = 0;
+	for (int i = 0; sent && i < 50 && locked < 2; i++) {
+		log.clear();
+		const auto lines = get_matching_lines(log,
+			".*(Setting lock_hostgroup for SET query|Unable to parse unknown SET query).*");
+		for (const line_match_t& line : lines.second) {
+			if (std::get<LINE_MATCH_T::LINE>(line).find("Setting lock_hostgroup for SET query") != std::string::npos) {
+				locked++;
+			} else {
+				bug_report++;
+			}
+		}
+		if (locked < 2) usleep(100000);
+	}
+	ok(sent && bug_report == 0,
+		"INTERVAL time zone SETs are not logged as parse failures asking for a bug report (%d such lines)", bug_report);
+	ok(sent && locked == 2,
+		"Each client's first INTERVAL time zone SET logs the hostgroup lock once, a later one nothing (%d lines, expected 2)",
+		locked);
+}
+
 // A bad pgsql-default_timezone is refused, and the runtime value stays as it was.
 static void check_default_variable() {
 	const char* where = " WHERE variable_name='pgsql-default_timezone'";
@@ -512,7 +551,7 @@ int main() {
 	unsetenv("PGTZ");
 	unsetenv("PGOPTIONS");
 
-	plan(1 + 65 + 2 + 18 + 2 + 21 + 1 + 1 + 15 + 4);
+	plan(1 + 65 + 2 + 18 + 2 + 21 + 1 + 1 + 15 + 2 + 4);
 	alarm(300);
 
 	admin = mysql_init(nullptr);
@@ -530,6 +569,7 @@ int main() {
 	check_reset_to_client_default();
 	check_clients_keep_their_value();
 	check_interval_forwarded();
+	check_interval_lock_logged();
 	check_default_variable();
 
 	mysql_close(admin);
