@@ -6076,8 +6076,10 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		}
 	}
 
-	// Query cache handling
-	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET) {
+	// Query cache handling. A session locked on a hostgroup ran a change ProxySQL could not
+	// track (SET SCHEMA, SET LOCAL, a SET inside a multi-statement query, ...), so the key
+	// does not describe its settings: a cached entry may not fit it. Same rule as the extended cache.
+	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && locked_on_hostgroup < 0) {
 		CurrentQuery.simple_cache_seed = simple_query_cache_seed(client_myds->myconn);
 		const std::shared_ptr<PgSQL_QC_entry_t> pgsql_qc_entry = GloPgQC->get(
 			CurrentQuery.simple_cache_seed,
@@ -6425,8 +6427,10 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			// extended-query cache above, this path does not test MultiplexDisabled(), so
 			// being on a LISTEN-pinned connection does not by itself keep it out.
 			// The native path has no multi-statement flag; several replies in one result mean one.
+			// A session locked on a hostgroup has settings the key cannot see: its result,
+			// stored under the plain key, would be served to clients without them.
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true &&
-				multi_result == false &&
+				multi_result == false && locked_on_hostgroup < 0 &&
 				_conn->native_result_had_notification == false) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&

@@ -1329,6 +1329,101 @@ void execute_settings_edge_test(PGconn* admin_conn, PGconn*) {
         });
 }
 
+// plain runs query first and caches its result. locked must then read its own value without
+// a cache lookup or store, and plain's entry must still answer plain.
+static void check_locked_session(PGconn* admin_conn, PGconn* locked, PGconn* plain,
+    const char* query, const std::string& own, const char* what) {
+    const std::string pv = single_value(plain, query);
+    ok(pv != own, "%s: plain client reads another value ('%s'), so a wrong hit would show", what, pv.c_str());
+    metrics.before = getQueryCacheMetrics(admin_conn);
+    const std::string v = single_value(locked, query);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == own, "%s: locked session reads its own value '%s'. Got '%s'", what, own.c_str(), v.c_str());
+    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+    metrics.swap();
+    const std::string v2 = single_value(plain, query);
+    ok(v2 == pv, "%s: plain client still reads '%s'. Got '%s'", what, pv.c_str(), v2.c_str());
+}
+
+// A session locked on a hostgroup ran a change ProxySQL does not track, so the cache key does
+// not describe its settings. Its results must not be cached, and it must not get cached entries.
+void execute_locked_session_test(PGconn* admin_conn, PGconn*) {
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_soft_ttl_pct'",
+        "LOAD PGSQL VARIABLES TO RUNTIME",
+        "PROXYSQL FLUSH PGSQL QUERY CACHE"
+        }))
+        return;
+
+    PGConnPtr locked = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr plain = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr multi = createNewConnection(ConnType::BACKEND, false);
+    if (!locked || !plain || !multi)
+        return;
+
+    // SET SCHEMA is the search_path alias ProxySQL does not track: it locks the session.
+    if (!executeQueries(locked.get(), { "CREATE SCHEMA IF NOT EXISTS qc_lk", "SET SCHEMA 'qc_lk'" }))
+        return;
+    const char* q = "SELECT current_schema()";
+
+    metrics.before = getQueryCacheMetrics(admin_conn);
+    std::string v = single_value(locked.get(), q);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == "qc_lk", "Locked session reads its own schema. Expected 'qc_lk', got '%s'", v.c_str());
+    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+    metrics.swap();
+
+    v = single_value(plain.get(), q);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == "public", "Plain session is not served the locked session's result. Expected 'public', got '%s'", v.c_str());
+    checkMetricDelta<>("Query_Cache_count_SET", 1, std::equal_to<int>());
+    metrics.swap();
+
+    // The plain session's result is cached now: the locked session must not be served it.
+    v = single_value(locked.get(), q);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == "qc_lk", "Locked session is not served the cached plain result. Expected 'qc_lk', got '%s'", v.c_str());
+    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    metrics.swap();
+
+    // A SET inside a multi-statement query is not tracked either and locks the session.
+    const char* ts = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00'";
+    executeQueries(multi.get(), { "SET TimeZone TO 'Asia/Kolkata'; SELECT 1" });
+    v = single_value(multi.get(), ts);
+    ok(v == "2026-11-05 15:30:00+05:30", "Session with a multi-statement SET reads its own TimeZone. Expected '2026-11-05 15:30:00+05:30', got '%s'", v.c_str());
+    v = single_value(plain.get(), ts);
+    ok(v == "2026-11-05 10:00:00+00", "Plain session is not served the multi-statement session's result. Expected '2026-11-05 10:00:00+00', got '%s'", v.c_str());
+
+    // Other changes that lock: SET LOCAL, a SET of a setting ProxySQL does not track, and an
+    // unknown connect option. The last one is checked on the session's first query: the lock
+    // is only applied after that query's cache lookup.
+    {
+        PGConnPtr sl = createNewConnection(ConnType::BACKEND, false);
+        PGConnPtr us = createNewConnection(ConnType::BACKEND, false);
+        PGConnPtr uo = createNewConnection(ConnType::BACKEND, false, "options='-c work_mem=16MB'");
+        executeQueries(sl.get(), { "BEGIN", "SET LOCAL TimeZone TO 'Asia/Kolkata'" });
+        check_locked_session(admin_conn, sl.get(), plain.get(),
+            "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS l1", "2026-11-05 15:30:00+05:30", "SET LOCAL");
+        executeQueries(sl.get(), { "COMMIT" });
+        executeQueries(us.get(), { "SET work_mem TO '8MB'" });
+        check_locked_session(admin_conn, us.get(), plain.get(),
+            "SELECT current_setting('work_mem') AS l2", "8MB", "SET of an untracked setting");
+        check_locked_session(admin_conn, uo.get(), plain.get(),
+            "SELECT current_setting('work_mem') AS l3", "16MB", "unknown connect option");
+    }
+
+    executeQueries(plain.get(), { "DROP SCHEMA IF EXISTS qc_lk" });
+    executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "LOAD PGSQL QUERY RULES TO RUNTIME"
+        });
+}
+
 std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
 	{ "Basic Test", execute_basic_test },
 	{ "Data Manipulation Test", execute_data_manipulation_test },
@@ -1343,6 +1438,7 @@ std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
 	{ "Search Path Test", execute_search_path_test },
 	{ "Result Settings Test", execute_result_settings_test },
 	{ "Settings Edge Test", execute_settings_edge_test },
+	{ "Locked Session Test", execute_locked_session_test },
 };
 
 void execute_tests(bool with_ssl, bool diff_conn) {
@@ -1396,9 +1492,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
 	if (cl.use_noise) {
-		plan(309*2 + 3);
+		plan(333*2 + 3);
 	} else {
-		plan(309*2);
+		plan(333*2);
 	}
 
     execute_tests(false, false);
