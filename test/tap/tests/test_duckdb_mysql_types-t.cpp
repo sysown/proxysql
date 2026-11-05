@@ -37,7 +37,7 @@ bool verify(MYSQL* c, const std::string& sql, const std::vector<Column>& expecte
 				 fields[i].flags & UNSIGNED_FLAG, fields[i].charsetnr, fields[i].decimals);
 			return false;
 		}
-		if (!empty && row[i] && (e.type == MYSQL_TYPE_VAR_STRING || e.type == MYSQL_TYPE_BLOB) &&
+		if (!empty && row[i] && (e.type == MYSQL_TYPE_VAR_STRING || e.type == MYSQL_TYPE_LONG_BLOB) &&
 			fields[i].length < lengths[i])
 			return false;
 		if (!empty &&
@@ -111,8 +111,8 @@ bool cases(MYSQL* c) {
 		return false;
 	if (!check(verify(c, "SELECT ''::VARCHAR,''::BLOB,NULL::BLOB",
 					  {{MYSQL_TYPE_VAR_STRING, 0, 45, 0, ""},
-					   {MYSQL_TYPE_BLOB, 0, 63, 0, ""},
-					   {MYSQL_TYPE_BLOB, 0, 63, 0, nullptr}}),
+					   {MYSQL_TYPE_LONG_BLOB, 0, 63, 0, ""},
+					   {MYSQL_TYPE_LONG_BLOB, 0, 63, 0, nullptr}}),
 			   "empty text, empty blob and SQL NULL remain distinct"))
 		return false;
 	{
@@ -126,7 +126,7 @@ bool cases(MYSQL* c) {
 		auto row = mysql_fetch_row(r.get());
 		auto* lengths = mysql_fetch_lengths(r.get());
 		if (!check(
-				row && fields[0].type == MYSQL_TYPE_BLOB && fields[0].charsetnr == 63 &&
+				row && fields[0].type == MYSQL_TYPE_LONG_BLOB && fields[0].charsetnr == 63 &&
 					(fields[0].flags & BINARY_FLAG) && fields[0].length == 3 && lengths[0] == 3 &&
 					std::memcmp(row[0], "A\0B", 3) == 0 && fields[1].charsetnr == 45 &&
 					std::string(row[1], lengths[1]) == "Grüße",
@@ -192,17 +192,7 @@ bool run(Fixture& f) {
 		connect("127.0.0.1", f.mysql_port, "recovery_client", "recovery_client"), mysql_close);
 	if (!front || !cases(front.get()))
 		return false;
-	front.reset();
-	return check(query(f.admin, "INSERT OR REPLACE INTO disk.global_variables "
-								"VALUES('duckdb-mysql_compatibility','true')") &&
-					 f.shutdown() && f.start() &&
-					 verify(f.duck,
-							"SELECT CAST(1 AS SIGNED) AS `n`,TRUE AS `flag`,CAST('1.25' AS "
-							"DECIMAL(10,2)) AS `price`",
-							{{MYSQL_TYPE_LONGLONG, 0, 63, 0, "1"},
-							 {MYSQL_TYPE_TINY, 0, 63, 0, "1"},
-							 {MYSQL_TYPE_NEWDECIMAL, 0, 63, 2, "1.25"}}),
-				 "opt-in MySQL SELECT translation also returns native numeric metadata");
+	return true;
 }
 } // namespace
 int main() {

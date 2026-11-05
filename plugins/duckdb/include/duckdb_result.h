@@ -5,59 +5,48 @@
 
 #include <string>
 #include <vector>
-#include <cstdint>
-
-// MySQL text-protocol field attributes, independent of core/connector headers.
-// Unavailable origin and nullability information is deliberately not invented.
-struct DuckDBMySQLColumn {
-	uint8_t type { 253 }; // MYSQL_TYPE_VAR_STRING
-	uint16_t charset { 45 }; // utf8mb4_general_ci
-	uint16_t flags { 0 };
-	uint32_t length { 0 };
-	uint8_t decimals { 0 };
-};
 
 class SQLite3_result;
+
+struct DuckDBColumnType {
+	duckdb_type type;
+	uint8_t precision { 0 };
+	uint8_t scale { 0 };
+	uint32_t max_length { 0 }; // largest returned byte length; text/blob metadata
+};
+
+enum class DuckDBResultProtocol { mysql, pgsql };
+
+// Borrow a logical type and map it to the C type ID, including TIME_NS,
+// which the vendored DuckDB C API omits. Does not take ownership.
+duckdb_type duckdb_result_type_id(duckdb_logical_type logical);
 
 // Converts a materialised duckdb_result into the SQLite3_result that
 // core's MySQL and PostgreSQL serialisers both consume.
 //
 // Values are read through DuckDB's C chunk/vector API (string_t lengths for
-// VARCHAR/BLOB, typed vector data for everything else). This preserves
-// embedded NUL bytes that DuckDB 1.4.5's legacy result materialisation loses
-// even through duckdb_value_string().
-// Both text protocols transmit length-aware strings. PostgreSQL retains text
-// column metadata; the optional MySQL descriptors expose native scalar types.
-// The renderability allowlist follows the historical contract of DuckDB
-// 1.4.5's deprecated C API (duckdb/src/include/duckdb/main/capi/cast/
-// generic.hpp, GetInternalCValue's switch on deprecated_type) -- this is
-// the authoritative source, not a probed sample of types:
+// VARCHAR/BLOB, typed vector data for other scalar types).
+// ENUM uses the vendored native C++ dictionary lookup for length-aware labels.
+// This preserves embedded NUL bytes that DuckDB 1.4.5's legacy result
+// materialisation loses even through duckdb_value_string().
+// This is correct on the wire for the column types the compatibility
+// allowlist supports: both text protocols transmit values as strings.
+// Optional column_types receives the executed result's schema (including
+// decimal precision/scale) before chunk access; plugin serializers use it
+// for numeric/boolean/binary metadata and retain text metadata for other types.
+// BLOB cells use raw bytes for MySQL and hex BYTEA text for PostgreSQL.
+// BOOLEAN cells use 0/1 for MySQL and f/t for PostgreSQL.
+// Direct conversion supports scalar numeric/boolean values, DATE/TIME/TIME_TZ/TIME_NS,
+// TIMESTAMP and its S/MS/NS resolutions, INTERVAL, UUID, ENUM, BIT, VARCHAR
+// and BLOB. Timestamp resolutions use native DuckDB formatting, preserving nanoseconds,
+// negative epochs and infinities without another query. TIMESTAMPTZ uses the
+// originating connection's native cast to preserve its session timezone; conn
+// must be supplied for nonempty results containing a TIMESTAMPTZ column.
 //
-//   RENDERS AS TEXT (has a case in that switch): BOOLEAN, TINYINT,
-//   SMALLINT, INTEGER, BIGINT, UTINYINT, USMALLINT, UINTEGER, UBIGINT,
-//   FLOAT, DOUBLE, DATE, TIME, TIMESTAMP, HUGEINT, UHUGEINT, DECIMAL,
-//   INTERVAL, VARCHAR, BLOB -- 20 types, empirically confirmed too (e.g.
-//   DECIMAL(10,2) -> "1.50", INTERVAL 3 DAY -> "3 days").
-//
-//   RENDERS AS NULL (falls through to that switch's `default:` branch,
-//   which produces a NULL char* regardless of whether the value is
-//   actually SQL NULL): every other duckdb_type. That includes the
-//   nested/composite types (LIST, STRUCT, MAP, ARRAY, UNION) but is NOT
-//   limited to them -- several ordinary scalar types are just as
-//   unrenderable: UUID, ENUM, BIT, TIME_TZ, TIMESTAMP_TZ, BIGNUM, and the
-//   TIMESTAMP_S/MS/NS variants are all empirically confirmed to render as
-//   NULL, since none of them appear in GetInternalCValue's switch either
-//   (UUID in particular is easy to assume "just works" -- it doesn't).
-//
-// Consequently a null field in the converted SQLite3_result is AMBIGUOUS
-// on its own: it means either "the value was genuinely SQL NULL" or "the
-// column's type is outside the compatibility allowlist". Callers
-// must not treat a null field as proof of SQL NULL. Call
-// duckdb_result_has_unrenderable_column() (declared below) on the
-// duckdb_result BEFORE conversion to tell the two apart -- it answers
-// exactly the question a caller of this function needs answered ("is
-// every column on the direct-conversion allowlist?"), not merely
-// "does this result contain a nested column?".
+// Types outside duckdb_type_renders_as_text() still produce null fields on
+// this low-level path. Callers must inspect the result schema and wrap or
+// reject unsupported types before conversion; such fields cannot be treated
+// as proof of SQL NULL. The session executor performs that preflight.
 //
 // Returns nullptr when the result has no columns. In DuckDB 1.4.5 this is
 // NOT what DDL/DML statements (CREATE TABLE, INSERT, ...) produce -- every
@@ -95,17 +84,13 @@ class SQLite3_result;
 // raw result (duckdb_rows_changed(), etc.), rather than through an extra
 // indirection that would add nothing beyond forwarding the call.
 //
-// When mysql_columns is supplied, numeric booleans and round-trip floating
-// formatting are enabled, metadata is collected before chunk access, and
-// exceptional scalar values fall back to text for their entire column.
-// Unbounded text/blob lengths report the largest returned byte length.
-//
 // The caller owns the returned object and must `delete` it. When `error` is
 // non-null, conversion failures are reported there and nullptr is returned.
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res,
                                          std::string* error = nullptr,
-                                         bool mysql_booleans = false,
-                                         std::vector<DuckDBMySQLColumn>* mysql_columns = nullptr);
+                                         std::vector<DuckDBColumnType>* column_types = nullptr,
+                                         DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql,
+                                         duckdb_connection conn = nullptr);
 
 // Appends one length-aware converted row and translates SQLite's status into
 // the converter's error contract. This keeps an oversized row from being
@@ -113,28 +98,8 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res,
 bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
                                const unsigned long* sizes, std::string& error);
 
-// Answers "is every column on the direct-conversion allowlist?" -- true
-// if ANY column's duckdb_column_type() is one that GetInternalCValue's
-// compatibility switch (see the comment above) does not handle, and
-// duckdb_result_to_sqlite3() will therefore deliberately convert that
-// column's values to a null field regardless of whether they were
-// actually SQL NULL.
-//
-// This covers the nested/composite types (LIST, STRUCT, MAP, ARRAY,
-// UNION) but is NOT limited to them: it also flags non-nested scalar
-// types the switch doesn't handle either -- UUID, ENUM, BIT, TIME_TZ,
-// TIMESTAMP_TZ, BIGNUM, TIMESTAMP_S, TIMESTAMP_MS, TIMESTAMP_NS, as well
-// as any other duckdb_type this build defines that isn't in the switch's
-// allowlist (see the implementation: it mirrors the switch's positive
-// list rather than hand-maintaining a list of "known bad" types, so a
-// future DuckDB version's new type is treated as unrenderable by default
-// rather than silently slipping through undetected).
-//
-// Callers that need to preserve data for a flagged column must handle
-// that column differently -- e.g. via duckdb's JSON/Vector APIs -- rather
-// than assume duckdb_result_to_sqlite3()'s NULL means SQL NULL.
-//
-// Returns false for a null res or a result with zero columns.
+// True when ANY result column is outside the direct conversion allowlist.
+// Returns false for a null result or a result with zero columns.
 bool duckdb_result_has_unrenderable_column(duckdb_result* res);
 
 // The single-column predicate behind duckdb_result_has_unrenderable_column()
@@ -143,8 +108,7 @@ bool duckdb_result_has_unrenderable_column(duckdb_result* res);
 // (deciding, from a duckdb_prepared_statement's column types alone,
 // BEFORE anything executes, whether the COLUMNS(*)::VARCHAR rewrap is
 // needed) can call the exact same allowlist rather than hand-maintaining
-// a second copy of it. See the .cpp for the full mirrors-DuckDB's-switch
-// rationale.
+// a second copy of it.
 bool duckdb_type_renders_as_text(duckdb_type t);
 
 #endif // DUCKDB_RESULT_H

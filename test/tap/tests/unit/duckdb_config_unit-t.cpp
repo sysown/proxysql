@@ -7,7 +7,7 @@
 #include <vector>
 
 int main() {
-	plan(29);
+	plan(26);
 
 	// --- iface parsing -------------------------------------------------
 	std::vector<DuckDBIface> ifaces;
@@ -117,12 +117,6 @@ int main() {
 	ok(cfg.set("enable_external_access", "not-a-bool", err) == false && !err.empty(),
 	   "non-boolean enable_external_access is rejected with a message");
 
-	ok(cfg.get("mysql_compatibility") == "false", "MySQL compatibility defaults to disabled");
-	ok(cfg.set("mysql_compatibility", "1", err) && cfg.get("mysql_compatibility") == "true",
-	   "MySQL compatibility boolean aliases are normalized");
-	ok(!cfg.set("mysql_compatibility", "invalid", err) && cfg.get("mysql_compatibility") == "true",
-	   "invalid MySQL compatibility setting preserves the installed value");
-	ok(cfg.set("mysql_compatibility", "false", err) && cfg.get("mysql_compatibility") == "false",
-	   "native SQL behavior can be selected explicitly");
+	ok(!cfg.set("mysql_compatibility", "true", err), "retired custom-lexer compatibility setting is rejected");
 	return exit_status();
 }

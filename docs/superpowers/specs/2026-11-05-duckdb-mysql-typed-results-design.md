@@ -1,5 +1,13 @@
 # DuckDB typed MySQL results
 
+> **Superseded implementation details (2026-11-06).** The reconciliation adopts
+> #6303's shared `DuckDBColumnType` and protocol-aware result converter for both
+> MySQL and PostgreSQL. Native MySQL temporal metadata, exceptional scalar
+> fallback, observed byte lengths and selective positional wrapping are retained
+> on that foundation. The custom compatibility mode is removed. Prepared
+> frontend protocol belongs to #6298; #6282 implements only the DuckDB adapter.
+> See [current handoff](../specs/2026-11-05-duckdb-mysql-replica-design.md).
+
 Date: 2026-11-05
 Base: 782baf59b
 Scope: the user selected typed MySQL results first, then prepared statements. This change implements typed text-protocol results as the foundation; prepared-statement protocol follows separately.

@@ -143,6 +143,15 @@ replication API either does not decode them or would return a different
 representation than the snapshot. Non-transactional tables are not
 supported.
 
+Source tables affected by foreign-key `CASCADE` or `SET NULL` actions are not
+supported. InnoDB's internally cascaded child changes are not emitted as row
+events, and this replica does not reproduce foreign-key actions. Current
+snapshot validation does **not** reject those schemas yet; they can diverge even
+with ROW/FULL logging. See the
+[MySQL 8.4 replication manual](https://dev.mysql.com/doc/refman/8.4/en/innodb-and-mysql-replication.html).
+Metadata-based admission checks and live regression coverage remain follow-up
+work under #6289.
+
 v1 stops on any DDL in the binlog (`ALTER`, `RENAME`, and so on) rather than
 applying it. Stop the replica, `RESET DUCKDB REPLICA`, and `START` again to
 resnapshot. Online schema-change tools therefore require an explicit

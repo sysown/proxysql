@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <string>
 
 namespace {
@@ -51,7 +52,7 @@ std::string scalar_text(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(101);
+	plan(NO_PLAN);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -191,12 +192,12 @@ int main() {
 	}
 
 	{
-		auto native = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'");
-		ok(native.ok && native.result && std::string(native.result->rows[0]->fields[0]) == "true" &&
-		   std::string(native.result->rows[0]->fields[1]) == "false" && !native.result->rows[0]->fields[2],
-		   "native execution retains boolean text and SQL NULL");
+		auto native = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'", DuckDBResultProtocol::pgsql);
+		ok(native.ok && native.result && std::string(native.result->rows[0]->fields[0]) == "t" &&
+		   std::string(native.result->rows[0]->fields[1]) == "f" && !native.result->rows[0]->fields[2],
+		   "PostgreSQL execution retains native boolean values and SQL NULL");
 		delete native.result;
-		auto mysql = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'", true);
+		auto mysql = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'", DuckDBResultProtocol::mysql);
 		ok(mysql.ok && mysql.result && std::string(mysql.result->rows[0]->fields[0]) == "1" &&
 		   std::string(mysql.result->rows[0]->fields[1]) == "0" && !mysql.result->rows[0]->fields[2] &&
 		   std::string(mysql.result->rows[0]->fields[3]) == "true",
@@ -243,42 +244,91 @@ int main() {
 	}
 
 	{
-		// Regression guard for the C3 double-execution risk: INSERT ...
-		// RETURNING over a UUID column classifies as QUERY_RESULT (not
-		// CHANGED_ROWS) in DuckDB 1.4.5, and its "id" column is
-		// unrenderable, so duckdb_execute_effective() decides (from the
-		// PREPARED statement's schema, before executing anything) that
-		// this needs the rewrap. Preparing the wrap itself then fails --
-		// verified directly: in this DuckDB build, wrapping a bare
-		// INSERT in `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)` is a
-		// parser error ("syntax error at or near INTO"), since a bare
-		// DML statement is not valid FROM-clause subquery content -- so
-		// duckdb_execute_effective() falls back to the ORIGINAL prepared
-		// statement, which has not executed yet at that point either.
-		// Either way `effective` runs exactly once: assert row count,
-		// not response shape, which is what actually proves that.
+		// Unsupported RETURNING values must fail before execution. A
+		// sequence also detects execution followed by rollback, since its
+		// advance cannot be rolled back.
 		duckdb_result setup;
-		if (duckdb_query(conn,
-		        "CREATE TABLE t(id UUID DEFAULT gen_random_uuid(), n INTEGER)",
-		        &setup) != DuckDBSuccess) {
-			BAIL_OUT("could not create test table t");
+		for (const char* sql : {
+			"CREATE SEQUENCE rejected_returning_seq",
+			"CREATE TABLE t(id INTEGER[] DEFAULT [1, 2], "
+			"n INTEGER DEFAULT nextval('rejected_returning_seq'))",
+			"INSERT INTO t(n) VALUES (99)"
+		}) {
+			if (duckdb_query(conn, sql, &setup) != DuckDBSuccess) {
+				BAIL_OUT("could not set up unsupported RETURNING test");
+			}
+			duckdb_destroy_result(&setup);
 		}
+
+		for (const char* sql : {
+			"INSERT INTO t DEFAULT VALUES RETURNING id",
+			"UPDATE t SET n=100 RETURNING id",
+			"DELETE FROM t RETURNING id"
+		}) {
+			const DuckDBExecOutcome outcome = duckdb_execute_effective(conn, sql);
+			std::unique_ptr<SQLite3_result> r(outcome.result);
+			ok(!outcome.ok && outcome.error_type == DUCKDB_ERROR_NOT_IMPLEMENTED &&
+			   outcome.error.find("VARCHAR") != std::string::npos &&
+			   !outcome.has_resultset && !r,
+			   "unsupported RETURNING produces an actionable error: %s", sql);
+			ok(scalar_count(conn, "SELECT COUNT(*) FROM t") == 1 &&
+			   scalar_count(conn, "SELECT n FROM t") == 99,
+			   "rejected RETURNING leaves the table unchanged: %s", sql);
+		}
+		ok(scalar_count(conn, "SELECT nextval('rejected_returning_seq')") == 1,
+		   "rejected INSERT does not evaluate the sequence default");
+
+		const DuckDBExecOutcome cast = duckdb_execute_effective(
+			conn, "INSERT INTO t(n) VALUES (1) RETURNING id::VARCHAR");
+		std::unique_ptr<SQLite3_result> r(cast.result);
+		ok(cast.ok && cast.has_resultset && r && r->rows_count == 1 &&
+		   r->rows[0]->fields[0] && std::strcmp(r->rows[0]->fields[0], "[1, 2]") == 0 &&
+		   scalar_count(conn, "SELECT COUNT(*) FROM t") == 2,
+		   "explicit VARCHAR RETURNING preserves the value and inserts exactly once");
+
+		const DuckDBExecOutcome begin = duckdb_execute_effective(conn, "BEGIN");
+		const DuckDBExecOutcome pending = duckdb_execute_effective(conn, "INSERT INTO t(n) VALUES (2)");
+		ok(begin.ok && pending.ok, "create pending work in an explicit transaction");
+		const DuckDBExecOutcome rejected = duckdb_execute_effective(conn, "DELETE FROM t RETURNING id");
+		ok(!rejected.ok && scalar_count(conn, "SELECT COUNT(*) FROM t") == 3,
+		   "rejected RETURNING preserves earlier pending work without deleting rows");
+		const DuckDBExecOutcome rollback = duckdb_execute_effective(conn, "ROLLBACK");
+		ok(rollback.ok && duckdb_pgsql_transaction_status(conn) == 'I' &&
+		   scalar_count(conn, "SELECT COUNT(*) FROM t") == 2,
+		   "rollback after rejection discards pending work and restores idle state");
+	}
+
+	{
+		// Imported/parameter-bound timestamps can exceed the native text
+		// formatter's range. A RETURNING conversion error must undo the write.
+		duckdb_result setup;
+		for (const char* sql : { "CREATE TABLE ts_extreme_source(ts TIMESTAMP_S)",
+		                        "CREATE TABLE ts_extreme_target(ts TIMESTAMP_S)" }) {
+			if (duckdb_query(conn, sql, &setup) != DuckDBSuccess)
+				BAIL_OUT("could not create extreme timestamp tables");
+			duckdb_destroy_result(&setup);
+		}
+		duckdb_prepared_statement statement = nullptr;
+		if (duckdb_prepare(conn, "INSERT INTO ts_extreme_source VALUES (?)", &statement) != DuckDBSuccess)
+			BAIL_OUT("could not prepare extreme timestamp insert");
+		duckdb_value value = duckdb_create_timestamp_s({ std::numeric_limits<int64_t>::max() - 1 });
+		const duckdb_state bound = duckdb_bind_value(statement, 1, value);
+		duckdb_destroy_value(&value);
+		if (bound != DuckDBSuccess || duckdb_execute_prepared(statement, &setup) != DuckDBSuccess)
+			BAIL_OUT("could not populate extreme timestamp source");
 		duckdb_destroy_result(&setup);
+		duckdb_destroy_prepare(&statement);
 
-		const DuckDBExecOutcome outcome =
-			duckdb_execute_effective(conn, "INSERT INTO t(n) VALUES (1) RETURNING id");
-		ok(outcome.ok, "INSERT ... RETURNING over an unrenderable column does not error");
-
-		const int rows = scalar_count(conn, "SELECT COUNT(*) FROM t");
-		ok(rows == 1,
-		   "INSERT ... RETURNING over an unrenderable column inserts "
-		   "exactly once (not re-executed by the C3 re-query)");
-
+		const DuckDBExecOutcome outcome = duckdb_execute_effective(conn,
+			"INSERT INTO ts_extreme_target SELECT ts FROM ts_extreme_source RETURNING ts");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
-		ok(outcome.has_resultset && r && r->rows_count == 1 &&
-		   r->rows[0]->fields[0] == nullptr,
-		   "the RETURNING id is sent as NULL (degraded output) since the "
-		   "wrap could not be prepared for this statement shape");
+		ok(!outcome.ok && !outcome.has_resultset && !r &&
+		   outcome.error_type == DUCKDB_ERROR_OUT_OF_RANGE,
+		   "extreme timestamp RETURNING reports a conversion error");
+		ok(scalar_count(conn, "SELECT COUNT(*) FROM ts_extreme_target") == 0 &&
+		   scalar_count(conn, "SELECT COUNT(*) FROM ts_extreme_source") == 1 &&
+		   duckdb_pgsql_transaction_status(conn) == 'I',
+		   "timestamp conversion failure rolls back the mutation and leaves the connection usable");
 	}
 
 	{
@@ -329,7 +379,7 @@ int main() {
 		// error, which -- before the fix -- silently fell back to NULL
 		// rendering for the single most common input shape there is.
 		const DuckDBExecOutcome outcome =
-			duckdb_execute_effective(conn, "SELECT gen_random_uuid() AS u;");
+			duckdb_execute_effective(conn, "SELECT [1, 2] AS u;");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -342,7 +392,7 @@ int main() {
 		// otherwise comment out the wrap's closing `)`. Confirmed by
 		// probe.
 		const DuckDBExecOutcome outcome =
-			duckdb_execute_effective(conn, "SELECT gen_random_uuid() AS u -- trailing comment");
+			duckdb_execute_effective(conn, "SELECT [1, 2] AS u -- trailing comment");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -351,7 +401,7 @@ int main() {
 
 	{
 		const DuckDBExecOutcome outcome = duckdb_execute_effective(
-			conn, "SELECT gen_random_uuid() AS u; -- trailing comment");
+			conn, "SELECT [1, 2] AS u; -- trailing comment");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -360,7 +410,7 @@ int main() {
 
 	{
 		const DuckDBExecOutcome outcome = duckdb_execute_effective(
-			conn, "SELECT gen_random_uuid() AS u; /* trailing comment */");
+			conn, "SELECT [1, 2] AS u; /* trailing comment */");
 		std::unique_ptr<SQLite3_result> r(outcome.result);
 		ok(outcome.ok && outcome.has_resultset && r && r->rows_count == 1 &&
 		   r->rows[0]->fields[0] != nullptr,
@@ -501,25 +551,25 @@ int main() {
 	ok(user_variable.ok && scalar_count(managed_conn, "SELECT getvariable('tenant_marker')") == 7,
 	   "SET VARIABLE user variables are unaffected");
 	{
-		const auto mixed = duckdb_execute_effective(managed_conn, "SELECT 1 AS dup,[2] AS nested,'text' AS dup,TRUE AS flag", true, true);
-		ok(mixed.ok && mixed.result && mixed.mysql_columns.size() == 4 && mixed.mysql_columns[0].type == 3 &&
-		   mixed.mysql_columns[1].type == 253 && mixed.mysql_columns[3].type == 1 &&
+		const auto mixed = duckdb_execute_effective(managed_conn, "SELECT 1 AS dup,[2] AS nested,'text' AS dup,TRUE AS flag", DuckDBResultProtocol::mysql);
+		ok(mixed.ok && mixed.result && mixed.column_types.size() == 4 && mixed.column_types[0].type == DUCKDB_TYPE_INTEGER &&
+		   mixed.column_types[1].type == DUCKDB_TYPE_VARCHAR && mixed.column_types[3].type == DUCKDB_TYPE_BOOLEAN &&
 		   std::string(mixed.result->column_definition[0]->name) == "dup" &&
 		   std::string(mixed.result->column_definition[2]->name) == "dup" && std::string(mixed.result->rows[0]->fields[3]) == "1",
 		   "selective MySQL wrapping preserves scalar types, booleans, order and duplicate labels");
 		delete mixed.result;
 		duckdb_execute_effective(managed_conn, "CREATE SEQUENCE typed_once");
-		const auto once = duckdb_execute_effective(managed_conn,"SELECT nextval('typed_once'),[2]",true,true);
+		const auto once = duckdb_execute_effective(managed_conn,"SELECT nextval('typed_once'),[2]",DuckDBResultProtocol::mysql);
 		ok(once.ok && scalar_count(managed_conn,"SELECT currval('typed_once')") == 1,
 		   "selective wrapping executes a volatile scalar exactly once");
 		delete once.result;
 		duckdb_execute_effective(managed_conn,"CREATE TABLE typed_returning(id INT,nested INT[])");
-		const auto returning = duckdb_execute_effective(managed_conn,"INSERT INTO typed_returning VALUES(7,[2]) RETURNING id",true,true);
-		ok(returning.ok && returning.result && returning.mysql_columns.size() == 1 && returning.mysql_columns[0].type == 3 &&
+		const auto returning = duckdb_execute_effective(managed_conn,"INSERT INTO typed_returning VALUES(7,[2]) RETURNING id",DuckDBResultProtocol::mysql);
+		ok(returning.ok && returning.result && returning.column_types.size() == 1 && returning.column_types[0].type == DUCKDB_TYPE_INTEGER &&
 		   scalar_count(managed_conn,"SELECT COUNT(*) FROM typed_returning") == 1,
 		   "scalar DML RETURNING has typed metadata and mutates once");
 		delete returning.result;
-		const auto unsupported = duckdb_execute_effective(managed_conn,"INSERT INTO typed_returning VALUES(8,[3]) RETURNING nested",true,true);
+		const auto unsupported = duckdb_execute_effective(managed_conn,"INSERT INTO typed_returning VALUES(8,[3]) RETURNING nested",DuckDBResultProtocol::mysql);
 		ok(!unsupported.ok && scalar_count(managed_conn,"SELECT COUNT(*) FROM typed_returning") == 1,
 		   "unrenderable MySQL DML RETURNING is rejected before any mutation");
 		delete unsupported.result;

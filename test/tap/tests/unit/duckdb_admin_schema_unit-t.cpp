@@ -85,8 +85,8 @@ int main() {
 	std::string err;
 	ok(duckdb_prepare_variables_for_startup(db, *plugin_ctx.config_store, err),
 	   "fresh startup seeds and validates DuckDB global variables");
-	ok(cell(db, "SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'duckdb-%'") == "9",
-	   "Main contains all nine duckdb-prefixed defaults");
+	ok(cell(db, "SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'duckdb-%'") == "8",
+	   "Main contains all eight duckdb-prefixed defaults");
 	ok(!table_exists(db, "main", "duckdb_variables") &&
 	   !table_exists(db, "main", "runtime_duckdb_variables"),
 	   "fresh Admin schema exposes neither removed DuckDB table");
@@ -102,7 +102,7 @@ int main() {
 	db.execute("INSERT INTO runtime_global_variables VALUES ('mysql-threads','4')");
 	runtime_view.refresh(&db, runtime_view.opaque);
 	ok(cell(db, "SELECT variable_value FROM runtime_global_variables WHERE variable_name='mysql-threads'") == "4" &&
-	   cell(db, "SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'duckdb-%'") == "9",
+	   cell(db, "SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'duckdb-%'") == "8",
 	   "runtime refresh replaces only the duckdb namespace");
 
 	db.execute("UPDATE global_variables SET variable_value='4' WHERE variable_name='duckdb-threads'");
@@ -156,7 +156,7 @@ int main() {
 
 	result = run("SAVE DUCKDB VARIABLES TO DISK", db);
 	ok(result.error_code == 0 &&
-	   cell(db, "SELECT COUNT(*) FROM disk.global_variables WHERE variable_name LIKE 'duckdb-%'") == "9",
+	   cell(db, "SELECT COUNT(*) FROM disk.global_variables WHERE variable_name LIKE 'duckdb-%'") == "8",
 	   "SAVE TO DISK copies only the complete duckdb-prefixed Main slice");
 	db.execute("UPDATE disk.global_variables SET variable_value='5' WHERE variable_name='duckdb-threads'");
 	result = run("LOAD DUCKDB VARIABLES FROM DISK", db);

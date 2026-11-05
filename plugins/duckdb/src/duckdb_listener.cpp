@@ -215,7 +215,6 @@ bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::st
 
 	listeners_ = std::move(bound);
 	engine_ = &engine;
-	mysql_compatibility_ = cfg.mysql_compatibility();
 	shutdown_.store(false);
 	running_.store(true);
 	accept_thread_ = std::thread(&DuckDBListener::accept_loop, this);
@@ -441,7 +440,6 @@ void DuckDBListener::run_session(int client_fd) {
 	std::string cerr;
 	if (!engine_->connect(&st.conn, cerr)) { close(client_fd); return; }
 	st.engine = engine_;
-	st.mysql_compatibility = std::is_same_v<Thr, MySQL_Thread> && mysql_compatibility_;
 	st.pgsql_txn_status = 'I';
 	st.database_name = engine_->database_path();
 	if (st.database_name.empty() || st.database_name == ":memory:") {

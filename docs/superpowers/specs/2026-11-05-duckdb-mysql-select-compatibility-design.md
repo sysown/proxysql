@@ -1,5 +1,11 @@
 # DuckDB MySQL SELECT compatibility — first pass
 
+> **Retired on 2026-11-06.** Historical implementation record only. The custom
+> lexer, translator, opt-in variable and tests have been removed. #6280 requires
+> new SQL recognition to use currently vendored ParserSQL; missing grammar is
+> deferred upstream. See the [current handoff](../specs/2026-11-05-duckdb-mysql-replica-design.md)
+> and #6284. The design below does not describe supported functionality.
+
 Date: 2026-11-05
 Base: `748306f2b`
 Status: implemented and validated for the documented core

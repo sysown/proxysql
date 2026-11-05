@@ -1,7 +1,6 @@
 #ifndef DUCKDB_SESSION_H
 #define DUCKDB_SESSION_H
 
-#include "duckdb.h"
 #include "duckdb_result.h"
 
 #include <cstddef>
@@ -52,7 +51,6 @@ struct DuckDBSessionState {
 	duckdb_connection conn { nullptr };
 	DuckDBEngine* engine { nullptr };
 	bool pgsql_extended_error { false };
-	bool mysql_compatibility { false };
 	char pgsql_txn_status { 'I' };
 	std::string database_name { "memory" };
 };
@@ -98,28 +96,26 @@ struct DuckDBExecOutcome {
 	duckdb_error_type error_type { DUCKDB_ERROR_INVALID };
 	bool has_resultset { false };        // true: `result` holds the resultset to send
 	SQLite3_result* result { nullptr };  // caller-owned when has_resultset; nullptr otherwise
-	std::vector<DuckDBMySQLColumn> mysql_columns;
+	std::vector<DuckDBColumnType> column_types; // schema of the executed result, after any VARCHAR wrapper
 	int affected_rows { 0 };             // meaningful only when ok && !has_resultset
 };
 
-// Executes `effective` once on `conn`, dispatching DDL/DML versus query rows.
-// Unsupported output types are detected before execution. Query projections
-// can be wrapped as text; MySQL preserves supported scalar columns beside
-// those casts, while PostgreSQL retains its existing all-text wrapper.
-// Unsupported unwrappable MySQL output is rejected before mutation.
+// Runs `effective` (already intercept-rewritten DuckDB SQL) on `conn`
+// and applies the DDL/DML/QUERY_RESULT dispatch (C2, via
+// duckdb_result_return_type()) and the unrenderable-column rewrap (C3).
 //
-// mysql_types collects native MySQL descriptors and enables numeric booleans
-// and round-trip floating-point formatting. mysql_booleans independently
-// supports the earlier numeric-boolean conversion path without descriptors.
+// C3 is decided from a *prepared* statement's column types -- via
+// duckdb_prepared_statement_column_type() and
+// duckdb_type_renders_as_text() (duckdb_result.h) -- BEFORE anything is
+// executed. If neither direct conversion nor the VARCHAR wrapper can
+// represent the result, reject before execution. Otherwise execute the
+// selected prepared statement exactly once.
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
-                                               bool mysql_booleans = false, bool mysql_types = false);
+                                         DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql);
 
-// Recognizes client SET statements that target the Admin-managed engine-wide
-// settings (memory_limit, threads, enable_external_access, access_mode) and
-// refuses them with an error naming the duckdb-* Admin variable to use instead
-// (issue #6320): returns false with `handled=true` and `err` set. Any other
-// statement returns true with `handled=false` and continues to DuckDB, where
-// duckdb_execute_effective() confines SET/RESET to session scope.
+// Rejects client SET statements for Admin-managed engine-global settings.
+// Returns false with an error for a rejected statement; unhandled session SET
+// statements return true with `handled=false`.
 bool duckdb_execute_managed_set(const std::string& sql, DuckDBEngine& engine,
                                bool& handled, std::string& err);
 

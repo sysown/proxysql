@@ -1,7 +1,7 @@
 # DuckDB MySQL Replica — Design and Handoff
 
-Date: 2026-11-05
-Status: applier and typed MySQL SELECT results validated; prepared statements next; internal routing deferred
+Date: 2026-11-05; reconciled 2026-11-06
+Status: replica hardening retained; shared #6303 result foundation integrated; #6280 constraints apply
 Branch: `feature/duckdb-mysql-replica`
 Worktree: `/mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica`
 Base: `v3.0` at `e2f317aba`
@@ -22,8 +22,8 @@ This document covers **sub-project 1: the MySQL replica applier**. Existing
 query rules can route analytical reads to a backend hostgroup pointing to the
 same ProxySQL instance's DuckDB MySQL listener on a different port. A dedicated
 internal query-rule destination and automatic lag-aware fallback are deferred
-and may never be needed. MySQL dialect compatibility and further applier
-hardening are the next workstreams listed in section 10.
+and may never be needed. Feature work and remaining applier
+hardening follow the issue boundaries and prerequisites in section 10.
 
 The plugin itself (DuckDB engine, MySQL/PostgreSQL listeners, `duckdb-*`
 variables, snapshot loader) already exists on `v3.0`. This branch extends it;
@@ -140,6 +140,18 @@ Rejected at snapshot: tables without a primary key, `JSON`, `ENUM`, `SET`,
 geometry, non-`utf8mb4`/`utf8`/`ascii`/`binary` charsets, decimal width > 38.
 `TIME` is stored as `VARCHAR` (MySQL time can be negative or exceed 24h).
 
+**Unenforced source limitation:** foreign-key actions that modify child rows
+(`CASCADE` or `SET NULL`) are not supported. InnoDB executes cascading actions
+internally without logging the child changes; see the
+[MySQL 8.4 manual](https://dev.mysql.com/doc/refman/8.4/en/innodb-and-mysql-replication.html).
+Current discovery reads column metadata, not referential actions, and the target
+DDL preserves no foreign keys. Such tables are currently admitted and can
+therefore diverge. This conclusion follows from documented source behavior and
+code inspection; a live reproduction is still pending. Rejecting these selected
+child tables using INFORMATION_SCHEMA metadata, with live delete/update/set-null
+regressions, is an immediate #6289 follow-up; selecting only the child table
+does not avoid the issue.
+
 ## 6. Snapshot semantics
 
 1. `FLUSH TABLES WITH READ LOCK`
@@ -163,7 +175,7 @@ Snapshot, apply and RESET fully qualify targets with the actual catalog from
 their own DuckDB connection, including appender creation and metadata
 introspection. A catalog matching the source schema or `proxysql_replica` is
 supported. Native client SQL may still require three-part names when a
-catalog and schema collide; SELECT compatibility does not rewrite namespaces.
+catalog and schema collide; client SQL does not rewrite namespaces.
 
 A source `server_uuid` change since the snapshot is an error; the operator must
 `RESET` and snapshot again.
@@ -232,10 +244,11 @@ Build: `plugins/duckdb/Makefile` adds the new sources and links
 
 ## 9. Validation status
 
-Validated on 2026-11-05 against a dedicated MySQL **8.4.8** InnoDB source
+Originally validated on 2026-11-05 and rerun after reconciliation on 2026-11-06
+against a dedicated MySQL **8.4.8** InnoDB source
 and the real DuckDB **1.4.5** / MariaDB Connector/C **3.3.8** libraries:
 
-- The PROXYSQL40 core, DuckDB plugin, replica TAP test and nine DuckDB unit
+- The PROXYSQL40 core, DuckDB plugin, replica TAP tests and eight DuckDB unit
   binaries build and link.
 - The live replica TAP scenario passes **31 assertions**, separately with
   `binlog_checksum=NONE` and `binlog_checksum=CRC32`.
@@ -259,18 +272,23 @@ and the real DuckDB **1.4.5** / MariaDB Connector/C **3.3.8** libraries:
   fails the marker deadline. Recovery still passes **19 assertions** after
   extracting the common fixture. See the
   [measured baseline](../benchmarks/2026-11-05-duckdb-replica-load.md).
-- Typed MySQL result coverage passes **31 assertions** through direct and
-  ordinary routed connections, including native and opt-in compatibility
-  modes, wide numerics, binary/NUL data, empty results, temporal/float text
-  fallback, duplicate labels, DML RETURNING, 16 MiB row splitting and
-  300-column sequence wrapping. PostgreSQL retains its text result path.
-- The nine DuckDB unit binaries pass **379 assertions** in total, including
-  **61** in `duckdb_replica_unit-t`, **16** in
-  `duckdb_replica_storage_unit-t`, and **53** in the SELECT translator unit.
-- Existing Admin-table TAP coverage passes 22 assertions; the MySQL listener
-  TAP test passes 17. The PostgreSQL listener TAP test still fails assertions
-  19..24 (extended-query rejection). The same six failures reproduce with
-  the plugin built from base revision `e2f317aba`; they predate this work.
+- After reconciling with [#6303](https://github.com/sysown/proxysql/pull/6303),
+  the shared result converter and metadata serializers serve **both** protocols.
+  Native MySQL typed coverage passes **30 assertions** through direct and
+  ordinary routed connections, including wide numerics, binary/NUL data,
+  empty results, temporal/float text fallback, duplicate labels, DML RETURNING,
+  16 MiB row splitting and 300-column sequence wrapping.
+- The eight remaining DuckDB unit binaries pass **400 TAP checks**, including
+  seven optional ICU skips. This includes **111** result checks, **111** session
+  checks, **61** replica checks and **16** storage checks. The custom translator
+  and its tests are removed.
+- Admin-table TAP coverage passes **22 assertions**. The default no-ICU MySQL
+  wire suite passes **77 checks** and PostgreSQL **84 checks**, each including
+  four optional ICU skips. With the signed DuckDB 1.4.5 ICU extension loaded,
+  the same suites pass **77/84 assertions without skips**, including independent
+  session timezones and DST. #6303's raw-test TLS setup resolves the old six
+  PostgreSQL extended-query assertion failures; those are no longer a known
+  baseline failure. Both suites check mixed scalar/composite metadata.
 - Live coverage includes typed snapshot and DML, multi-row UPDATE pairing,
   primary-key changes, rollback, filtering an unrelated JSON table, binlog
   rotation, source file/position/GTID agreement, committed Admin statistics,
@@ -281,8 +299,6 @@ and the real DuckDB **1.4.5** / MariaDB Connector/C **3.3.8** libraries:
   checkpoints, retry after removing a foreign-key dependency, manifest
   ownership after configuration edits, and failed-snapshot rollback
   preserving an unrelated inactive table.
-- The opt-in SELECT compatibility differential test passes **39 assertions**
-  against MySQL, direct DuckDB and ordinary same-instance hostgroup routing.
 - Config and snapshot reject case variants of the reserved metadata schema
   before storage/source access. Quoted identifiers, metadata catalog-name
   collisions, missing targets and fresh RESET idempotence have storage coverage.
@@ -339,28 +355,54 @@ applied data.
 - `binlog_row_metadata=FULL` is not required for the supported type subset:
   signedness comes from snapshot column types, and ENUM/SET remain rejected.
 
-### 10.3 Next workstreams
+### 10.3 Next workstreams under #6280
 
-Routing decision (2026-11-05): use regular `mysql_servers` hostgroups and query
-rules to target this instance's DuckDB MySQL listener. Internal query-rule
-routing with automatic lag-aware fallback is deferred indefinitely; it is not
-a prerequisite for the work below. The compatibility differential test
-validates this topology through the regular ProxySQL listener, including
-backend authentication and session setup.
+The parent tracker is [#6280](https://github.com/sysown/proxysql/issues/6280).
+Its constraints govern this branch:
 
-Typed MySQL COM_QUERY results are implemented; see section 10.6. The user
-prioritizes client-facing features over further performance tuning.
+- **Only currently vendored ParserSQL may recognize new SQL syntax.** Do not
+  add a custom parser, lexer, prefix matcher or syntax workaround. Missing
+  grammar must wait for upstream support. Existing mainline discovery and
+  configuration security guards are retained, not expanded as a substitute.
+- **Frontend prepared statements belong to the shared core framework #6298.**
+  The DuckDB work in #6282 supplies native prepare/bind/execute/fetch/reset/
+  finalize through that framework once its contract is available. Frontend
+  statement IDs, MySQL state machines, PostgreSQL portals, parameter decoding,
+  binary result encoding and lifecycle/limit policies must not be duplicated
+  in the plugin. A stable adapter contract is still a prerequisite.
 
-1. **MySQL prepared statements.** Add parameter binding and binary results
-   using the typed result foundation, through direct and ordinary backend
-   routing. Prepared-statement protocol is not yet implemented.
-2. **Broader analytical SELECT compatibility.** Expand the bounded subset
-   around application queries; see the compatibility design.
-3. **Read-only protection and further applier hardening.** Protect replicated
-   tables/metadata from client writes, broaden workload coverage and validate
-   packaging. Further throughput optimization remains deferred.
-4. **Bulk load** (`LOAD DATA LOCAL INFILE`, `COPY FROM STDIN`).
-5. **Postgres logical replication** into the same engine.
+Routing decision: use ordinary hostgroups/query rules targeting this instance's
+DuckDB MySQL listener on a different port. Typed-result tests cover direct and
+routed execution. Internal routing and lag-aware fallback remain deferred
+indefinitely. Further benchmark/throughput work is also deferred by user choice.
+
+| Issue | Scope and current branch status | Next action |
+|---|---|---|
+| [#6289](https://github.com/sysown/proxysql/issues/6289) | Snapshot/applier, durable resume, crash/concurrency coverage implemented; automatic reconnect and FK-action admission missing | Reject unsupported FK actions with live coverage, then add bounded stop-responsive reconnect from durable coordinates |
+| [#6283](https://github.com/sysown/proxysql/issues/6283) / [#6303](https://github.com/sysown/proxysql/pull/6303) | Shared richer results integrated, with native MySQL temporal metadata and per-column fallback retained | Review integration and merge dependency; preserve both protocols |
+| [#6298](https://github.com/sysown/proxysql/issues/6298) then [#6282](https://github.com/sysown/proxysql/issues/6282) | Core prepared framework, then DuckDB adapter; not implemented here | Coordinate adapter contract before implementation; validate direct and routed clients once available |
+| [#6284](https://github.com/sysown/proxysql/issues/6284) | Scoped SQL compatibility; custom translator removed | Use native analytical SELECTs now; map candidate syntax to vendored ParserSQL support before new work |
+| [#6281](https://github.com/sysown/proxysql/issues/6281) | Autocommit semantics | Blocked on ParserSQL #68/#69; do not add downstream syntax recognition |
+| [#6285](https://github.com/sysown/proxysql/issues/6285) | Catalog/ORM compatibility | Follow typed results and applicable prepared support; ParserSQL constraint also applies |
+| [#6286](https://github.com/sysown/proxysql/issues/6286), [#6287](https://github.com/sysown/proxysql/issues/6287), [#6288](https://github.com/sysown/proxysql/issues/6288) | Bulk transfer, streaming, Arrow | Separate features; not implied complete by the replica snapshot loader |
+| [#6290](https://github.com/sysown/proxysql/issues/6290) | PostgreSQL logical replication | Separate later workstream |
+
+The immediate correctness task is **rejecting unsupported source FK actions**
+under #6289, using metadata rather than new SQL recognition (section 5). The
+DBTrail review brought this existing gap to attention; it has not been fixed or
+live-reproduced by the reconciliation. Then implement **automatic replica
+network recovery**. Today a binlog fetch failure enters sticky `error`;
+`STOP` followed by `START` resumes the durable checkpoint. Restart/crash recovery
+is validated, but that is not automatic retry of a running failed connection.
+Tests should disconnect the source during live apply, include transactions
+committed while disconnected, and verify exact rows plus matching coordinates
+without RESET/resnapshot. Source identity changes, unsupported DDL and invalid
+row images must remain errors. Do not close #6289 until remaining acceptance
+criteria are satisfied. Read-only replica protection is a subsequent hardening
+candidate; it must not introduce SQL recognition outside ParserSQL.
+
+The broader #6280 backlog also includes #6291 multi-results, #6292 managed
+instances, #6293 backups and #6294 DuckLake. They are separate from this PR.
 
 ### 10.4 Process crash and snapshot concurrency (completed)
 
@@ -410,23 +452,33 @@ history limits. Broader workloads and long-duration memory behavior remain
 unmeasured. The current per-row SQL execution path is a candidate for
 profiling before choosing an optimization.
 
-### 10.6 Typed MySQL results (completed)
+### 10.6 Shared typed results (reconciled with #6303)
 
-The MySQL listener now sends native scalar field metadata for COM_QUERY
-results in both native and compatibility modes. This includes signedness,
-decimal scale, binary/UTF-8 character sets, and empty-result types. Native
-MySQL BOOLEAN values now return 1/0. PostgreSQL retains its existing text
-metadata and boolean representation.
+This branch integrates #6303 at `7479dae6a` using its `DuckDBColumnType`,
+protocol-aware conversion and both frontend metadata paths. It preserves native
+UUID, TIMESTAMP S/MS/NS, TIMETZ, TIME_NS, ENUM, BIT and session-aware TIMESTAMPTZ
+conversion, PostgreSQL BYTEA/f-t booleans, exact unsigned/wide numerics, and
+pre-execution rejection of unsupported DML RETURNING.
 
-The plugin retains length-aware value rows and emits field/row packets with
-existing core protocol generators. Wide integers use exact DECIMAL metadata;
-unsupported types and exceptional scalar values use text fallback. Mixed
-scalar/composite projections preserve column order, duplicate labels and
-scalar types. Scalar DML RETURNING executes once; unsupported returning types
-are rejected before mutation. Nullable/key/origin information remains
-conservative, and unbounded string/blob lengths describe observed bytes.
-See the [typed result design](2026-11-05-duckdb-mysql-typed-results-design.md)
-for mappings and validation. Prepared-statement protocol is the next feature.
+Useful branch additions now sit on that one foundation: MySQL DATE/TIME/
+DATETIME metadata, UTF-8 text and observed byte lengths, FLOAT/DOUBLE roundtrip
+formatting, whole-column text fallback for MySQL-unrepresentable scalar values,
+and selective positional wrapping on **both** protocols. Duplicate labels and
+neighboring scalar types survive; supported statements execute once. Native
+MySQL BOOLEAN returns 1/0; PostgreSQL BOOLEAN returns f/t. Transfer remains text;
+client-visible prepared statements and binary transfer are not implemented.
+
+The custom SELECT lexer, `duckdb-mysql_compatibility` variable and differential
+translator tests are removed to comply with #6280. Native DuckDB analytical
+SELECTs remain supported. Old branch configurations with that persisted key
+must remove it from Main/Disk before restart; see
+[troubleshooting](../../../doc/duckdb/troubleshooting.md#an-old-development-configuration-contains-mysql_compatibility).
+Historical compatibility/typed-result design files are marked retired or
+superseded rather than representing the current implementation.
+
+A new draft PR targets `v3.0` and declares dependency on #6303. The merge keeps
+newer mainline configuration/security guards. #6303 is still an unmerged draft;
+its result changes will appear in this PR's diff until the dependency lands.
 
 ## 11. Known risks
 
@@ -434,6 +486,7 @@ for mappings and validation. Prepared-statement protocol is the next feature.
 |---|---|
 | `STOP` can block up to the 5 s dump read timeout, longer on the snapshot lock | `STOP` releases the Admin mutex during the join; documented. |
 | SQL-literal apply is slower than bound parameters | Acceptable for v1; measure before optimizing. |
+| InnoDB cascaded child changes have no row events; target FK actions are absent | Currently not detected/rejected. Do not claim these source schemas are supported; add metadata admission and live coverage next. |
 | Client writes to a replicated table diverge it | v1 has no per-table authorization. Documented; a read-only listener mode is a follow-up. |
 | Snapshot `RELOAD` is unavailable on some managed MySQL | v1 refuses to start rather than taking a racy snapshot. An idempotent-overlap mode is a follow-up. |
 | The plugin now links `libmariadbclient` | Needed because the core does not export `mariadb_rpl_*`; verify the package on each platform. |
@@ -473,14 +526,11 @@ make -C test/tap/tests test_duckdb_replica_recovery-t
 make -C test/tap/tests test_duckdb_replica_bench-t
 RUN_DUCKDB_REPLICA_BENCH=1 ./test/tap/tests/test_duckdb_replica_bench-t
 
-# syntax check used during development (headers extracted from deps)
-g++ -std=c++17 -fsyntax-only -Iplugins/duckdb/include -I/tmp/opencode/duckdbinc \
-  -I/tmp/opencode/mdbinc plugins/duckdb/src/duckdb_replica_binlog.cpp
 ```
 
-The dependency headers are not extracted in a clean checkout. `make` extracts
-them; the `/tmp/opencode/*` paths above are only the local scratch copies used
-for the compile check.
+The local reconciliation used the existing shared dependency build plus this
+worktree's patched MariaDB connector. Build the dependencies in a clean checkout
+before invoking the individual targets.
 
 ## 13. Handoff checklist
 
@@ -498,7 +548,9 @@ for the compile check.
 - [x] SIGKILL recovery and concurrent writes during snapshot (NONE and CRC32)
 - [x] First replica load baseline (snapshot, paced updates, reader concurrency, lag and RSS)
 - [ ] Further applier hardening (read-only protection, apply performance, broader load, packaging)
-- [x] Core MySQL analytical SELECT compatibility (opt-in)
-- [x] Typed MySQL COM_QUERY scalar results
-- [ ] MySQL prepared-statement protocol and binary results
+- [ ] ParserSQL-based scoped analytical SELECT compatibility (#6284); custom lexer removed
+- [x] Shared #6303 typed text results on both protocols, with preserved MySQL additions
+- [ ] Core prepared framework (#6298), followed by DuckDB adapter (#6282)
+- [ ] Reject unsupported source FK actions, with live regression coverage (#6289)
+- [ ] Automatic network reconnect/resume for #6289
 - [ ] Internal query-rule destination (deferred indefinitely)

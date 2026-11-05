@@ -1,5 +1,13 @@
 # DuckDB typed MySQL results implementation plan
 
+> **Superseded implementation details (2026-11-06).** The reconciliation adopts
+> #6303's shared `DuckDBColumnType` and protocol-aware result converter for both
+> MySQL and PostgreSQL. Native MySQL temporal metadata, exceptional scalar
+> fallback, observed byte lengths and selective positional wrapping are retained
+> on that foundation. The custom compatibility mode is removed. Prepared
+> frontend protocol belongs to #6298; #6282 implements only the DuckDB adapter.
+> See [current handoff](../specs/2026-11-05-duckdb-mysql-replica-design.md).
+
 > **For agentic workers:** Use superpowers:executing-plans inline in the existing feature worktree.
 
 **Goal:** Deliver typed scalar MySQL results as the next client-compatibility feature.
