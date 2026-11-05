@@ -62,6 +62,17 @@ std::string duckdb_quote_duckdb_ident(const std::string& name) {
 	return out;
 }
 
+bool duckdb_replica_is_reserved_schema(const std::string& schema) {
+	return lower_copy(schema) == "proxysql_replica";
+}
+
+std::string duckdb_replica_qualified_name(const std::string& catalog,
+                                          const std::string& schema,
+                                          const std::string& table) {
+	const std::string prefix = catalog.empty() ? "" : duckdb_quote_duckdb_ident(catalog) + ".";
+	return prefix + duckdb_quote_duckdb_ident(schema) + "." + duckdb_quote_duckdb_ident(table);
+}
+
 std::string duckdb_replica_map_column(const std::string& name,
                                       const std::string& data_type,
                                       const std::string& column_type,
@@ -157,9 +168,9 @@ std::string duckdb_replica_map_column(const std::string& name,
 
 std::string duckdb_replica_create_table_sql(const std::string& schema,
                                             const std::string& table,
-                                            const std::vector<DuckDBReplicaMappedColumn>& columns) {
-	std::string sql = "CREATE TABLE " + duckdb_quote_duckdb_ident(schema) + "." +
-		duckdb_quote_duckdb_ident(table) + " (";
+                                            const std::vector<DuckDBReplicaMappedColumn>& columns,
+                                            const std::string& catalog) {
+	std::string sql = "CREATE TABLE " + duckdb_replica_qualified_name(catalog, schema, table) + " (";
 	std::string keys;
 	for (size_t i = 0; i < columns.size(); ++i) {
 		if (i != 0) sql += ", ";

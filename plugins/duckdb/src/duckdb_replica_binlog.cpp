@@ -1,4 +1,5 @@
 #include "duckdb_replica_binlog.h"
+#include "duckdb_replica_catalog.h"
 
 #include "duckdb_engine.h"
 
@@ -358,6 +359,7 @@ private:
 	const std::function<bool()>& stop_requested_;
 	const std::function<void(uint64_t, uint64_t, int64_t, const DuckDBReplicaProbeResult&)>& progress_;
 
+	std::string catalog_;
 	duckdb_connection conn_ { nullptr };
 	MYSQL* mysql_ { nullptr };
 	MARIADB_RPL* rpl_ { nullptr };
@@ -451,8 +453,8 @@ bool Applier::load_metadata(std::string& err) {
 	}
 	duckdb_result result;
 	const std::string metadata_sql =
-		"SELECT schema_name, table_name, primary_key FROM proxysql_replica.tables "
-		"WHERE source_id = " + sql_literal(source_.source_id);
+		"SELECT schema_name, table_name, primary_key FROM " +
+		duckdb_replica_qualified_name(catalog_, "proxysql_replica", "tables") + " WHERE source_id = " + sql_literal(source_.source_id);
 	if (duckdb_query(conn_, metadata_sql.c_str(), &result) != DuckDBSuccess) {
 		const char* message = duckdb_result_error(&result);
 		err = message != nullptr ? message : "cannot read proxysql_replica.tables";
@@ -494,8 +496,8 @@ bool Applier::load_metadata(std::string& err) {
 		info.table = table;
 		duckdb_result columns;
 		const std::string sql =
-			"SELECT column_name, data_type::VARCHAR FROM information_schema.columns "
-			"WHERE table_schema = " + sql_literal(schema) +
+			"SELECT column_name, data_type::VARCHAR FROM system.information_schema.columns "
+			"WHERE table_catalog = " + sql_literal(catalog_) + " AND table_schema = " + sql_literal(schema) +
 			" AND table_name = " + sql_literal(table) + " ORDER BY ordinal_position";
 		if (duckdb_query(conn_, sql.c_str(), &columns) != DuckDBSuccess) {
 			const char* message = duckdb_result_error(&columns);
@@ -687,8 +689,7 @@ bool Applier::build_statement(TableInfo& info, const TableMap& map,
 		}
 	}
 
-	const std::string target = duckdb_quote_duckdb_ident(info.schema) + "." +
-		duckdb_quote_duckdb_ident(info.table);
+	const std::string target = duckdb_replica_qualified_name(catalog_, info.schema, info.table);
 
 	if (row_kind == WRITE_ROWS) {
 		out = "INSERT INTO " + target + " (" + join_names(info.columns) + ") VALUES (";
@@ -785,7 +786,7 @@ bool Applier::flush(std::string& err) {
 		DuckDBReplicaGtidSet combined = applied_gtids_;
 		combined.merge(batch_gtids_);
 		const std::string sql =
-			"UPDATE proxysql_replica.position SET gtid_executed = " +
+			"UPDATE " + duckdb_replica_qualified_name(catalog_, "proxysql_replica", "position") + " SET gtid_executed = " +
 			sql_literal(combined.to_string()) + ", binlog_file = " + sql_literal(batch_file_) +
 			", binlog_pos = " + std::to_string(batch_pos_) + ", updated_at = now() "
 			"WHERE source_id = " + sql_literal(source_.source_id);
@@ -842,7 +843,7 @@ DuckDBReplicaApplyResult Applier::run() {
 		~Guard() { engine.disconnect(conn); }
 	} guard { engine_, &conn_ };
 
-	if (!load_metadata(err)) {
+	if (!duckdb_replica_current_catalog(conn_, catalog_, err) || !load_metadata(err)) {
 		result.code = DuckDBReplicaApplyResult::Code::failed;
 		result.error = err;
 		return result;

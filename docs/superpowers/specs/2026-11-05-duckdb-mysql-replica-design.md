@@ -1,7 +1,7 @@
 # DuckDB MySQL Replica — Design and Handoff
 
 Date: 2026-11-05
-Status: applier and core SELECT compatibility validated; hardening next; internal routing deferred
+Status: applier, core SELECT compatibility and storage hardening validated; internal routing deferred
 Branch: `feature/duckdb-mysql-replica`
 Worktree: `/mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica`
 Base: `v3.0` at `e2f317aba`
@@ -100,7 +100,11 @@ Commands:
 - `START DUCKDB REPLICA` — re-read Main, snapshot if needed, then apply.
 - `STOP DUCKDB REPLICA` — flush committed work, join the thread.
 - `RESET DUCKDB REPLICA` — legal only while stopped; drops the replicated
-  tables, `proxysql_replica.tables`, and `proxysql_replica.position`.
+  tables recorded in the persisted ownership manifest, `proxysql_replica.tables`,
+  and `proxysql_replica.position` in one DuckDB transaction. Editable Main
+  configuration does not determine ownership. Unrelated tables survive. Any
+  DROP/commit failure returns an error and rolls back storage; published status
+  clears only after successful commit.
 
 `stats_duckdb_replica` is projected from the replica thread. Columns:
 `source_id, state, hostname, port, server_id, gtid_executed, binlog_file,
@@ -142,15 +146,24 @@ geometry, non-`utf8mb4`/`utf8`/`ascii`/`binary` charsets, decimal width > 38.
 2. `START TRANSACTION WITH CONSISTENT SNAPSHOT`
 3. Read `SHOW BINARY LOG STATUS` (file, position, `Executed_Gtid_Set`)
 4. `UNLOCK TABLES`
-5. For each opted-in table: map `information_schema.COLUMNS`, create the
-   DuckDB table, stream rows through `duckdb_appender`, flush every 1000 rows.
-6. In one DuckDB transaction: insert `proxysql_replica.tables` metadata, insert
+5. Begin one DuckDB transaction. For each opted-in table: map
+   `information_schema.COLUMNS`, create the DuckDB table, stream rows through
+   `duckdb_appender`, flush every 1000 rows.
+6. In the same transaction: insert `proxysql_replica.tables` metadata, insert
    `proxysql_replica.position`, commit.
 
 If the position row exists, the snapshot is skipped (`already_loaded`). A
 crash before the position commit leaves no position; the next start drops the
-partial tables and snapshots again. The MySQL read transaction stays open for
-the whole copy and is committed after the DuckDB commit.
+partial tables and snapshots again. An ordinary failure rolls back DuckDB
+DDL, data and metadata together; it never issues further DROP statements
+after rollback. The MySQL read transaction stays open for the whole copy and
+is committed after the DuckDB commit.
+
+Snapshot, apply and RESET fully qualify targets with the actual catalog from
+their own DuckDB connection, including appender creation and metadata
+introspection. A catalog matching the source schema or `proxysql_replica` is
+supported. Native client SQL may still require three-part names when a
+catalog and schema collide; SELECT compatibility does not rewrite namespaces.
 
 A source `server_uuid` change since the snapshot is an error; the operator must
 `RESET` and snapshot again.
@@ -222,12 +235,13 @@ Build: `plugins/duckdb/Makefile` adds the new sources and links
 Validated on 2026-11-05 against a dedicated MySQL **8.4.8** InnoDB source
 and the real DuckDB **1.4.5** / MariaDB Connector/C **3.3.8** libraries:
 
-- The PROXYSQL40 core, DuckDB plugin, replica TAP test and seven DuckDB unit
+- The PROXYSQL40 core, DuckDB plugin, replica TAP test and nine DuckDB unit
   binaries build and link.
-- The live replica TAP scenario passes **24 assertions**, separately with
+- The live replica TAP scenario passes **31 assertions**, separately with
   `binlog_checksum=NONE` and `binlog_checksum=CRC32`.
-- The seven DuckDB unit binaries pass **290 assertions** in total, including
-  **55** in `duckdb_replica_unit-t`.
+- The nine DuckDB unit binaries pass **371 assertions** in total, including
+  **61** in `duckdb_replica_unit-t`, **16** in
+  `duckdb_replica_storage_unit-t`, and **53** in the SELECT translator unit.
 - Existing Admin-table TAP coverage passes 22 assertions; the MySQL listener
   TAP test passes 17. The PostgreSQL listener TAP test still fails assertions
   19..24 (extended-query rejection). The same six failures reproduce with
@@ -237,7 +251,16 @@ and the real DuckDB **1.4.5** / MariaDB Connector/C **3.3.8** libraries:
   rotation, source file/position/GTID agreement, committed Admin statistics,
   automatic restart without duplicates, continued apply, sticky DDL error
   with an unchanged checkpoint, RESET/resnapshot, and rejection of a partial
-  UPDATE after image with a full before image.
+  UPDATE after image with a full before image. It also covers colliding
+  catalog/schema names, failed RESET preserving durable and published
+  checkpoints, retry after removing a foreign-key dependency, manifest
+  ownership after configuration edits, and failed-snapshot rollback
+  preserving an unrelated inactive table.
+- The opt-in SELECT compatibility differential test passes **39 assertions**
+  against MySQL, direct DuckDB and ordinary same-instance hostgroup routing.
+- Config and snapshot reject case variants of the reserved metadata schema
+  before storage/source access. Quoted identifiers, metadata catalog-name
+  collisions, missing targets and fresh RESET idempotence have storage coverage.
 - Decoder regressions cover every TIMESTAMP2 fractional precision (0..6),
   negative DECIMAL groups, and YEAR zero. Existing mapping, literal, GTID and
   lifecycle coverage remains in place.
@@ -252,9 +275,9 @@ The existing listener/admin-schema unit targets now link the replica sources.
 
 This is functional validation of the tested source and types; crash injection,
 large positions above 4 GB, load/performance tests, and platform packaging
-validation remain outstanding. A source schema matching the DuckDB file's
-catalog name can trigger DuckDB's two-part-name ambiguity; use a distinct
-DuckDB database filename until qualification is hardened.
+validation remain outstanding. Catalog/schema collisions are covered by
+storage tests and the live scenario, whose database filename now matches the
+source schema.
 
 ## 10. Next steps, in order
 
@@ -294,12 +317,13 @@ applied data.
 Routing decision (2026-11-05): use regular `mysql_servers` hostgroups and query
 rules to target this instance's DuckDB MySQL listener. Internal query-rule
 routing with automatic lag-aware fallback is deferred indefinitely; it is not
-a prerequisite for the work below. This topology still needs an integration
-check through the regular ProxySQL listener, including backend authentication
-and session setup.
+a prerequisite for the work below. The compatibility differential test
+validates this topology through the regular ProxySQL listener, including
+backend authentication and session setup.
 
-1. **Applier hardening.** Fix catalog/schema-name ambiguity; test abrupt crash
-   recovery and concurrent writes during snapshot; validate large positions,
+1. **Further applier hardening.** Catalog qualification, transactional
+   manifest-owned RESET, and failed-snapshot rollback safety are implemented.
+   Next: test abrupt crash recovery and concurrent writes during snapshot; validate large positions,
    read-only protection, performance, and platform packaging.
 2. **MySQL analytical compatibility.** The opt-in core SELECT pass is
    implemented and differential-tested through direct and ordinary backend
@@ -327,9 +351,10 @@ and session setup.
 # build (from the worktree root)
 PROXYSQL40=1 make
 
-# replica unit test
-make -C test/tap/tests/unit duckdb_replica_unit-t
+# replica unit tests
+make -C test/tap/tests/unit duckdb_replica_unit-t duckdb_replica_storage_unit-t
 ./test/tap/tests/unit/duckdb_replica_unit-t
+./test/tap/tests/unit/duckdb_replica_storage_unit-t
 
 # live test (dedicated source; restarts ProxySQL during the test)
 make -C test/tap/tests test_duckdb_replica-t
@@ -357,6 +382,7 @@ for the compile check.
 - [x] Type mapping and value literals
 - [x] Unit test for pure logic
 - [x] Live MySQL 8.4 end-to-end test (NONE and CRC32 checksums)
-- [ ] Applier hardening
+- [x] Catalog qualification, atomic manifest-owned RESET and rollback safety
+- [ ] Further applier hardening (crash injection, large positions, read-only protection, load, packaging)
 - [x] Core MySQL analytical SELECT compatibility (opt-in)
 - [ ] Internal query-rule destination (deferred indefinitely)

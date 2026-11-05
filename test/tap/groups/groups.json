@@ -48,6 +48,7 @@
   "duckdb_admin_schema_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "duckdb_config_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "duckdb_mysql_compat_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
+  "duckdb_replica_storage_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "duckdb_replica_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "duckdb_engine_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "duckdb_listener_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],

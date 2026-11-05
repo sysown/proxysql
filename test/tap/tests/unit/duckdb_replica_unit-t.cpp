@@ -57,7 +57,7 @@ DuckDBReplicaStartRequest file_request() {
 } // namespace
 
 int main() {
-	plan(55);
+	plan(61);
 	const uint8_t full = 0xff, padded = 0x7f, partial = 0x3f;
 	ok(duckdb_replica_full_row_images(&full, &full, 7, true), "full UPDATE bitmaps are accepted");
 	ok(duckdb_replica_full_row_images(&padded, &full, 7, true), "unused bitmap padding bits are ignored");
@@ -265,6 +265,14 @@ int main() {
 	ok(duckdb_replica_validate_config(unknown).find("unknown source") != std::string::npos,
 	   "a table for an unknown source is rejected");
 
+	for (const char* schema : {"proxysql_replica", "ProxySQL_Replica", "PROXYSQL_REPLICA"}) {
+		DuckDBReplicaConfig reserved = one_source();
+		reserved.tables.front().schema_name = schema;
+		reserved.tables.front().table_name = "tables";
+		ok(duckdb_replica_validate_config(reserved).find("reserved") != std::string::npos,
+		   "reserved metadata schema %s is rejected regardless of identifier case", schema);
+	}
+
 	DuckDBReplica replica;
 	std::string err;
 	DuckDBReplicaStartRequest memory = file_request();
@@ -309,6 +317,9 @@ int main() {
 	ok(replica.start(request, err), "start with an injected probe succeeds");
 	ok(replica.wait_until([](const DuckDBReplicaStatus& st) { return st.state == "checking"; }, 2000),
 	   "the replica thread reports checking before the probe returns");
+	bool reset_callback = false;
+	ok(!replica.reset(err, [&] { reset_callback = true; return std::string(); }) && !reset_callback,
+	   "RESET refuses running replicas before attempting storage changes");
 	release.store(true);
 	ok(replica.wait_until([](const DuckDBReplicaStatus& st) { return st.state == "snapshotted"; }, 2000),
 	   "a successful snapshot ends in snapshotted, not applying");
@@ -323,5 +334,15 @@ int main() {
 	ok(replica.status().state == "stopped" && !replica.status().running,
 	   "stop joins the thread and leaves the replica stopped");
 
+	const DuckDBReplicaStatus before_reset = replica.status();
+	err.clear();
+	ok(!replica.reset(err, [] { return std::string("storage dependency"); }) && err == "storage dependency" &&
+	   replica.status().binlog_pos == before_reset.binlog_pos && replica.status().binlog_file == before_reset.binlog_file &&
+	   replica.status().gtid_executed == before_reset.gtid_executed,
+	   "failed storage reset preserves the published durable checkpoint");
+	reset_callback = false;
+	ok(replica.reset(err, [&] { reset_callback = true; return std::string(); }) && reset_callback &&
+	   replica.status().binlog_pos == -1 && replica.status().gtid_executed.empty(),
+	   "successful storage reset clears lifecycle state after the callback commits");
 	return exit_status();
 }

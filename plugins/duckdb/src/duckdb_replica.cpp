@@ -234,7 +234,7 @@ std::string duckdb_replica_validate_config(const DuckDBReplicaConfig& config) {
 		if (!valid_identifier(table.schema_name, 64) || !valid_identifier(table.table_name, 64)) {
 			return "replica schema_name and table_name must be identifiers of at most 64 characters";
 		}
-		if (table.schema_name == "proxysql_replica") {
+		if (duckdb_replica_is_reserved_schema(table.schema_name)) {
 			return "schema proxysql_replica is reserved for replica metadata";
 		}
 		bool known = false;
@@ -694,13 +694,19 @@ void DuckDBReplica::stop() {
 	stop_requested_ = false;
 }
 
-bool DuckDBReplica::reset(std::string& err) {
+bool DuckDBReplica::reset(std::string& err,
+                          const std::function<std::string()>& reset_storage) {
 	std::lock_guard<std::mutex> lock(life_mutex_);
+	err.clear();
 	if (thread_.joinable() || running_.load()) {
 		err = "cannot reset DuckDB replica while it is running; STOP DUCKDB REPLICA first";
 		return false;
 	}
-	status_ = DuckDBReplicaStatus {};
+	if (reset_storage) {
+		err = reset_storage();
+		if (!err.empty()) return false;
+	}
+	publish(DuckDBReplicaStatus {});
 	return true;
 }
 

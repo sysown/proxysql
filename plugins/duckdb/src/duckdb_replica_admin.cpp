@@ -184,9 +184,9 @@ ProxySQL_PluginCommandResult cmd_reset_replica(const ProxySQL_PluginCommandConte
 		return command_failure("DuckDB engine is not running; cannot drop the snapshot");
 	}
 	std::string err;
-	if (!plugin.replica->reset(err)) return command_failure(err);
-	err = duckdb_replica_drop_snapshot(*plugin.engine, plugin.replica->installed_config().tables);
-	if (!err.empty()) return command_failure(err);
+	if (!plugin.replica->reset(err, [&plugin] {
+		return duckdb_replica_drop_snapshot(*plugin.engine);
+	})) return command_failure(err);
 	return command_ok("DuckDB replica snapshot dropped");
 }
 

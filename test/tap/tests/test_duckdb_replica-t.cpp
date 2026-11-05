@@ -146,7 +146,9 @@ struct Fixture {
 		normalize(expected);
 		const bool matched = wait_for([&] {
 			Rows actual;
-			if (!query(duck, sql, actual)) return false;
+			const std::string duck_sql = "SELECT id,amount,note,created,ts,HEX(payload),u FROM " +
+				schema + "." + schema + ".events ORDER BY id";
+			if (!query(duck, duck_sql, actual)) return false;
 			normalize(actual);
 			return actual == expected;
 		});
@@ -162,6 +164,10 @@ struct Fixture {
 	~Fixture() {
 		if (changed && admin) {
 			execute(admin, "STOP DUCKDB REPLICA");
+			if (duck) {
+				execute(duck, "DROP TABLE IF EXISTS " + schema + "." + schema + ".reset_blocker");
+				execute(duck, "DROP TABLE IF EXISTS " + schema + ".main.rollback_keep_" + std::to_string(getpid()));
+			}
 			execute(admin, "RESET DUCKDB REPLICA");
 			auto restore_rows = [&](const std::vector<std::string>& statements) {
 				bool restored = execute(admin, "BEGIN");
@@ -199,7 +205,7 @@ bool run(Fixture& f) {
 		    !backup(f.admin, schema + ".duckdb_replica_tables", "source_id,schema_name,table_name,active", "", restore)) return false;
 	}
 	f.changed = true;
-	const std::string db = "/tmp/" + f.schema + "_store.duckdb";
+	const std::string db = "/tmp/" + f.schema + ".duckdb";
 	if (!check(execute(f.admin, "UPDATE global_variables SET variable_value=" + quote(db) +
 	                         " WHERE variable_name='duckdb-database_path'") &&
 	        execute(f.admin, "SAVE DUCKDB VARIABLES TO DISK") && f.restart(),
@@ -273,6 +279,43 @@ bool run(Fixture& f) {
 	           f.position() == before_partial &&
 	           cell(f.admin, "SELECT last_error FROM stats_duckdb_replica").find("partial row image") != std::string::npos,
 	           "partial UPDATE after image is rejected without advancing the checkpoint")) return false;
+	if (!check(execute(f.admin, "STOP DUCKDB REPLICA") &&
+	           execute(f.duck, "CREATE TABLE " + f.schema + "." + f.schema +
+	                           ".reset_blocker(id INT,part INT,FOREIGN KEY(id,part) REFERENCES " + f.schema + ".guard(id,part))"),
+	           "create a genuine unrelated dependency that prevents RESET")) return false;
+	if (!check(execute(f.admin, "DELETE FROM duckdb_replica_tables WHERE source_id='e2e' AND table_name='events'") &&
+	           execute(f.admin, "LOAD DUCKDB REPLICA TO RUNTIME"),
+	           "edit installed configuration after snapshot without changing persisted ownership")) return false;
+	const Rows reset_position = f.position();
+	Rows reset_stats;
+	if (!query(f.admin, "SELECT binlog_file,binlog_pos,gtid_executed FROM stats_duckdb_replica", reset_stats)) return false;
+	const bool reset_failed = !execute(f.admin, "RESET DUCKDB REPLICA");
+	Rows after_reset_stats;
+	if (!check(reset_failed && f.position() == reset_position &&
+	           query(f.admin, "SELECT binlog_file,binlog_pos,gtid_executed FROM stats_duckdb_replica", after_reset_stats) &&
+	           after_reset_stats == reset_stats,
+	           "failed RESET preserves data, durable checkpoint and published lifecycle status")) return false;
+	if (!check(execute(f.duck, "DROP TABLE " + f.schema + "." + f.schema + ".reset_blocker") && execute(f.admin, "RESET DUCKDB REPLICA") &&
+	           cell(f.duck, "SELECT COUNT(*) FROM system.information_schema.tables WHERE table_schema='proxysql_replica'") == "0" &&
+	           cell(f.duck, "SELECT COUNT(*) FROM system.information_schema.tables WHERE table_schema=" + quote(f.schema) +
+	                        " AND table_name IN ('events','guard')") == "0",
+	           "RESET removes manifest-owned tables and metadata after dependency removal despite configuration edits")) return false;
+	const std::string keeper = "rollback_keep_" + std::to_string(getpid());
+	if (!check(execute(f.duck, "CREATE TABLE " + f.schema + ".main." + keeper + "(id INT)") &&
+	           execute(f.duck, "INSERT INTO " + f.schema + ".main." + keeper + " VALUES(42)") &&
+	           execute(f.admin, "INSERT INTO duckdb_replica_tables VALUES('e2e'," + quote(f.schema) + ",'ignored',1)") &&
+	           execute(f.admin, "INSERT INTO duckdb_replica_tables VALUES('e2e','main'," + quote(keeper) + ",0)"),
+	           "prepare an unsupported source table and an unrelated inactive target")) return false;
+	if (!check(execute(f.admin, "START DUCKDB REPLICA") && f.state("error") &&
+	           cell(f.admin, "SELECT last_error FROM stats_duckdb_replica").find("JSON") != std::string::npos &&
+	           cell(f.duck, "SELECT id FROM " + f.schema + ".main." + keeper) == "42" &&
+	           cell(f.duck, "SELECT COUNT(*) FROM system.information_schema.tables WHERE table_schema='proxysql_replica'") == "0" &&
+	           cell(f.duck, "SELECT COUNT(*) FROM system.information_schema.tables WHERE table_schema=" + quote(f.schema) +
+	                        " AND table_name='guard'") == "0",
+	           "failed snapshot rolls back its tables and metadata while preserving unrelated inactive data")) return false;
+	if (!check(execute(f.admin, "STOP DUCKDB REPLICA") && execute(f.admin, "RESET DUCKDB REPLICA") &&
+	           cell(f.duck, "SELECT id FROM " + f.schema + ".main." + keeper) == "42",
+	           "RESET after failed snapshot is idempotent and preserves unowned tables")) return false;
 	return true;
 }
 } // namespace

@@ -107,7 +107,15 @@ std::string duckdb_replica_map_column(const std::string& name,
 
 std::string duckdb_replica_create_table_sql(const std::string& schema,
                                             const std::string& table,
-                                            const std::vector<DuckDBReplicaMappedColumn>& columns);
+                                            const std::vector<DuckDBReplicaMappedColumn>& columns,
+                                            const std::string& catalog = "");
+
+std::string duckdb_replica_qualified_name(const std::string& catalog,
+                                          const std::string& schema,
+                                          const std::string& table);
+
+// DuckDB folds ASCII identifier case, including quoted identifiers.
+bool duckdb_replica_is_reserved_schema(const std::string& schema);
 
 std::string duckdb_quote_mysql_ident(const std::string& name);
 std::string duckdb_quote_duckdb_ident(const std::string& name);
@@ -119,10 +127,9 @@ struct DuckDBReplicaLoadResult {
 	uint64_t rows { 0 };
 };
 
-// Drops opted-in tables and proxysql_replica.position so the next START
-// snapshots again. Empty string means success.
-std::string duckdb_replica_drop_snapshot(DuckDBEngine& engine,
-                                        const std::vector<DuckDBReplicaTable>& tables);
+// Atomically drops manifest-owned tables and replica metadata. Unrelated
+// tables survive. Empty string means success; failures preserve all storage.
+std::string duckdb_replica_drop_snapshot(DuckDBEngine& engine);
 
 // Injected by tests. Empty means the built-in snapshot, which requires
 // `engine`. The built-in snapshot is not declared here so this header does
@@ -182,8 +189,10 @@ public:
 	// Joins the thread. Safe when never started, and safe to call twice.
 	void stop();
 	// Legal only when the thread is not running. Clears status, not the
-	// installed source definition.
-	bool reset(std::string& err);
+	// installed source definition. A storage callback runs under the lifecycle
+	// lock and must not re-enter this object; its failure preserves status.
+	bool reset(std::string& err,
+	           const std::function<std::string()>& reset_storage = {});
 	DuckDBReplicaConfig installed_config() const;
 
 	DuckDBReplicaStatus status() const;

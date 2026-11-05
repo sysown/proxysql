@@ -1,4 +1,5 @@
 #include "duckdb_replica.h"
+#include "duckdb_replica_catalog.h"
 
 #include "duckdb_engine.h"
 
@@ -454,19 +455,26 @@ bool read_locked_position(MYSQL* mysql, DuckDBReplicaProbeResult& out, std::stri
 	return true;
 }
 
-void drop_loaded(duckdb_connection conn, const std::vector<DuckDBReplicaTable>& tables) {
-	std::string ignored;
-	for (const auto& table : tables) {
-		exec_duckdb(conn, "DROP TABLE IF EXISTS " + duckdb_quote_duckdb_ident(table.schema_name) + "." +
-		                      duckdb_quote_duckdb_ident(table.table_name),
-		            ignored);
-	}
-}
-
 } // namespace
 
-std::string duckdb_replica_drop_snapshot(DuckDBEngine& engine,
-                                        const std::vector<DuckDBReplicaTable>& tables) {
+bool duckdb_replica_current_catalog(duckdb_connection connection,
+                                    std::string& catalog, std::string& error) {
+	catalog.clear();
+	duckdb_result result;
+	if (duckdb_query(connection, "SELECT current_database()", &result) != DuckDBSuccess) {
+		const char* message = duckdb_result_error(&result);
+		error = message ? message : "cannot read replica catalog";
+		duckdb_destroy_result(&result);
+		return false;
+	}
+	char* value = duckdb_value_varchar(&result, 0, 0);
+	if (value) { catalog = value; duckdb_free(value); }
+	duckdb_destroy_result(&result);
+	if (catalog.empty()) { error = "replica connection has no current catalog"; return false; }
+	return true;
+}
+
+std::string duckdb_replica_drop_snapshot(DuckDBEngine& engine) {
 	std::string err;
 	duckdb_connection conn = nullptr;
 	if (!engine.connect(&conn, err)) return err;
@@ -475,16 +483,54 @@ std::string duckdb_replica_drop_snapshot(DuckDBEngine& engine,
 		duckdb_connection* conn;
 		~Guard() { engine.disconnect(conn); }
 	} guard { engine, &conn };
-	// A missing schema is not a failure: RESET before the first successful
-	// snapshot, or a schema that was never created, must still succeed.
-	std::string ignored;
-	exec_duckdb(conn, "DROP TABLE IF EXISTS proxysql_replica.position", ignored);
-	exec_duckdb(conn, "DROP TABLE IF EXISTS proxysql_replica.tables", ignored);
-	for (const auto& table : tables) {
-		exec_duckdb(conn, "DROP TABLE IF EXISTS " + duckdb_quote_duckdb_ident(table.schema_name) + "." +
-		                      duckdb_quote_duckdb_ident(table.table_name),
-		            ignored);
+	std::string catalog;
+	if (!duckdb_replica_current_catalog(conn, catalog, err)) return err;
+	const std::string manifest = duckdb_replica_qualified_name(catalog, "proxysql_replica", "tables");
+	const std::string position = duckdb_replica_qualified_name(catalog, "proxysql_replica", "position");
+	if (!exec_duckdb(conn, "BEGIN TRANSACTION", err)) return err;
+	auto fail = [&](const std::string& message) {
+		std::string ignored;
+		exec_duckdb(conn, "ROLLBACK", ignored);
+		return "RESET DUCKDB REPLICA: " + message;
+	};
+	duckdb_result exists;
+	const std::string probe =
+		"SELECT COUNT(*) FROM system.information_schema.tables WHERE table_catalog = " +
+		sql_literal(catalog) + " AND table_schema = 'proxysql_replica' AND table_name = 'tables'";
+	if (duckdb_query(conn, probe.c_str(), &exists) != DuckDBSuccess) {
+		const char* message = duckdb_result_error(&exists);
+		err = message ? message : "cannot inspect replica manifest";
+		duckdb_destroy_result(&exists);
+		return fail(err);
 	}
+	const bool has_manifest = duckdb_value_int64(&exists, 0, 0) != 0;
+	duckdb_destroy_result(&exists);
+	std::vector<std::pair<std::string, std::string>> owned;
+	if (has_manifest) {
+		duckdb_result tables;
+		const std::string sql = "SELECT schema_name,table_name FROM " + manifest + " ORDER BY schema_name,table_name";
+		if (duckdb_query(conn, sql.c_str(), &tables) != DuckDBSuccess) {
+			const char* message = duckdb_result_error(&tables);
+			err = message ? message : "cannot read replica manifest";
+			duckdb_destroy_result(&tables);
+			return fail(err);
+		}
+		for (idx_t row = 0; row < duckdb_row_count(&tables); ++row) {
+			char* schema = duckdb_value_varchar(&tables, 0, row);
+			char* table = duckdb_value_varchar(&tables, 1, row);
+			owned.emplace_back(schema ? schema : "", table ? table : "");
+			if (schema) duckdb_free(schema);
+			if (table) duckdb_free(table);
+		}
+		duckdb_destroy_result(&tables);
+	}
+	for (const auto& table : owned) {
+		const std::string target = duckdb_replica_qualified_name(catalog, table.first, table.second);
+		if (!exec_duckdb(conn, "DROP TABLE IF EXISTS " + target, err)) return fail(err);
+	}
+	if (!exec_duckdb(conn, "DROP TABLE IF EXISTS " + position, err) ||
+	    !exec_duckdb(conn, "DROP TABLE IF EXISTS " + manifest, err) ||
+	    !exec_duckdb(conn, "COMMIT", err)) return fail(err);
 	return "";
 }
 
@@ -501,7 +547,7 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 	const std::function<void(void*)>& watch_connection,
 	const std::function<void(const std::string&, uint64_t)>& progress) {
 	for (const auto& table : tables) {
-		if (table.schema_name == "proxysql_replica") {
+		if (duckdb_replica_is_reserved_schema(table.schema_name)) {
 			return failed("schema proxysql_replica is reserved for replica metadata");
 		}
 	}
@@ -520,12 +566,17 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 		}
 	} guard { engine, &conn, watch_connection };
 
+	std::string catalog;
+	if (!duckdb_replica_current_catalog(conn, catalog, err)) return failed(err);
+	const std::string position_table = duckdb_replica_qualified_name(catalog, "proxysql_replica", "position");
+	const std::string tables_table = duckdb_replica_qualified_name(catalog, "proxysql_replica", "tables");
 	{
 		duckdb_result result;
-		if (duckdb_query(conn,
-		                 "SELECT COUNT(*)::VARCHAR FROM information_schema.tables "
-		                 "WHERE table_schema = 'proxysql_replica' AND table_name = 'position'",
-		                 &result) != DuckDBSuccess) {
+		const std::string catalog_sql =
+			"SELECT COUNT(*)::VARCHAR FROM system.information_schema.tables "
+			"WHERE table_catalog = " + sql_literal(catalog) +
+			" AND table_schema = 'proxysql_replica' AND table_name = 'position'";
+		if (duckdb_query(conn, catalog_sql.c_str(), &result) != DuckDBSuccess) {
 			const char* message = duckdb_result_error(&result);
 			err = message != nullptr ? message : "failed reading snapshot position catalog";
 			duckdb_destroy_result(&result);
@@ -539,7 +590,7 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 			duckdb_result pos;
 			const std::string sql =
 				"SELECT gtid_executed, binlog_file, binlog_pos::VARCHAR, server_uuid "
-				"FROM proxysql_replica.position WHERE source_id = " + sql_literal(source.source_id);
+				"FROM " + position_table + " WHERE source_id = " + sql_literal(source.source_id);
 			if (duckdb_query(conn, sql.c_str(), &pos) != DuckDBSuccess) {
 				const char* message = duckdb_result_error(&pos);
 				err = message != nullptr ? message : "failed reading proxysql_replica.position";
@@ -619,21 +670,20 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 		if (committed) return;
 		std::string ignored;
 		exec_duckdb(conn, "ROLLBACK", ignored);
-		drop_loaded(conn, tables);
 	};
 
-	if (!exec_duckdb(conn, "CREATE SCHEMA IF NOT EXISTS proxysql_replica", err) ||
+	if (!exec_duckdb(conn, "CREATE SCHEMA IF NOT EXISTS " + duckdb_quote_duckdb_ident(catalog) + ".proxysql_replica", err) ||
 	    !exec_duckdb(conn,
-	                 "CREATE TABLE IF NOT EXISTS proxysql_replica.position ("
+	                 "CREATE TABLE IF NOT EXISTS " + position_table + " ("
 	                 "source_id VARCHAR PRIMARY KEY, server_uuid VARCHAR, gtid_executed VARCHAR, "
 	                 "binlog_file VARCHAR, binlog_pos BIGINT, updated_at TIMESTAMP)",
 	                 err) ||
 	    !exec_duckdb(conn,
-	                 "CREATE TABLE IF NOT EXISTS proxysql_replica.tables ("
+	                 "CREATE TABLE IF NOT EXISTS " + tables_table + " ("
 	                 "source_id VARCHAR, schema_name VARCHAR, table_name VARCHAR, "
 	                 "primary_key VARCHAR, PRIMARY KEY (source_id, schema_name, table_name))",
 	                 err) ||
-	    !exec_duckdb(conn, "DELETE FROM proxysql_replica.tables WHERE source_id = " +
+	    !exec_duckdb(conn, "DELETE FROM " + tables_table + " WHERE source_id = " +
 	                           sql_literal(source.source_id),
 	                 err)) {
 		rollback();
@@ -666,14 +716,12 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 			if (!pk_names.empty()) pk_names += ",";
 			pk_names += column.name;
 		}
-		if (!exec_duckdb(conn, "CREATE SCHEMA IF NOT EXISTS " + duckdb_quote_duckdb_ident(table.schema_name), err) ||
-		    !exec_duckdb(conn, "DROP TABLE IF EXISTS " + duckdb_quote_duckdb_ident(table.schema_name) + "." +
-		                           duckdb_quote_duckdb_ident(table.table_name),
+		if (!exec_duckdb(conn, "CREATE SCHEMA IF NOT EXISTS " + duckdb_quote_duckdb_ident(catalog) + "." + duckdb_quote_duckdb_ident(table.schema_name), err) ||
+		    !exec_duckdb(conn, "DROP TABLE IF EXISTS " + duckdb_replica_qualified_name(catalog, table.schema_name, table.table_name),
 		                err) ||
-		    !exec_duckdb(conn, duckdb_replica_create_table_sql(table.schema_name, table.table_name, columns), err) ||
+		    !exec_duckdb(conn, duckdb_replica_create_table_sql(table.schema_name, table.table_name, columns, catalog), err) ||
 		    !exec_duckdb(conn,
-		                 "INSERT INTO proxysql_replica.tables "
-		                 "(source_id, schema_name, table_name, primary_key) VALUES (" +
+		                 "INSERT INTO " + tables_table + " (source_id, schema_name, table_name, primary_key) VALUES (" +
 		                     sql_literal(source.source_id) + ", " + sql_literal(table.schema_name) + ", " +
 		                     sql_literal(table.table_name) + ", " + sql_literal(pk_names) + ")",
 		                 err)) {
@@ -699,7 +747,7 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 			return failed(qualified + ": " + err);
 		}
 		duckdb_appender appender = nullptr;
-		if (duckdb_appender_create(conn, table.schema_name.c_str(), table.table_name.c_str(), &appender) != DuckDBSuccess) {
+		if (duckdb_appender_create_ext(conn, catalog.c_str(), table.schema_name.c_str(), table.table_name.c_str(), &appender) != DuckDBSuccess) {
 			mysql_free_result(raw_rows);
 			err = "failed to create DuckDB appender for " + qualified;
 			rollback();
@@ -755,8 +803,7 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 		return stopped();
 	}
 	const std::string insert =
-		"INSERT INTO proxysql_replica.position "
-		"(source_id, server_uuid, gtid_executed, binlog_file, binlog_pos, updated_at) VALUES (" +
+		"INSERT INTO " + position_table + " (source_id, server_uuid, gtid_executed, binlog_file, binlog_pos, updated_at) VALUES (" +
 		sql_literal(source.source_id) + ", " + sql_literal(locked.server_uuid.empty() ? probed.server_uuid : locked.server_uuid) +
 		", " + sql_literal(locked.gtid_executed) + ", " + sql_literal(locked.binlog_file) + ", " +
 		std::to_string(locked.binlog_pos) + ", now())";
