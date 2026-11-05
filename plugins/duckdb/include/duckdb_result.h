@@ -87,7 +87,8 @@ class SQLite3_result;
 // The caller owns the returned object and must `delete` it. When `error` is
 // non-null, conversion failures are reported there and nullptr is returned.
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res,
-                                         std::string* error = nullptr);
+                                         std::string* error = nullptr,
+                                         bool mysql_booleans = false);
 
 // Appends one length-aware converted row and translates SQLite's status into
 // the converter's error contract. This keeps an oversized row from being

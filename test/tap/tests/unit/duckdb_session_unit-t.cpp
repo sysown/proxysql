@@ -51,7 +51,7 @@ std::string scalar_text(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(95);
+	plan(97);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -190,6 +190,19 @@ int main() {
 		BAIL_OUT("could not open an in-memory duckdb");
 	}
 
+	{
+		auto native = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'");
+		ok(native.ok && native.result && std::string(native.result->rows[0]->fields[0]) == "true" &&
+		   std::string(native.result->rows[0]->fields[1]) == "false" && !native.result->rows[0]->fields[2],
+		   "native execution retains boolean text and SQL NULL");
+		delete native.result;
+		auto mysql = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'", true);
+		ok(mysql.ok && mysql.result && std::string(mysql.result->rows[0]->fields[0]) == "1" &&
+		   std::string(mysql.result->rows[0]->fields[1]) == "0" && !mysql.result->rows[0]->fields[2] &&
+		   std::string(mysql.result->rows[0]->fields[3]) == "true",
+		   "MySQL execution renders boolean values as 1/0 without changing strings or NULLs");
+		delete mysql.result;
+	}
 	ok(duckdb_pgsql_transaction_status(conn) == 'I',
 	   "a new DuckDB connection reports PostgreSQL idle transaction state");
 	{

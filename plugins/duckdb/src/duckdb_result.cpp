@@ -78,7 +78,7 @@ std::string format_uhugeint(duckdb_uhugeint h) {
 }
 #endif
 
-bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string& out) {
+bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string& out, bool mysql_booleans) {
 	uint64_t* validity = duckdb_vector_get_validity(vector);
 	if (!cell_is_valid(validity, row)) return false;
 	void* data = duckdb_vector_get_data(vector);
@@ -87,7 +87,7 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 	char buf[64];
 	switch (type) {
 	case DUCKDB_TYPE_BOOLEAN:
-		out = static_cast<bool*>(data)[row] ? "true" : "false";
+		out = static_cast<bool*>(data)[row] ? (mysql_booleans ? "1" : "true") : (mysql_booleans ? "0" : "false");
 		return true;
 	case DUCKDB_TYPE_TINYINT:
 		out = std::to_string(static_cast<int8_t*>(data)[row]);
@@ -235,7 +235,7 @@ bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
 	return false;
 }
 
-SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error) {
+SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error, bool mysql_booleans) {
 	if (error != nullptr) error->clear();
 	if (res == nullptr) return nullptr;
 
@@ -273,7 +273,7 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error)
 				fields[c] = nullptr;
 				sizes[c] = 0;
 				if (!duckdb_type_renders_as_text(types[c]) || vectors[c] == nullptr) continue;
-				if (!render_cell(types[c], vectors[c], r, rendered[c])) continue;
+				if (!render_cell(types[c], vectors[c], r, rendered[c], mysql_booleans)) continue;
 				fields[c] = rendered[c].data();
 				sizes[c] = static_cast<unsigned long>(rendered[c].size());
 			}

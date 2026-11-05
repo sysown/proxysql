@@ -67,6 +67,7 @@ private:
 	int signal_pipe_[2] { -1, -1 };
 
 	DuckDBEngine* engine_ { nullptr };
+	bool mysql_compatibility_ { false };
 
 	mutable pthread_mutex_t mutex_;
 	std::vector<Listener> listeners_;

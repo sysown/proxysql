@@ -149,6 +149,7 @@ bool duckdb_parse_ifaces(const std::string& spec,
 DuckDBConfigStore::DuckDBConfigStore() {
 	values_ = {
 		{ "mysql_ifaces",    kDefaultMysqlIfaces },
+		{ "mysql_compatibility", "false" },
 		{ "pgsql_ifaces",    kDefaultPgsqlIfaces },
 		{ "database_path",   kDefaultDatabasePath },
 		{ "memory_limit",    kDefaultMemoryLimit },
@@ -180,10 +181,10 @@ bool DuckDBConfigStore::set(const std::string& name, const std::string& value, s
 			err = "invalid value for '" + name + "': expected an integer between 1 and INT_MAX";
 			return false;
 		}
-	} else if (name == "read_only") {
+	} else if (name == "read_only" || name == "mysql_compatibility") {
 		bool v = false;
 		if (!parse_bool(value, v)) {
-			err = "invalid value for 'read_only': expected a boolean";
+			err = "invalid value for '" + name + "': expected a boolean";
 			return false;
 		}
 	} else if (name == "enable_external_access") {
@@ -200,7 +201,7 @@ bool DuckDBConfigStore::set(const std::string& name, const std::string& value, s
 	}
 	// database_path and memory_limit are accepted as-is.
 
-	if (name == "read_only" || name == "enable_external_access") {
+	if (name == "read_only" || name == "enable_external_access" || name == "mysql_compatibility") {
 		bool normalized = false;
 		parse_bool(value, normalized);
 		values_[name] = normalized ? "true" : "false";
@@ -295,6 +296,13 @@ int DuckDBConfigStore::max_connections() const {
 	long v = 0;
 	if (!parse_int(get_locked("max_connections"), v) || v < 1) return kDefaultMaxConnections;
 	return static_cast<int>(v);
+}
+
+bool DuckDBConfigStore::mysql_compatibility() const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	bool value = false;
+	parse_bool(get_locked("mysql_compatibility"), value);
+	return value;
 }
 
 bool DuckDBConfigStore::read_only() const {

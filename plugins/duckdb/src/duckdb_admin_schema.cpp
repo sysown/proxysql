@@ -176,7 +176,7 @@ ProxySQL_PluginCommandResult load_variables(SQLite3DB& db) {
 	if (!read_candidate(db, effective, candidate, err)) return command_failure(err);
 
 	std::vector<std::string> startup_only;
-	for (const char* name : {"mysql_ifaces", "pgsql_ifaces", "database_path", "read_only"}) {
+	for (const char* name : {"mysql_ifaces", "pgsql_ifaces", "database_path", "read_only", "mysql_compatibility"}) {
 		if (candidate.get(name) != effective.get(name)) startup_only.emplace_back(name);
 	}
 	if (!startup_only.empty()) return command_failure(lifecycle_error(startup_only));
@@ -271,7 +271,7 @@ bool duckdb_migrate_legacy_variable_tables(SQLite3DB& admindb, std::string& err)
 	}
 	const char* known =
 		"('mysql_ifaces','pgsql_ifaces','database_path','memory_limit','threads',"
-		"'max_connections','read_only','enable_external_access')";
+		"'max_connections','read_only','enable_external_access','mysql_compatibility')";
 	auto fail = [&](const std::string& message) {
 		admindb.execute("ROLLBACK");
 		err = message;

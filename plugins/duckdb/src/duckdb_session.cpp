@@ -1,4 +1,5 @@
 #include "duckdb_session.h"
+#include "duckdb_mysql_compat.h"
 #include "duckdb_engine.h"
 #include "duckdb_result.h"
 #include "sqlite3db.h"
@@ -737,7 +738,7 @@ bool check_prepared_config_policy(const std::string& sql, duckdb_statement_type 
 
 } // namespace
 
-DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective) {
+DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective, bool mysql_booleans) {
 	DuckDBExecOutcome outcome;
 	const DuckDBTxnVerb verb = classify_txn_verb(effective);
 	DuckDBSessionState& session_state = duckdb_session_state();
@@ -933,7 +934,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	// exactly once above, so just convert it.
 	outcome.has_resultset = true;
 	std::string conversion_error;
-	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error);
+	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error, mysql_booleans);
 	duckdb_destroy_result(&res);
 	if (!conversion_error.empty()) {
 		outcome.ok = false;
@@ -1125,6 +1126,16 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		return;
 	}
 
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
+		if (st.mysql_compatibility && kind == DuckDBIntercept::none) {
+			std::string error;
+			if (!duckdb_translate_mysql_select(sql, effective, error)) {
+				duckdb_send_mysql_error(sess, 1235, "42000", error.c_str());
+				return;
+			}
+		}
+	}
+
 	// Managed global settings are deliberately executed through the engine's
 	// dedicated control connection, never inside an application's session or
 	// transaction. Unmanaged SET statements stay on the normal DuckDB path.
@@ -1152,7 +1163,7 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 	// client text), not `effective`, is what goes to duckdb_send_result:
 	// for PgSQL, SQLite3_to_Postgres derives its CommandComplete tag from
 	// the first word of whatever we pass it.
-	const DuckDBExecOutcome outcome = duckdb_execute_effective(st.conn, effective);
+	const DuckDBExecOutcome outcome = duckdb_execute_effective(st.conn, effective, st.mysql_compatibility);
 	if (!outcome.ok) {
 		if constexpr (std::is_same_v<S, MySQL_Session>)
 			duckdb_send_mysql_error(sess,

@@ -74,11 +74,11 @@ int main() {
 		"('duckdb_variables','runtime_duckdb_variables')") == "0",
 	   "dedicated DuckDB scalar-variable tables do not exist");
 	ok(cell(admin,
-		"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'duckdb-%'") == "8",
-	   "Main exposes eight duckdb-prefixed variables");
+		"SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'duckdb-%'") == "9",
+	   "Main exposes nine duckdb-prefixed variables");
 	ok(cell(admin,
-		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'duckdb-%'") == "8",
-	   "Runtime exposes eight effective duckdb-prefixed variables");
+		"SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'duckdb-%'") == "9",
+	   "Runtime exposes nine effective duckdb-prefixed variables");
 
 	MYSQL* first = connect_duckdb(cl);
 	MYSQL* second = connect_duckdb(cl);
@@ -167,7 +167,7 @@ int main() {
 	   "SAVE FROM RUNTIME replaces pending Main with effective values");
 	ok(execute(admin, "SAVE DUCKDB VARIABLES FROM MEMORY TO DISK") &&
 	   cell(admin, "SELECT COUNT(*) FROM disk.global_variables "
-	               "WHERE variable_name LIKE 'duckdb-%'") == "8",
+	               "WHERE variable_name LIKE 'duckdb-%'") == "9",
 	   "Disk alias persists only the complete duckdb-prefixed slice");
 	ok(execute(admin, "UPDATE disk.global_variables SET variable_value='5' "
 	                  "WHERE variable_name='duckdb-threads'") &&

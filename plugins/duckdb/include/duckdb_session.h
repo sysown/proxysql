@@ -51,6 +51,7 @@ struct DuckDBSessionState {
 	duckdb_connection conn { nullptr };
 	DuckDBEngine* engine { nullptr };
 	bool pgsql_extended_error { false };
+	bool mysql_compatibility { false };
 	char pgsql_txn_status { 'I' };
 	std::string database_name { "memory" };
 };
@@ -115,7 +116,8 @@ struct DuckDBExecOutcome {
 // can never reach the wrapped-execution path at all (it fails to
 // *parse* as `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)`, so the decision
 // falls back to the original statement before anything runs).
-DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective);
+DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
+                                               bool mysql_booleans = false);
 
 // Recognizes client SET statements that target the Admin-managed engine-wide
 // settings (memory_limit, threads, enable_external_access, access_mode) and

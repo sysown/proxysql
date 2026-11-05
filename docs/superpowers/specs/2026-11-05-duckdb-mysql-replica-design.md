@@ -1,7 +1,7 @@
 # DuckDB MySQL Replica — Design and Handoff
 
 Date: 2026-11-05
-Status: applier live-validated; compatibility and hardening next; internal routing deferred
+Status: applier and core SELECT compatibility validated; hardening next; internal routing deferred
 Branch: `feature/duckdb-mysql-replica`
 Worktree: `/mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica`
 Base: `v3.0` at `e2f317aba`
@@ -301,9 +301,10 @@ and session setup.
 1. **Applier hardening.** Fix catalog/schema-name ambiguity; test abrupt crash
    recovery and concurrent writes during snapshot; validate large positions,
    read-only protection, performance, and platform packaging.
-2. **MySQL analytical compatibility.** Define and implement a bounded
-   `SELECT` subset on the DuckDB listener, with explicit errors for unsupported
-   statements. The initial workload still needs to be selected.
+2. **MySQL analytical compatibility.** The opt-in core SELECT pass is
+   implemented and differential-tested through direct and ordinary backend
+   routing. Expand the bounded subset as needed; see
+   `2026-11-05-duckdb-mysql-select-compatibility-design.md`.
 3. **Typed results and prepared statements** on the DuckDB MySQL listener,
    carried through ordinary backend routing.
 4. **Bulk load** (`LOAD DATA LOCAL INFILE`, `COPY FROM STDIN`).
@@ -357,5 +358,5 @@ for the compile check.
 - [x] Unit test for pure logic
 - [x] Live MySQL 8.4 end-to-end test (NONE and CRC32 checksums)
 - [ ] Applier hardening
-- [ ] MySQL compatibility
+- [x] Core MySQL analytical SELECT compatibility (opt-in)
 - [ ] Internal query-rule destination (deferred indefinitely)
