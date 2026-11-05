@@ -253,6 +253,12 @@ and the real DuckDB **1.4.5** / MariaDB Connector/C **3.3.8** libraries:
   RELOAD privilege proves a committed checkpoint resumes without silently
   resnapshotting. Temporary mutations omitting the consistent source
   transaction and ignoring the durable checkpoint fail the intended checks.
+- The opt-in replica load harness passes **11 assertions** per enabled run,
+  with three repeats each at 100 and 1,000 requested changed data rows/s.
+  Exact row/coordinate audits pass after every phase; a stopped applier
+  fails the marker deadline. Recovery still passes **19 assertions** after
+  extracting the common fixture. See the
+  [measured baseline](../benchmarks/2026-11-05-duckdb-replica-load.md).
 - The nine DuckDB unit binaries pass **371 assertions** in total, including
   **61** in `duckdb_replica_unit-t`, **16** in
   `duckdb_replica_storage_unit-t`, and **53** in the SELECT translator unit.
@@ -289,8 +295,9 @@ The existing listener/admin-schema unit targets now link the replica sources.
 
 This is functional validation of the tested source and types, including
 Linux process-crash recovery. Power loss/torn writes, exact interruption
-inside DuckDB COMMIT, positions above 4 GB, load/performance tests, and
-platform packaging validation remain outstanding. Catalog/schema collisions
+inside DuckDB COMMIT, broader/long-running load tests and platform packaging
+validation remain outstanding. A first update-heavy load baseline is now
+measured; see section 10.5. Catalog/schema collisions
 are covered by storage tests and the live scenario, whose database filename now matches the
 source schema.
 
@@ -339,8 +346,9 @@ backend authentication and session setup.
 1. **Further applier hardening.** Catalog qualification, transactional
    manifest-owned RESET, and failed-snapshot rollback safety are implemented.
    Process-crash recovery and concurrent writes during snapshot are now
-   validated. Next: validate large positions, read-only protection,
-   performance, and platform packaging.
+   validated. A first load baseline is measured in section 10.5. Next:
+   add read-only protection, profile/optimize apply throughput, broaden
+   workload coverage, and validate platform packaging.
 2. **MySQL analytical compatibility.** The opt-in core SELECT pass is
    implemented and differential-tested through direct and ordinary backend
    routing. Expand the bounded subset as needed; see
@@ -376,16 +384,47 @@ The test observes active catch-up and validates atomic recovery; it does not
 pin the kill to a specific instruction inside DuckDB COMMIT or simulate
 power loss. Linux is the platform validated so far.
 
+### 10.5 Load characterization (first baseline completed)
+
+`test_duckdb_replica_bench-t` is opt-in through
+`RUN_DUCKDB_REPLICA_BENCH=1`; default runs skip before creating resources.
+It reuses the isolated recovery fixture, times a 200,001-row snapshot, then
+runs paced writes without and with two aggregate readers, followed by a
+5,000-row source transaction. Distinct replicated transaction markers
+measure observed commit-to-visible latency, including coalesced apply
+batches. Full row and coordinate audits happen outside timed intervals.
+
+On the measured shared Linux host, six runs gave a median snapshot time of
+about 1.79 s. With 1,000 requested changed data rows/s, completion throughput
+was about 485 rows/s without readers and 456 rows/s with two readers,
+accumulating seconds of backlog. At 100 requested rows/s, median visibility
+latency was about 0.3 s and per-run p99 about 1.3 s. These are workload/host
+observations, not capacity or latency guarantees. The
+[report and raw results](../benchmarks/2026-11-05-duckdb-replica-load.md)
+record source flush settings, sample intervals, marker overhead and cache
+history limits. Broader workloads and long-duration memory behavior remain
+unmeasured. The current per-row SQL execution path is a candidate for
+profiling before choosing an optimization.
+
 ## 11. Known risks
 
 | Risk | Handling |
 |---|---|
-| `next_event_pos` is `unsigned int` in the connector | Positions above 4 GB truncate; document and test with a rotated file. Long-term: track file/pos from raw event headers. |
 | `STOP` can block up to the 5 s dump read timeout, longer on the snapshot lock | `STOP` releases the Admin mutex during the join; documented. |
 | SQL-literal apply is slower than bound parameters | Acceptable for v1; measure before optimizing. |
 | Client writes to a replicated table diverge it | v1 has no per-table authorization. Documented; a read-only listener mode is a follow-up. |
 | Snapshot `RELOAD` is unavailable on some managed MySQL | v1 refuses to start rather than taking a racy snapshot. An idempotent-overlap mode is a follow-up. |
 | The plugin now links `libmariadbclient` | Needed because the core does not export `mariadb_rpl_*`; verify the package on each platform. |
+
+The earlier claim that the connector has a known truncation defect above
+4 GB was unsupported and has been withdrawn. MySQL's
+[`max_binlog_size`](https://dev.mysql.com/doc/refman/9.7/en/replication-options-binary-log.html#sysvar_max_binlog_size)
+has a maximum/default of 1 GiB. A single transaction can exceed that rotation
+threshold, but no truncation failure has been reproduced here. The connector's
+32-bit event-position field alone does not establish a bug; inspecting raw
+headers would not widen the four-byte field it already decodes. Oversized
+transactions belong in workload characterization, not a claimed known-defect
+priority.
 
 ## 12. Commands
 
@@ -407,6 +446,10 @@ make -C test/tap/tests test_duckdb_replica-t
 make -C test/tap/tests test_duckdb_replica_recovery-t
 ./test/tap/tests/test_duckdb_replica_recovery-t
 # Optional path overrides: TAP_PROXYSQL_BINARY and TAP_DUCKDB_PLUGIN.
+
+# opt-in load characterization (same dedicated administrative TAP_MYSQL* source)
+make -C test/tap/tests test_duckdb_replica_bench-t
+RUN_DUCKDB_REPLICA_BENCH=1 ./test/tap/tests/test_duckdb_replica_bench-t
 
 # syntax check used during development (headers extracted from deps)
 g++ -std=c++17 -fsyntax-only -Iplugins/duckdb/include -I/tmp/opencode/duckdbinc \
@@ -431,6 +474,7 @@ for the compile check.
 - [x] Live MySQL 8.4 end-to-end test (NONE and CRC32 checksums)
 - [x] Catalog qualification, atomic manifest-owned RESET and rollback safety
 - [x] SIGKILL recovery and concurrent writes during snapshot (NONE and CRC32)
-- [ ] Further applier hardening (large positions, read-only protection, load, packaging)
+- [x] First replica load baseline (snapshot, paced updates, reader concurrency, lag and RSS)
+- [ ] Further applier hardening (read-only protection, apply performance, broader load, packaging)
 - [x] Core MySQL analytical SELECT compatibility (opt-in)
 - [ ] Internal query-rule destination (deferred indefinitely)
