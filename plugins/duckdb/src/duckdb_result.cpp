@@ -1,5 +1,7 @@
 #include "duckdb_result.h"
 #include "sqlite3db.h"
+#include <mysql.h>
+#include <limits>
 
 #include <algorithm>
 #include <cmath>
@@ -10,6 +12,125 @@
 
 namespace {
 
+DuckDBMySQLColumn mysql_column(duckdb_logical_type logical) {
+	DuckDBMySQLColumn c;
+	const auto type = duckdb_get_type_id(logical);
+	c.charset = 63;
+	c.flags = NUM_FLAG;
+	switch (type) {
+	case DUCKDB_TYPE_BOOLEAN:
+		c.type = MYSQL_TYPE_TINY;
+		c.length = 1;
+		break;
+	case DUCKDB_TYPE_UTINYINT:
+		c.flags |= UNSIGNED_FLAG;
+		[[fallthrough]];
+	case DUCKDB_TYPE_TINYINT:
+		c.type = MYSQL_TYPE_TINY;
+		c.length = (c.flags & UNSIGNED_FLAG) ? 3 : 4;
+		break;
+	case DUCKDB_TYPE_USMALLINT:
+		c.flags |= UNSIGNED_FLAG;
+		[[fallthrough]];
+	case DUCKDB_TYPE_SMALLINT:
+		c.type = MYSQL_TYPE_SHORT;
+		c.length = (c.flags & UNSIGNED_FLAG) ? 5 : 6;
+		break;
+	case DUCKDB_TYPE_UINTEGER:
+		c.flags |= UNSIGNED_FLAG;
+		[[fallthrough]];
+	case DUCKDB_TYPE_INTEGER:
+		c.type = MYSQL_TYPE_LONG;
+		c.length = (c.flags & UNSIGNED_FLAG) ? 10 : 11;
+		break;
+	case DUCKDB_TYPE_UBIGINT:
+		c.flags |= UNSIGNED_FLAG;
+		[[fallthrough]];
+	case DUCKDB_TYPE_BIGINT:
+		c.type = MYSQL_TYPE_LONGLONG;
+		c.length = 20;
+		break;
+	case DUCKDB_TYPE_UHUGEINT:
+		c.flags |= UNSIGNED_FLAG;
+		[[fallthrough]];
+	case DUCKDB_TYPE_HUGEINT:
+		c.type = MYSQL_TYPE_NEWDECIMAL;
+		c.length = (c.flags & UNSIGNED_FLAG) ? 39 : 40;
+		break;
+	case DUCKDB_TYPE_DECIMAL:
+		c.type = MYSQL_TYPE_NEWDECIMAL;
+		c.decimals = duckdb_decimal_scale(logical);
+		c.length = duckdb_decimal_width(logical) + (c.decimals ? 1 : 0) + 1;
+		break;
+	case DUCKDB_TYPE_FLOAT:
+		c.type = MYSQL_TYPE_FLOAT;
+		c.length = 15;
+		c.decimals = 31;
+		break;
+	case DUCKDB_TYPE_DOUBLE:
+		c.type = MYSQL_TYPE_DOUBLE;
+		c.length = 24;
+		c.decimals = 31;
+		break;
+	case DUCKDB_TYPE_DATE:
+		c.type = MYSQL_TYPE_DATE;
+		c.length = 10;
+		c.flags = 0;
+		break;
+	case DUCKDB_TYPE_TIME:
+		c.type = MYSQL_TYPE_TIME;
+		c.length = 15;
+		c.decimals = 6;
+		c.flags = 0;
+		break;
+	case DUCKDB_TYPE_TIMESTAMP:
+		c.type = MYSQL_TYPE_DATETIME;
+		c.length = 26;
+		c.decimals = 6;
+		c.flags = 0;
+		break;
+	case DUCKDB_TYPE_BLOB:
+		c.type = MYSQL_TYPE_BLOB;
+		c.flags = BINARY_FLAG | BLOB_FLAG;
+		break;
+	case DUCKDB_TYPE_SQLNULL:
+		c.type = MYSQL_TYPE_NULL;
+		c.flags = 0;
+		break;
+	default:
+		return DuckDBMySQLColumn{};
+	}
+	return c;
+}
+
+bool requires_mysql_text(duckdb_type type, duckdb_vector vector, idx_t row) {
+	auto* validity = duckdb_vector_get_validity(vector);
+	if (validity && !duckdb_validity_row_is_valid(validity, row))
+		return false;
+	void* data = duckdb_vector_get_data(vector);
+	if (!data)
+		return false;
+	if (type == DUCKDB_TYPE_FLOAT)
+		return !std::isfinite(static_cast<float*>(data)[row]);
+	if (type == DUCKDB_TYPE_DOUBLE)
+		return !std::isfinite(static_cast<double*>(data)[row]);
+	if (type == DUCKDB_TYPE_DATE) {
+		const auto value = static_cast<duckdb_date*>(data)[row];
+		if (!duckdb_is_finite_date(value))
+			return true;
+		const int year = duckdb_from_date(value).year;
+		return year < 1 || year > 9999;
+	}
+	if (type == DUCKDB_TYPE_TIMESTAMP) {
+		const auto value = static_cast<duckdb_timestamp*>(data)[row];
+		if (!duckdb_is_finite_timestamp(value))
+			return true;
+		const int year = duckdb_from_timestamp(value).date.year;
+		return year < 1 || year > 9999;
+	}
+	return false;
+}
+
 bool cell_is_valid(uint64_t* validity, idx_t row) {
 	return validity == nullptr || duckdb_validity_row_is_valid(validity, row);
 }
@@ -18,11 +139,11 @@ void assign_string_t(duckdb_string_t str, std::string& out) {
 	out.assign(duckdb_string_t_data(&str), static_cast<size_t>(duckdb_string_t_length(str)));
 }
 
-std::string format_double(double v) {
+std::string format_double(double v, int precision = 15) {
 	if (std::isnan(v)) return "nan";
 	if (std::isinf(v)) return v > 0 ? "inf" : "-inf";
 	char buf[64];
-	std::snprintf(buf, sizeof(buf), "%.15g", v);
+	std::snprintf(buf, sizeof(buf), "%.*g", precision, v);
 	return buf;
 }
 
@@ -78,7 +199,7 @@ std::string format_uhugeint(duckdb_uhugeint h) {
 }
 #endif
 
-bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string& out, bool mysql_booleans) {
+bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string& out, bool mysql_booleans, bool mysql_types) {
 	uint64_t* validity = duckdb_vector_get_validity(vector);
 	if (!cell_is_valid(validity, row)) return false;
 	void* data = duckdb_vector_get_data(vector);
@@ -114,10 +235,10 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		out = std::to_string(static_cast<uint64_t*>(data)[row]);
 		return true;
 	case DUCKDB_TYPE_FLOAT:
-		out = format_double(static_cast<float*>(data)[row]);
+		out = format_double(static_cast<float*>(data)[row], mysql_types ? std::numeric_limits<float>::max_digits10 : 15);
 		return true;
 	case DUCKDB_TYPE_DOUBLE:
-		out = format_double(static_cast<double*>(data)[row]);
+		out = format_double(static_cast<double*>(data)[row], mysql_types ? std::numeric_limits<double>::max_digits10 : 15);
 		return true;
 	case DUCKDB_TYPE_DATE: {
 		const duckdb_date value = static_cast<duckdb_date*>(data)[row];
@@ -235,7 +356,8 @@ bool duckdb_append_sqlite3_row(SQLite3_result& out, char** fields,
 	return false;
 }
 
-SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error, bool mysql_booleans) {
+SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error, bool mysql_booleans, std::vector<DuckDBMySQLColumn>* mysql_columns) {
+	if (mysql_columns) mysql_columns->clear();
 	if (error != nullptr) error->clear();
 	if (res == nullptr) return nullptr;
 
@@ -248,8 +370,14 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 		const char* name = duckdb_column_name(res, c);
 		out->add_column_definition(SQLITE_TEXT, name != nullptr ? name : "");
 		types[c] = duckdb_column_type(res, c);
+		if (mysql_columns) {
+			duckdb_logical_type logical = duckdb_column_logical_type(res, c);
+			mysql_columns->push_back(mysql_column(logical));
+			duckdb_destroy_logical_type(&logical);
+		}
 	}
 
+	std::vector<uint32_t> max_lengths(static_cast<size_t>(ncols), 0);
 	std::vector<char*> fields(static_cast<size_t>(ncols), nullptr);
 	std::vector<unsigned long> sizes(static_cast<size_t>(ncols), 0);
 	std::vector<std::string> rendered(static_cast<size_t>(ncols));
@@ -273,7 +401,11 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 				fields[c] = nullptr;
 				sizes[c] = 0;
 				if (!duckdb_type_renders_as_text(types[c]) || vectors[c] == nullptr) continue;
-				if (!render_cell(types[c], vectors[c], r, rendered[c], mysql_booleans)) continue;
+				if (!render_cell(types[c], vectors[c], r, rendered[c], mysql_booleans || mysql_columns != nullptr, mysql_columns != nullptr)) continue;
+				if (mysql_columns) {
+					if (requires_mysql_text(types[c], vectors[c], r)) (*mysql_columns)[c] = DuckDBMySQLColumn{};
+					max_lengths[c] = std::max(max_lengths[c], static_cast<uint32_t>(std::min<size_t>(rendered[c].size(), UINT32_MAX)));
+				}
 				fields[c] = rendered[c].data();
 				sizes[c] = static_cast<unsigned long>(rendered[c].size());
 			}
@@ -286,6 +418,10 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 			}
 		}
 		duckdb_destroy_data_chunk(&chunk);
+	}
+	if (mysql_columns) for (idx_t c = 0; c < ncols; ++c) {
+		if ((*mysql_columns)[c].type == MYSQL_TYPE_VAR_STRING || (*mysql_columns)[c].type == MYSQL_TYPE_BLOB)
+			(*mysql_columns)[c].length = max_lengths[c];
 	}
 	return out;
 }

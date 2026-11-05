@@ -738,7 +738,7 @@ bool check_prepared_config_policy(const std::string& sql, duckdb_statement_type 
 
 } // namespace
 
-DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective, bool mysql_booleans) {
+DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective, bool mysql_booleans, bool mysql_types) {
 	DuckDBExecOutcome outcome;
 	const DuckDBTxnVerb verb = classify_txn_verb(effective);
 	DuckDBSessionState& session_state = duckdb_session_state();
@@ -824,8 +824,38 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		// client sends one) is stripped first for the same reason -- a
 		// `;` inside the subquery is itself a parser error.
 		const std::string trimmed = trim_trailing_semicolons(effective);
-		const std::string wrapped =
-			"SELECT COLUMNS(*)::VARCHAR FROM (\n" + trimmed + "\n)";
+		std::string wrapped = "SELECT COLUMNS(*)::VARCHAR FROM (\n" + trimmed + "\n)";
+		if (mysql_types) {
+			auto quote_ident = [](const std::string& name) {
+				std::string out = "\"";
+				for (char c : name) {
+					out += c;
+					if (c == '"')
+						out += c;
+				}
+				return out + '"';
+			};
+			wrapped = "SELECT ";
+			std::string aliases;
+			for (idx_t c = 0; c < ncols; ++c) {
+				if (c) {
+					wrapped += ",";
+					aliases += ",";
+				}
+				const std::string positional = "__c" + std::to_string(c);
+				aliases += quote_ident(positional);
+				const std::string value = "\"__proxysql_result\"." + quote_ident(positional);
+				wrapped +=
+					duckdb_type_renders_as_text(duckdb_prepared_statement_column_type(stmt, c))
+						? value
+						: "CAST(" + value + " AS VARCHAR)";
+				const char* name = duckdb_prepared_statement_column_name(stmt, c);
+				wrapped += " AS " + quote_ident(name ? name : "");
+				if (name)
+					duckdb_free(const_cast<char*>(name));
+			}
+			wrapped += " FROM (\n" + trimmed + "\n) AS \"__proxysql_result\"(" + aliases + ")";
+		}
 
 		duckdb_prepared_statement wrap_stmt = nullptr;
 		if (duckdb_prepare(conn, wrapped.c_str(), &wrap_stmt) == DuckDBSuccess) {
@@ -836,18 +866,22 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 			// position (confirmed by probe: "syntax error at or near
 			// INTO") and this build has no writable-CTE support either.
 			// Discard the original prepared statement WITHOUT ever
-			// executing it, and run the wrap instead.
+			// executing it, and run the wrap instead. MySQL casts only unsupported
+			// positional columns; PostgreSQL retains its all-text wrapper.
 			duckdb_destroy_prepare(&stmt);
 			exec_stmt = wrap_stmt;
 		} else {
-			// The wrap doesn't parse (e.g. RETURNING DML, which cannot
-			// legally sit inside a FROM-clause subquery in this DuckDB
-			// grammar). Fall back to the ORIGINAL prepared statement --
-			// still not executed yet either way -- and accept the
-			// degraded (NULL-rendering) output for the unrenderable
-			// column: degraded output beats no output for a query that
-			// is about to succeed.
+			// RETURNING DML cannot be placed in a FROM clause. MySQL rejects
+			// unsupported output before execution; PostgreSQL keeps its existing
+			// conversion fallback. Neither path executes the statement twice.
 			duckdb_destroy_prepare(&wrap_stmt);
+			if (mysql_types) {
+				duckdb_destroy_prepare(&stmt);
+				outcome.ok = false;
+				outcome.error = "Unsupported DuckDB result type in a statement that cannot be wrapped as a SELECT";
+				outcome.error_type = DUCKDB_ERROR_NOT_IMPLEMENTED;
+				return finish();
+			}
 		}
 	}
 
@@ -930,11 +964,12 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 
 	// rtype == DUCKDB_RESULT_TYPE_QUERY_RESULT: either the original
 	// query (renderable, or unrenderable-but-fell-back-to-degraded), or
-	// the wrap (every column now VARCHAR). Either way it already ran
+	// the wrap (unsupported columns now VARCHAR). Either way it already ran
 	// exactly once above, so just convert it.
 	outcome.has_resultset = true;
 	std::string conversion_error;
-	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error, mysql_booleans);
+	outcome.result = duckdb_result_to_sqlite3(&res, &conversion_error, mysql_booleans,
+		mysql_types ? &outcome.mysql_columns : nullptr);
 	duckdb_destroy_result(&res);
 	if (!conversion_error.empty()) {
 		outcome.ok = false;
@@ -959,12 +994,64 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 // (non-template) session pointer type -- at the point of the template
 // definition, not at instantiation).
 
-void duckdb_send_result(MySQL_Session* sess, SQLite3_result* r, char* err,
-                        int affected, const char* /*sql*/) {
-	const bool deprecate_eof_active =
+void duckdb_send_result(MySQL_Session* sess, SQLite3_result* r, char* err, int affected,
+						const char* /*sql*/,
+						const std::vector<DuckDBMySQLColumn>* columns = nullptr) {
+	auto* protocol = &sess->client_myds->myprot;
+	auto* stream = protocol->get_myds();
+	const bool deprecate_eof =
 		sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
-	sess->SQLite3_to_MySQL(r, err, affected, &sess->client_myds->myprot,
-		false, deprecate_eof_active);
+	uint16_t status = sess->autocommit ? SERVER_STATUS_AUTOCOMMIT : 0;
+	if (duckdb_pgsql_transaction_status(duckdb_session_state().conn) != 'I')
+		status |= SERVER_STATUS_IN_TRANS;
+	if (err) {
+		duckdb_send_mysql_error(sess, 1105, "HY000", err);
+		return;
+	}
+	stream->DSS = STATE_QUERY_SENT_DS;
+	if (!r) {
+		protocol->generate_pkt_OK(true, nullptr, nullptr, 1, affected, 0, status, 0, nullptr);
+		stream->DSS = STATE_SLEEP;
+		return;
+	}
+	uint8_t sid = 1;
+	protocol->generate_pkt_column_count(true, nullptr, nullptr, sid++, r->columns);
+	for (int c = 0; c < r->columns; ++c) {
+		DuckDBMySQLColumn field;
+		if (columns && columns->size() == static_cast<size_t>(r->columns))
+			field = (*columns)[c];
+		else
+			for (const auto* row : r->rows)
+				field.length = std::max<uint32_t>(field.length, row->sizes[c]);
+		protocol->generate_pkt_field(true, nullptr, nullptr, sid++, (char*)"", (char*)"", (char*)"",
+									 r->column_definition[c]->name, (char*)"", field.charset,
+									 field.length, field.type, field.flags, field.decimals, false,
+									 0, nullptr);
+	}
+	stream->DSS = STATE_COLUMN_DEFINITION;
+	if (!deprecate_eof)
+		protocol->generate_pkt_EOF(true, nullptr, nullptr, sid++, 0, status);
+	MySQL_ResultSet packets{};
+	packets.buffer_init(protocol);
+	std::vector<char*> values(r->columns);
+	std::vector<unsigned long> lengths(r->columns);
+	for (const auto* row : r->rows) {
+		for (int c = 0; c < r->columns; ++c) {
+			values[c] = row->fields[c];
+			lengths[c] = row->sizes[c];
+		}
+		sid = protocol->generate_pkt_row3(&packets, nullptr, sid, r->columns, lengths.data(),
+										  values.data(), 0) +
+			  1;
+	}
+	packets.buffer_to_PSarrayOut();
+	packets.get_resultset(stream->PSarrayOUT);
+	stream->DSS = STATE_ROW;
+	if (deprecate_eof)
+		protocol->generate_pkt_OK(true, nullptr, nullptr, sid, 0, 0, status, 0, nullptr, true);
+	else
+		protocol->generate_pkt_EOF(true, nullptr, nullptr, sid, 0, status);
+	stream->DSS = STATE_SLEEP;
 }
 
 void duckdb_send_result(PgSQL_Session* sess, SQLite3_result* r, char* err,
@@ -1157,13 +1244,14 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 	}
 
 	// All DDL/DML/QUERY_RESULT dispatch (C2) and the unrenderable-column
-	// re-query with its double-execution safety gate (C3) live in
+	// execute-once fallback conversion (C3) live in
 	// duckdb_execute_effective(), which is protocol-agnostic and directly
 	// testable against a live duckdb_connection. `sql` (the ORIGINAL
 	// client text), not `effective`, is what goes to duckdb_send_result:
 	// for PgSQL, SQLite3_to_Postgres derives its CommandComplete tag from
 	// the first word of whatever we pass it.
-	const DuckDBExecOutcome outcome = duckdb_execute_effective(st.conn, effective, st.mysql_compatibility);
+	const DuckDBExecOutcome outcome = duckdb_execute_effective(st.conn, effective,
+		std::is_same_v<S, MySQL_Session>, std::is_same_v<S, MySQL_Session>);
 	if (!outcome.ok) {
 		if constexpr (std::is_same_v<S, MySQL_Session>)
 			duckdb_send_mysql_error(sess,
@@ -1177,7 +1265,9 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		return;
 	}
 	if (outcome.has_resultset) {
-		duckdb_send_result(sess, outcome.result, nullptr, 0, sql.c_str());
+		if constexpr (std::is_same_v<S, MySQL_Session>)
+			duckdb_send_result(sess, outcome.result, nullptr, 0, sql.c_str(), &outcome.mysql_columns);
+		else duckdb_send_result(sess, outcome.result, nullptr, 0, sql.c_str());
 		delete outcome.result;
 	} else {
 		duckdb_send_result(sess, nullptr, nullptr, outcome.affected_rows, sql.c_str());

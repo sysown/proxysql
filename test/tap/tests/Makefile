@@ -291,7 +291,7 @@ sh-%:
 kill_connection2_fixture-t: kill_connection2_fixture-t.cpp kill_connection2-t.cpp
 
 # Owns an isolated ProxySQL child for real SIGKILL recovery testing.
-test_duckdb_replica_recovery-t test_duckdb_replica_bench-t: %: %.cpp duckdb_replica_test_utils.h $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
+test_duckdb_replica_recovery-t test_duckdb_replica_bench-t test_duckdb_mysql_types-t: %: %.cpp duckdb_replica_test_utils.h $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) \
 		-DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' \
 		-DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' \

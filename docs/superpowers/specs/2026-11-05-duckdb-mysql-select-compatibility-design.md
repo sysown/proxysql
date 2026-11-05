@@ -42,7 +42,7 @@ other statement classes retain their existing path. No fallback is introduced.
   [-2^63,2^64-1]. Inputs are evaluated once, including aggregate expressions;
   out-of-range inputs fail instead of emulating MySQL's warning/clamping rules.
 - Projected BOOLEAN values render as 1/0; VARCHAR 'true' and SQL NULL keep
-  their values. Result metadata remains the existing text protocol metadata.
+  their values. Result metadata now uses native MySQL scalar types; see the typed-results design.
 - Existing DuckDB equivalents: COUNT, SUM, MIN, MAX, AVG, CASE, IF, IFNULL,
   COALESCE, ROUND, ABS, YEAR, MONTH and DAY.
 - Two-argument DATEDIFF uses date-only values and MySQL argument order.
@@ -109,7 +109,7 @@ locale/timezone changes and invalid-date warning behavior are excluded.
 - Independent review findings around comparison precedence, LIKE escapes,
   integer casts and fixture cleanup were reproduced and corrected.
 
-Result metadata remains text; use explicit column aliases for rewritten
+MySQL result metadata now exposes native scalar types; use explicit column aliases for rewritten
 expressions, since their default labels may reflect translated DuckDB SQL.
 The six PostgreSQL extended-query rejection failures remain the independently
 reproduced baseline failures, outside this change.

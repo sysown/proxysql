@@ -1,7 +1,7 @@
 # DuckDB MySQL Replica — Design and Handoff
 
 Date: 2026-11-05
-Status: applier, core SELECT compatibility, storage hardening and process-crash recovery validated; internal routing deferred
+Status: applier and typed MySQL SELECT results validated; prepared statements next; internal routing deferred
 Branch: `feature/duckdb-mysql-replica`
 Worktree: `/mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica`
 Base: `v3.0` at `e2f317aba`
@@ -259,7 +259,12 @@ and the real DuckDB **1.4.5** / MariaDB Connector/C **3.3.8** libraries:
   fails the marker deadline. Recovery still passes **19 assertions** after
   extracting the common fixture. See the
   [measured baseline](../benchmarks/2026-11-05-duckdb-replica-load.md).
-- The nine DuckDB unit binaries pass **371 assertions** in total, including
+- Typed MySQL result coverage passes **31 assertions** through direct and
+  ordinary routed connections, including native and opt-in compatibility
+  modes, wide numerics, binary/NUL data, empty results, temporal/float text
+  fallback, duplicate labels, DML RETURNING, 16 MiB row splitting and
+  300-column sequence wrapping. PostgreSQL retains its text result path.
+- The nine DuckDB unit binaries pass **379 assertions** in total, including
   **61** in `duckdb_replica_unit-t`, **16** in
   `duckdb_replica_storage_unit-t`, and **53** in the SELECT translator unit.
 - Existing Admin-table TAP coverage passes 22 assertions; the MySQL listener
@@ -343,18 +348,17 @@ a prerequisite for the work below. The compatibility differential test
 validates this topology through the regular ProxySQL listener, including
 backend authentication and session setup.
 
-1. **Further applier hardening.** Catalog qualification, transactional
-   manifest-owned RESET, and failed-snapshot rollback safety are implemented.
-   Process-crash recovery and concurrent writes during snapshot are now
-   validated. A first load baseline is measured in section 10.5. Next:
-   add read-only protection, profile/optimize apply throughput, broaden
-   workload coverage, and validate platform packaging.
-2. **MySQL analytical compatibility.** The opt-in core SELECT pass is
-   implemented and differential-tested through direct and ordinary backend
-   routing. Expand the bounded subset as needed; see
-   `2026-11-05-duckdb-mysql-select-compatibility-design.md`.
-3. **Typed results and prepared statements** on the DuckDB MySQL listener,
-   carried through ordinary backend routing.
+Typed MySQL COM_QUERY results are implemented; see section 10.6. The user
+prioritizes client-facing features over further performance tuning.
+
+1. **MySQL prepared statements.** Add parameter binding and binary results
+   using the typed result foundation, through direct and ordinary backend
+   routing. Prepared-statement protocol is not yet implemented.
+2. **Broader analytical SELECT compatibility.** Expand the bounded subset
+   around application queries; see the compatibility design.
+3. **Read-only protection and further applier hardening.** Protect replicated
+   tables/metadata from client writes, broaden workload coverage and validate
+   packaging. Further throughput optimization remains deferred.
 4. **Bulk load** (`LOAD DATA LOCAL INFILE`, `COPY FROM STDIN`).
 5. **Postgres logical replication** into the same engine.
 
@@ -405,6 +409,24 @@ record source flush settings, sample intervals, marker overhead and cache
 history limits. Broader workloads and long-duration memory behavior remain
 unmeasured. The current per-row SQL execution path is a candidate for
 profiling before choosing an optimization.
+
+### 10.6 Typed MySQL results (completed)
+
+The MySQL listener now sends native scalar field metadata for COM_QUERY
+results in both native and compatibility modes. This includes signedness,
+decimal scale, binary/UTF-8 character sets, and empty-result types. Native
+MySQL BOOLEAN values now return 1/0. PostgreSQL retains its existing text
+metadata and boolean representation.
+
+The plugin retains length-aware value rows and emits field/row packets with
+existing core protocol generators. Wide integers use exact DECIMAL metadata;
+unsupported types and exceptional scalar values use text fallback. Mixed
+scalar/composite projections preserve column order, duplicate labels and
+scalar types. Scalar DML RETURNING executes once; unsupported returning types
+are rejected before mutation. Nullable/key/origin information remains
+conservative, and unbounded string/blob lengths describe observed bytes.
+See the [typed result design](2026-11-05-duckdb-mysql-typed-results-design.md)
+for mappings and validation. Prepared-statement protocol is the next feature.
 
 ## 11. Known risks
 
@@ -477,4 +499,6 @@ for the compile check.
 - [x] First replica load baseline (snapshot, paced updates, reader concurrency, lag and RSS)
 - [ ] Further applier hardening (read-only protection, apply performance, broader load, packaging)
 - [x] Core MySQL analytical SELECT compatibility (opt-in)
+- [x] Typed MySQL COM_QUERY scalar results
+- [ ] MySQL prepared-statement protocol and binary results
 - [ ] Internal query-rule destination (deferred indefinitely)

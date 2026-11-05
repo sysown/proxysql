@@ -51,7 +51,7 @@ std::string scalar_text(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(97);
+	plan(101);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -500,6 +500,30 @@ int main() {
 	const DuckDBExecOutcome user_variable = duckdb_execute_effective(managed_conn, "SET VARIABLE tenant_marker = 7");
 	ok(user_variable.ok && scalar_count(managed_conn, "SELECT getvariable('tenant_marker')") == 7,
 	   "SET VARIABLE user variables are unaffected");
+	{
+		const auto mixed = duckdb_execute_effective(managed_conn, "SELECT 1 AS dup,[2] AS nested,'text' AS dup,TRUE AS flag", true, true);
+		ok(mixed.ok && mixed.result && mixed.mysql_columns.size() == 4 && mixed.mysql_columns[0].type == 3 &&
+		   mixed.mysql_columns[1].type == 253 && mixed.mysql_columns[3].type == 1 &&
+		   std::string(mixed.result->column_definition[0]->name) == "dup" &&
+		   std::string(mixed.result->column_definition[2]->name) == "dup" && std::string(mixed.result->rows[0]->fields[3]) == "1",
+		   "selective MySQL wrapping preserves scalar types, booleans, order and duplicate labels");
+		delete mixed.result;
+		duckdb_execute_effective(managed_conn, "CREATE SEQUENCE typed_once");
+		const auto once = duckdb_execute_effective(managed_conn,"SELECT nextval('typed_once'),[2]",true,true);
+		ok(once.ok && scalar_count(managed_conn,"SELECT currval('typed_once')") == 1,
+		   "selective wrapping executes a volatile scalar exactly once");
+		delete once.result;
+		duckdb_execute_effective(managed_conn,"CREATE TABLE typed_returning(id INT,nested INT[])");
+		const auto returning = duckdb_execute_effective(managed_conn,"INSERT INTO typed_returning VALUES(7,[2]) RETURNING id",true,true);
+		ok(returning.ok && returning.result && returning.mysql_columns.size() == 1 && returning.mysql_columns[0].type == 3 &&
+		   scalar_count(managed_conn,"SELECT COUNT(*) FROM typed_returning") == 1,
+		   "scalar DML RETURNING has typed metadata and mutates once");
+		delete returning.result;
+		const auto unsupported = duckdb_execute_effective(managed_conn,"INSERT INTO typed_returning VALUES(8,[3]) RETURNING nested",true,true);
+		ok(!unsupported.ok && scalar_count(managed_conn,"SELECT COUNT(*) FROM typed_returning") == 1,
+		   "unrenderable MySQL DML RETURNING is rejected before any mutation");
+		delete unsupported.result;
+	}
 	managed_engine.disconnect(&other_conn);
 	managed_engine.disconnect(&managed_conn);
 	managed_engine.close();

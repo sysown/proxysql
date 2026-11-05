@@ -4,6 +4,18 @@
 #include "duckdb.h"
 
 #include <string>
+#include <vector>
+#include <cstdint>
+
+// MySQL text-protocol field attributes, independent of core/connector headers.
+// Unavailable origin and nullability information is deliberately not invented.
+struct DuckDBMySQLColumn {
+	uint8_t type { 253 }; // MYSQL_TYPE_VAR_STRING
+	uint16_t charset { 45 }; // utf8mb4_general_ci
+	uint16_t flags { 0 };
+	uint32_t length { 0 };
+	uint8_t decimals { 0 };
+};
 
 class SQLite3_result;
 
@@ -14,10 +26,9 @@ class SQLite3_result;
 // VARCHAR/BLOB, typed vector data for everything else). This preserves
 // embedded NUL bytes that DuckDB 1.4.5's legacy result materialisation loses
 // even through duckdb_value_string().
-// This is correct on the wire for the column types the compatibility
-// allowlist supports: both text protocols
-// transmit values as strings and both serialisers label every column as
-// text anyway (MYSQL_TYPE_VAR_STRING / TEXTOID). Verified against DuckDB
+// Both text protocols transmit length-aware strings. PostgreSQL retains text
+// column metadata; the optional MySQL descriptors expose native scalar types.
+// The renderability allowlist follows the historical contract of DuckDB
 // 1.4.5's deprecated C API (duckdb/src/include/duckdb/main/capi/cast/
 // generic.hpp, GetInternalCValue's switch on deprecated_type) -- this is
 // the authoritative source, not a probed sample of types:
@@ -84,11 +95,17 @@ class SQLite3_result;
 // raw result (duckdb_rows_changed(), etc.), rather than through an extra
 // indirection that would add nothing beyond forwarding the call.
 //
+// When mysql_columns is supplied, numeric booleans and round-trip floating
+// formatting are enabled, metadata is collected before chunk access, and
+// exceptional scalar values fall back to text for their entire column.
+// Unbounded text/blob lengths report the largest returned byte length.
+//
 // The caller owns the returned object and must `delete` it. When `error` is
 // non-null, conversion failures are reported there and nullptr is returned.
 SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res,
                                          std::string* error = nullptr,
-                                         bool mysql_booleans = false);
+                                         bool mysql_booleans = false,
+                                         std::vector<DuckDBMySQLColumn>* mysql_columns = nullptr);
 
 // Appends one length-aware converted row and translates SQLite's status into
 // the converter's error contract. This keeps an oversized row from being

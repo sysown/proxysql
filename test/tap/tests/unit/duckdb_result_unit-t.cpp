@@ -4,6 +4,7 @@
 #include "tap.h"
 
 #include <climits>
+#include <mysql.h>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -34,7 +35,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(40);
+	plan(44);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -284,6 +285,51 @@ int main() {
 	   "a null duckdb_result* converts to nullptr");
 	ok(duckdb_result_has_unrenderable_column(nullptr) == false,
 	   "predicate returns false for a null duckdb_result*");
+
+	{
+		duckdb_result res;
+		duckdb_query(conn, "SELECT 255::UTINYINT,TRUE,'1.2300'::DECIMAL(20,4),NULL::INTEGER WHERE FALSE", &res);
+		std::vector<DuckDBMySQLColumn> columns;
+		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&res, nullptr, false, &columns));
+		ok(r && r->rows_count == 0 && columns.size() == 4 && columns[0].type == MYSQL_TYPE_TINY &&
+		   (columns[0].flags & UNSIGNED_FLAG) && columns[0].length == 3 && columns[1].type == MYSQL_TYPE_TINY &&
+		   columns[2].type == MYSQL_TYPE_NEWDECIMAL && columns[2].decimals == 4 && columns[2].length == 22 &&
+		   columns[3].type == MYSQL_TYPE_LONG && !(columns[3].flags & NOT_NULL_FLAG),
+		   "empty typed results preserve width, unsigned flag, decimal precision/scale and conservative nullability");
+		duckdb_destroy_result(&res);
+	}
+	{
+		duckdb_result res;
+		duckdb_query(conn, "SELECT from_hex('410042'),TRUE,'1.2345678901234567'::DOUBLE", &res);
+		std::vector<DuckDBMySQLColumn> columns;
+		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&res, nullptr, false, &columns));
+		ok(r && columns.size() == 3 && columns[0].type == MYSQL_TYPE_BLOB && columns[0].charset == 63 &&
+		   (columns[0].flags & BINARY_FLAG) && columns[0].length == 3 && r->rows[0]->sizes[0] == 3 &&
+		   std::memcmp(r->rows[0]->fields[0], "A\0B", 3) == 0 && field_equals(r.get(),0,1,"1") &&
+		   field_equals(r.get(),0,2,"1.2345678901234567"), "typed conversion preserves binary bytes, numeric booleans and double round trips");
+		duckdb_destroy_result(&res);
+	}
+	{
+		duckdb_result res;
+		duckdb_query(conn, "SELECT x, d FROM (VALUES (1.5::DOUBLE, DATE '2026-11-05'), ('NaN'::DOUBLE, DATE 'infinity')) v(x,d)", &res);
+		std::vector<DuckDBMySQLColumn> columns;
+		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&res, nullptr, false, &columns));
+		ok(r && r->rows_count == 2 && columns.size() == 2 && columns[0].type == MYSQL_TYPE_VAR_STRING &&
+		   columns[1].type == MYSQL_TYPE_VAR_STRING && columns[1].length == 10 &&
+		   field_equals(r.get(),0,0,"1.5") && field_equals(r.get(),1,0,"nan") && field_equals(r.get(),1,1,"infinity"),
+		   "a later exceptional value changes the entire column to text without losing earlier lengths or values");
+		duckdb_destroy_result(&res);
+	}
+	{
+		duckdb_result res;
+		duckdb_query(conn, "SELECT NULL::BLOB, ''::VARCHAR", &res);
+		std::vector<DuckDBMySQLColumn> columns;
+		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&res, nullptr, false, &columns));
+		ok(r && columns.size() == 2 && columns[0].length == 0 && columns[1].length == 0 &&
+		   r->rows[0]->fields[0] == nullptr && r->rows[0]->fields[1] != nullptr && r->rows[0]->sizes[1] == 0,
+		   "typed metadata distinguishes SQL NULL from an empty string even with zero observed byte lengths");
+		duckdb_destroy_result(&res);
+	}
 
 	duckdb_disconnect(&conn);
 	duckdb_close(&db);

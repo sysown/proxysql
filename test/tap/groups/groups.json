@@ -621,6 +621,7 @@
   "test_duckdb_e2e_mysql-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],
   "test_duckdb_e2e_pgsql-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],
   "test_duckdb_mysql_compat-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],
+  "test_duckdb_mysql_types-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],
   "test_duckdb_replica-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],
   "test_duckdb_replica_recovery-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],
   "test_duckdb_replica_bench-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],

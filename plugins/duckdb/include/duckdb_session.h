@@ -2,6 +2,7 @@
 #define DUCKDB_SESSION_H
 
 #include "duckdb.h"
+#include "duckdb_result.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -97,27 +98,21 @@ struct DuckDBExecOutcome {
 	duckdb_error_type error_type { DUCKDB_ERROR_INVALID };
 	bool has_resultset { false };        // true: `result` holds the resultset to send
 	SQLite3_result* result { nullptr };  // caller-owned when has_resultset; nullptr otherwise
+	std::vector<DuckDBMySQLColumn> mysql_columns;
 	int affected_rows { 0 };             // meaningful only when ok && !has_resultset
 };
 
-// Runs `effective` (already intercept-rewritten DuckDB SQL) on `conn`
-// and applies the DDL/DML/QUERY_RESULT dispatch (C2, via
-// duckdb_result_return_type()) and the unrenderable-column rewrap (C3).
+// Executes `effective` once on `conn`, dispatching DDL/DML versus query rows.
+// Unsupported output types are detected before execution. Query projections
+// can be wrapped as text; MySQL preserves supported scalar columns beside
+// those casts, while PostgreSQL retains its existing all-text wrapper.
+// Unsupported unwrappable MySQL output is rejected before mutation.
 //
-// C3 is decided from a *prepared* statement's column types -- via
-// duckdb_prepared_statement_column_type() and
-// duckdb_type_renders_as_text() (duckdb_result.h) -- BEFORE anything is
-// executed, so `effective` runs exactly once no matter which way the
-// decision goes. There used to be a lexical "is this safe to run a
-// second time" gate (duckdb_is_safe_to_rewrap) here; it is gone because
-// nothing is ever run a second time any more, so it had nothing left to
-// guard -- see the long comment on duckdb_execute_effective's
-// definition for the full reasoning, including why a bare DML statement
-// can never reach the wrapped-execution path at all (it fails to
-// *parse* as `SELECT COLUMNS(*)::VARCHAR FROM (<stmt>)`, so the decision
-// falls back to the original statement before anything runs).
+// mysql_types collects native MySQL descriptors and enables numeric booleans
+// and round-trip floating-point formatting. mysql_booleans independently
+// supports the earlier numeric-boolean conversion path without descriptors.
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
-                                               bool mysql_booleans = false);
+                                               bool mysql_booleans = false, bool mysql_types = false);
 
 // Recognizes client SET statements that target the Admin-managed engine-wide
 // settings (memory_limit, threads, enable_external_access, access_mode) and
