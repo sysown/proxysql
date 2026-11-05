@@ -269,8 +269,47 @@ static void test_substitute() {
 	ok(feed(reg2, '1', "", out) == Extq_Verdict::BAD, "substitute: a failing Parse that succeeds is a protocol violation");
 }
 
+// A batch sent for a client Flush (hold_ready_after_error()): no ReadyForQuery that ends it is the
+// client's, which gets one at its own Sync -- with or without an error, whether the Sync was rendered
+// with the batch or sent after the error.
+static void test_client_flush() {
+	const std::string own_error("E\0\0\0\x0cS26000\0\0", 13);
+	std::string out;
+
+	// ProxySQL's own error (P P(same name) H): the batch carrying it ends in the implicit Sync.
+	PgSQL_Extq_Registry reg;
+	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::RELAY, 0));
+	reg.push(slot(Extq_Kind::PARSE, Extq_Reply::SUBSTITUTE, 1, own_error));
+	reg.push(slot(Extq_Kind::SYNC, Extq_Reply::DROP, 2));
+	reg.hold_ready_after_error();
+	reg.start(out);
+	feed(reg, '1', "", out);
+	feed(reg, 'E', "backend error", out);
+	ok(feed(reg, 'Z', "I", out) == Extq_Verdict::DROP && reg.complete(),
+		"client flush: after ProxySQL's own error the implicit Sync's ReadyForQuery is dropped");
+
+	// A batch cut short without a Sync, then a backend error: the connection sends the Sync.
+	PgSQL_Extq_Registry reg2;
+	reg2.push(slot(Extq_Kind::PARSE, Extq_Reply::RELAY, 0));
+	reg2.hold_ready_after_error();
+	reg2.start(out);
+	feed(reg2, 'E', "syntax error", out);
+	ok(reg2.needs_sync(), "client flush, cut short: a Sync must be sent after the error");
+	reg2.sync_sent();
+	ok(feed(reg2, 'Z', "I", out) == Extq_Verdict::DROP && reg2.complete(),
+		"client flush, cut short: the ReadyForQuery of the Sync sent after the error is dropped");
+
+	// clear() forgets it: the next batch's ReadyForQuery after an error is relayed again.
+	reg2.clear();
+	reg2.push(slot(Extq_Kind::EXECUTE, Extq_Reply::RELAY, 0));
+	reg2.start(out);
+	feed(reg2, 'E', "err", out);
+	reg2.sync_sent();
+	ok(feed(reg2, 'Z', "I", out) == Extq_Verdict::RELAY, "client flush: clear() drops the hold");
+}
+
 int main() {
-	plan(46);
+	plan(50);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 	test_plain_unit();             // 8
@@ -284,6 +323,7 @@ int main() {
 	test_all_local();              // 1
 	test_suspended_execute();      // 4
 	test_substitute();             // 5
+	test_client_flush();           // 4
 	test_cleanup_minimal();
 	return exit_status();
 }

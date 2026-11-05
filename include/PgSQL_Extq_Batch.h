@@ -60,6 +60,10 @@ public:
 	// gets one, so the caller sends a Sync and then calls sync_sent().
 	bool needs_sync() const { return need_sync_ && !sync_sent_; }
 	void sync_sent() { sync_sent_ = true; }
+	// The batch was sent for a client Flush: after an error the ReadyForQuery that ends it -- of the
+	// Sync it was rendered with, or of the one sent after the error (sync_sent()) -- is not the
+	// client's, which gets one at its own Sync.
+	void hold_ready_after_error() { hold_ready_after_error_ = true; }
 private:
 	void emit_due(std::string& out);
 	void on_error();
@@ -73,6 +77,7 @@ private:
 	bool aborted_ = false;       // an ErrorResponse came; only ReadyForQuery may follow
 	bool need_sync_ = false;
 	bool sync_sent_ = false;
+	bool hold_ready_after_error_ = false;
 	bool saw_param_desc_ = false;
 	uint64_t rows_ = 0;
 	uint64_t affected_rows_ = UINT64_MAX;

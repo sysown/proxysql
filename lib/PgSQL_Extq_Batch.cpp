@@ -9,6 +9,7 @@ void PgSQL_Extq_Registry::clear() {
 	aborted_ = false;
 	need_sync_ = false;
 	sync_sent_ = false;
+	hold_ready_after_error_ = false;
 	saw_param_desc_ = false;
 	rows_ = 0;
 	affected_rows_ = UINT64_MAX;
@@ -110,7 +111,9 @@ Extq_Verdict PgSQL_Extq_Registry::on_message(char type, const unsigned char* pay
 			return Extq_Verdict::BAD;
 		}
 		complete_ = true;
-		return Extq_Verdict::RELAY;
+		// Unless the batch was sent for a client Flush: whether its Sync was rendered or added after
+		// the error (sync_sent()), the client's own Sync gets its ReadyForQuery.
+		return hold_ready_after_error_ ? Extq_Verdict::DROP : Extq_Verdict::RELAY;
 	}
 	if (slots_.empty()) {
 		return Extq_Verdict::BAD;
