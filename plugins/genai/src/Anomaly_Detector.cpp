@@ -151,7 +151,8 @@ std::string Anomaly_Detector::normalize_query(const std::string& query) {
 	std::transform(normalized.begin(), normalized.end(), normalized.begin(), ::tolower);
 
 	// Remove SQL comments
-	std::regex comment_regex("--.*?$|/\\*.*?\\*/", std::regex::multiline);
+	// Match line endings explicitly: older C++17 libraries lack multiline.
+	std::regex comment_regex("--[^\\r\\n]*|/\\*.*?\\*/");
 	normalized = std::regex_replace(normalized, comment_regex, "");
 
 	// Replace string literals with placeholder

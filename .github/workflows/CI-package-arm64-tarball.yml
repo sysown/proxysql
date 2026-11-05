@@ -134,7 +134,7 @@ jobs:
         uploaded=0
         for f in binaries/proxysql-*.tar.gz binaries/proxysql-*.tar.gz.sha256; do
           FNAME=$(basename "$f")
-          EXISTING=$(gh api "repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" \
+          EXISTING=$(gh api --paginate "repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?per_page=100" \
             --jq ".[] | select(.name==\"${FNAME}\") | .id" | head -1)
           if [ -n "$EXISTING" ]; then
             echo "Replacing existing asset ${FNAME} (id=${EXISTING})"
