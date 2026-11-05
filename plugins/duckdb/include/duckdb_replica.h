@@ -195,7 +195,8 @@ private:
 	void thread_main(Work work);
 	void publish(const DuckDBReplicaStatus& next);
 	void note_snapshot(const std::string& table, uint64_t rows);
-	void note_apply(uint64_t rows, uint64_t batches, int64_t lag);
+	void note_apply(uint64_t rows, uint64_t batches, int64_t lag,
+	                const DuckDBReplicaProbeResult& position);
 	void finish_stopped(DuckDBReplicaStatus next);
 	void watch_connection(void* conn);
 	void interrupt_snapshot();

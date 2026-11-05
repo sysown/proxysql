@@ -43,6 +43,16 @@ bool numeric_text_ok(const std::string& text) {
 
 } // namespace
 
+bool duckdb_replica_full_row_images(const uint8_t* before, const uint8_t* after,
+                                    uint32_t columns, bool update) {
+	if (columns == 0 || before == nullptr || (update && after == nullptr)) return false;
+	for (uint32_t i = 0; i < columns; ++i) {
+		const uint8_t bit = 1u << (i % 8);
+		if (!(before[i / 8] & bit) || (update && !(after[i / 8] & bit))) return false;
+	}
+	return true;
+}
+
 std::string duckdb_replica_value_literal(const DuckDBReplicaValue& value, std::string& err) {
 	switch (value.kind) {
 	case DuckDBReplicaValue::Kind::null:

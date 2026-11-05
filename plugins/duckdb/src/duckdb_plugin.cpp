@@ -111,6 +111,15 @@ bool duckdb_start() {
 			}
 		}
 	}
+	if (ctx.replica && ctx.replica->installed_config().enabled_source() != nullptr) {
+		DuckDBReplicaStartRequest request;
+		request.database_path = ctx.engine->database_path();
+		request.read_only = ctx.config_store->read_only();
+		request.engine = ctx.engine.get();
+		if (!ctx.replica->start(request, err)) {
+			log_error("duckdb: replica startup failed: " + err);
+		}
+	}
 	return true;
 }
 

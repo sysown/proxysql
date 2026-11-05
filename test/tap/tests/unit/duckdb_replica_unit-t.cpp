@@ -1,9 +1,13 @@
 #include "duckdb_replica.h"
 #include "duckdb_replica_binlog.h"
 #include "tap.h"
+#include <mysql.h>
+#include <mariadb_rpl.h>
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <thread>
@@ -53,7 +57,87 @@ DuckDBReplicaStartRequest file_request() {
 } // namespace
 
 int main() {
-	plan(39);
+	plan(55);
+	const uint8_t full = 0xff, padded = 0x7f, partial = 0x3f;
+	ok(duckdb_replica_full_row_images(&full, &full, 7, true), "full UPDATE bitmaps are accepted");
+	ok(duckdb_replica_full_row_images(&padded, &full, 7, true), "unused bitmap padding bits are ignored");
+	ok(!duckdb_replica_full_row_images(&full, &partial, 7, true), "partial UPDATE after image is rejected before decoding");
+	ok(!duckdb_replica_full_row_images(&partial, nullptr, 7, false), "partial INSERT or DELETE image is rejected");
+	ok(!duckdb_replica_full_row_images(&full, nullptr, 7, true), "missing UPDATE after bitmap is rejected");
+	ok(!duckdb_replica_full_row_images(nullptr, nullptr, 7, false), "missing row bitmap is rejected");
+	for (unsigned year : {0u, 1u}) {
+		MARIADB_RPL rpl {};
+		MARIADB_RPL_EVENT map {};
+		map.event_type = TABLE_MAP_EVENT;
+		map.event.table_map.table_id = 1;
+		map.event.table_map.column_count = 2;
+		char types[] = {MYSQL_TYPE_YEAR, MYSQL_TYPE_LONG};
+		map.event.table_map.column_types = {types, sizeof(types)};
+		auto* event = static_cast<MARIADB_RPL_EVENT*>(std::calloc(1, sizeof(MARIADB_RPL_EVENT)));
+		event->event_type = WRITE_ROWS_EVENT;
+		event->event.rows.table_id = 1;
+		unsigned char bytes[] = {0, static_cast<unsigned char>(year), 42, 0, 0, 0};
+		event->event.rows.row_data = bytes;
+		event->event.rows.row_data_size = sizeof(bytes);
+		MARIADB_RPL_ROW* row = mariadb_rpl_extract_rows(&rpl, &map, event);
+		ok(row && !row->next && row->columns[0].val.ull == (year ? 1901 : 0) && row->columns[1].val.ull == 42,
+		   "YEAR encoded byte %u preserves zero or the 1900 offset", year);
+		mariadb_free_rpl_event(event);
+	}
+
+	// Bytes copied from MySQL's big-endian TIMESTAMP2 format, followed by
+	// an integer sentinel so an incorrect fractional byte count is visible.
+	const unsigned micros[] = {0, 100000, 120000, 123000, 123400, 123450, 123456};
+	for (unsigned precision = 0; precision <= 6; ++precision) {
+		MARIADB_RPL rpl {};
+		MARIADB_RPL_EVENT map {};
+		map.event_type = TABLE_MAP_EVENT;
+		map.event.table_map.table_id = 1;
+		map.event.table_map.column_count = 2;
+		char types[] = {MYSQL_TYPE_TIMESTAMP2, MYSQL_TYPE_LONG};
+		char metadata[] = {static_cast<char>(precision)};
+		map.event.table_map.column_types = {types, sizeof(types)};
+		map.event.table_map.metadata = {metadata, sizeof(metadata)};
+		auto* event = static_cast<MARIADB_RPL_EVENT*>(std::calloc(1, sizeof(MARIADB_RPL_EVENT)));
+		event->event_type = WRITE_ROWS_EVENT;
+		event->event.rows.table_id = 1;
+		unsigned char bytes[32] = {0, 0x6a, 0xeb, 0xd5, 0x8b}; // 1793840523 seconds
+		const unsigned n = (precision + 1) / 2;
+		unsigned fraction = micros[precision] / (n == 1 ? 10000 : n == 2 ? 100 : 1);
+		for (unsigned j = 0; j < n; ++j) bytes[5 + j] = fraction >> (8 * (n - j - 1));
+		bytes[5 + n] = 42;
+		event->event.rows.row_data = bytes;
+		event->event.rows.row_data_size = 9 + n;
+		MARIADB_RPL_ROW* row = mariadb_rpl_extract_rows(&rpl, &map, event);
+		char expected[32];
+		std::snprintf(expected, sizeof(expected), "1793840523.%06u", micros[precision]);
+		ok(row && row->next == nullptr && row->columns[1].val.ull == 42 &&
+		   std::string(row->columns[0].val.str.str, row->columns[0].val.str.length) == expected,
+		   "TIMESTAMP2(%u) decodes big-endian seconds, scaled microseconds and next column", precision);
+		mariadb_free_rpl_event(event);
+	}
+	{
+		MARIADB_RPL rpl {};
+		MARIADB_RPL_EVENT map {};
+		map.event_type = TABLE_MAP_EVENT;
+		map.event.table_map.table_id = 1;
+		map.event.table_map.column_count = 2;
+		char types[] = {static_cast<char>(MYSQL_TYPE_NEWDECIMAL), MYSQL_TYPE_LONG};
+		char metadata[] = {18, 4};
+		map.event.table_map.column_types = {types, sizeof(types)};
+		map.event.table_map.metadata = {metadata, sizeof(metadata)};
+		auto* event = static_cast<MARIADB_RPL_EVENT*>(std::calloc(1, sizeof(MARIADB_RPL_EVENT)));
+		event->event_type = WRITE_ROWS_EVENT;
+		event->event.rows.table_id = 1;
+		unsigned char bytes[] = {0, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xfc, 0x24, 0xe6, 0x70, 42, 0, 0, 0};
+		event->event.rows.row_data = bytes;
+		event->event.rows.row_data_size = sizeof(bytes);
+		MARIADB_RPL_ROW* row = mariadb_rpl_extract_rows(&rpl, &map, event);
+		ok(row && !row->next && row->columns[1].val.ull == 42 &&
+		   std::string(row->columns[0].val.str.str, row->columns[0].val.str.length) == "-987.6543",
+		   "negative DECIMAL(18,4) sign-extends its three-byte group without corrupting memory");
+		mariadb_free_rpl_event(event);
+	}
 
 	DuckDBReplicaMappedColumn column;
 	ok(duckdb_replica_map_column("id", "int", "int(10) unsigned", "", "PRI", false, column).empty() &&

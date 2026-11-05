@@ -438,7 +438,7 @@ __attribute__((weak))
 DuckDBReplicaApplyResult duckdb_replica_apply_binlog(
 	DuckDBEngine&, const DuckDBReplicaSource&, const std::vector<DuckDBReplicaTable>&,
 	const DuckDBReplicaProbeResult&, const std::function<bool()>&,
-	const std::function<void(uint64_t, uint64_t, int64_t)>&) {
+	const std::function<void(uint64_t, uint64_t, int64_t, const DuckDBReplicaProbeResult&)>&) {
 	DuckDBReplicaApplyResult result;
 	result.code = DuckDBReplicaApplyResult::Code::failed;
 	result.error = "binlog applier is not linked";
@@ -460,12 +460,16 @@ void DuckDBReplica::note_snapshot(const std::string& table, uint64_t rows) {
 	status_cv_.notify_all();
 }
 
-void DuckDBReplica::note_apply(uint64_t rows, uint64_t batches, int64_t lag) {
+void DuckDBReplica::note_apply(uint64_t rows, uint64_t batches, int64_t lag,
+                               const DuckDBReplicaProbeResult& position) {
 	std::lock_guard<std::mutex> lock(status_mutex_);
 	status_.state = "applying";
 	status_.rows_applied = rows;
 	status_.batches = batches;
 	status_.seconds_behind_source = lag;
+	status_.binlog_file = position.binlog_file;
+	status_.binlog_pos = position.binlog_pos;
+	status_.gtid_executed = position.gtid_executed;
 	status_.snapshot_table.clear();
 	status_.detail = "applying binlog";
 	status_cv_.notify_all();
@@ -573,9 +577,10 @@ void DuckDBReplica::thread_main(Work work) {
 				const DuckDBReplicaApplyResult applied = duckdb_replica_apply_binlog(
 					*work.engine, work.source, work.tables, loaded.position,
 					[this] { return stop_requested(); },
-					[this](uint64_t rows, uint64_t batches, int64_t lag) {
-						note_apply(rows, batches, lag);
+					[this](uint64_t rows, uint64_t batches, int64_t lag, const DuckDBReplicaProbeResult& position) {
+						note_apply(rows, batches, lag, position);
 					});
+				next = copy_status();
 				if (applied.code == DuckDBReplicaApplyResult::Code::stopped || stop_requested()) {
 					finish_stopped(next);
 					return;

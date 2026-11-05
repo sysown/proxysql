@@ -1,7 +1,7 @@
 # DuckDB MySQL Replica — Design and Handoff
 
 Date: 2026-11-05
-Status: implementation in progress
+Status: applier live-validated; compatibility and hardening next; internal routing deferred
 Branch: `feature/duckdb-mysql-replica`
 Worktree: `/mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica`
 Base: `v3.0` at `e2f317aba`
@@ -18,10 +18,12 @@ server deleted. ProxySQL keeps one client listener, one set of credentials,
 one query-rule table, and one Admin interface. An embedded DuckDB replica is
 fed from the MySQL binlog and is addressable from the same query rules.
 
-This document covers **sub-project 1: the MySQL replica applier**. Routing
-`SELECT`s to the replica (an internal query-rule destination) and the MySQL
-dialect translator are explicitly **not** part of this document. They are the
-next sub-projects and are listed in section 10.
+This document covers **sub-project 1: the MySQL replica applier**. Existing
+query rules can route analytical reads to a backend hostgroup pointing to the
+same ProxySQL instance's DuckDB MySQL listener on a different port. A dedicated
+internal query-rule destination and automatic lag-aware fallback are deferred
+and may never be needed. MySQL dialect compatibility and further applier
+hardening are the next workstreams listed in section 10.
 
 The plugin itself (DuckDB engine, MySQL/PostgreSQL listeners, `duckdb-*`
 variables, snapshot loader) already exists on `v3.0`. This branch extends it;
@@ -106,7 +108,8 @@ binlog_pos, seconds_behind_source, last_error, detail, snapshot_table,
 rows_applied, batches`.
 
 States: `stopped`, `checking`, `snapshotting`, `snapshotted`, `applying`,
-`error`. `error` is sticky until `STOP`.
+`error`. `error` is sticky until `STOP`. On ProxySQL startup, an enabled source
+restored from Disk starts automatically and resumes its durable position.
 
 ## 5. Source requirements
 
@@ -121,7 +124,8 @@ Checked by `duckdb_replica_probe_mysql` before any snapshot:
 - `binlog_transaction_compression=OFF` (accepted if the variable is absent)
 - source `server_id` != replica `server_id`
 
-The applier additionally re-checks the row-event column bitmap, because
+The applier additionally re-checks both UPDATE row-image bitmaps (and the
+single INSERT/DELETE bitmap), because
 `binlog_row_image` can change at runtime and the connector's row decoder
 ignores partial images.
 
@@ -160,8 +164,8 @@ A source `server_uuid` change since the snapshot is an error; the operator must
   by the next fetch.
 - Rows are decoded with `mariadb_rpl_extract_rows`, which returns typed values
   (`MARIADB_RPL_VALUE`). We do not hand-parse row images.
-- `UPDATE_ROWS` is assumed to yield before/after pairs in that order. **This is
-  one of the two things the end-to-end test must confirm.**
+- `UPDATE_ROWS` yields before/after pairs in that order, confirmed by the live
+  multi-row primary-key-changing UPDATE test.
 - Row statements are buffered per source transaction and only appended to the
   apply batch on `XID`/`COMMIT`. `ROLLBACK` discards the buffer.
 - Flush triggers: 50,000 statements, 64 MB of SQL, or 200 ms since the last
@@ -201,7 +205,9 @@ path; prepared statements with bound values are the follow-up.
 | `plugins/duckdb/src/duckdb_replica_snapshot.cpp` | Locked snapshot, appender load, position |
 | `plugins/duckdb/src/duckdb_replica_values.cpp` | SQL literals, GTID interval set |
 | `plugins/duckdb/src/duckdb_replica_binlog.cpp` | Dump stream, row decode, batching, apply |
-| `test/tap/tests/unit/duckdb_replica_unit-t.cpp` | Type mapping, literals, GTID, lifecycle |
+| `test/tap/tests/unit/duckdb_replica_unit-t.cpp` | Type mapping, literals, GTID, lifecycle, decoder regressions |
+| `test/tap/tests/test_duckdb_replica-t.cpp` | Live MySQL 8.4 snapshot, apply, rotation, restart and failure recovery |
+| `deps/mariadb-client-library/mariadb_rpl_rows.patch` | Connector row decoding and ROTATE fixes |
 
 Wiring: `duckdb_plugin.cpp` registers the replica admin schema, installs the
 config at start, joins the replica in `stop()` before the engine closes, and
@@ -213,34 +219,49 @@ Build: `plugins/duckdb/Makefile` adds the new sources and links
 
 ## 9. Validation status
 
-Done in this branch:
+Validated on 2026-11-05 against a dedicated MySQL **8.4.8** InnoDB source
+and the real DuckDB **1.4.5** / MariaDB Connector/C **3.3.8** libraries:
 
-- `duckdb_replica_values.cpp`, `duckdb_replica_types.cpp`,
-  `duckdb_replica.cpp`, `duckdb_replica_snapshot.cpp`,
-  `duckdb_replica_binlog.cpp`, `duckdb_replica_admin.cpp`, and
-  `duckdb_plugin.cpp` compile with `-fsyntax-only` against the real DuckDB
-  1.4.5 and MariaDB Connector/C 3.3.8 headers.
-- The unit test file compiles.
-- A standalone run of the pure logic asserts:
-  - `'O''Reilly'` escaping
-  - `from_hex('01ff')` for blobs
-  - non-numeric decimal text is refused
-  - NUL in VARCHAR is refused
-  - GTID interval compression (`u:1-2,u:4`)
-  - `u:1-1000000000` parses in constant time
-  - `int unsigned` -> `UINTEGER`
-  - JSON is refused
+- The PROXYSQL40 core, DuckDB plugin, replica TAP test and seven DuckDB unit
+  binaries build and link.
+- The live replica TAP scenario passes **24 assertions**, separately with
+  `binlog_checksum=NONE` and `binlog_checksum=CRC32`.
+- The seven DuckDB unit binaries pass **290 assertions** in total, including
+  **55** in `duckdb_replica_unit-t`.
+- Existing Admin-table TAP coverage passes 22 assertions; the MySQL listener
+  TAP test passes 17. The PostgreSQL listener TAP test still fails assertions
+  19..24 (extended-query rejection). The same six failures reproduce with
+  the plugin built from base revision `e2f317aba`; they predate this work.
+- Live coverage includes typed snapshot and DML, multi-row UPDATE pairing,
+  primary-key changes, rollback, filtering an unrelated JSON table, binlog
+  rotation, source file/position/GTID agreement, committed Admin statistics,
+  automatic restart without duplicates, continued apply, sticky DDL error
+  with an unchanged checkpoint, RESET/resnapshot, and rejection of a partial
+  UPDATE after image with a full before image.
+- Decoder regressions cover every TIMESTAMP2 fractional precision (0..6),
+  negative DECIMAL groups, and YEAR zero. Existing mapping, literal, GTID and
+  lifecycle coverage remains in place.
 
-**Not done:** a live MySQL 8.4 run. The applier has never decoded a real
-binlog event in this environment. The update before/after pairing and
-`ROTATE`/position handling are assumptions until the end-to-end test below
-passes.
+The live run forced fixes for bitmap padding, heartbeat v2, signed integers,
+checksum negotiation, committed statistics and automatic startup. The
+connector patch fixes TIMESTAMP2 byte order/fractional widths, UPDATE v2's
+second bitmap, signed three-byte decimal groups, YEAR zero, and checksum-aware
+ROTATE filename lengths. Both images are validated before connector decoding.
+Unselected tables retain their TABLE_MAP even when their types are unsupported.
+The existing listener/admin-schema unit targets now link the replica sources.
+
+This is functional validation of the tested source and types; crash injection,
+large positions above 4 GB, load/performance tests, and platform packaging
+validation remain outstanding. A source schema matching the DuckDB file's
+catalog name can trigger DuckDB's two-part-name ambiguity; use a distinct
+DuckDB database filename until qualification is hardened.
 
 ## 10. Next steps, in order
 
-### 10.1 End-to-end replica test (blocking)
+### 10.1 End-to-end replica test (completed)
 
-Add `test/tap/tests/test_duckdb_replica-t.cpp` to `duckdb-e2e-g1`:
+Implemented `test/tap/tests/test_duckdb_replica-t.cpp` in `duckdb-e2e-g1`.
+The group now provisions `infra-dbdeployer-mysql84-binlog`:
 
 1. Start the existing MySQL 8.4 infra with GTID + ROW + FULL.
 2. Create `app.events` with a primary key and a few types (int, decimal,
@@ -258,23 +279,33 @@ Add `test/tap/tests/test_duckdb_replica-t.cpp` to `duckdb-e2e-g1`:
 Acceptance: no gap, no duplicate, and the position is never ahead of the
 applied data.
 
-### 10.2 Fixes the test is expected to force
+### 10.2 Decoder and position assumptions (resolved for tested cases)
 
-- Confirm `mariadb_rpl_extract_rows` update row ordering.
-- Confirm `ROTATE` handling when a binlog file rolls during the test.
-- Confirm `TIMESTAMP2` text format from the connector.
-- Decide whether `binlog_row_metadata=FULL` should be required (it would make
-  `signed_indicator` and enum labels available).
+- UPDATE before/after ordering and primary-key changes pass live validation.
+- ROTATE is tested with both NONE and CRC32 checksums, followed by restart
+  from the new file's durable position.
+- TIMESTAMP2 is rendered by the patched connector as seconds plus six-digit
+  microseconds; precision 0..6 has direct decoder tests.
+- `binlog_row_metadata=FULL` is not required for the supported type subset:
+  signedness comes from snapshot column types, and ENUM/SET remain rejected.
 
-### 10.3 After the applier is trusted
+### 10.3 Next workstreams
 
-1. **Internal query-rule destination.** A rule action that sends a statement
-   to the embedded engine instead of a backend, with lag-aware fallback to the
-   primary. Acceptance: MyDuck's three-rule demo works with no `myduck`
-   server.
-2. **MySQL analytical translator.** The bounded `SELECT` subset; fail or fall
-   back on anything else.
-3. **Typed results and prepared statements** on the proxy listener path.
+Routing decision (2026-11-05): use regular `mysql_servers` hostgroups and query
+rules to target this instance's DuckDB MySQL listener. Internal query-rule
+routing with automatic lag-aware fallback is deferred indefinitely; it is not
+a prerequisite for the work below. This topology still needs an integration
+check through the regular ProxySQL listener, including backend authentication
+and session setup.
+
+1. **Applier hardening.** Fix catalog/schema-name ambiguity; test abrupt crash
+   recovery and concurrent writes during snapshot; validate large positions,
+   read-only protection, performance, and platform packaging.
+2. **MySQL analytical compatibility.** Define and implement a bounded
+   `SELECT` subset on the DuckDB listener, with explicit errors for unsupported
+   statements. The initial workload still needs to be selected.
+3. **Typed results and prepared statements** on the DuckDB MySQL listener,
+   carried through ordinary backend routing.
 4. **Bulk load** (`LOAD DATA LOCAL INFILE`, `COPY FROM STDIN`).
 5. **Postgres logical replication** into the same engine.
 
@@ -295,9 +326,14 @@ applied data.
 # build (from the worktree root)
 PROXYSQL40=1 make
 
-# unit test
+# replica unit test
 make -C test/tap/tests/unit duckdb_replica_unit-t
 ./test/tap/tests/unit/duckdb_replica_unit-t
+
+# live test (dedicated source; restarts ProxySQL during the test)
+make -C test/tap/tests test_duckdb_replica-t
+# Supply the standard TAP_* listener and TAP_MYSQL* source credentials.
+./test/tap/tests/test_duckdb_replica-t
 
 # syntax check used during development (headers extracted from deps)
 g++ -std=c++17 -fsyntax-only -Iplugins/duckdb/include -I/tmp/opencode/duckdbinc \
@@ -319,6 +355,7 @@ for the compile check.
 - [x] DDL stops the replica
 - [x] Type mapping and value literals
 - [x] Unit test for pure logic
-- [ ] Live MySQL 8.4 end-to-end test
-- [ ] Query-rule destination
-- [ ] MySQL translator
+- [x] Live MySQL 8.4 end-to-end test (NONE and CRC32 checksums)
+- [ ] Applier hardening
+- [ ] MySQL compatibility
+- [ ] Internal query-rule destination (deferred indefinitely)

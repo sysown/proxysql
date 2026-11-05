@@ -214,7 +214,7 @@ endif
 check-duckdb-archives: $(DUCKDB_AR)
 	@sh $(DUCKDB_ARCHIVE_LISTER) $(DUCKDB_PATH)/build/release >/dev/null
 
-$(PLUGIN_SO): $(OBJS) $(DUCKDB_AR) $(DUCKDB_ARCHIVE_LISTER) Makefile | check-duckdb-archives
+$(PLUGIN_SO): $(OBJS) $(DUCKDB_AR) $(DUCKDB_ARCHIVE_LISTER) $(MARIADB_LDIR)/libmariadbclient.a Makefile | check-duckdb-archives
 	@duckdb_archives=$$(sh $(DUCKDB_ARCHIVE_LISTER) $(DUCKDB_PATH)/build/release) || exit $$?; \
 	$(CXX) $(SHARED_FLAGS) -o $@ $(OBJS) $(CXXFLAGS) -pthread \
 		$(DUCKDB_LINK_GROUP_START) $$duckdb_archives $(DUCKDB_LINK_GROUP_END) \

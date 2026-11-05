@@ -12,6 +12,11 @@
 
 class DuckDBEngine;
 
+// The connector decodes full images only; UPDATE must include every column
+// in both bitmaps. Padding bits in the final bitmap byte are ignored.
+bool duckdb_replica_full_row_images(const uint8_t* before, const uint8_t* after,
+                                    uint32_t columns, bool update);
+
 // A decoded binlog value, kept independent of the MariaDB connector types so
 // the literal builder can be unit-tested without a server or a dump.
 struct DuckDBReplicaValue {
@@ -67,6 +72,6 @@ DuckDBReplicaApplyResult duckdb_replica_apply_binlog(
 	const std::vector<DuckDBReplicaTable>& tables,
 	const DuckDBReplicaProbeResult& start,
 	const std::function<bool()>& stop_requested,
-	const std::function<void(uint64_t, uint64_t, int64_t)>& progress);
+	const std::function<void(uint64_t, uint64_t, int64_t, const DuckDBReplicaProbeResult&)>& progress);
 
 #endif // DUCKDB_REPLICA_BINLOG_H

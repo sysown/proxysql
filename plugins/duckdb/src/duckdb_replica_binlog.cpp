@@ -155,19 +155,33 @@ DuckDBReplicaValue decode_value(const MARIADB_RPL_VALUE& value,
 	case MYSQL_TYPE_SHORT:
 	case MYSQL_TYPE_INT24:
 	case MYSQL_TYPE_LONG:
-	case MYSQL_TYPE_LONGLONG:
+	case MYSQL_TYPE_LONGLONG: {
+		// Connector/C fills the union with the unsigned representation, even
+		// for signed narrow columns. Recover the sign using snapshot metadata.
+		int64_t signed_value = value.val.ll;
+		switch (mysql_type) {
+		case MYSQL_TYPE_TINY: signed_value = static_cast<int8_t>(value.val.ull); break;
+		case MYSQL_TYPE_SHORT: signed_value = static_cast<int16_t>(value.val.ull); break;
+		case MYSQL_TYPE_INT24:
+			signed_value = static_cast<int64_t>(value.val.ull & 0xffffff) -
+				((value.val.ull & 0x800000) ? 0x1000000 : 0);
+			break;
+		case MYSQL_TYPE_LONG: signed_value = static_cast<int32_t>(value.val.ull); break;
+		default: break;
+		}
 		if (varchar_target) {
 			out.kind = DuckDBReplicaValue::Kind::text;
 			out.text = std::to_string(unsigned_target ? static_cast<unsigned long long>(value.val.ull)
-			                                          : static_cast<long long>(value.val.ll));
+			                                          : static_cast<long long>(signed_value));
 		} else if (unsigned_target && value.val.ull > static_cast<uint64_t>(INT64_MAX)) {
 			out.kind = DuckDBReplicaValue::Kind::decimal_text;
 			out.text = std::to_string(static_cast<unsigned long long>(value.val.ull));
 		} else {
 			out.kind = DuckDBReplicaValue::Kind::integer;
-			out.integer = unsigned_target ? static_cast<int64_t>(value.val.ull) : value.val.ll;
+			out.integer = unsigned_target ? static_cast<int64_t>(value.val.ull) : signed_value;
 		}
 		break;
+	}
 	case MYSQL_TYPE_FLOAT:
 		out.kind = DuckDBReplicaValue::Kind::real;
 		out.real = value.val.f;
@@ -313,8 +327,8 @@ public:
 	        const std::vector<DuckDBReplicaTable>& tables,
 	        const DuckDBReplicaProbeResult& start,
 	        const std::function<bool()>& stop_requested,
-	        const std::function<void(uint64_t, uint64_t, int64_t)>& progress)
-		: engine_(engine), source_(source), tables_(tables), start_(start),
+	        const std::function<void(uint64_t, uint64_t, int64_t, const DuckDBReplicaProbeResult&)>& progress)
+		: engine_(engine), source_(source), tables_(tables), start_(start), applied_position_(start),
 		  stop_requested_(stop_requested), progress_(progress) {}
 	~Applier() {
 		if (rpl_ != nullptr) mariadb_rpl_close(rpl_);
@@ -340,8 +354,9 @@ private:
 	const DuckDBReplicaSource& source_;
 	const std::vector<DuckDBReplicaTable>& tables_;
 	DuckDBReplicaProbeResult start_;
+	DuckDBReplicaProbeResult applied_position_;
 	const std::function<bool()>& stop_requested_;
-	const std::function<void(uint64_t, uint64_t, int64_t)>& progress_;
+	const std::function<void(uint64_t, uint64_t, int64_t, const DuckDBReplicaProbeResult&)>& progress_;
 
 	duckdb_connection conn_ { nullptr };
 	MYSQL* mysql_ { nullptr };
@@ -398,6 +413,7 @@ bool Applier::connect_source(std::string& err) {
 	}
 	const char* setup[] = {
 		"SET NAMES utf8mb4",
+		"SET @master_binlog_checksum = @@global.binlog_checksum",
 		"SET @master_heartbeat_period = 1000000000",
 	};
 	for (const char* sql : setup) {
@@ -562,8 +578,7 @@ bool Applier::handle_table_map(const MARIADB_RPL_EVENT& event, std::string& err)
 	const bool wanted = wanted_.count(key) != 0;
 	for (uint32_t i = 0; i < map.column_count; ++i) {
 		const uint8_t type = static_cast<uint8_t>(map.column_types[i]);
-		if (!supported_binlog_type(type)) {
-			if (!wanted) return true; // filtered out
+		if (wanted && !supported_binlog_type(type)) {
 			err = "table " + key + " has a column type the replica cannot decode (" +
 				std::to_string(static_cast<int>(type)) + ")";
 			return false;
@@ -591,21 +606,19 @@ bool Applier::handle_rows(const MARIADB_RPL_EVENT& event, std::string& err) {
 		err = "compressed row events are not supported for " + table_key(map.schema, map.table);
 		return false;
 	}
-	// binlog_row_image=FULL is checked at start, but it can be changed at
-	// runtime. The connector's row decoder ignores the column bitmap, so a
-	// partial image would be misread rather than rejected.
-	if (event.event.rows.column_bitmap != nullptr) {
-		const uint32_t bytes = (map.column_count + 7) / 8;
-		for (uint32_t i = 0; i < bytes; ++i) {
-			const uint8_t expected = (i + 1) * 8 <= map.column_count
-				? 0xff
-				: static_cast<uint8_t>((1u << (map.column_count - i * 8)) - 1u);
-			if (event.event.rows.column_bitmap[i] != expected) {
-				err = "partial row image for " + table_key(map.schema, map.table) +
-					"; binlog_row_image must stay FULL";
-				return false;
-			}
-		}
+	const bool is_update = event.event_type == UPDATE_ROWS_EVENT ||
+		event.event_type == UPDATE_ROWS_EVENT_V1 ||
+		event.event_type == UPDATE_ROWS_COMPRESSED_EVENT ||
+		event.event_type == UPDATE_ROWS_COMPRESSED_EVENT_V1;
+	// The connector ignores the image bitmaps. Validate both UPDATE images
+	// before it can read a partial image as a full row.
+	if (event.event.rows.column_count != map.column_count ||
+	    !duckdb_replica_full_row_images(event.event.rows.column_bitmap,
+	                                    event.event.rows.column_update_bitmap,
+	                                    map.column_count, is_update)) {
+		err = "partial row image for " + table_key(map.schema, map.table) +
+			"; binlog_row_image must stay FULL";
+		return false;
 	}
 
 	MARIADB_RPL_EVENT synthetic {};
@@ -623,10 +636,7 @@ bool Applier::handle_rows(const MARIADB_RPL_EVENT& event, std::string& err) {
 		return false;
 	}
 
-	const bool is_update = event.event_type == UPDATE_ROWS_EVENT ||
-		event.event_type == UPDATE_ROWS_EVENT_V1 ||
-		event.event_type == UPDATE_ROWS_COMPRESSED_EVENT ||
-		event.event_type == UPDATE_ROWS_COMPRESSED_EVENT_V1;
+
 	const bool is_delete = event.event_type == DELETE_ROWS_EVENT ||
 		event.event_type == DELETE_ROWS_EVENT_V1 ||
 		event.event_type == DELETE_ROWS_COMPRESSED_EVENT ||
@@ -768,7 +778,6 @@ bool Applier::flush(std::string& err) {
 			exec_duckdb(conn_, "ROLLBACK", ignored);
 			return false;
 		}
-		++rows_;
 	}
 	if (batch_pos_ >= 0) {
 		// Persist the union, not just this batch: a restart must still know
@@ -792,6 +801,12 @@ bool Applier::flush(std::string& err) {
 		return false;
 	}
 	applied_gtids_.merge(batch_gtids_);
+	if (batch_pos_ >= 0) {
+		applied_position_.binlog_file = batch_file_;
+		applied_position_.binlog_pos = batch_pos_;
+	}
+	applied_position_.gtid_executed = applied_gtids_.to_string();
+	rows_ += batch_.size();
 	batch_.clear();
 	batch_bytes_ = 0;
 	batch_gtids_ = DuckDBReplicaGtidSet {};
@@ -804,7 +819,7 @@ bool Applier::flush(std::string& err) {
 		const int64_t now = static_cast<int64_t>(std::time(nullptr));
 		lag = now > last_event_ts_ ? now - last_event_ts_ : 0;
 	}
-	if (progress_) progress_(rows_, batches_, lag);
+	if (progress_) progress_(rows_, batches_, lag, applied_position_);
 	return true;
 }
 
@@ -848,10 +863,7 @@ DuckDBReplicaApplyResult Applier::run() {
 				return result;
 			}
 			result.code = DuckDBReplicaApplyResult::Code::stopped;
-			result.position = start_;
-			result.position.binlog_file = current_file_;
-			result.position.binlog_pos = current_pos_;
-			result.position.gtid_executed = applied_gtids_.to_string();
+			result.position = applied_position_;
 			result.rows = rows_;
 			result.batches = batches_;
 			return result;
@@ -866,7 +878,9 @@ DuckDBReplicaApplyResult Applier::run() {
 				return result;
 			}
 			result.code = DuckDBReplicaApplyResult::Code::failed;
-			result.error = std::string("binlog stream ended: ") + mariadb_rpl_error(rpl_);
+			const char* detail = mariadb_rpl_error(rpl_);
+			if (detail == nullptr || *detail == '\0') detail = mysql_error(mysql_);
+			result.error = std::string("binlog stream ended: ") + (detail != nullptr ? detail : "");
 			return result;
 		}
 		const int64_t next_pos = static_cast<int64_t>(event->next_event_pos);
@@ -881,6 +895,7 @@ DuckDBReplicaApplyResult Applier::run() {
 				return true;
 			case FORMAT_DESCRIPTION_EVENT:
 			case HEARTBEAT_LOG_EVENT:
+			case HEARTBEAT_LOG_EVENT_V2:
 			case ANNOTATE_ROWS_EVENT:
 			case INTVAR_EVENT:
 			case RAND_EVENT:
@@ -990,7 +1005,7 @@ DuckDBReplicaApplyResult duckdb_replica_apply_binlog(
 	const std::vector<DuckDBReplicaTable>& tables,
 	const DuckDBReplicaProbeResult& start,
 	const std::function<bool()>& stop_requested,
-	const std::function<void(uint64_t, uint64_t, int64_t)>& progress) {
+	const std::function<void(uint64_t, uint64_t, int64_t, const DuckDBReplicaProbeResult&)>& progress) {
 	Applier applier(engine, source, tables, start, stop_requested, progress);
 	return applier.run();
 }
