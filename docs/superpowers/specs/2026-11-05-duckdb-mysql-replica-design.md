@@ -1,7 +1,7 @@
 # DuckDB MySQL Replica — Design and Handoff
 
 Date: 2026-11-05
-Status: applier, core SELECT compatibility and storage hardening validated; internal routing deferred
+Status: applier, core SELECT compatibility, storage hardening and process-crash recovery validated; internal routing deferred
 Branch: `feature/duckdb-mysql-replica`
 Worktree: `/mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica`
 Base: `v3.0` at `e2f317aba`
@@ -239,6 +239,20 @@ and the real DuckDB **1.4.5** / MariaDB Connector/C **3.3.8** libraries:
   binaries build and link.
 - The live replica TAP scenario passes **31 assertions**, separately with
   `binlog_checksum=NONE` and `binlog_checksum=CRC32`.
+- The separate recovery TAP scenario passes **19 assertions** with each
+  checksum mode. It owns its ProxySQL process and uses SIGKILL, including
+  while snapshot rows are uncommitted and while a large transaction is being
+  caught up. Startup with replication disabled exposes the recovered data
+  and checkpoint before further apply can hide a partial commit.
+- Concurrent snapshot coverage commits insert/update/delete in one source
+  transaction across a table already being copied and a later table. It
+  requires positive copy progress and snapshotting state after COMMIT, then
+  compares every row and the exact file/position/GTID after catch-up.
+- Recovery includes an incomplete snapshot restarted from scratch, offline
+  commits and a rolled-back source transaction. Revoking the fixture account's
+  RELOAD privilege proves a committed checkpoint resumes without silently
+  resnapshotting. Temporary mutations omitting the consistent source
+  transaction and ignoring the durable checkpoint fail the intended checks.
 - The nine DuckDB unit binaries pass **371 assertions** in total, including
   **61** in `duckdb_replica_unit-t`, **16** in
   `duckdb_replica_storage_unit-t`, and **53** in the SELECT translator unit.
@@ -273,10 +287,11 @@ ROTATE filename lengths. Both images are validated before connector decoding.
 Unselected tables retain their TABLE_MAP even when their types are unsupported.
 The existing listener/admin-schema unit targets now link the replica sources.
 
-This is functional validation of the tested source and types; crash injection,
-large positions above 4 GB, load/performance tests, and platform packaging
-validation remain outstanding. Catalog/schema collisions are covered by
-storage tests and the live scenario, whose database filename now matches the
+This is functional validation of the tested source and types, including
+Linux process-crash recovery. Power loss/torn writes, exact interruption
+inside DuckDB COMMIT, positions above 4 GB, load/performance tests, and
+platform packaging validation remain outstanding. Catalog/schema collisions
+are covered by storage tests and the live scenario, whose database filename now matches the
 source schema.
 
 ## 10. Next steps, in order
@@ -323,8 +338,9 @@ backend authentication and session setup.
 
 1. **Further applier hardening.** Catalog qualification, transactional
    manifest-owned RESET, and failed-snapshot rollback safety are implemented.
-   Next: test abrupt crash recovery and concurrent writes during snapshot; validate large positions,
-   read-only protection, performance, and platform packaging.
+   Process-crash recovery and concurrent writes during snapshot are now
+   validated. Next: validate large positions, read-only protection,
+   performance, and platform packaging.
 2. **MySQL analytical compatibility.** The opt-in core SELECT pass is
    implemented and differential-tested through direct and ordinary backend
    routing. Expand the bounded subset as needed; see
@@ -333,6 +349,32 @@ backend authentication and session setup.
    carried through ordinary backend routing.
 4. **Bulk load** (`LOAD DATA LOCAL INFILE`, `COPY FROM STDIN`).
 5. **Postgres logical replication** into the same engine.
+
+### 10.4 Process crash and snapshot concurrency (completed)
+
+`test/tap/tests/test_duckdb_replica_recovery-t.cpp` runs in `duckdb-e2e-g1`
+against its own child ProxySQL, private temporary data directory and dynamic
+loopback ports. It never kills or reconfigures the group's normal server.
+A 200,000-row InnoDB table makes copy progress observable; missed overlap
+windows fail explicitly. SIGKILL bypasses graceful replica flushing.
+
+The fixture bootstraps custom DuckDB variables in Disk before enabling the
+plugin, then reuses those files through each crash. A disabled startup lets
+it inspect an interrupted snapshot (no visible partial tables/metadata) and
+an interrupted apply (complete old or complete new rows with the matching
+checkpoint). Subsequent START must converge exactly with the source.
+
+The test uses administrative `TAP_MYSQL*` credentials to create its own
+schema/account and grant/revoke privileges; account setup is excluded from
+the workload binlog with session `sql_log_bin=0`. This adds no production
+replica privilege requirement. On normal exit it reaps its child and removes
+only its own source objects and files; failed runs retain their logs. On
+Linux, parent-death SIGKILL prevents an abruptly killed TAP runner from
+leaving its ProxySQL child alive, including the fork/registration race.
+
+The test observes active catch-up and validates atomic recovery; it does not
+pin the kill to a specific instruction inside DuckDB COMMIT or simulate
+power loss. Linux is the platform validated so far.
 
 ## 11. Known risks
 
@@ -361,6 +403,11 @@ make -C test/tap/tests test_duckdb_replica-t
 # Supply the standard TAP_* listener and TAP_MYSQL* source credentials.
 ./test/tap/tests/test_duckdb_replica-t
 
+# isolated SIGKILL/concurrent-snapshot scenario (administrative source credentials)
+make -C test/tap/tests test_duckdb_replica_recovery-t
+./test/tap/tests/test_duckdb_replica_recovery-t
+# Optional path overrides: TAP_PROXYSQL_BINARY and TAP_DUCKDB_PLUGIN.
+
 # syntax check used during development (headers extracted from deps)
 g++ -std=c++17 -fsyntax-only -Iplugins/duckdb/include -I/tmp/opencode/duckdbinc \
   -I/tmp/opencode/mdbinc plugins/duckdb/src/duckdb_replica_binlog.cpp
@@ -383,6 +430,7 @@ for the compile check.
 - [x] Unit test for pure logic
 - [x] Live MySQL 8.4 end-to-end test (NONE and CRC32 checksums)
 - [x] Catalog qualification, atomic manifest-owned RESET and rollback safety
-- [ ] Further applier hardening (crash injection, large positions, read-only protection, load, packaging)
+- [x] SIGKILL recovery and concurrent writes during snapshot (NONE and CRC32)
+- [ ] Further applier hardening (large positions, read-only protection, load, packaging)
 - [x] Core MySQL analytical SELECT compatibility (opt-in)
 - [ ] Internal query-rule destination (deferred indefinitely)
