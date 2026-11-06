@@ -90,14 +90,14 @@ static bool test_schema_routing(const CommandLine& cl) {
 	}
 	struct Cleanup {
 		MYSQL* admin;
-		std::function<void()> restore;
-		Cleanup(MYSQL* connection, std::function<void()> action)
+		std::function<bool()> restore;
+		Cleanup(MYSQL* connection, std::function<bool()> action)
 			: admin(connection), restore(std::move(action)) {}
 		Cleanup(const Cleanup&) = delete;
 		Cleanup& operator=(const Cleanup&) = delete;
 		~Cleanup() noexcept {
 			try {
-				restore();
+				if (!restore()) ok(false, "Schema routing cleanup failed to restore configuration");
 			} catch (const std::exception& e) {
 				ok(false, "Schema routing cleanup failed: %s", e.what());
 			} catch (...) {
@@ -106,16 +106,18 @@ static bool test_schema_routing(const CommandLine& cl) {
 			mysql_close(admin);
 		}
 	} cleanup{admin, [&exec, &destination, &parser, &algorithm, &locking]() {
-		exec("DELETE FROM mysql_query_rules");
-		exec("INSERT INTO mysql_query_rules SELECT * FROM test_6590_rules");
-		exec("LOAD MYSQL QUERY RULES TO RUNTIME");
-		exec("DROP TABLE test_6590_rules");
-		exec("DELETE FROM mysql_servers WHERE hostgroup_id=" + destination);
-		exec("LOAD MYSQL SERVERS TO RUNTIME");
-		exec("SET mysql-query_processor_parser=" + parser);
-		exec("SET mysql-set_parser_algorithm=" + algorithm);
-		exec("SET mysql-set_query_lock_on_hostgroup=" + locking);
-		exec("LOAD MYSQL VARIABLES TO RUNTIME");
+		bool restored = exec("DELETE FROM mysql_query_rules");
+		// Evaluate exec first so every restore is attempted after an SQL failure.
+		restored = exec("INSERT INTO mysql_query_rules SELECT * FROM test_6590_rules") && restored;
+		restored = exec("LOAD MYSQL QUERY RULES TO RUNTIME") && restored;
+		restored = exec("DROP TABLE test_6590_rules") && restored;
+		restored = exec("DELETE FROM mysql_servers WHERE hostgroup_id=" + destination) && restored;
+		restored = exec("LOAD MYSQL SERVERS TO RUNTIME") && restored;
+		restored = exec("SET mysql-query_processor_parser=" + parser) && restored;
+		restored = exec("SET mysql-set_parser_algorithm=" + algorithm) && restored;
+		restored = exec("SET mysql-set_query_lock_on_hostgroup=" + locking) && restored;
+		restored = exec("LOAD MYSQL VARIABLES TO RUNTIME") && restored;
+		return restored;
 	}};
 	if (!exec("INSERT INTO mysql_servers(hostgroup_id,hostname,port,use_ssl) SELECT " + destination +
 		",hostname,port,use_ssl FROM runtime_mysql_servers WHERE status='ONLINE' AND hostgroup_id=" + source) ||
