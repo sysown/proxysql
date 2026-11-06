@@ -15,6 +15,7 @@ REPOSITORY = 'sysown/proxysql'
 
 
 def workflows():
+    """Load source and optional paired-engine workflows as data, never code."""
     for path in sorted((ROOT / '.github/workflows').rglob('*.yml')):
         yield str(path.relative_to(ROOT)), yaml.safe_load(path.read_text())
     # CI lint resolves this ref for its existing paired workflow checks. Read
@@ -37,6 +38,7 @@ def workflows():
 
 
 def allows(step, event, coverage_file=True, **overrides):
+    """Evaluate a real step condition with explicit event and coverage fixtures."""
     context = {
         'github.repository': REPOSITORY,
         'github.event.pull_request': None,
@@ -58,18 +60,23 @@ def allows(step, event, coverage_file=True, **overrides):
 
 
 def pr(repository):
+    """Project a PR's repository name, including a deleted fork's null value."""
     return {'github.event.pull_request': True,
             'github.event.pull_request.head.repo.full_name': repository}
 
 
 def upstream(repository):
+    """Project the repository name of an upstream workflow-run event."""
     return {'github.event.workflow_run': True,
             'github.event.workflow_run.head_repository.full_name': repository}
 
 
 class CodecovForkUploads(unittest.TestCase):
+    """Keep fork upload restrictions and internal coverage paths executable."""
+
     @classmethod
     def setUpClass(cls):
+        """Discover every Codecov attempt in the source and selected engine."""
         cls.uploads = []
         for path, workflow in workflows():
             for job_name, job in (workflow or {}).get('jobs', {}).items():
@@ -80,18 +87,21 @@ class CodecovForkUploads(unittest.TestCase):
             raise AssertionError('No Codecov upload steps discovered')
 
     def test_external_forks_skip_all_upload_attempts(self):
+        """Reject foreign PR and upstream repositories for initial and retry steps."""
         for path, job, step in self.uploads:
             for event in (pr('contributor/proxysql'), upstream('contributor/proxysql')):
                 with self.subTest(workflow=path, job=job, step=step['name'], event=event):
                     self.assertFalse(allows(step, event))
 
     def test_missing_head_repository_cannot_enable_uploads(self):
+        """Reject empty and null repository projections without enabling uploads."""
         for path, job, step in self.uploads:
-            for event in (pr(''), upstream('')):
+            for event in (pr(''), upstream(''), pr(None), upstream(None)):
                 with self.subTest(workflow=path, job=job, step=step['name'], event=event):
                     self.assertFalse(allows(step, event))
 
     def test_internal_and_non_pr_events_keep_uploads(self):
+        """Allow trusted events when each upload's existing prerequisites hold."""
         events = (pr(REPOSITORY), upstream(REPOSITORY),
                   {'github.event_name': 'push'}, {'github.event_name': 'schedule'},
                   {'github.event_name': 'workflow_dispatch'})
@@ -101,6 +111,7 @@ class CodecovForkUploads(unittest.TestCase):
                     self.assertTrue(allows(step, event))
 
     def test_coverage_and_retry_prerequisites_still_apply(self):
+        """Preserve coverage, LCOV, prior-attempt and cancellation gates."""
         prerequisites = {
             'matrix.coverage': False,
             'steps.cov.outputs.found': '0',
@@ -124,10 +135,16 @@ class CodecovForkUploads(unittest.TestCase):
                         self.assertFalse(allows(step, pr(REPOSITORY)))
 
     def test_successful_fork_simulator_run_retains_coverage(self):
+        """Keep simulator uploads for internal runs and artifacts for fork runs."""
         workflow = yaml.safe_load((ROOT / '.github/workflows/CI-cluster-simulator.yml').read_text())
         job = workflow['jobs']['test']
         self.assertEqual(job['env']['COVERAGE'], '1')
         steps = job['steps']
+        uploads = [step for step in steps
+                   if str(step.get('uses', '')).startswith('codecov/codecov-action@')]
+        self.assertEqual(len(uploads), 1, 'Keep the simulator Codecov upload')
+        self.assertTrue(allows(uploads[0], pr(REPOSITORY)))
+        self.assertFalse(allows(uploads[0], pr('contributor/proxysql')))
         self.assertTrue(any(step.get('run') == 'test/infra/control/run-tests-isolated.bash'
                             for step in steps))
         require = next(step for step in steps if step.get('id') == 'require-lcov')
