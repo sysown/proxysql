@@ -152,4 +152,20 @@ class WorkflowTests(unittest.TestCase):
   text=(ROOT/'.github/workflows/ci-set_parser_algorithm_3-g1.yml').read_text()
   self.assertNotIn('ci_infra_logs/ci-set_parser_algorithm_3-g1/',text)
 
+ def test_every_codecov_upload_guards_external_pull_requests(self):
+  # This local policy check covers every initial upload and retry. The paired
+  # product-branch suite evaluates these conditions against event fixtures.
+  guard=("(!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && "
+         "(!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository)")
+  checked=0
+  for file in (ROOT/'.github/workflows').glob('*.yml'):
+   for job in workflow(file.name).get('jobs',{}).values():
+    for step in job.get('steps',[]):
+     if not step.get('uses','').startswith('codecov/codecov-action@'):continue
+     checked+=1
+     with self.subTest(file=file.name,step=step.get('name')):
+      condition=' '.join(str(step.get('if','')).split())
+      self.assertTrue(condition.endswith(' && '+guard+' }}'),condition)
+  self.assertGreater(checked,0)
+
 if __name__=='__main__':unittest.main()

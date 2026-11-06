@@ -203,7 +203,7 @@ jobs:
 
 
     - name: Upload coverage to Codecov
-      if: ${{ matrix.coverage && (always() && steps.require_lcov.outcome == 'success') }}
+      if: ${{ matrix.coverage && (always() && steps.require_lcov.outcome == 'success') && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
       with:

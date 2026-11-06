@@ -107,7 +107,7 @@ jobs:
       run: test -s coverage/lcov.info
     - name: Upload coverage to Codecov
       id: codecov_1
-      if: ${{ !cancelled() && steps.require-lcov.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.require-lcov.outcome == 'success' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
       with:
@@ -128,7 +128,7 @@ jobs:
       run: sleep 15
     - name: Upload coverage to Codecov (retry 1)
       id: codecov_2
-      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
+      if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
       with:
@@ -149,7 +149,7 @@ jobs:
       run: sleep 45
     - name: Upload coverage to Codecov (retry 2)
       id: codecov_3
-      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
+      if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
       with:
