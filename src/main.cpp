@@ -2136,6 +2136,11 @@ void ProxySQL_daemonize_wait_daemon() {
 }
 
 
+/**
+ * @brief Complete daemon startup by entering the data directory and creating the PID file.
+ * @return True after notifying the parent and reopening logs; false if the PID file cannot be created.
+ * @note Exits the process if changing to the data directory fails.
+ */
 bool ProxySQL_daemonize_phase2() {
 	int rc;
 /*
@@ -2999,6 +3004,12 @@ void watchdog_main_loop() {
 	}
 }
 
+/**
+ * @brief Initialize ProxySQL, run its service lifecycle, and release process resources on shutdown.
+ * @param argc Number of command-line arguments.
+ * @param argv Null-terminated command-line argument strings.
+ * @return Process exit status.
+ */
 int main(int argc, const char * argv[]) {
 
 	if (check_openssl_version() == false) {

@@ -4297,6 +4297,11 @@ void init_myhgc_servers_defaults(char* servers_defaults, PgSQL_HGC* myhgc) {
 	}
 }
 
+/**
+ * @brief Install incoming PostgreSQL hostgroup attributes and reset removed attributes to their defaults.
+ * @details Preserves existing groups' configured flags, creates missing groups, and consumes
+ *   incoming_hostgroup_attributes. An empty hostgroup list is valid.
+ */
 void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 	if (incoming_hostgroup_attributes==NULL) {
 		return;

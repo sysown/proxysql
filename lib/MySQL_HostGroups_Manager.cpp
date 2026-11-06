@@ -7171,6 +7171,11 @@ void init_myhgc_servers_defaults(char* servers_defaults, MyHGC* myhgc) {
 	}
 }
 
+/**
+ * @brief Install incoming MySQL hostgroup attributes and reset attributes removed from the configuration.
+ * @details Preserves the prior configured flags for existing groups, creates missing groups, and consumes
+ *   incoming_hostgroup_attributes. An empty hostgroup list is valid.
+ */
 void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	if (incoming_hostgroup_attributes==NULL) {
 		return;
