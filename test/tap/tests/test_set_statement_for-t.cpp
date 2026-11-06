@@ -139,10 +139,14 @@ static bool test_schema_routing(const CommandLine& cl) {
 			ok(atoll(scalar(count_sql).c_str()) == before + 1,
 				"parser=%d: SET STATEMENT reaches rule hostgroup %s instead of default %s",
 				mode, destination.c_str(), source.c_str());
+			const std::string followup_count_sql = "SELECT COALESCE(SUM(count_star),0) FROM stats_mysql_query_digest "
+				"WHERE hostgroup=" + source + " AND digest_text LIKE '%issue6590_followup%'";
+			const long long followup_before = atoll(scalar(followup_count_sql).c_str());
 			rc = mysql_query(client, "SELECT 6591 AS issue6590_followup");
 			res = rc == 0 ? mysql_store_result(client) : NULL;
 			row = res ? mysql_fetch_row(res) : NULL;
-			ok(row && row[0] && strcmp(row[0], "6591") == 0,
+			ok(row && row[0] && strcmp(row[0], "6591") == 0 &&
+				atoll(scalar(followup_count_sql).c_str()) == followup_before + 1,
 				"parser=%d: follow-up query can route back to the default hostgroup", mode);
 			if (res) mysql_free_result(res);
 			mysql_close(client);
