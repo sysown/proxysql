@@ -21,6 +21,8 @@
  *   - Multiple variables in a single SET STATEMENT work
  *   - Case-insensitive matching works
  *   - Whitespace tolerance after FOR (multi-line, tab, CRLF, multi-space)
+ *   - Schema-based routing to a non-default hostgroup with both query parsers
+ *   - A subsequent query can route to a different hostgroup (#6590)
  *
  * This test requires a MariaDB backend. It should only be registered in
  * TAP groups whose infra provides one (e.g. mariadb10-galera-*). The
@@ -34,11 +36,120 @@
 #include <stdio.h>
 #include <string.h>
 #include <vector>
+#include <functional>
 #include "mysql.h"
 #include "proxysql_utils.h"
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+
+// A successful query on the default hostgroup cannot detect #6590. Duplicate
+// its backend into another hostgroup and check the digest's actual destination.
+static bool test_schema_routing(const CommandLine& cl) {
+	MYSQL* admin = mysql_init(NULL);
+	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password,
+		NULL, cl.admin_port, NULL, 0)) {
+		diag("Admin connection failed: %s", mysql_error(admin));
+		mysql_close(admin);
+		return false;
+	}
+	auto exec = [&](const std::string& sql) {
+		if (mysql_query(admin, sql.c_str())) {
+			diag("%s: %s", sql.c_str(), mysql_error(admin));
+			return false;
+		}
+		return true;
+	};
+	auto scalar = [&](const std::string& sql) -> std::string {
+		if (!exec(sql)) return "";
+		MYSQL_RES* res = mysql_store_result(admin);
+		MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
+		std::string value = row && row[0] ? row[0] : "";
+		if (res) mysql_free_result(res);
+		return value;
+	};
+	// SQLite string literals use doubled quotes, including for usernames.
+	std::string username = cl.username;
+	for (size_t pos = 0; (pos = username.find('\'', pos)) != std::string::npos; pos += 2)
+		username.insert(pos, 1, '\'');
+	const std::string source = scalar("SELECT default_hostgroup FROM runtime_mysql_users "
+		"WHERE username='" + username + "' AND frontend=1 LIMIT 1");
+	const std::string destination = scalar("SELECT MAX(hostgroup_id)+1 FROM runtime_mysql_servers");
+	const std::string parser = scalar("SELECT variable_value FROM global_variables WHERE variable_name='mysql-query_processor_parser'");
+	const std::string algorithm = scalar("SELECT variable_value FROM global_variables WHERE variable_name='mysql-set_parser_algorithm'");
+	const std::string locking = scalar("SELECT variable_value FROM global_variables WHERE variable_name='mysql-set_query_lock_on_hostgroup'");
+	if (source.empty() || destination.empty() || parser.empty() || algorithm.empty() || locking.empty()) {
+		mysql_close(admin);
+		return false;
+	}
+	if (!exec("CREATE TEMP TABLE test_6590_rules AS SELECT * FROM mysql_query_rules")) {
+		mysql_close(admin);
+		return false;
+	}
+	struct Cleanup {
+		std::function<void()> restore;
+		~Cleanup() { restore(); }
+	} cleanup{[&]() {
+		exec("DELETE FROM mysql_query_rules");
+		exec("INSERT INTO mysql_query_rules SELECT * FROM test_6590_rules");
+		exec("LOAD MYSQL QUERY RULES TO RUNTIME");
+		exec("DROP TABLE test_6590_rules");
+		exec("DELETE FROM mysql_servers WHERE hostgroup_id=" + destination);
+		exec("LOAD MYSQL SERVERS TO RUNTIME");
+		exec("SET mysql-query_processor_parser=" + parser);
+		exec("SET mysql-set_parser_algorithm=" + algorithm);
+		exec("SET mysql-set_query_lock_on_hostgroup=" + locking);
+		exec("LOAD MYSQL VARIABLES TO RUNTIME");
+		mysql_close(admin);
+	}};
+	if (!exec("INSERT INTO mysql_servers(hostgroup_id,hostname,port,use_ssl) SELECT " + destination +
+		",hostname,port,use_ssl FROM runtime_mysql_servers WHERE status='ONLINE' AND hostgroup_id=" + source) ||
+		!exec("LOAD MYSQL SERVERS TO RUNTIME") || !exec("DELETE FROM mysql_query_rules") ||
+		!exec("INSERT INTO mysql_query_rules(rule_id,active,schemaname,match_pattern,destination_hostgroup,apply) VALUES "
+			"(0,1,'information_schema','^SELECT 6591 AS issue6590_followup$'," + source + ",1),"
+			"(1,1,'information_schema',NULL," + destination + ",1)") ||
+		!exec("LOAD MYSQL QUERY RULES TO RUNTIME") ||
+		!exec("SET mysql-set_parser_algorithm=2") || !exec("SET mysql-set_query_lock_on_hostgroup=1")) return false;
+
+	const char* queries[] = {
+		"SET STATEMENT max_statement_time=10 FOR SELECT 6590 AS issue6590_route",
+		"SET STATEMENT max_statement_time=10 FOR\n SELECT 6590 AS issue6590_route",
+		"set statement max_statement_time=10, lock_wait_timeout=60 for select 6590 as issue6590_route"
+	};
+	for (int mode : {0, 1}) {
+		if (!exec("SET mysql-query_processor_parser=" + std::to_string(mode)) ||
+			!exec("LOAD MYSQL VARIABLES TO RUNTIME")) return false;
+		for (const char* query : queries) {
+			MYSQL* client = mysql_init(NULL);
+			if (!mysql_real_connect(client, cl.host, cl.username, cl.password,
+				"information_schema", cl.port, NULL, 0)) {
+				diag("Regression connection failed: %s", mysql_error(client));
+				mysql_close(client);
+				return false;
+			}
+			const std::string count_sql = "SELECT COALESCE(SUM(count_star),0) FROM stats_mysql_query_digest "
+				"WHERE hostgroup=" + destination + " AND digest_text LIKE '%issue6590_route%'";
+			const long long before = atoll(scalar(count_sql).c_str());
+			int rc = mysql_query(client, query);
+			MYSQL_RES* res = rc == 0 ? mysql_store_result(client) : NULL;
+			MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
+			ok(row && row[0] && strcmp(row[0], "6590") == 0,
+				"parser=%d: schema-routed SET STATEMENT returns backend result", mode);
+			if (res) mysql_free_result(res);
+			ok(atoll(scalar(count_sql).c_str()) == before + 1,
+				"parser=%d: SET STATEMENT reaches rule hostgroup %s instead of default %s",
+				mode, destination.c_str(), source.c_str());
+			rc = mysql_query(client, "SELECT 6591 AS issue6590_followup");
+			res = rc == 0 ? mysql_store_result(client) : NULL;
+			row = res ? mysql_fetch_row(res) : NULL;
+			ok(row && row[0] && strcmp(row[0], "6591") == 0,
+				"parser=%d: follow-up query can route back to the default hostgroup", mode);
+			if (res) mysql_free_result(res);
+			mysql_close(client);
+		}
+	}
+	return true;
+}
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -48,7 +159,7 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	plan(5 + 8);
+	plan(5 + 8 + 18);
 
 	diag("=== Test: MariaDB SET STATEMENT ... FOR passthrough ===");
 	diag("Issue #5686: ProxySQL should forward SET STATEMENT ... FOR");
@@ -200,8 +311,8 @@ int main(int argc, char** argv) {
 		diag("");
 	}
 
-	diag("=== All tests completed ===");
-
 	mysql_close(proxysql);
+	if (!test_schema_routing(cl)) return -1;
+	diag("=== All tests completed ===");
 	return exit_status();
 }
