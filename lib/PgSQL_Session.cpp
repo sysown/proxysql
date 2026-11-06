@@ -327,6 +327,7 @@ void PgSQL_Query_Info::begin(unsigned char *_p, int len, bool header, const PgSQ
 	PgQueryCmd=PGSQL_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
+	simple_cache_seed = 0;
 	memset(&QueryParserArgs, 0, sizeof(QueryParserArgs));
 	start_time=sess->thread->curtime;
 	init(_p, len, header);
@@ -374,6 +375,7 @@ void PgSQL_Query_Info::swap(PgSQL_Query_Info& o) noexcept {
 	std::swap(stmt_cache_key, o.stmt_cache_key);
 	std::swap(stmt_cache_valid, o.stmt_cache_valid);
 #endif
+	std::swap(simple_cache_seed, o.simple_cache_seed);
 	std::swap(QueryPointer, o.QueryPointer);
 	std::swap(QueryLength, o.QueryLength);
 	std::swap(PgQueryCmd, o.PgQueryCmd);
@@ -5963,6 +5965,14 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	return PgSQL_Local_Reply::NONE;
 }
 
+// Seed for the simple-query cache key: user and database plus every tracked setting.
+// Without the settings, a result cached under one search_path or TimeZone is served
+// to a client using another. Uses the hashes computed at SET time, not the strings.
+static inline uint64_t simple_query_cache_seed(const PgSQL_Connection* c) {
+	const uint64_t h = SpookyHash::Hash64(c->var_hash.data(), sizeof(c->var_hash), c->userinfo->hash);
+	return SpookyHash::Hash64(c->startup_parameters_hash.data(), sizeof(c->startup_parameters_hash), h);
+}
+
 PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo(PtrSize_t* pkt, bool* lock_hostgroup, PgSQL_Extended_Query_Type stmt_type) {
 	/*
 		lock_hostgroup:
@@ -6066,10 +6076,13 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		}
 	}
 
-	// Query cache handling
-	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET) {
+	// Query cache handling. A session locked on a hostgroup ran a change ProxySQL could not
+	// track (SET SCHEMA, SET LOCAL, a SET inside a multi-statement query, ...), so the key
+	// does not describe its settings: a cached entry may not fit it. Same rule as the extended cache.
+	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && locked_on_hostgroup < 0) {
+		CurrentQuery.simple_cache_seed = simple_query_cache_seed(client_myds->myconn);
 		const std::shared_ptr<PgSQL_QC_entry_t> pgsql_qc_entry = GloPgQC->get(
-			client_myds->myconn->userinfo->hash,
+			CurrentQuery.simple_cache_seed,
 			(const unsigned char*)CurrentQuery.QueryPointer,
 			CurrentQuery.QueryLength,
 			thread->curtime / 1000,
@@ -6414,8 +6427,10 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			// extended-query cache above, this path does not test MultiplexDisabled(), so
 			// being on a LISTEN-pinned connection does not by itself keep it out.
 			// The native path has no multi-statement flag; several replies in one result mean one.
+			// A session locked on a hostgroup has settings the key cannot see: its result,
+			// stored under the plain key, would be served to clients without them.
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true &&
-				multi_result == false &&
+				multi_result == false && locked_on_hostgroup < 0 &&
 				_conn->native_result_had_notification == false) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&
@@ -6448,7 +6463,8 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 						unsigned char* buff = PgSQL_Data_Stream::copy_array_to_buffer(client_myds->PSarrayOUT, 
 							resultset_size, false);
 						GloPgQC->set(
-							client_myds->myconn->userinfo->hash,
+							CurrentQuery.simple_cache_seed ? CurrentQuery.simple_cache_seed :
+								simple_query_cache_seed(client_myds->myconn),
 							CurrentQuery.QueryPointer,
 							CurrentQuery.QueryLength,
 							buff, 
