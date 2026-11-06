@@ -37,6 +37,8 @@
 #include <string.h>
 #include <vector>
 #include <functional>
+#include <exception>
+#include <utility>
 #include "mysql.h"
 #include "proxysql_utils.h"
 #include "tap.h"
@@ -53,14 +55,14 @@ static bool test_schema_routing(const CommandLine& cl) {
 		mysql_close(admin);
 		return false;
 	}
-	auto exec = [&](const std::string& sql) {
+	auto exec = [admin](const std::string& sql) {
 		if (mysql_query(admin, sql.c_str())) {
 			diag("%s: %s", sql.c_str(), mysql_error(admin));
 			return false;
 		}
 		return true;
 	};
-	auto scalar = [&](const std::string& sql) -> std::string {
+	auto scalar = [&exec, admin](const std::string& sql) -> std::string {
 		if (!exec(sql)) return "";
 		MYSQL_RES* res = mysql_store_result(admin);
 		MYSQL_ROW row = res ? mysql_fetch_row(res) : NULL;
@@ -87,9 +89,23 @@ static bool test_schema_routing(const CommandLine& cl) {
 		return false;
 	}
 	struct Cleanup {
+		MYSQL* admin;
 		std::function<void()> restore;
-		~Cleanup() { restore(); }
-	} cleanup{[&]() {
+		Cleanup(MYSQL* connection, std::function<void()> action)
+			: admin(connection), restore(std::move(action)) {}
+		Cleanup(const Cleanup&) = delete;
+		Cleanup& operator=(const Cleanup&) = delete;
+		~Cleanup() noexcept {
+			try {
+				restore();
+			} catch (const std::exception& e) {
+				ok(false, "Schema routing cleanup failed: %s", e.what());
+			} catch (...) {
+				ok(false, "Schema routing cleanup failed with an unknown exception");
+			}
+			mysql_close(admin);
+		}
+	} cleanup{admin, [&exec, &destination, &parser, &algorithm, &locking]() {
 		exec("DELETE FROM mysql_query_rules");
 		exec("INSERT INTO mysql_query_rules SELECT * FROM test_6590_rules");
 		exec("LOAD MYSQL QUERY RULES TO RUNTIME");
@@ -100,7 +116,6 @@ static bool test_schema_routing(const CommandLine& cl) {
 		exec("SET mysql-set_parser_algorithm=" + algorithm);
 		exec("SET mysql-set_query_lock_on_hostgroup=" + locking);
 		exec("LOAD MYSQL VARIABLES TO RUNTIME");
-		mysql_close(admin);
 	}};
 	if (!exec("INSERT INTO mysql_servers(hostgroup_id,hostname,port,use_ssl) SELECT " + destination +
 		",hostname,port,use_ssl FROM runtime_mysql_servers WHERE status='ONLINE' AND hostgroup_id=" + source) ||
