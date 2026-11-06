@@ -664,9 +664,11 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	query_processor_firewall_unit-t \
 	statistics_unit-t \
 	log_utils_unit-t \
+	log_filename_variables_unit-t \
 	listen_validator_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
+	pgsql_digest_bounds_unit-t \
 	ezoption_parser_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
@@ -1492,6 +1494,14 @@ vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERS
 
 # This test includes the cache source to inject allocator failure locally.
 pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
+
+# The bounds fixture exercises the production tokenizer's internal compression stages.
+pgsql_digest_bounds_unit-t: $(PROXYSQL_PATH)/lib/pgsql_tokenizer.cpp
+ifeq ($(UNAME_S),Linux)
+ifeq ($(WITHASAN),1)
+pgsql_digest_bounds_unit-t: private OPT += -fsanitize=pointer-compare,pointer-subtract
+endif
+endif
 
 # The allocation fixture includes the protocol source for failure injection.
 # Compile libpq's private-header access separately so its configuration macros
