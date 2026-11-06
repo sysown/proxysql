@@ -39,6 +39,8 @@ run_check "Check every TAP source is registered in groups.json" \
 	python3 test/tap/groups/check_groups.py --source
 run_check "Check cluster simulator coverage contract" \
 	test/infra/control/test-cluster-simulator-coverage.bash
+run_check "Test fork Codecov upload and artifact conditions" \
+	python3 -m unittest discover -s test/infra/control -p test_codecov_fork_uploads.py
 run_check "Check cluster launch, endpoints and direct polling sizes" \
 	python3 test/infra/control/test_cluster_size.py
 run_check "Check no-infra source asset restoration" \
