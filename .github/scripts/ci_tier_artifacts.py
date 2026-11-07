@@ -165,7 +165,7 @@ class GitHubAPI:
                 raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode} after {attempt+1} attempts: {diagnostic}')
             time.sleep(60 if 'rate limit' in error or '429' in error else min(30,2**attempt))
 
-    def download(self,path,destination,size,digest=None):
+    def download(self,path,destination,size,digest=None,verify=True):
         """Download up to eight resumable ranges directly into one archive."""
         if size<=0:raise ValueError('invalid artifact size')
         if digest and not re.fullmatch(r'sha256:[0-9a-fA-F]{64}',digest):
@@ -183,7 +183,7 @@ class GitHubAPI:
         with tempfile.TemporaryDirectory(dir=destination.parent,prefix='.artifact-') as tmp:
             assembled=Path(tmp)/'complete.zip'
             download_parts(url,token,assembled,size,workers,deadline)
-            if digest:
+            if digest and verify:
                 checksum=hashlib.sha256()
                 with assembled.open('rb') as source:
                     while chunk:=source.read(1024*1024):
@@ -343,11 +343,27 @@ def restore_handoff(manifest,leg,destination,api):
     # Default /tmp scratch survived cancelled jobs on persistent pool VMs.
     with tempfile.TemporaryDirectory(prefix='ci-handoff-',dir=os.environ.get('RUNNER_TEMP') or None) as tmp:
         downloaded=Path(tmp)/'handoff.zip'
-        api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest'))
-        with zipfile.ZipFile(downloaded) as archive:
-            with archive.open('cache_full.tar.zst') as packed, handoff_archive(packed) as tar:
-                destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
-                tar.extractall(destination,filter=handoff_stream_filter)
+        api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest'),verify=False)
+        try:
+            with zipfile.ZipFile(downloaded) as archive:
+                with archive.open('cache_full.tar.zst') as packed, handoff_archive(packed) as tar:
+                    destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
+                    tar.extractall(destination,filter=handoff_stream_filter)
+        except Exception as error:
+            digest=record.get('digest')
+            if digest:
+                try:
+                    checksum=hashlib.sha256()
+                    with downloaded.open('rb') as source:
+                        while chunk:=source.read(1024*1024):
+                            checksum.update(chunk)
+                    if 'sha256:'+checksum.hexdigest()!=digest.lower():
+                        raise RuntimeError('handoff extraction failed and artifact checksum mismatch (corrupt download)') from error
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+            raise
     metadata=json.loads((destination/'src/ci-tier.json').read_text())
     for key,value in [('execution_id',manifest['execution_id']),('sha',manifest['sha']),('tier',leg['tier']),('mode',leg['mode'])]:
         if metadata.get(key)!=value:raise ValueError('restored metadata mismatch: '+key)
