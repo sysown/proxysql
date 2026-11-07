@@ -501,7 +501,7 @@ jobs:
         plugin_files=(plugins/*/*.so)
         echo ">>> packing slim handoff: tier=${TIER} variant=${VARIANT} gcno=${#gcno[@]} matrix=${#matrix_files[@]} plugins=${#plugin_files[@]}"
         # Exclude the unit-test directory; it is shipped by the unit handoff.
-        tar -cf - src/ test/ --exclude='test/tap/tests/unit' "${gcno[@]}" "${matrix_files[@]}" "${plugin_files[@]}" \
+        tar --exclude='test/tap/tests/unit' -cf - src/ test/ "${gcno[@]}" "${matrix_files[@]}" "${plugin_files[@]}" \
           | zstd -15 -T0 -o ../cache_slim.tar.zst
 
     - name: Pack unit test handoff (zstd-15)
