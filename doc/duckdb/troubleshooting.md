@@ -108,17 +108,21 @@ as a compatibility no-op.
 
 ## Values arrive as strings
 
-This is current behavior. Both protocol serializers advertise text columns.
-Applications must parse values based on the query contract rather than rely on
-MySQL/PostgreSQL type metadata.
+Numeric columns carry MySQL/PostgreSQL type metadata, but the wire transfer
+format is still text. Client APIs such as `mysql_fetch_row` and `PQgetvalue`
+return textual values; use their column metadata to choose a conversion.
+MySQL DATE/TIME/microsecond TIMESTAMP have native temporal metadata. Unsupported
+columns and exceptional scalar values use text fallback; supported columns next
+to a wrapped column keep their own types. See
+[Protocol compatibility](protocol-compatibility.md).
 
-## A special DuckDB value arrives as NULL
+## An unsupported result type produces SQLSTATE 0A000
 
 Most unsupported direct types are re-rendered through a VARCHAR wrapper.
-However, some DML `RETURNING` shapes cannot be wrapped. In that degraded path,
-an unsupported result type can appear as NULL even though the underlying value
-is not SQL NULL. Cast the returned expression explicitly to `VARCHAR` in the
-original SQL as a workaround:
+However, some DML `RETURNING` shapes cannot be wrapped. The plugin rejects these
+statements before execution, preserving the table and avoiding false NULL
+values. Cast the returned expression explicitly to `VARCHAR` in the original
+SQL:
 
 ```sql
 INSERT INTO t VALUES (...) RETURNING special_column::VARCHAR;
@@ -164,3 +168,18 @@ lower `duckdb-memory_limit`, choose a conservative `duckdb-threads` value, and
 reduce `duckdb-max_connections`; all three apply live. If a live query must be stopped and the client cannot cancel it,
 controlled process recovery may be required; assess the impact on normal
 ProxySQL traffic before acting.
+
+## An old development configuration contains mysql_compatibility
+
+The experimental `duckdb-mysql_compatibility` switch and custom SQL translator
+were removed to follow #6280's ParserSQL requirement. This is an unpublished
+branch migration. Before restarting a previously configured development
+instance, remove the stale variable from Main and Disk through Admin:
+
+```sql
+DELETE FROM global_variables WHERE variable_name='duckdb-mysql_compatibility';
+DELETE FROM disk.global_variables WHERE variable_name='duckdb-mysql_compatibility';
+```
+
+Unknown DuckDB variables fail configuration validation. There is no replacement
+switch; use native DuckDB SQL pending ParserSQL-based compatibility.

@@ -1,0 +1,45 @@
+--- include/mariadb_rpl.h
++++ include/mariadb_rpl.h
+@@ -582,3 +582 @@
+-((int32_t)(((int32_t)(((const uchar*)(B))[2])) |\
+-(((int32_t)(((const uchar*)(B))[1])) << 8) |\
+-(((int32_t)(((const uchar*)(B))[0])) << 16)))
++((int32_t)(myisam_uint3korr(B) ^ 0x800000U) - 0x800000)
+--- libmariadb/mariadb_rpl.c
++++ libmariadb/mariadb_rpl.c
+@@ -435 +435,2 @@
+-          column->val.ull= uint1korr(pos++) + 1900;
++          column->val.ull= *pos ? uint1korr(pos) + 1900 : 0;
++          pos++;
+@@ -514,3 +515,5 @@
+-          uint32_t p1= uint4korr(pos);
+-          uint8_t f_len= *metadata++;
+-          uint32_t p2;
++          uint32_t p1= myisam_uint4korr(pos);
++          uint8_t precision= *metadata++;
++          uint8_t f_len= (precision + 1) / 2;
++          uint32_t p2= 0;
++          uint8_t j;
+@@ -518,3 +521,7 @@
+-          p2= (uint32_t)uintNkorr(f_len, pos);
+-          pos+= f_len;
+-          sprintf(tmp, "%d.%d", p1, p2);
++          for (j= 0; j < f_len; j++)
++            p2= (p2 << 8) | *pos++;
++          if (f_len == 1)
++            p2*= 10000;
++          else if (f_len == 2)
++            p2*= 100;
++          sprintf(tmp, "%u.%06u", p1, p2);
+@@ -1549,2 +1556,6 @@
+-      /* Payload */
+-      len= ev_end - ev - 4;
++      /* Artificial ROTATE precedes FORMAT_DESCRIPTION, so its checksum
++         policy comes from the server variable read at initialization. */
++      len= ev_end - ev - ((rpl_event->timestamp == 0 &&
++                          (rpl_event->flags & LOG_EVENT_ARTIFICIAL_F))
++                         ? (rpl->artificial_checksum ? 4 : 0)
++                         : (rpl->use_checksum ? 4 : 0));
+@@ -1854,0 +1866,2 @@
++          rpl_event->event_type == UPDATE_ROWS_EVENT ||
++          rpl_event->event_type == UPDATE_ROWS_COMPRESSED_EVENT ||
