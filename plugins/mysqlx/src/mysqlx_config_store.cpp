@@ -113,10 +113,9 @@ void merge_mysqlx_users(
 //   7 comment
 //   8 tls_mode      (added with mysqlx_routes.tls_mode column)
 //
-// `parse_err` mirrors load_variables(): a malformed tls_mode token is
-// recorded as a string the install path can surface to the operator,
-// rather than silently coerced to inherit. The route is then dropped
-// (not partially loaded) so the operator's intent isn't half-applied.
+// `parse_err` mirrors load_variables(): an invalid listener bind or tls_mode
+// is reported to the operator, and the installer rejects the entire new
+// route set rather than partially replacing the existing runtime state.
 void load_routes(
 	SQLite3_result& rows,
 	std::unordered_map<std::string, MysqlxRoute>& routes,
@@ -130,6 +129,15 @@ void load_routes(
 		MysqlxRoute route {};
 		route.name = nullable_string(row->fields[0]);
 		route.bind = nullable_string(row->fields[1]);
+		std::string host;
+		int port = 0;
+		if (!mysqlx_parse_bind_address(route.bind, host, port)) {
+			if (parse_err.empty()) {
+				parse_err = "invalid bind '" + route.bind + "' for route '" + route.name +
+					"' (expected host:port with an explicit port in 1..65535)";
+			}
+			continue;
+		}
 		route.destination_hostgroup = nullable_int(row->fields[2]);
 		route.fallback_hostgroup = nullable_int(row->fields[3], -1);
 		route.strategy = nullable_string(row->fields[4]);
@@ -363,6 +371,37 @@ const char* backend_auth_mode_to_string(MysqlxBackendAuthMode m) {
 }
 
 } // namespace
+
+bool mysqlx_parse_bind_address(const std::string& bind, std::string& host, int& port) {
+	if (bind.empty()) return false;
+	size_t host_start = 0;
+	size_t host_length = 0;
+	size_t port_start = 0;
+	if (bind[0] == '[') {
+		const auto closing = bind.find(']');
+		if (closing == std::string::npos || closing <= 1 ||
+			closing + 2 >= bind.size() || bind[closing + 1] != ':') return false;
+		host_start = 1;
+		host_length = closing - 1;
+		port_start = closing + 2;
+	} else {
+		const auto colon = bind.find(':');
+		if (colon == std::string::npos || colon == 0 || colon + 1 >= bind.size() ||
+			bind.find(':', colon + 1) != std::string::npos) return false;
+		host_length = colon;
+		port_start = colon + 1;
+	}
+	int parsed_port = 0;
+	for (size_t i = port_start; i < bind.size(); ++i) {
+		if (bind[i] < '0' || bind[i] > '9') return false;
+		parsed_port = parsed_port * 10 + (bind[i] - '0');
+		if (parsed_port > 65535) return false;
+	}
+	if (parsed_port == 0) return false;
+	host = bind.substr(host_start, host_length);
+	port = parsed_port;
+	return true;
+}
 
 MysqlxBackendAuthMode mysqlx_backend_auth_mode_from_string(const std::string& value) {
 	if (strcasecmp(value.c_str(), "pass_through") == 0) {

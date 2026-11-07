@@ -82,9 +82,8 @@ static const ClassifyCase cases[] = {
 	{"SELECT pg_terminate_backend /* x */ -- y\n (123)", PGSQL_QUERY_TERMINATE_BACKEND},
 };
 
-// Parser mode only. The legacy classifier reads the first token of the text as is, so it
-// reports UNKNOWN for a SELECT behind a kept comment, and it sees only the token after
-// SELECT, so it cannot tell a column named like the function from a call to it.
+// Parser mode only. The legacy classifier sees only the token after SELECT, so it
+// cannot tell a column named like the function from a call to it.
 static const ClassifyCase parser_only_cases[] = {
 	{"SELECT pg_cancel_backend FROM t", PGSQL_QUERY_SELECT},
 	{"SELECT pg_terminate_backend AS x FROM t", PGSQL_QUERY_SELECT},
@@ -155,19 +154,10 @@ static const ClassifyCase type_cases[] = {
 // v3.0's native emitter omits it.
 static const ClassifyCase type_keep_comment_cases[] = {
 	{"/* c */ UPDATE t SET a = b", PGSQL_QUERY_UPDATE},
-#ifdef PROXYSQL31
-	// Parsing '?' fails; the legacy classifier stops at the kept comment.
-	{"/* c */ UPDATE t SET a = 1", PGSQL_QUERY_UNKNOWN},
-#else
+	// The fallback classifier skips kept comments when ParserSQL rejects '?'.
 	{"/* c */ UPDATE t SET a = 1", PGSQL_QUERY_UPDATE},
-#endif
 	{"/* c */ BEGIN", PGSQL_QUERY_BEGIN},
-#ifdef PROXYSQL31
-	{"/* c */ COPY t FROM STDIN", PGSQL_QUERY_UNKNOWN},
-#else
-	// The native digest omits the comment before legacy classification.
 	{"/* c */ COPY t FROM STDIN", PGSQL_QUERY_COPY},
-#endif
 	{"/* c */ CREATE INDEX i ON t (a)", PGSQL_QUERY_CREATE_TABLE},
 };
 
@@ -334,6 +324,66 @@ static void test_parser_without_digests() {
 	pgsql_thread___query_digests = true;
 }
 
+// Parser-disabled command counters read the raw, NUL-terminated 32-byte prefix.
+// Keep these separate from parser tests so ParserSQL cannot mask cursor regressions.
+static const ClassifyCase legacy_prefix_cases[] = {
+	{"\t\n\r\f\vSELECT 1", PGSQL_QUERY_SELECT},
+	{"SELECT\t1", PGSQL_QUERY_SELECT},
+	{"SELECT\n1", PGSQL_QUERY_SELECT},
+	{";\t;\nSELECT 1", PGSQL_QUERY_SELECT},
+	{"/* c */ SELECT 1", PGSQL_QUERY_SELECT},
+	{"/*a*//*b*/SELECT 1", PGSQL_QUERY_SELECT},
+	{"/*a/*b*/c*/SELECT 1", PGSQL_QUERY_SELECT},
+	{"-- c\nSELECT 1", PGSQL_QUERY_SELECT},
+	{"-- c\r\nSELECT 1", PGSQL_QUERY_SELECT},
+	{"/*a*/;--b\n\tINSERT INTO t", PGSQL_QUERY_INSERT},
+	{"CREATE\tTABLE t(a int)", PGSQL_QUERY_CREATE_TABLE},
+	{"CREATE/*c*/TABLE t(a int)", PGSQL_QUERY_CREATE_TABLE},
+	{"START--c\nTRANSACTION", PGSQL_QUERY_BEGIN},
+	{"ROLLBACK\nTO/*c*/SAVEPOINT s", PGSQL_QUERY_ROLLBACK_TO_SAVEPOINT},
+	{"SELECT/*c*/1", PGSQL_QUERY_SELECT},
+	{"SELECT\n\tpg_cancel_backend(1)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"SELECT/**/pg_cancel_backend(1)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"/*c*/SELECT pg_cancel_backend(1)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"--c\nSELECT pg_terminate_backend(1)", PGSQL_QUERY_TERMINATE_BACKEND},
+	// The prefix ends exactly after the complete function name.
+	{"/* c */ SELECT pg_cancel_backend(1)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"SELECT pg_cancel_backend/**/(1)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"SELECT pg_cancel_backend/*x*/(1)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"SELECT pg_terminate_backend/*x*/(1)", PGSQL_QUERY_TERMINATE_BACKEND},
+	{"SELECT pg_cancel_backend/*a/*b*/c*/(1)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"SELECT pg_cancel_backend --c\n(1)", PGSQL_QUERY_CANCEL_BACKEND},
+	{"SELECT pg_cancel_backend_extra(1)", PGSQL_QUERY_SELECT},
+	{"SELECT pg_terminate_backend2(1)", PGSQL_QUERY_SELECT},
+	{"SELECT pg_cancel_backend.x", PGSQL_QUERY_SELECT},
+	{"SELECT pg_cancel_backend/**/.x", PGSQL_QUERY_SELECT},
+	{"SELECT pg_cancel_backend/**/x", PGSQL_QUERY_SELECT},
+	// Empty/comment-only input and comments truncated before a command stay unknown.
+	{"", PGSQL_QUERY_UNKNOWN},
+	{";\t\n", PGSQL_QUERY_UNKNOWN},
+	{"/* closed */", PGSQL_QUERY_UNKNOWN},
+	{"-- SELECT 1", PGSQL_QUERY_UNKNOWN},
+	{"/* SELECT 1", PGSQL_QUERY_UNKNOWN},
+	{"/* outer /* inner */ SELECT 1", PGSQL_QUERY_UNKNOWN},
+	{"/* 123456789012345678901234567890 */ SELECT 1", PGSQL_QUERY_UNKNOWN},
+	// Exercise a prefix whose final byte is the first byte of a comment delimiter.
+	{"                               /* comment */ SELECT 1", PGSQL_QUERY_UNKNOWN},
+	{"                               -- comment\nSELECT 1", PGSQL_QUERY_UNKNOWN},
+};
+
+static void test_legacy_without_digests() {
+	pgsql_thread___query_processor_parser = 0;
+	pgsql_thread___query_digests = false;
+	pgsql_thread___commands_stats = true;
+	for (const auto& c : legacy_prefix_cases) {
+		bool prefix_freed = false;
+		const enum PGSQL_QUERY_command got = classify(c.sql, &prefix_freed);
+		ok(got == c.expected, "parser=0 digests=0: '%s' -> %d (got %d)", c.sql, c.expected, got);
+		ok(prefix_freed, "parser=0 digests=0: query_prefix released for '%s'", c.sql);
+	}
+	pgsql_thread___query_digests = true;
+}
+
 // The legacy classifier is the reference: both modes must agree on every case.
 static void test_legacy_parity() {
 	pgsql_thread___query_processor_parser = 0;
@@ -353,7 +403,8 @@ int main() {
 		sizeof(type_keep_comment_cases) / sizeof(type_keep_comment_cases[0]) +
 		sizeof(type_prefix_cases) / sizeof(type_prefix_cases[0]);
 	const size_t n_skip = sizeof(parsersql_skip_cases) / sizeof(parsersql_skip_cases[0]);
-	plan(1 + n_cases + 3 + n_parser_only + 14 * 2 + n_cases + n_types + 2 * n_skip);
+	const size_t n_legacy_prefix = sizeof(legacy_prefix_cases) / sizeof(legacy_prefix_cases[0]);
+	plan(1 + n_cases + 3 + n_parser_only + 14 * 2 + n_cases + n_types + 2 * n_skip + 2 * n_legacy_prefix);
 	ok(test_init_minimal() == 0 && test_init_query_processor() == 0, "test init succeeds");
 	// Worker defaults; the legacy digest yields an empty text with a zero length limit.
 	pgsql_thread___query_digests_max_query_length = 65000;
@@ -367,6 +418,7 @@ int main() {
 	test_parser_statement_types();
 	test_parsersql_skip_guard();
 	test_legacy_parity();
+	test_legacy_without_digests();
 
 	pgsql_thread___query_processor_parser = 0;
 	test_cleanup_query_processor();

@@ -21,6 +21,7 @@
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "Worker_Scheduler.h"
 
 extern PgSQL_Threads_Handler *GloPTH;
 extern MySQL_Logger *GloMyLogger;
@@ -30,17 +31,61 @@ enum class Outcome { wait, complete, error, killed };
 static void *subject;
 static Outcome outcome;
 static unsigned other_calls;
+static void *release_from;
+static bool honor_deadlines;
 template<class Session> int handle(Session *sess) {
+    if (honor_deadlines && sess->mybe && sess->mybe->server_myds &&
+        sess->mybe->server_myds->max_connect_time &&
+        sess->thread->curtime >= sess->mybe->server_myds->max_connect_time) {
+        if (sess != subject) ++other_calls;
+        sess->status = WAITING_CLIENT_DATA;
+        return 0;
+    }
+#ifdef PROXYSQL31
+    if (sess == release_from) {
+        sess->thread->released_hostgroups.push_back(1);
+        release_from = nullptr;
+    }
+#endif
 	if (sess != subject) { ++other_calls; return 0; }
 	if (outcome == Outcome::complete) sess->status = WAITING_CLIENT_DATA;
 	if (outcome == Outcome::killed) sess->killed = true;
 	return outcome == Outcome::error ? -1 : 0;
 }
 extern "C" int __wrap__ZN13MySQL_Session7handlerEv(MySQL_Session *s) { return handle(s); }
+#ifdef PROXYSQL31
+extern "C" int __wrap__ZN13PgSQL_Session7handlerEb(PgSQL_Session *s, bool io_only) {
+	return io_only ? 0 : handle(s);
+}
+#else
 extern "C" int __wrap__ZN13PgSQL_Session7handlerEv(PgSQL_Session *s) { return handle(s); }
+#endif
+extern "C" PgSQL_Session_Run_Result __wrap__ZN13PgSQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb(
+	PgSQL_Session *s, PgSQL_Pool_Acquire_Mode, bool io_only) {
+	if (io_only) return PgSQL_Session_Run_Result::WaitIO;
+	const int rc = handle(s);
+	s->to_process = 0;
+	if (rc == -1 || s->killed) {
+		s->healthy = false;
+		return PgSQL_Session_Run_Result::Close;
+	}
+	return s->status == CONNECTING_SERVER ? PgSQL_Session_Run_Result::WaitBackend : PgSQL_Session_Run_Result::WaitIO;
+}
+
+extern "C" Session_Run_Result __wrap__ZN13MySQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb(
+    MySQL_Session *s, Pool_Acquire_Mode, bool io_only) {
+    if (io_only) return Session_Run_Result::WaitIO;
+    const int rc = handle(s);
+    s->to_process = 0;
+    if (rc == -1 || s->killed) {
+        s->healthy = false;
+        return Session_Run_Result::Close;
+    }
+    return s->status == CONNECTING_SERVER ? Session_Run_Result::WaitBackend : Session_Run_Result::WaitIO;
+}
 
 template<class Worker, class Session, class Stream>
-Session *new_waiter(Worker& worker, int& peer) {
+Session *new_waiter(Worker& worker, int& peer, unsigned hid = 1, unsigned long long deadline = 0) {
 	int fds[2];
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds)) BAIL_OUT("socketpair failed");
 	peer = fds[1];
@@ -61,7 +106,11 @@ Session *new_waiter(Worker& worker, int& peer) {
 	worker.mysql_sessions->add(sess);
 	worker.mypolls.add(POLLIN, fds[0], sess->client_myds, worker.curtime);
 #ifdef PROXYSQL31
-	worker.enter_waiter(sess, 1);
+    if (deadline) {
+        sess->mybe = sess->find_or_create_backend(hid);
+        sess->mybe->server_myds->max_connect_time = deadline;
+    }
+    worker.enter_waiter(sess, hid);
 #else
 	// Exercise invalid-index inspection independently of B-band availability.
 	worker.mypolls.remove_index_fast(sess->client_myds->poll_fds_idx);
@@ -177,6 +226,150 @@ void test_protocol(const char *name) {
 	close(peer);
 }
 
+static void test_mysql_deadline_hint() {
+    MySQL_Thread worker;
+    if (!worker.init()) BAIL_OUT("worker init failed");
+    worker.maintenance_loop = false;
+    worker.curtime = 1000000;
+    int head_peer, tail_peer;
+    auto *head = new_waiter<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>(worker, head_peer);
+    auto *tail = new_waiter<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>(worker, tail_peer);
+    head->mybe = head->find_or_create_backend(1);
+    tail->mybe = tail->find_or_create_backend(1);
+    head->mybe->server_myds->max_connect_time = worker.curtime + 1000000;
+    tail->mybe->server_myds->max_connect_time = worker.curtime + 100;
+    subject = head;
+    outcome = Outcome::wait;
+    honor_deadlines = true;
+    other_calls = 0;
+    worker.process_all_sessions();
+    ok(worker.waiter_deadline_hint == tail->mybe->server_myds->max_connect_time && !other_calls,
+        "MySQL: unknown deadline hint is refreshed without retrying an unavailable tail");
+    worker.curtime += 99;
+    worker.process_all_sessions();
+    ok(tail->waiter_node.session && !other_calls,
+        "MySQL: a future tail deadline does not bypass blocked ordinary recovery");
+    ++worker.curtime;
+    worker.process_all_sessions();
+    ok(!tail->waiter_node.session && head->waiter_node.session && other_calls == 1,
+        "MySQL: the exact earliest deadline services an expired tail behind an unavailable head");
+    worker.process_all_sessions();
+    ok(worker.waiter_deadline_hint == head->mybe->server_myds->max_connect_time,
+        "MySQL: a removed earliest waiter leaves only a conservative stale hint until refresh");
+    tail->status = CONNECTING_SERVER;
+    tail->mybe->server_myds->max_connect_time = worker.curtime + 100;
+    worker.enter_waiter(tail, 1);
+    tail->mybe->server_myds->max_connect_time = worker.curtime + 20;
+    worker.enter_waiter(tail, 1);
+    worker.curtime += 20;
+    worker.process_all_sessions();
+    ok(!tail->waiter_node.session && head->waiter_node.session,
+        "MySQL: lowering an existing tail deadline invalidates a later future bound");
+    worker.process_all_sessions();
+    int other_peer;
+    auto *other = new_waiter<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>(worker, other_peer, 2, worker.curtime + 10);
+    ok(worker.waiter_deadline_hint == other->mybe->server_myds->max_connect_time,
+        "MySQL: an earlier deadline in another hostgroup lowers the global bound");
+    worker.curtime += 10;
+    worker.process_all_sessions();
+    ok(!other->waiter_node.session && head->waiter_node.session,
+        "MySQL: an expired second hostgroup progresses while the first remains blocked");
+    head->mybe->server_myds->max_connect_time = 0;
+    worker.enter_waiter(head, 1);
+    worker.process_all_sessions();
+    ok(worker.waiter_deadline_hint == ~0ULL && head->waiter_node.session,
+        "MySQL: disabled connect deadlines retain a valid unbounded hint");
+    tail->status = CONNECTING_SERVER;
+    tail->mybe->server_myds->max_connect_time = 0;
+    worker.enter_waiter(tail, 1);
+    tail->mybe->server_myds->max_connect_time = worker.curtime + 10;
+    worker.enter_waiter(tail, 1);
+    worker.curtime += 10;
+    worker.process_all_sessions();
+    ok(!tail->waiter_node.session && head->waiter_node.session,
+        "MySQL: a deadline added to an unbounded waiter still expires behind a blocked head");
+    honor_deadlines = false;
+    while (worker.mysql_sessions->len) {
+        auto *sess = static_cast<MySQL_Session*>(worker.mysql_sessions->index(0));
+        worker.unregister_session(0);
+        delete sess;
+    }
+    close(head_peer);
+    close(tail_peer);
+    close(other_peer);
+}
+
+template<class Worker, class Session, class Stream, class Connection, class Pool>
+static void test_release_phase(Pool *pool, const char *name) {
+    Worker worker;
+    if (!worker.init()) BAIL_OUT("worker init failed");
+    worker.maintenance_loop = false;
+    worker.curtime = 1000000;
+    int peer;
+    auto *sess = new_waiter<Worker, Session, Stream>(worker, peer);
+    subject = sess;
+    outcome = Outcome::complete;
+    {
+        Worker_Scheduler<Worker, Session, Connection, Pool> scheduler(worker, *pool);
+        worker.released_hostgroups.push_back(1);
+        scheduler.dispatch_released();
+        if constexpr (std::is_same_v<Session, MySQL_Session>)
+            ok(sess->waiter_node.session != nullptr,
+                "MySQL: release dispatch defers waiter execution until the normal waiter phase");
+        else
+            ok(sess->waiter_node.session == nullptr,
+                "PgSQL: release dispatch retains immediate waiter execution");
+        scheduler.run_late();
+        ok(worker.waiter_lists.empty() && sess->status == WAITING_CLIENT_DATA,
+            "%s: the normal waiter phase preserves progress after release dispatch", name);
+    }
+    worker.unregister_session(0);
+    delete sess;
+    close(peer);
+}
+
+static void test_mysql_backendless_scan() {
+    MySQL_Thread worker;
+    if (!worker.init()) BAIL_OUT("worker init failed");
+    worker.maintenance_loop = false;
+    worker.curtime = 1000000;
+    int peer;
+    auto *ready = new_waiter<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>(worker, peer);
+    worker.leave_waiter(ready);
+    ready->status = PROCESSING_QUERY;
+    ready->to_process = 1;
+    subject = ready;
+    outcome = Outcome::complete;
+    worker.process_all_sessions();
+    ok(!ready->to_process && worker.mysql_sessions->len == 1,
+        "MySQL: backendless work deferred by the main scan still runs in the late phase");
+    worker.unregister_session(0);
+    delete ready;
+    close(peer);
+
+    int waiter_peer, holder_peer;
+    auto *waiter = new_waiter<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>(worker, waiter_peer);
+    auto *holder = new_waiter<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>(worker, holder_peer);
+    worker.leave_waiter(holder);
+    holder->mybe = holder->find_or_create_backend(1);
+    auto *conn = new MySQL_Connection();
+    holder->mybe->server_myds->myconn = conn;
+    holder->status = PROCESSING_QUERY;
+    holder->to_process = 1;
+    subject = waiter;
+    outcome = Outcome::error;
+    release_from = holder;
+    worker.process_all_sessions();
+    ok(worker.mysql_sessions->len == 1 && worker.mysql_sessions->index(0) == holder && worker.waiter_lists.empty(),
+        "MySQL: waiter recovery closes a session already visited by the main scan");
+    holder->mybe->server_myds->myconn = nullptr;
+    delete conn;
+    worker.unregister_session(0);
+    delete holder;
+    close(waiter_peer);
+    close(holder_peer);
+}
+
 #endif // PROXYSQL31
 
 // A real processlist request must tolerate clients deliberately removed from
@@ -283,7 +476,7 @@ static void test_pgsql_timeout() {
 static void test_pgsql_cache() {
 	PgSQL_Thread worker;
 	if (!worker.init()) BAIL_OUT("worker init failed");
-	GloPTH->num_threads = 1;
+	GloPTH->num_threads = 2;
 	PgSQL_srv_info_t info {"waiter-cache-unit", 5432, "unit"};
 	PgSQL_srv_opts_t opts {1, 100, 0};
 	PgHGM->wrlock();
@@ -303,7 +496,7 @@ static void test_pgsql_cache() {
 	worker.waiter_lists.push_back(node);
 	worker.push_MyConn_local(conn);
 	ok(server->ConnectionsUsed->conns_length() == 0 && server->ConnectionsFree->conns_length() == 1,
-		"PgSQL: queued waiter bypasses the local cache with zero failure counters");
+		"PgSQL: queued waiter publishes releases when peer workers need access");
 	worker.waiter_lists.unlink(node);
 	worker.return_local_connections();
 }
@@ -363,7 +556,7 @@ static void test_stable_tier() {
 
 int main() {
 #ifdef PROXYSQL31
-	plan(65);
+	plan(80);
 #else
 	plan(19);
 #endif
@@ -377,6 +570,10 @@ int main() {
 	test_processlist<MySQL_Thread, MySQL_Session, MySQL_Data_Stream, MySQL_Connection>("MySQL", GloMTH, GloMTH->mysql_threads, 12);
 	test_processlist<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream, PgSQL_Connection>("PgSQL", GloPTH, GloPTH->pgsql_threads, 14);
 #ifdef PROXYSQL31
+    test_release_phase<MySQL_Thread, MySQL_Session, MySQL_Data_Stream, MySQL_Connection>(MyHGM, "MySQL");
+    test_release_phase<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream, PgSQL_Connection>(PgHGM, "PgSQL");
+	test_mysql_deadline_hint();
+	test_mysql_backendless_scan();
 	test_mysql_timeout();
 	test_pgsql_timeout();
 	test_pgsql_cache();

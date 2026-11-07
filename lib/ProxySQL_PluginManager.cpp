@@ -693,6 +693,17 @@ std::string canonicalize_plugin_command(const std::string& sql) {
 
 } // namespace
 
+#ifdef PROXYSQL40
+struct ProxySQL_ServerRuntimeManagerPin::Impl {
+	ScopedActiveManagerPin pin;
+};
+
+ProxySQL_ServerRuntimeManagerPin::ProxySQL_ServerRuntimeManagerPin()
+	: impl_(new Impl) {}
+
+ProxySQL_ServerRuntimeManagerPin::~ProxySQL_ServerRuntimeManagerPin() = default;
+#endif
+
 // Snapshot callbacks return nullptr until implemented.  This is safe to call
 // and allows plugins to check the return value rather than crashing on a
 // null function pointer.
@@ -2146,15 +2157,8 @@ bool ProxySQL_PluginManager::install_managed_discovery(ProxySQL_ServerProtocol p
 		error = "Admin database is unavailable";
 		return false;
 	}
-	// Configuration publication uses Admin servers -> protocol -> runtime install
-	// -> HGM. Keep the same order while the claim-owned topology row and its
-	// runtime generation are installed as one serialized operation.
-	ScopedAdminServerLock admin_lock(protocol);
-	if (!admin_lock.locked()) {
-		error = "Admin server lock is unavailable";
-		return false;
-	}
-	ProxySQL_ServerRuntimeInstallLock install_lock(protocol);
+	// The wrapper holds the Admin and runtime-install locks before pinning this
+	// manager, matching the order used by ordinary server publication.
 	ProxySQL_ServerRuntimeSnapshot snapshot {};
 	std::vector<ProxySQL_ServerHostgroupClaim> previous;
 	const ProxySQL_PluginDescriptor *claim_owner = nullptr;
@@ -2944,6 +2948,19 @@ std::vector<uint32_t> proxysql_active_server_topology_hostgroups(ProxySQL_Server
 bool proxysql_install_managed_discovery_locked(ProxySQL_ServerProtocol protocol,
 	uint64_t desired_revision, const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
 	uint64_t& runtime_generation_out, std::string& error) {
+	runtime_generation_out = 0;
+	if (server_protocol_index(protocol) < 0 || desired_revision == 0) {
+		error = "invalid managed discovery protocol or revision";
+		return false;
+	}
+	if (GloAdmin == nullptr || GloAdmin->admindb == nullptr) {
+		error = "Admin database is unavailable";
+		return false;
+	}
+	// LOAD ... SERVERS publishes while holding these two locks. Acquire them
+	// before the manager pin here too, and retain the pin through notification.
+	ScopedAdminServerLock admin_lock(protocol);
+	ProxySQL_ServerRuntimeInstallLock install_lock(protocol);
 	ScopedActiveManagerPin pin;
 	if (pin.manager() == nullptr) {
 		runtime_generation_out = 0;

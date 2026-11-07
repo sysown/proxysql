@@ -92,6 +92,7 @@ Anomaly_Detector::Anomaly_Detector() : vector_db(NULL) {
 
 Anomaly_Detector::~Anomaly_Detector() {
 	close();
+	pthread_mutex_destroy(&user_stats_mutex);
 }
 
 // ============================================================================
@@ -119,10 +120,9 @@ int Anomaly_Detector::init() {
  * @brief Close and cleanup resources
  */
 void Anomaly_Detector::close() {
-	// Clear user statistics
+	// close() may be called explicitly before destruction, or repeatedly.
+	// Keep the statistics mutex alive for the entire object's lifetime.
 	clear_user_statistics();
-
-	pthread_mutex_destroy(&user_stats_mutex);
 
 	proxy_info("Anomaly: Anomaly Detector closed\n");
 }
@@ -151,7 +151,8 @@ std::string Anomaly_Detector::normalize_query(const std::string& query) {
 	std::transform(normalized.begin(), normalized.end(), normalized.begin(), ::tolower);
 
 	// Remove SQL comments
-	std::regex comment_regex("--.*?$|/\\*.*?\\*/", std::regex::multiline);
+	// Match line endings explicitly: older C++17 libraries lack multiline.
+	std::regex comment_regex("--[^\\r\\n]*|/\\*.*?\\*/");
 	normalized = std::regex_replace(normalized, comment_regex, "");
 
 	// Replace string literals with placeholder

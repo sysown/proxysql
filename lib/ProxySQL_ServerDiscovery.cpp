@@ -331,6 +331,14 @@ void complete_accepted_server_desired_set(
 bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& current,
 	const ProxySQL_ServerDesiredSet& desired_set,
 	std::vector<ProxySQL_ServerRow>& merged, std::string& error) {
+	const auto claims = proxysql_active_server_hostgroup_claims(desired_set.protocol);
+	return proxysql_merge_server_desired_set(current, desired_set, claims, merged, error);
+}
+
+bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& current,
+	const ProxySQL_ServerDesiredSet& desired_set,
+	const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
+	std::vector<ProxySQL_ServerRow>& merged, std::string& error) {
 	merged.clear();
 	error.clear();
 	if (current.protocol != desired_set.protocol ||
@@ -379,7 +387,6 @@ bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& cur
 	// The same backend can legitimately appear in two independent claimed
 	// pairs; preserving its placement in one pair must not retain or overwrite
 	// its row in the other pair.
-	const auto claims = proxysql_active_server_hostgroup_claims(desired_set.protocol);
 	std::map<uint32_t, size_t> claim_by_hostgroup;
 	for (size_t index = 0; index < claims.size(); ++index) {
 		const auto& claim = claims[index];

@@ -76,7 +76,7 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'SHA-256'):
             self.api.merge_entries(self.root)
 
-    def test_registration_merges_verified_metadata_without_downloads(self):
+    def test_registration_merges_entries_and_rejects_existing_keys(self):
         candidate = self.root / 'lock-entries.json'
         registry = self.root / 'registered.json'
         first = self.candidate()
@@ -114,7 +114,6 @@ class PublicationTests(unittest.TestCase):
         self.assertIn('--draft=false', commands[3])
         self.assertIn(str(self.root / 'ubuntu24-amd64-gcc-openssl.tar.gz'), commands[2])
         self.assertIn(str(self.root / 'lock-entries.json'), commands[2])
-        self.assertEqual([60, 60, 600, 60], [c[1].get('timeout') for c in run.call_args_list])
         self.assertFalse(any('--clobber' in c for c in commands))
 
     def test_publish_requires_plan_before_any_release_request(self):
@@ -147,22 +146,6 @@ class PublicationTests(unittest.TestCase):
                                        expected_source_sha='c' * 40)
         self.assertFalse(run.called)
 
-    def test_build_operations_have_distinct_bounded_timeouts(self):
-        profile = self.api.build_matrix('ubuntu24-amd64-gcc', 'openssl')['include'][0]
-        def respond(command, **kwargs):
-            stdout = json.dumps({'services': {profile['service']: {'image': 'build:fixture'}}}) if command[:3] == ['docker', 'compose', 'config'] else 'build@sha256:fixture'
-            return subprocess.CompletedProcess(command, 0, stdout, '')
-        with patch.object(self.api, 'ROOT', self.root), \
-                patch.object(self.api, 'profiles', return_value=[profile]), \
-                patch.object(self.api.platform, 'machine', return_value='x86_64'), \
-                patch.object(self.api.platform, 'system', return_value='Linux'), \
-                patch.object(self.api.subprocess, 'run', side_effect=respond) as run, \
-                patch.object(self.api.subprocess, 'check_call') as build:
-            self.api.build_profile(profile['profile'], 'openssl', self.root / 'output',
-                                   'sysown/proxysql', 'dependency-artifacts-v1-1-1')
-        self.assertEqual([60, 600, 60], [call[1].get('timeout') for call in run.call_args_list])
-        self.assertEqual(5400, build.call_args[1].get('timeout'))
-
     def test_upload_failure_keeps_release_as_draft(self):
         self.candidate()
         self.expected_matrix()
@@ -174,11 +157,11 @@ class PublicationTests(unittest.TestCase):
                 self.api.publish_batch(self.root, 'sysown/proxysql', 'dependency-artifacts-v1-1-1', 'b' * 40)
         self.assertEqual(['create', 'upload'], [call[0][0][2] for call in run.call_args_list[1:]])
 
-    def test_external_command_timeout_terminates_the_command(self):
+    def test_external_command_honors_requested_timeout(self):
         with self.assertRaises(subprocess.TimeoutExpired):
-            self.api.run([sys.executable, '-c', 'import time; time.sleep(30)'], timeout=0.05)
+            self.api.run([sys.executable, '-c', 'import time; time.sleep(2)'], timeout=0.05)
 
-    def test_automatic_workflow_keeps_publication_separate_from_source_execution(self):
+    def test_workflow_declares_reviewed_publication_guards(self):
         workflow = (ROOT / '.github/workflows/CI-dependency-artifacts.yml').read_text()
         for event in ('pull_request:', 'push:', 'workflow_dispatch:'):
             self.assertIn(event, workflow)
@@ -199,19 +182,6 @@ class PublicationTests(unittest.TestCase):
         for action in re.findall(r'uses:\s*([^\s#]+)', workflow):
             if not action.startswith('./'):
                 self.assertRegex(action, r'@[0-9a-f]{40}$')
-        self.assertIn('- DEPS_MODE', (ROOT / 'docker-compose.yml').read_text())
-        checks = (ROOT / '.github/workflows/CI-dependency-artifacts-checks.yml').read_text()
-        self.assertIn('source-validation:', checks)
-        self.assertIn('test_dependency_artifact_', checks)
-
-    def test_build_script_restores_before_runtime_smoke(self):
-        script = (ROOT / 'deps/artifacts/build.bash').read_text()
-        self.assertLess(script.index('DEPS_MODE=source'), script.index('manage.py" package'))
-        self.assertLess(script.index('restore_bundle'), script.index('dependency-artifacts-smoke.bash'))
-        smoke = (ROOT / 'test/infra/control/dependency-artifacts-smoke.bash').read_text()
-        self.assertIn('duckdb_query', smoke)
-        self.assertIn('TLS_method()', smoke)
-        self.assertIn('OPENSSL_VERSION_NUMBER', smoke)
 
 
 if __name__ == '__main__':

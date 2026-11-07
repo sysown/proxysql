@@ -106,6 +106,12 @@ struct ProxySQL_ServerHostgroupClaim {
 };
 
 #ifdef PROXYSQL40
+// HGM callers copy claims before taking their runtime lock, so merging never
+// acquires the plugin-manager lifetime gate while holding the HGM lock.
+bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& current,
+	const ProxySQL_ServerDesiredSet& desired_set,
+	const std::vector<ProxySQL_ServerHostgroupClaim>& claims,
+	std::vector<ProxySQL_ServerRow>& merged, std::string& error);
 // Internal, lifetime-safe snapshots used by core monitor/HGM consumers. These
 // are not plugin service-table callbacks.
 void proxysql_lock_server_discovery_protocol(ProxySQL_ServerProtocol protocol);
@@ -188,6 +194,21 @@ public:
 
 private:
 	int index_ {-1};
+};
+
+// Pins the manager across a core publication that takes HGM locks. Construct
+// after the Admin/runtime-install locks and before HGM; destroy on the same
+// thread. Nested publication reuses this pin instead of locking beneath HGM.
+class ProxySQL_ServerRuntimeManagerPin {
+public:
+	ProxySQL_ServerRuntimeManagerPin();
+	~ProxySQL_ServerRuntimeManagerPin();
+	ProxySQL_ServerRuntimeManagerPin(const ProxySQL_ServerRuntimeManagerPin&) = delete;
+	ProxySQL_ServerRuntimeManagerPin& operator=(const ProxySQL_ServerRuntimeManagerPin&) = delete;
+
+private:
+	struct Impl;
+	std::unique_ptr<Impl> impl_;
 };
 
 // Advances and returns the protocol's runtime generation. The caller holds the

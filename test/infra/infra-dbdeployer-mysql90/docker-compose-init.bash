@@ -20,8 +20,10 @@ set -o pipefail
 SUDO=""
 if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
 
+# Allow setup and post-initialization time outside the readiness window.
+# Explicit TIMEOUT overrides remain authoritative.
 # relaunch self with timeout
-[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-600} "${BASH_SOURCE}" "$@"
+[[ $(ps -o command= $(ps -o ppid= $$)) =~ timeout ]] || exec timeout -v -s 9 ${TIMEOUT:-900} "${BASH_SOURCE}" "$@"
 
 # make sure we have correct cwd
 pushd $(dirname $0) &>/dev/null
@@ -129,7 +131,7 @@ fi
 # 6. Wait for dbdeployer entrypoint to finish MySQL deployment
 CONTAINER="${COMPOSE_PROJECT}-dbdeployer1-1"
 echo -n "Waiting for dbdeployer to finish deployment..."
-MAX_WAIT=120
+MAX_WAIT=600
 COUNT=0
 while ! docker exec "${CONTAINER}" test -f /tmp/dbdeployer_ready 2>/dev/null; do
     if [ $COUNT -ge $MAX_WAIT ]; then

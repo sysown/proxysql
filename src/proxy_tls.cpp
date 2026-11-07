@@ -343,6 +343,8 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 		write_x509(ssl_ca_fp, x1);
 		x2 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_Server_Certificate", t, 3650, x1, pk);
 		write_x509(ssl_cert_fp, x2);
+		// The CA is only needed while generating the server certificate.
+		X509_free(x1);
 	} else {
 		proxy_info("SSL keys/certificates found in datadir (%s): loading them.\n", GloVars.datadir);
 		if (bootstrap == true) {

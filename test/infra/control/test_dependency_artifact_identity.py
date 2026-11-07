@@ -85,6 +85,26 @@ class IdentityTests(unittest.TestCase):
         recipe.write_text(recipe.read_text() + '# changed recipe\n')
         self.assertNotEqual(first, self.api.fingerprint(self.identity()))
 
+    def test_tsan_identity_is_ineligible_for_bundles_and_distinct_from_normal(self):
+        normal = self.identity()
+        self.env['WITHTSAN'] = '1'
+        tsan = self.identity()
+        self.assertFalse(tsan['eligible'])
+        self.assertNotEqual(self.api.fingerprint(normal), self.api.fingerprint(tsan))
+        for key in ('CFLAGS', 'CXXFLAGS', 'LDFLAGS'):
+            self.assertIn('-fsanitize=thread', tsan['flags'][key])
+        self.assertIn('-DENABLE_THREAD_SANITIZER=ON', tsan['settings'])
+        self.assertIn('-DSKIP_EXTENSIONS=jemalloc', tsan['settings'])
+
+    def test_tsan_duckdb_identity_preserves_the_effective_final_overrides(self):
+        self.env['WITHTSAN'] = '1'
+        self.env['DUCKDB_CMAKE_FLAGS'] = (
+            '-DENABLE_THREAD_SANITIZER=ON -DENABLE_THREAD_SANITIZER=OFF '
+            '-DSKIP_EXTENSIONS=jemalloc -DSKIP_EXTENSIONS=other')
+        options = self.identity()['settings']
+        self.assertEqual(options[-2:], ['-DENABLE_THREAD_SANITIZER=ON',
+                                       '-DSKIP_EXTENSIONS=jemalloc'])
+
     def test_actual_source_digest_is_checked(self):
         (self.root / 'deps/duckdb/duckdb-1.4.5.tar.gz').write_bytes(b'corrupted')
         with self.assertRaisesRegex(ValueError, 'SHA-256'):

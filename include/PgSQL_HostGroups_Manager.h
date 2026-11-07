@@ -1,5 +1,6 @@
 #ifndef PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H
 #define PROXYSQL_PGSQL_HOSTGROUPS_MANAGER_H
+#include "PgSQL_Scheduler.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_gtid.h"
@@ -169,7 +170,8 @@ class PgSQL_SrvConnList {
 		conns->remove_index_fast((unsigned int)i);
 	}
 	PgSQL_Connection *remove(int);
-	PgSQL_Connection * get_random_MyConn(PgSQL_Session *sess, bool ff);
+	PgSQL_Connection * get_random_MyConn(PgSQL_Session *sess, bool ff,
+		PgSQL_Pool_Acquire_Mode mode = PgSQL_Pool_Acquire_Mode::Normal);
 	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const PgSQL_Connection * client_conn);
 	unsigned int conns_length() { return conns->len; }
 	void drop_all_connections();
@@ -852,7 +854,8 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 */
 	int remove_server_in_hg(uint32_t hid, const string& addr, uint16_t port);
 
-	PgSQL_Connection * get_MyConn_from_pool(unsigned int hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
+	PgSQL_Connection * get_MyConn_from_pool(unsigned int hid, PgSQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms,
+		PgSQL_Pool_Acquire_Mode mode = PgSQL_Pool_Acquire_Mode::Normal);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, PgSQL_Connection **, int);

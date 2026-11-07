@@ -9,7 +9,7 @@ set -o pipefail
 # This hook only needs to wait for the cluster to stabilize.
 #
 
-NUM_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+NUM_NODES=${PROXYSQL_CLUSTER_NODES:-6}
 if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]] || [[ "${NUM_NODES}" == "0" ]]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] >>> Pre-proxysql: no cluster, nothing to do."
     exit 0

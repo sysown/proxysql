@@ -317,6 +317,10 @@ sys.exit(0 if any('${TAP_GROUP}' in v for v in groups.values()) else 1)
     # Search for test binaries in known test directories
     TEST_DIRS="${WORKSPACE}/test/tap/tests/unit ${WORKSPACE}/test/tap/tests"
 
+    source "${SCRIPT_DIR}/unit-test-execution.bash"
+    UNIT_LOG_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/unit-test-logs"
+    mkdir -p "${UNIT_LOG_DIR}"
+
     TOTAL=0
     PASSED=0
     FAILED=0
@@ -341,13 +345,14 @@ sys.exit(0 if any('${TAP_GROUP}' in v for v in groups.values()) else 1)
 
         TOTAL=$((TOTAL + 1))
         echo ">>> Running: ${TEST_NAME}"
-        if "${TEST_BIN}"; then
+        if proxysql_run_unit_test "${UNIT_LOG_DIR}/${TEST_NAME}.log" "${TEST_BIN}"; then
             PASSED=$((PASSED + 1))
             echo ">>> PASSED: ${TEST_NAME}"
         else
+            rc=$?
             FAILED=$((FAILED + 1))
-            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}"
-            echo ">>> FAILED: ${TEST_NAME}"
+            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}(rc=${rc})"
+            echo ">>> FAILED: ${TEST_NAME} (rc=${rc})"
         fi
     done
 

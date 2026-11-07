@@ -5,6 +5,7 @@ using json = nlohmann::json;
 #include <iostream>     // std::cout
 #include <algorithm>    // std::sort
 #include <vector>       // std::vector
+#include <climits>      // INT_MAX for bounded debug output
 #include "proxysql.h"
 #include "cpp.h"
 #include "Command_Counter.h"
@@ -790,8 +791,87 @@ enum PGSQL_QUERY_command PgSQL_Query_Processor::query_parser_command_type(SQP_pa
 	return ret;
 }
 
+// A legacy classifier token borrows the digest/prefix storage. SQL whitespace,
+// comments and semicolons separate command keywords, including in raw prefixes.
+struct PgSQL_Command_Token {
+	const char* data = NULL;
+	size_t length = 0;
+
+	template<size_t N>
+	bool is(const char (&keyword)[N]) const {
+		return length == N - 1 && strncasecmp(data, keyword, N - 1) == 0;
+	}
+
+	template<size_t N>
+	bool starts_keyword(const char (&keyword)[N]) const {
+		if (length < N - 1 || strncasecmp(data, keyword, N - 1) != 0) return false;
+		if (length == N - 1) return true;
+		const unsigned char c = (unsigned char)data[N - 1];
+		return !(isalnum(c) || c == '_' || c == '$');
+	}
+
+	void remove_prefix(size_t n) { data += n; length -= n; }
+};
+
+class PgSQL_Command_Cursor {
+	const char* next;
+public:
+	explicit PgSQL_Command_Cursor(const char* text) : next(text) {}
+	PgSQL_Command_Token take(bool split_comments = true) {
+		next = pgsql_stmt_skip_lead(next, NULL);
+		while (next != NULL && *next == ';') next = pgsql_stmt_skip_lead(next + 1, NULL);
+		if (next == NULL) return {};
+		const char* start = next;
+		while (*next != '\0' && !isspace((unsigned char)*next) && *next != ';') {
+			if (split_comments && ((next[0] == '/' && next[1] == '*') ||
+				(next[0] == '-' && next[1] == '-'))) break;
+			++next;
+		}
+		return {start, (size_t)(next - start)};
+	}
+};
+
+// The token ends at a delimiter in the original text, not necessarily at NUL.
+// Keep the old SELECT refinement semantics without reading beyond that end,
+// including comments cut short by a token/prefix boundary and nested comments.
+static enum PGSQL_QUERY_command select_target_command_type(PgSQL_Command_Token token) {
+	enum PGSQL_QUERY_command cmd;
+	if (token.starts_keyword("pg_cancel_backend")) {
+		cmd = PGSQL_QUERY_CANCEL_BACKEND;
+		token.remove_prefix(sizeof("pg_cancel_backend") - 1);
+	} else if (token.starts_keyword("pg_terminate_backend")) {
+		cmd = PGSQL_QUERY_TERMINATE_BACKEND;
+		token.remove_prefix(sizeof("pg_terminate_backend") - 1);
+	} else {
+		return PGSQL_QUERY_SELECT;
+	}
+	for (;;) {
+		while (token.length && isspace((unsigned char)token.data[0])) token.remove_prefix(1);
+		if (token.length >= 2 && token.data[0] == '/' && token.data[1] == '*') {
+			size_t depth = 1;
+			token.remove_prefix(2);
+			while (depth && token.length) {
+				if (token.length >= 2 && token.data[0] == '/' && token.data[1] == '*') {
+					++depth;
+					token.remove_prefix(2);
+				} else if (token.length >= 2 && token.data[0] == '*' && token.data[1] == '/') {
+					--depth;
+					token.remove_prefix(2);
+				} else {
+					token.remove_prefix(1);
+				}
+			}
+			if (depth) return cmd;
+		} else if (token.length >= 2 && token.data[0] == '-' && token.data[1] == '-') {
+			while (token.length && token.data[0] != '\n') token.remove_prefix(1);
+		} else {
+			return (!token.length || token.data[0] == '(') ? cmd : PGSQL_QUERY_SELECT;
+		}
+	}
+}
+
 /**
- * @brief Tokenizer-based classification used when pgsql-query_processor_parser=0.
+ * @brief Read-only token classification used when pgsql-query_processor_parser=0.
  *
  * @param text Digest text, or the query prefix when digests are disabled. May be NULL.
  */
@@ -799,480 +879,481 @@ static enum PGSQL_QUERY_command legacy_command_type(const char* text) {
 	enum PGSQL_QUERY_command ret = PGSQL_QUERY_UNKNOWN;
 	char c1;
 
-	tokenizer_t tok;
-	tokenizer(&tok, text, " ;", TOKENIZER_NO_EMPTIES);
-	char* token = NULL;
+	PgSQL_Command_Cursor cursor(text);
+	PgSQL_Command_Token token;
 __get_token:
-	token = (char*)tokenize(&tok);
-	if (token == NULL) {
+	token = cursor.take();
+	if (token.data == NULL) {
 		goto __exit__query_parser_command_type;
 	}
 __remove_parenthesis:
-	if (token[0] == '(') {
-		if (strlen(token) > 1) {
-			token++;
+	if (token.data[0] == '(') {
+		if (token.length > 1) {
+			token.remove_prefix(1);
 			goto __remove_parenthesis;
 		}
 		else {
 			goto __get_token;
 		}
 	}
-	c1 = token[0];
-	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%s Prefix:%c\n", token, c1);
+	c1 = token.data[0];
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Command:%.*s Prefix:%c\n", (int)std::min(token.length, (size_t)INT_MAX), token.data, c1);
 	switch (c1) {
 	case 'a':
 	case 'A':
-		if (!strcasecmp("ALTER", token)) {
-			token = (char*)tokenize(&tok);
-			if (token == NULL) break;
-			if (!strcasecmp("TABLE", token)) ret = PGSQL_QUERY_ALTER_TABLE;
-			else if (!strcasecmp("INDEX", token)) ret = PGSQL_QUERY_ALTER_INDEX;
-			else if (!strcasecmp("VIEW", token)) ret = PGSQL_QUERY_ALTER_VIEW;
-			else if (!strcasecmp("MATERIALIZED", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("VIEW", token)) ret = PGSQL_QUERY_ALTER_MATERIALIZED_VIEW;
+		if (token.is("ALTER")) {
+			token = cursor.take();
+			if (token.data == NULL) break;
+			if (token.is("TABLE")) ret = PGSQL_QUERY_ALTER_TABLE;
+			else if (token.is("INDEX")) ret = PGSQL_QUERY_ALTER_INDEX;
+			else if (token.is("VIEW")) ret = PGSQL_QUERY_ALTER_VIEW;
+			else if (token.is("MATERIALIZED")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("VIEW")) ret = PGSQL_QUERY_ALTER_MATERIALIZED_VIEW;
 			}
-			else if (!strcasecmp("SEQUENCE", token)) ret = PGSQL_QUERY_ALTER_SEQUENCE;
-			else if (!strcasecmp("SCHEMA", token)) ret = PGSQL_QUERY_ALTER_SCHEMA;
-			else if (!strcasecmp("FUNCTION", token)) ret = PGSQL_QUERY_ALTER_FUNCTION;
-			else if (!strcasecmp("PROCEDURE", token)) ret = PGSQL_QUERY_ALTER_PROCEDURE;
-			else if (!strcasecmp("AGGREGATE", token)) ret = PGSQL_QUERY_ALTER_AGGREGATE;
-			else if (!strcasecmp("OPERATOR", token)) ret = PGSQL_QUERY_ALTER_OPERATOR;
-			else if (!strcasecmp("TYPE", token)) ret = PGSQL_QUERY_ALTER_TYPE;
-			else if (!strcasecmp("DOMAIN", token)) ret = PGSQL_QUERY_ALTER_DOMAIN;
-			else if (!strcasecmp("TRIGGER", token)) ret = PGSQL_QUERY_ALTER_TRIGGER;
-			else if (!strcasecmp("RULE", token)) ret = PGSQL_QUERY_ALTER_RULE;
-			else if (!strcasecmp("EXTENSION", token)) ret = PGSQL_QUERY_ALTER_EXTENSION;
-			else if (!strcasecmp("POLICY", token)) ret = PGSQL_QUERY_ALTER_POLICY;
-			else if (!strcasecmp("ROLE", token)) ret = PGSQL_QUERY_ALTER_ROLE;
-			else if (!strcasecmp("USER", token)) ret = PGSQL_QUERY_ALTER_USER;
-			else if (!strcasecmp("DATABASE", token)) ret = PGSQL_QUERY_ALTER_DATABASE;
-			else if (!strcasecmp("COLLATION", token)) ret = PGSQL_QUERY_ALTER_COLLATION;
-			else if (!strcasecmp("TEXT", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL) {
-					if (!strcasecmp("SEARCH", token)) {
-						token = (char*)tokenize(&tok);
-						if (token != NULL) {
-							if (!strcasecmp("CONFIGURATION", token)) ret = PGSQL_QUERY_ALTER_TEXT_SEARCH_CONFIGURATION;
-							else if (!strcasecmp("DICTIONARY", token)) ret = PGSQL_QUERY_ALTER_TEXT_SEARCH_DICTIONARY;
-							else if (!strcasecmp("TEMPLATE", token)) ret = PGSQL_QUERY_ALTER_TEXT_SEARCH_TEMPLATE;
-							else if (!strcasecmp("PARSER", token)) ret = PGSQL_QUERY_ALTER_TEXT_SEARCH_PARSER;
+			else if (token.is("SEQUENCE")) ret = PGSQL_QUERY_ALTER_SEQUENCE;
+			else if (token.is("SCHEMA")) ret = PGSQL_QUERY_ALTER_SCHEMA;
+			else if (token.is("FUNCTION")) ret = PGSQL_QUERY_ALTER_FUNCTION;
+			else if (token.is("PROCEDURE")) ret = PGSQL_QUERY_ALTER_PROCEDURE;
+			else if (token.is("AGGREGATE")) ret = PGSQL_QUERY_ALTER_AGGREGATE;
+			else if (token.is("OPERATOR")) ret = PGSQL_QUERY_ALTER_OPERATOR;
+			else if (token.is("TYPE")) ret = PGSQL_QUERY_ALTER_TYPE;
+			else if (token.is("DOMAIN")) ret = PGSQL_QUERY_ALTER_DOMAIN;
+			else if (token.is("TRIGGER")) ret = PGSQL_QUERY_ALTER_TRIGGER;
+			else if (token.is("RULE")) ret = PGSQL_QUERY_ALTER_RULE;
+			else if (token.is("EXTENSION")) ret = PGSQL_QUERY_ALTER_EXTENSION;
+			else if (token.is("POLICY")) ret = PGSQL_QUERY_ALTER_POLICY;
+			else if (token.is("ROLE")) ret = PGSQL_QUERY_ALTER_ROLE;
+			else if (token.is("USER")) ret = PGSQL_QUERY_ALTER_USER;
+			else if (token.is("DATABASE")) ret = PGSQL_QUERY_ALTER_DATABASE;
+			else if (token.is("COLLATION")) ret = PGSQL_QUERY_ALTER_COLLATION;
+			else if (token.is("TEXT")) {
+				token = cursor.take();
+				if (token.data != NULL) {
+					if (token.is("SEARCH")) {
+						token = cursor.take();
+						if (token.data != NULL) {
+							if (token.is("CONFIGURATION")) ret = PGSQL_QUERY_ALTER_TEXT_SEARCH_CONFIGURATION;
+							else if (token.is("DICTIONARY")) ret = PGSQL_QUERY_ALTER_TEXT_SEARCH_DICTIONARY;
+							else if (token.is("TEMPLATE")) ret = PGSQL_QUERY_ALTER_TEXT_SEARCH_TEMPLATE;
+							else if (token.is("PARSER")) ret = PGSQL_QUERY_ALTER_TEXT_SEARCH_PARSER;
 						}
 					}
 				}
 			}
-			else if (!strcasecmp("FOREIGN", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("TABLE", token)) ret = PGSQL_QUERY_ALTER_FOREIGN_TABLE;
+			else if (token.is("FOREIGN")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("TABLE")) ret = PGSQL_QUERY_ALTER_FOREIGN_TABLE;
 			}
-			else if (!strcasecmp("SERVER", token)) ret = PGSQL_QUERY_ALTER_SERVER;
-			else if (!strcasecmp("USER", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("MAPPING", token)) ret = PGSQL_QUERY_ALTER_USER_MAPPING;
+			else if (token.is("SERVER")) ret = PGSQL_QUERY_ALTER_SERVER;
+			else if (token.is("USER")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("MAPPING")) ret = PGSQL_QUERY_ALTER_USER_MAPPING;
 			}
-			else if (!strcasecmp("PUBLICATION", token)) ret = PGSQL_QUERY_ALTER_PUBLICATION;
-			else if (!strcasecmp("SUBSCRIPTION", token)) ret = PGSQL_QUERY_ALTER_SUBSCRIPTION;
-			else if (!strcasecmp("ACCESS", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("METHOD", token)) ret = PGSQL_QUERY_ALTER_ACCESS_METHOD;
+			else if (token.is("PUBLICATION")) ret = PGSQL_QUERY_ALTER_PUBLICATION;
+			else if (token.is("SUBSCRIPTION")) ret = PGSQL_QUERY_ALTER_SUBSCRIPTION;
+			else if (token.is("ACCESS")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("METHOD")) ret = PGSQL_QUERY_ALTER_ACCESS_METHOD;
 			}
-			else if (!strcasecmp("EVENT", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("TRIGGER", token)) ret = PGSQL_QUERY_ALTER_EVENT_TRIGGER;
+			else if (token.is("EVENT")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("TRIGGER")) ret = PGSQL_QUERY_ALTER_EVENT_TRIGGER;
 			}
-			else if (!strcasecmp("TRANSFORM", token)) ret = PGSQL_QUERY_ALTER_TRANSFORM;
-			else if (!strcasecmp("CAST", token)) ret = PGSQL_QUERY_ALTER_CAST;
-			else if (!strcasecmp("OPERATOR", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL) {
-					if (!strcasecmp("CLASS", token)) ret = PGSQL_QUERY_ALTER_OPERATOR_CLASS;
-					else if (!strcasecmp("FAMILY", token)) ret = PGSQL_QUERY_ALTER_OPERATOR_FAMILY;
+			else if (token.is("TRANSFORM")) ret = PGSQL_QUERY_ALTER_TRANSFORM;
+			else if (token.is("CAST")) ret = PGSQL_QUERY_ALTER_CAST;
+			else if (token.is("OPERATOR")) {
+				token = cursor.take();
+				if (token.data != NULL) {
+					if (token.is("CLASS")) ret = PGSQL_QUERY_ALTER_OPERATOR_CLASS;
+					else if (token.is("FAMILY")) ret = PGSQL_QUERY_ALTER_OPERATOR_FAMILY;
 				}
 			}
-			else if (!strcasecmp("TABLESPACE", token)) ret = PGSQL_QUERY_ALTER_TABLESPACE;
+			else if (token.is("TABLESPACE")) ret = PGSQL_QUERY_ALTER_TABLESPACE;
 			break;
 		}
-		if (!strcasecmp("ANALYZE", token)) {
+		if (token.is("ANALYZE")) {
 			ret = PGSQL_QUERY_ANALYZE;
 			break;
 		}
-		if (!strcasecmp("ABORT", token)) {
+		if (token.is("ABORT")) {
 			ret = PGSQL_QUERY_ROLLBACK;
 			break;
 		}
 		break;
 	case 'b':
 	case 'B':
-		if (!strcasecmp("BEGIN", token)) {
+		if (token.is("BEGIN")) {
 			ret = PGSQL_QUERY_BEGIN;
 			break;
 		}
 		break;
 	case 'c':
 	case 'C':
-		if (!strcasecmp("CALL", token)) {
+		if (token.is("CALL")) {
 			ret = PGSQL_QUERY_CALL;
 			break;
 		}
-		if (!strcasecmp("CHECKPOINT", token)) {
+		if (token.is("CHECKPOINT")) {
 			ret = PGSQL_QUERY_CHECKPOINT;
 			break;
 		}
-		if (!strcasecmp("CLOSE", token)) {
-			token = (char*)tokenize(&tok);
-			if (token != NULL && !strcasecmp("CURSOR", token)) ret = PGSQL_QUERY_CLOSE_CURSOR;
+		if (token.is("CLOSE")) {
+			token = cursor.take();
+			if (token.data != NULL && token.is("CURSOR")) ret = PGSQL_QUERY_CLOSE_CURSOR;
 			break;
 		}
-		if (!strcasecmp("CLUSTER", token)) {
+		if (token.is("CLUSTER")) {
 			ret = PGSQL_QUERY_CLUSTER; 
 			break;
 		}
-		if (!strcasecmp("COMMENT", token)) {
+		if (token.is("COMMENT")) {
 			ret = PGSQL_QUERY_COMMENT;
 			break;
 		}
-		if (!strcasecmp("COMMIT", token)) {
+		if (token.is("COMMIT")) {
 			ret = PGSQL_QUERY_COMMIT;
 			break;
 		}
-		if (!strcasecmp("COPY", token)) {
+		if (token.is("COPY")) {
 			ret = PGSQL_QUERY_COPY;
 			break;
 		}
-		if (!strcasecmp("CREATE", token)) {
-			token = (char*)tokenize(&tok);
-			if (token == NULL) break;
-			if (!strcasecmp("TABLE", token)) ret = PGSQL_QUERY_CREATE_TABLE;
-			else if (!strcasecmp("INDEX", token)) ret = PGSQL_QUERY_CREATE_INDEX;
-			else if (!strcasecmp("VIEW", token)) ret = PGSQL_QUERY_CREATE_VIEW;
-			else if (!strcasecmp("MATERIALIZED", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("VIEW", token)) ret = PGSQL_QUERY_CREATE_MATERIALIZED_VIEW;
+		if (token.is("CREATE")) {
+			token = cursor.take();
+			if (token.data == NULL) break;
+			if (token.is("TABLE")) ret = PGSQL_QUERY_CREATE_TABLE;
+			else if (token.is("INDEX")) ret = PGSQL_QUERY_CREATE_INDEX;
+			else if (token.is("VIEW")) ret = PGSQL_QUERY_CREATE_VIEW;
+			else if (token.is("MATERIALIZED")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("VIEW")) ret = PGSQL_QUERY_CREATE_MATERIALIZED_VIEW;
 			}
-			else if (!strcasecmp("SEQUENCE", token)) ret = PGSQL_QUERY_CREATE_SEQUENCE;
-			else if (!strcasecmp("SCHEMA", token)) ret = PGSQL_QUERY_CREATE_SCHEMA;
-			else if (!strcasecmp("FUNCTION", token)) ret = PGSQL_QUERY_CREATE_FUNCTION;
-			else if (!strcasecmp("PROCEDURE", token)) ret = PGSQL_QUERY_CREATE_PROCEDURE;
-			else if (!strcasecmp("AGGREGATE", token)) ret = PGSQL_QUERY_CREATE_AGGREGATE;
-			else if (!strcasecmp("OPERATOR", token)) ret = PGSQL_QUERY_CREATE_OPERATOR;
-			else if (!strcasecmp("TYPE", token)) ret = PGSQL_QUERY_CREATE_TYPE;
-			else if (!strcasecmp("DOMAIN", token)) ret = PGSQL_QUERY_CREATE_DOMAIN;
-			else if (!strcasecmp("TRIGGER", token)) ret = PGSQL_QUERY_CREATE_TRIGGER;
-			else if (!strcasecmp("RULE", token)) ret = PGSQL_QUERY_CREATE_RULE;
-			else if (!strcasecmp("EXTENSION", token)) ret = PGSQL_QUERY_CREATE_EXTENSION;
-			else if (!strcasecmp("POLICY", token)) ret = PGSQL_QUERY_CREATE_POLICY;
-			else if (!strcasecmp("ROLE", token)) ret = PGSQL_QUERY_CREATE_ROLE;
-			else if (!strcasecmp("USER", token)) ret = PGSQL_QUERY_CREATE_USER;
-			else if (!strcasecmp("DATABASE", token)) ret = PGSQL_QUERY_CREATE_DATABASE;
-			else if (!strcasecmp("COLLATION", token)) ret = PGSQL_QUERY_CREATE_COLLATION;
-			else if (!strcasecmp("TEXT", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL) {
-					if (!strcasecmp("SEARCH", token)) {
-						token = (char*)tokenize(&tok);
-						if (token != NULL) {
-							if (!strcasecmp("CONFIGURATION", token)) ret = PGSQL_QUERY_CREATE_TEXT_SEARCH_CONFIGURATION;
-							else if (!strcasecmp("DICTIONARY", token)) ret = PGSQL_QUERY_CREATE_TEXT_SEARCH_DICTIONARY;
-							else if (!strcasecmp("TEMPLATE", token)) ret = PGSQL_QUERY_CREATE_TEXT_SEARCH_TEMPLATE;
-							else if (!strcasecmp("PARSER", token)) ret = PGSQL_QUERY_CREATE_TEXT_SEARCH_PARSER;
+			else if (token.is("SEQUENCE")) ret = PGSQL_QUERY_CREATE_SEQUENCE;
+			else if (token.is("SCHEMA")) ret = PGSQL_QUERY_CREATE_SCHEMA;
+			else if (token.is("FUNCTION")) ret = PGSQL_QUERY_CREATE_FUNCTION;
+			else if (token.is("PROCEDURE")) ret = PGSQL_QUERY_CREATE_PROCEDURE;
+			else if (token.is("AGGREGATE")) ret = PGSQL_QUERY_CREATE_AGGREGATE;
+			else if (token.is("OPERATOR")) ret = PGSQL_QUERY_CREATE_OPERATOR;
+			else if (token.is("TYPE")) ret = PGSQL_QUERY_CREATE_TYPE;
+			else if (token.is("DOMAIN")) ret = PGSQL_QUERY_CREATE_DOMAIN;
+			else if (token.is("TRIGGER")) ret = PGSQL_QUERY_CREATE_TRIGGER;
+			else if (token.is("RULE")) ret = PGSQL_QUERY_CREATE_RULE;
+			else if (token.is("EXTENSION")) ret = PGSQL_QUERY_CREATE_EXTENSION;
+			else if (token.is("POLICY")) ret = PGSQL_QUERY_CREATE_POLICY;
+			else if (token.is("ROLE")) ret = PGSQL_QUERY_CREATE_ROLE;
+			else if (token.is("USER")) ret = PGSQL_QUERY_CREATE_USER;
+			else if (token.is("DATABASE")) ret = PGSQL_QUERY_CREATE_DATABASE;
+			else if (token.is("COLLATION")) ret = PGSQL_QUERY_CREATE_COLLATION;
+			else if (token.is("TEXT")) {
+				token = cursor.take();
+				if (token.data != NULL) {
+					if (token.is("SEARCH")) {
+						token = cursor.take();
+						if (token.data != NULL) {
+							if (token.is("CONFIGURATION")) ret = PGSQL_QUERY_CREATE_TEXT_SEARCH_CONFIGURATION;
+							else if (token.is("DICTIONARY")) ret = PGSQL_QUERY_CREATE_TEXT_SEARCH_DICTIONARY;
+							else if (token.is("TEMPLATE")) ret = PGSQL_QUERY_CREATE_TEXT_SEARCH_TEMPLATE;
+							else if (token.is("PARSER")) ret = PGSQL_QUERY_CREATE_TEXT_SEARCH_PARSER;
 						}
 					}
 				}
 			}
-			else if (!strcasecmp("FOREIGN", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("TABLE", token)) ret = PGSQL_QUERY_CREATE_FOREIGN_TABLE;
+			else if (token.is("FOREIGN")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("TABLE")) ret = PGSQL_QUERY_CREATE_FOREIGN_TABLE;
 			}
-			else if (!strcasecmp("SERVER", token)) ret = PGSQL_QUERY_CREATE_SERVER;
-			else if (!strcasecmp("USER", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("MAPPING", token)) ret = PGSQL_QUERY_CREATE_USER_MAPPING;
+			else if (token.is("SERVER")) ret = PGSQL_QUERY_CREATE_SERVER;
+			else if (token.is("USER")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("MAPPING")) ret = PGSQL_QUERY_CREATE_USER_MAPPING;
 			}
-			else if (!strcasecmp("PUBLICATION", token)) ret = PGSQL_QUERY_CREATE_PUBLICATION;
-			else if (!strcasecmp("SUBSCRIPTION", token)) ret = PGSQL_QUERY_CREATE_SUBSCRIPTION;
-			else if (!strcasecmp("ACCESS", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("METHOD", token)) ret = PGSQL_QUERY_CREATE_ACCESS_METHOD;
+			else if (token.is("PUBLICATION")) ret = PGSQL_QUERY_CREATE_PUBLICATION;
+			else if (token.is("SUBSCRIPTION")) ret = PGSQL_QUERY_CREATE_SUBSCRIPTION;
+			else if (token.is("ACCESS")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("METHOD")) ret = PGSQL_QUERY_CREATE_ACCESS_METHOD;
 			}
-			else if (!strcasecmp("EVENT", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("TRIGGER", token)) ret = PGSQL_QUERY_CREATE_EVENT_TRIGGER;
+			else if (token.is("EVENT")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("TRIGGER")) ret = PGSQL_QUERY_CREATE_EVENT_TRIGGER;
 			}
-			else if (!strcasecmp("TRANSFORM", token)) ret = PGSQL_QUERY_CREATE_TRANSFORM;
-			else if (!strcasecmp("CAST", token)) ret = PGSQL_QUERY_CREATE_CAST;
-			else if (!strcasecmp("OPERATOR", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL) {
-					if (!strcasecmp("CLASS", token)) ret = PGSQL_QUERY_CREATE_OPERATOR_CLASS;
-					else if (!strcasecmp("FAMILY", token)) ret = PGSQL_QUERY_CREATE_OPERATOR_FAMILY;
+			else if (token.is("TRANSFORM")) ret = PGSQL_QUERY_CREATE_TRANSFORM;
+			else if (token.is("CAST")) ret = PGSQL_QUERY_CREATE_CAST;
+			else if (token.is("OPERATOR")) {
+				token = cursor.take();
+				if (token.data != NULL) {
+					if (token.is("CLASS")) ret = PGSQL_QUERY_CREATE_OPERATOR_CLASS;
+					else if (token.is("FAMILY")) ret = PGSQL_QUERY_CREATE_OPERATOR_FAMILY;
 				}
 			}
-			else if (!strcasecmp("TABLESPACE", token)) ret = PGSQL_QUERY_CREATE_TABLESPACE;
+			else if (token.is("TABLESPACE")) ret = PGSQL_QUERY_CREATE_TABLESPACE;
 			break;
 		}
 		break;
 	case 'd':
 	case 'D':
-		if (!strcasecmp("DEALLOCATE", token)) {
+		if (token.is("DEALLOCATE")) {
 			ret = PGSQL_QUERY_DEALLOCATE;
 			break;
 		}
-		if (!strcasecmp("DECLARE", token)) {
-			token = (char*)tokenize(&tok);
-			if (token != NULL && !strcasecmp("CURSOR", token)) ret = PGSQL_QUERY_DECLARE_CURSOR;
+		if (token.is("DECLARE")) {
+			token = cursor.take();
+			if (token.data != NULL && token.is("CURSOR")) ret = PGSQL_QUERY_DECLARE_CURSOR;
 			break;
 		}
-		if (!strcasecmp("DELETE", token)) {
+		if (token.is("DELETE")) {
 			ret = PGSQL_QUERY_DELETE;
 			break;
 		}
-		if (!strcasecmp("DISCARD", token)) {
+		if (token.is("DISCARD")) {
 			ret = PGSQL_QUERY_DISCARD;
 			break;
 		}
-		if (!strcasecmp("DROP", token)) {
-			token = (char*)tokenize(&tok);
-			if (token == NULL) break;
-			if (!strcasecmp("TABLE", token)) ret = PGSQL_QUERY_DROP_TABLE;
-			else if (!strcasecmp("INDEX", token)) ret = PGSQL_QUERY_DROP_INDEX;
-			else if (!strcasecmp("VIEW", token)) ret = PGSQL_QUERY_DROP_VIEW;
-			else if (!strcasecmp("MATERIALIZED", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("VIEW", token)) ret = PGSQL_QUERY_DROP_MATERIALIZED_VIEW;
+		if (token.is("DROP")) {
+			token = cursor.take();
+			if (token.data == NULL) break;
+			if (token.is("TABLE")) ret = PGSQL_QUERY_DROP_TABLE;
+			else if (token.is("INDEX")) ret = PGSQL_QUERY_DROP_INDEX;
+			else if (token.is("VIEW")) ret = PGSQL_QUERY_DROP_VIEW;
+			else if (token.is("MATERIALIZED")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("VIEW")) ret = PGSQL_QUERY_DROP_MATERIALIZED_VIEW;
 			}
-			else if (!strcasecmp("SEQUENCE", token)) ret = PGSQL_QUERY_DROP_SEQUENCE;
-			else if (!strcasecmp("SCHEMA", token)) ret = PGSQL_QUERY_DROP_SCHEMA;
-			else if (!strcasecmp("FUNCTION", token)) ret = PGSQL_QUERY_DROP_FUNCTION;
-			else if (!strcasecmp("PROCEDURE", token)) ret = PGSQL_QUERY_DROP_PROCEDURE;
-			else if (!strcasecmp("AGGREGATE", token)) ret = PGSQL_QUERY_DROP_AGGREGATE;
-			else if (!strcasecmp("OPERATOR", token)) ret = PGSQL_QUERY_DROP_OPERATOR;
-			else if (!strcasecmp("TYPE", token)) ret = PGSQL_QUERY_DROP_TYPE;
-			else if (!strcasecmp("DOMAIN", token)) ret = PGSQL_QUERY_DROP_DOMAIN;
-			else if (!strcasecmp("TRIGGER", token)) ret = PGSQL_QUERY_DROP_TRIGGER;
-			else if (!strcasecmp("RULE", token)) ret = PGSQL_QUERY_DROP_RULE;
-			else if (!strcasecmp("EXTENSION", token)) ret = PGSQL_QUERY_DROP_EXTENSION;
-			else if (!strcasecmp("POLICY", token)) ret = PGSQL_QUERY_DROP_POLICY;
-			else if (!strcasecmp("ROLE", token)) ret = PGSQL_QUERY_DROP_ROLE;
-			else if (!strcasecmp("USER", token)) ret = PGSQL_QUERY_DROP_USER;
-			else if (!strcasecmp("DATABASE", token)) ret = PGSQL_QUERY_DROP_DATABASE;
-			else if (!strcasecmp("COLLATION", token)) ret = PGSQL_QUERY_DROP_COLLATION;
-			else if (!strcasecmp("TEXT", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL) {
-					if (!strcasecmp("SEARCH", token)) {
-						token = (char*)tokenize(&tok);
-						if (token != NULL) {
-							if (!strcasecmp("CONFIGURATION", token)) ret = PGSQL_QUERY_DROP_TEXT_SEARCH_CONFIGURATION;
-							else if (!strcasecmp("DICTIONARY", token)) ret = PGSQL_QUERY_DROP_TEXT_SEARCH_DICTIONARY;
-							else if (!strcasecmp("TEMPLATE", token)) ret = PGSQL_QUERY_DROP_TEXT_SEARCH_TEMPLATE;
-							else if (!strcasecmp("PARSER", token)) ret = PGSQL_QUERY_DROP_TEXT_SEARCH_PARSER;
+			else if (token.is("SEQUENCE")) ret = PGSQL_QUERY_DROP_SEQUENCE;
+			else if (token.is("SCHEMA")) ret = PGSQL_QUERY_DROP_SCHEMA;
+			else if (token.is("FUNCTION")) ret = PGSQL_QUERY_DROP_FUNCTION;
+			else if (token.is("PROCEDURE")) ret = PGSQL_QUERY_DROP_PROCEDURE;
+			else if (token.is("AGGREGATE")) ret = PGSQL_QUERY_DROP_AGGREGATE;
+			else if (token.is("OPERATOR")) ret = PGSQL_QUERY_DROP_OPERATOR;
+			else if (token.is("TYPE")) ret = PGSQL_QUERY_DROP_TYPE;
+			else if (token.is("DOMAIN")) ret = PGSQL_QUERY_DROP_DOMAIN;
+			else if (token.is("TRIGGER")) ret = PGSQL_QUERY_DROP_TRIGGER;
+			else if (token.is("RULE")) ret = PGSQL_QUERY_DROP_RULE;
+			else if (token.is("EXTENSION")) ret = PGSQL_QUERY_DROP_EXTENSION;
+			else if (token.is("POLICY")) ret = PGSQL_QUERY_DROP_POLICY;
+			else if (token.is("ROLE")) ret = PGSQL_QUERY_DROP_ROLE;
+			else if (token.is("USER")) ret = PGSQL_QUERY_DROP_USER;
+			else if (token.is("DATABASE")) ret = PGSQL_QUERY_DROP_DATABASE;
+			else if (token.is("COLLATION")) ret = PGSQL_QUERY_DROP_COLLATION;
+			else if (token.is("TEXT")) {
+				token = cursor.take();
+				if (token.data != NULL) {
+					if (token.is("SEARCH")) {
+						token = cursor.take();
+						if (token.data != NULL) {
+							if (token.is("CONFIGURATION")) ret = PGSQL_QUERY_DROP_TEXT_SEARCH_CONFIGURATION;
+							else if (token.is("DICTIONARY")) ret = PGSQL_QUERY_DROP_TEXT_SEARCH_DICTIONARY;
+							else if (token.is("TEMPLATE")) ret = PGSQL_QUERY_DROP_TEXT_SEARCH_TEMPLATE;
+							else if (token.is("PARSER")) ret = PGSQL_QUERY_DROP_TEXT_SEARCH_PARSER;
 						}
 					}
 				}
 			}
-			else if (!strcasecmp("FOREIGN", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("TABLE", token)) ret = PGSQL_QUERY_DROP_FOREIGN_TABLE;
+			else if (token.is("FOREIGN")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("TABLE")) ret = PGSQL_QUERY_DROP_FOREIGN_TABLE;
 			}
-			else if (!strcasecmp("SERVER", token)) ret = PGSQL_QUERY_DROP_SERVER;
-			else if (!strcasecmp("USER", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("MAPPING", token)) ret = PGSQL_QUERY_DROP_USER_MAPPING;
+			else if (token.is("SERVER")) ret = PGSQL_QUERY_DROP_SERVER;
+			else if (token.is("USER")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("MAPPING")) ret = PGSQL_QUERY_DROP_USER_MAPPING;
 			}
-			else if (!strcasecmp("PUBLICATION", token)) ret = PGSQL_QUERY_DROP_PUBLICATION;
-			else if (!strcasecmp("SUBSCRIPTION", token)) ret = PGSQL_QUERY_DROP_SUBSCRIPTION;
-			else if (!strcasecmp("ACCESS", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("METHOD", token)) ret = PGSQL_QUERY_DROP_ACCESS_METHOD;
+			else if (token.is("PUBLICATION")) ret = PGSQL_QUERY_DROP_PUBLICATION;
+			else if (token.is("SUBSCRIPTION")) ret = PGSQL_QUERY_DROP_SUBSCRIPTION;
+			else if (token.is("ACCESS")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("METHOD")) ret = PGSQL_QUERY_DROP_ACCESS_METHOD;
 			}
-			else if (!strcasecmp("EVENT", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("TRIGGER", token)) ret = PGSQL_QUERY_DROP_EVENT_TRIGGER;
+			else if (token.is("EVENT")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("TRIGGER")) ret = PGSQL_QUERY_DROP_EVENT_TRIGGER;
 			}
-			else if (!strcasecmp("TRANSFORM", token)) ret = PGSQL_QUERY_DROP_TRANSFORM;
-			else if (!strcasecmp("CAST", token)) ret = PGSQL_QUERY_DROP_CAST;
-			else if (!strcasecmp("OPERATOR", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL) {
-					if (!strcasecmp("CLASS", token)) ret = PGSQL_QUERY_DROP_OPERATOR_CLASS;
-					else if (!strcasecmp("FAMILY", token)) ret = PGSQL_QUERY_DROP_OPERATOR_FAMILY;
+			else if (token.is("TRANSFORM")) ret = PGSQL_QUERY_DROP_TRANSFORM;
+			else if (token.is("CAST")) ret = PGSQL_QUERY_DROP_CAST;
+			else if (token.is("OPERATOR")) {
+				token = cursor.take();
+				if (token.data != NULL) {
+					if (token.is("CLASS")) ret = PGSQL_QUERY_DROP_OPERATOR_CLASS;
+					else if (token.is("FAMILY")) ret = PGSQL_QUERY_DROP_OPERATOR_FAMILY;
 				}
 			}
-			else if (!strcasecmp("TABLESPACE", token)) ret = PGSQL_QUERY_DROP_TABLESPACE;
+			else if (token.is("TABLESPACE")) ret = PGSQL_QUERY_DROP_TABLESPACE;
 			break;
 		}
 		break;
 	case 'e':
 	case 'E':
-		if (!strcasecmp("EXECUTE", token)) {
+		if (token.is("EXECUTE")) {
 			ret = PGSQL_QUERY_EXECUTE;
 			break;
 		}
-		if (!strcasecmp("EXPLAIN", token)) {
+		if (token.is("EXPLAIN")) {
 			ret = PGSQL_QUERY_EXPLAIN;
 			break;
 		}
 		break;
 	case 'f':
 	case 'F':
-		if (!strcasecmp("FETCH", token)) {
+		if (token.is("FETCH")) {
 			ret = PGSQL_QUERY_FETCH;
 			break;
 		}
 		break;
 	case 'g':
 	case 'G':
-		if (!strcasecmp("GRANT", token)) {
+		if (token.is("GRANT")) {
 			ret = PGSQL_QUERY_GRANT;
 			break;
 		}
 		break;
 	case 'i':
 	case 'I':
-		if (!strcasecmp("INSERT", token)) {
+		if (token.is("INSERT")) {
 			ret = PGSQL_QUERY_INSERT;
 			break;
 		}
-		if (!strcasecmp("IMPORT", token)) {
-			token = (char*)tokenize(&tok);
-			if (token != NULL && !strcasecmp("FOREIGN", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("SCHEMA", token)) ret = PGSQL_QUERY_IMPORT_FOREIGN_SCHEMA;
+		if (token.is("IMPORT")) {
+			token = cursor.take();
+			if (token.data != NULL && token.is("FOREIGN")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("SCHEMA")) ret = PGSQL_QUERY_IMPORT_FOREIGN_SCHEMA;
 			}
 			break;
 		}
 		break;
 	case 'l':
 	case 'L':
-		if (!strcasecmp("LISTEN", token)) {
+		if (token.is("LISTEN")) {
 			ret = PGSQL_QUERY_LISTEN;
 			break;
 		}
-		if (!strcasecmp("LOAD", token)) {
+		if (token.is("LOAD")) {
 			ret = PGSQL_QUERY_UNKNOWN; // Not in the enum, but exists in PostgreSQL
 			break;
 		}
-		if (!strcasecmp("LOCK", token)) {
+		if (token.is("LOCK")) {
 			ret = PGSQL_QUERY_LOCK;
 			break;
 		}
 		break;
 	case 'm':
 	case 'M':
-		if (!strcasecmp("MERGE", token)) {
+		if (token.is("MERGE")) {
 			ret = PGSQL_QUERY_MERGE;
 			break;
 		}
-		if (!strcasecmp("MOVE", token)) {
+		if (token.is("MOVE")) {
 			ret = PGSQL_QUERY_MOVE;
 			break;
 		}
 		break;
 	case 'n':
 	case 'N':
-		if (!strcasecmp("NOTIFY", token)) {
+		if (token.is("NOTIFY")) {
 			ret = PGSQL_QUERY_NOTIFY;
 			break;
 		}
 		break;
 	case 'p':
 	case 'P':
-		if (!strcasecmp("PREPARE", token)) {
+		if (token.is("PREPARE")) {
 			ret = PGSQL_QUERY_PREPARE;
 			break;
 		}
 		break;
 	case 'r':
 	case 'R':
-		if (!strcasecmp("REFRESH", token)) {
-			token = (char*)tokenize(&tok);
-			if (token != NULL && !strcasecmp("MATERIALIZED", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("VIEW", token)) ret = PGSQL_QUERY_REFRESH_MATERIALIZED_VIEW;
+		if (token.is("REFRESH")) {
+			token = cursor.take();
+			if (token.data != NULL && token.is("MATERIALIZED")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("VIEW")) ret = PGSQL_QUERY_REFRESH_MATERIALIZED_VIEW;
 			}
 			break;
 		}
-		if (!strcasecmp("REINDEX", token)) {
+		if (token.is("REINDEX")) {
 			ret = PGSQL_QUERY_REINDEX;
 			break;
 		}
-		if (!strcasecmp("RELEASE", token)) {
-			token = (char*)tokenize(&tok);
-			if (token != NULL && !strcasecmp("SAVEPOINT", token)) ret = PGSQL_QUERY_RELEASE_SAVEPOINT;
+		if (token.is("RELEASE")) {
+			token = cursor.take();
+			if (token.data != NULL && token.is("SAVEPOINT")) ret = PGSQL_QUERY_RELEASE_SAVEPOINT;
 			break;
 		}
-		if (!strcasecmp("RESET", token)) {
+		if (token.is("RESET")) {
 			ret = PGSQL_QUERY_RESET;
 			break;
 		}
-		if (!strcasecmp("REVOKE", token)) {
+		if (token.is("REVOKE")) {
 			ret = PGSQL_QUERY_REVOKE;
 			break;
 		}
-		if (!strcasecmp("ROLLBACK", token)) {
-			token = (char*)tokenize(&tok);
-			if (token == NULL) {
+		if (token.is("ROLLBACK")) {
+			token = cursor.take();
+			if (token.data == NULL) {
 				ret = PGSQL_QUERY_ROLLBACK;
 			}
-			else if (!strcasecmp("TO", token)) {
-				token = (char*)tokenize(&tok);
-				if (token != NULL && !strcasecmp("SAVEPOINT", token)) ret = PGSQL_QUERY_ROLLBACK_TO_SAVEPOINT;
+			else if (token.is("TO")) {
+				token = cursor.take();
+				if (token.data != NULL && token.is("SAVEPOINT")) ret = PGSQL_QUERY_ROLLBACK_TO_SAVEPOINT;
 			}
 			break;
 		}
 		break;
 	case 's':
 	case 'S':
-		if (!strcasecmp("SAVEPOINT", token)) {
+		if (token.is("SAVEPOINT")) {
 			ret = PGSQL_QUERY_SAVEPOINT;
 			break;
 		}
-		if (!strcasecmp("SELECT", token)) {
-			token = (char*)tokenize(&tok);
-			if (token == NULL) break;
+		if (token.is("SELECT")) {
+			// Retain inline comments for the bounded function-call refinement: a
+			// suffix such as "pg_cancel_backend/**/.x" must remain a SELECT.
+			token = cursor.take(false);
+			if (token.data == NULL) break;
 			ret = select_target_command_type(token);
 			break;
 		}
-		if (!strcasecmp("SET", token)) {
+		if (token.is("SET")) {
 			ret = PGSQL_QUERY_SET;
 			break;
 		}
-		if (!strcasecmp("SHOW", token)) {
+		if (token.is("SHOW")) {
 			ret = PGSQL_QUERY_SHOW;
 			break;
 		}
-		if (!strcasecmp("START", token)) {
-			token = (char*)tokenize(&tok);
-			if (token != NULL && !strcasecmp("TRANSACTION", token)) ret = PGSQL_QUERY_BEGIN;
+		if (token.is("START")) {
+			token = cursor.take();
+			if (token.data != NULL && token.is("TRANSACTION")) ret = PGSQL_QUERY_BEGIN;
 			break;
 		}
-		if (!strcasecmp("START_REPLICATION", token)) {
+		if (token.is("START_REPLICATION")) {
 			ret = PGSQL_QUERY_START_REPLICATION;
 			break;
 		}
 		break;
 	case 't':
 	case 'T':
-		if (!strcasecmp("TRUNCATE", token)) {
+		if (token.is("TRUNCATE")) {
 			ret = PGSQL_QUERY_TRUNCATE;
 			break;
 		}
 		break;
 	case 'u':
 	case 'U':
-		if (!strcasecmp("UNLISTEN", token)) {
+		if (token.is("UNLISTEN")) {
 			ret = PGSQL_QUERY_UNLISTEN;
 			break;
 		}
-		if (!strcasecmp("UPDATE", token)) {
+		if (token.is("UPDATE")) {
 			ret = PGSQL_QUERY_UPDATE;
 			break;
 		}
 		break;
 	case 'v':
 	case 'V':
-		if (!strcasecmp("VACUUM", token)) {
+		if (token.is("VACUUM")) {
 			ret = PGSQL_QUERY_VACUUM;
 			break;
 		}
@@ -1282,6 +1363,5 @@ __remove_parenthesis:
 	}
 
 __exit__query_parser_command_type:
-	free_tokenizer(&tok);
 	return ret;
 }

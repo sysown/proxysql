@@ -146,6 +146,21 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
             errors.append('consumer matrix bypasses selected tiers: '+str(identity))
             continue
         required_groups=set(row['groups'])
+        group_axis=row.get('group_axis')
+        axis_groups=set()
+        if group_axis is not None:
+            axes=row.get('axes',{})
+            values=axes.get(group_axis) if isinstance(axes,dict) and isinstance(group_axis,str) else None
+            if (not isinstance(values,list) or not values
+                or any(not isinstance(value,str) or not value for value in values)
+                or not required_groups.issubset(values)):
+                errors.append('invalid product group axis: '+str(identity))
+                continue
+            axis_groups=set(values)
+            # The shared engine can land before a source branch adds its shards.
+            # Its original groups remain mandatory; additional cells become
+            # required as soon as their product metadata is present.
+            required_groups.update(axis_groups & known_groups)
         execution_step=row.get('execution_step')
         if not required_groups and (not isinstance(execution_step,str) or not execution_step.strip()):
             errors.append('group-less consumer lacks a valid execution_step: '+str(identity))
@@ -196,9 +211,15 @@ def validate_routes(rows,callers,engines,known_groups,migrated):
                             execution_ran=True
                         executed=('run-tests-isolated.bash' in run or 'run-unit-tests-asan-coverage.bash' in run or 'unit-tests' in run)
                         if not executed or not allowed(step.get('if'),tier,mode,inputs,row['job']):continue
-                        value=resolve(step.get('env',{}).get('TAP_GROUP',''),inputs)
+                        value=resolve(step.get('env',{}).get('TAP_GROUP',job.get('env',{}).get('TAP_GROUP','')),inputs)
                         if value:wired.add(value)
                         wired.update(re.findall(r"TAP_GROUP=[\"']?([a-zA-Z0-9_-]+)",run))
+                        if group_axis:
+                            expression='${{ matrix.'+group_axis+' }}'
+                            assignment=(r'(?m)^\s*(?:export\s+)?TAP_GROUP=["\']?\$\{\{\s*matrix\.'
+                                        +re.escape(group_axis)+r'\s*\}\}["\']?\s*$')
+                            if same_expression(value,expression) or re.search(assignment,run):
+                                wired.update(axis_groups & known_groups)
                 if not required_groups and not execution_ran and not matrix_source_failed:
                     errors.append('consumer execution missing or disabled: '+str(identity)+' on '+tier+'/'+mode)
                 per_mode.append(wired)

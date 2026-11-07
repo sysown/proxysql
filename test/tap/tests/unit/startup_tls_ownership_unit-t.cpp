@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
 		skip(1, "startup TLS ownership requires an ASan DEBUG daemon");
 	} else {
 		ok(waited == child && child > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0,
-			"the real daemon releases its displaced startup TLS context without sanitizer errors");
+			"the real daemon releases generated certificates and its displaced startup TLS context without sanitizer errors");
 	}
 	return exit_status();
 }

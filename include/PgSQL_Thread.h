@@ -14,6 +14,7 @@
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
 #include <atomic>
+#include <deque>
 
 #include "prometheus_helpers.h"
 
@@ -152,9 +153,12 @@ struct CopyCmdMatcher {
 	}
 };
 
+template<class Worker, class Session, class Connection, class Pool> class Worker_Scheduler;
+
 class __attribute__((aligned(64))) PgSQL_Thread : public Base_Thread
 {
 private:
+	template<class, class, class, class> friend class Worker_Scheduler;
 	unsigned int servers_table_version_previous;
 	unsigned int servers_table_version_current;
 	unsigned long long last_processing_idles;
@@ -164,6 +168,11 @@ private:
 
 	PtrArray* cached_connections;
 	unsigned int push_local_counter;	// round-robin counter for bounded local caching: cache 1-in-N where N = pgsql_threads
+#ifdef PROXYSQL31
+	bool collecting_releases = false;
+	std::vector<unsigned> released_hostgroups;
+	std::deque<PgSQL_Session*> session_continuations;
+#endif
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
@@ -396,7 +405,13 @@ public:
 	void run___cleanup_mirror_queue();
 
 	//void ProcessAllMyDS_BeforePoll();
-	//void ProcessAllMyDS_AfterPoll();
+#ifdef PROXYSQL31
+	// PostgreSQL's scan records readiness only; session handlers perform I/O.
+	void ProcessAllMyDS_AfterPoll();
+	void process_poll_housekeeping();
+	std::vector<PgSQL_Data_Stream*> ready_listeners;
+	bool notification_pipe_ready = false;
+#endif
 
 	/**
 	 * @brief The main loop for the PgSQL_Thread object.
@@ -473,6 +488,9 @@ public:
 	void enter_waiter(PgSQL_Session *sess, unsigned hid);
 	void leave_waiter(PgSQL_Session *sess, bool restore_client = true);
 	void drop_from_poll(PgSQL_Data_Stream *ds);
+	void queue_session_continuation(PgSQL_Session *sess);
+	void cancel_session_continuation(PgSQL_Session *sess);
+	void close_scheduled_session(unsigned index);
 #endif // PROXYSQL31
 
 	/**
@@ -493,24 +511,14 @@ public:
 	struct pollfd* get_pollfd(unsigned int i);
 
 	/**
-	 * @brief Processes data on a specific data stream.
-	 *                       
-	 * @param myds A pointer to the `PgSQL_Data_Stream` object to process.
-	 * @param n The index of the data stream in the `mypolls` array.
-	 *
-	 * @return `true` if processing is successful, `false` if the session should be removed.
-	 *
-	 * @details This function handles data events on a specific data stream. It checks for events
-	 * such as `POLLIN`, `POLLOUT`, `POLLERR`, and `POLLHUP`. Based on the events, it reads data
-	 * from the network, processes packets, and updates the session's status. It also handles
-	 * timeout events and connection failures.
-	 *
-	 * @note This function is called by the `run()` function after the `poll()` call to process
-	 * events on each data stream. It is responsible for managing data flow and updating
-	 * session states.
-	 *
+	 * Process readiness in the poll scan on Stable. With PROXYSQL31, record it
+	 * for deferred consumption in the session handler. Returns false when the
+	 * scan must revisit a poll slot removed by migration or connection cleanup.
 	 */
 	bool process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n);
+#ifdef PROXYSQL31
+	bool consume_data_stream_readiness(PgSQL_Data_Stream *myds);
+#endif
 
 	//void ProcessAllSessions_SortingSessions();
 
@@ -697,7 +705,7 @@ public:
 	 * @note This function is used to manage the thread's local connection cache.
 	 *
 	 */
-	void push_MyConn_local(PgSQL_Connection*);
+	void push_MyConn_local(PgSQL_Connection*, PgSQL_Session* releasing_session = nullptr);
 
 	/**
 	 * @brief Returns all connections in the thread's local cache to the global pool.

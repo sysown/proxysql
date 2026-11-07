@@ -117,9 +117,21 @@ static void test_waiter_local_pool(MySQL_Thread &worker) {
 	session.connections_handler = true;
 	worker.enter_waiter(&session, 105);
 	worker.push_MyConn_local(connection);
-	check_pool_state(server, 0, 1, "queued waiter bypasses the local cache with no recent failed attempts");
+	check_pool_state(server, 1, 0, "single-worker queued waiter retains the connection in the local cache");
+	worker.return_local_connections();
+	check_pool_state(server, 0, 1, "single-worker cached connection is published when returned");
+	worker.leave_waiter(&session, false);
+
+	const auto saved_threads = GloMTH->num_threads;
+	GloMTH->num_threads = 2;
+	server = create_server(106, "waiting-multi-worker");
+	connection = create_used_connection(server, true);
+	worker.enter_waiter(&session, 106);
+	worker.push_MyConn_local(connection);
+	check_pool_state(server, 0, 1, "multi-worker queued waiter bypasses the local cache with no recent failed attempts");
 	worker.return_local_connections();
 	worker.leave_waiter(&session, false);
+	GloMTH->num_threads = saved_threads;
 #else
 	worker.note_pool_attempt(true);
 	worker.push_MyConn_local(connection);
@@ -129,7 +141,11 @@ static void test_waiter_local_pool(MySQL_Thread &worker) {
 }
 
 int main() {
+#ifdef PROXYSQL31
+	plan(8);
+#else
 	plan(6);
+#endif
 
 	if (test_init_minimal() != 0) {
 		BAIL_OUT("test_init_minimal() failed");

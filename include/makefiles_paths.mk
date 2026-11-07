@@ -46,7 +46,14 @@ RE2_PATH := $(DEPS_PATH)/re2/re2
 RE2_IDIR := $(RE2_PATH) -I$(ABSL_IDIR)
 RE2_LDIR := $(RE2_PATH)/obj
 RE2_STATIC_LIB := $(RE2_LDIR)/libre2.a
-RE2_ABSL_LIBS = $(shell if test -d "$(ABSL_PKG_CONFIG_PATH)"; then PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR=$(ABSL_PKG_CONFIG_PATH) pkg-config --static --libs absl_absl_check absl_absl_log absl_base absl_core_headers absl_fixed_array absl_flags absl_flat_hash_map absl_flat_hash_set absl_hash absl_inlined_vector absl_optional absl_span absl_str_format absl_strings absl_synchronization; fi)
+RE2_ABSL_PKG_LIBS = $(shell if test -d "$(ABSL_PKG_CONFIG_PATH)"; then PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR=$(ABSL_PKG_CONFIG_PATH) pkg-config --static --libs absl_absl_check absl_absl_log absl_base absl_core_headers absl_fixed_array absl_flags absl_flat_hash_map absl_flat_hash_set absl_hash absl_inlined_vector absl_optional absl_span absl_str_format absl_strings absl_synchronization; fi)
+RE2_ABSL_LIBS = $(RE2_ABSL_PKG_LIBS)
+ifeq ($(UNAME_S),Linux)
+# Keep Abseil's system realtime dependency dynamic even inside a static block.
+# Restore the caller's mode for subsequent archives and standalone consumers.
+RE2_RT_DYNAMIC_FLAGS := -Wl,--push-state,-Bdynamic -lrt -Wl,--pop-state
+RE2_ABSL_LIBS = $(foreach flag,$(RE2_ABSL_PKG_LIBS),$(if $(filter -lrt,$(flag)),$(RE2_RT_DYNAMIC_FLAGS),$(flag)))
+endif
 # Abseil's timezone implementation uses CoreFoundation on Apple platforms;
 # its static pkg-config metadata does not include that framework dependency.
 RE2_PLATFORM_LIBS :=
