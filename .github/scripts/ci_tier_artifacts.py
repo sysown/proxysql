@@ -99,28 +99,33 @@ def download_part(url,token,target,start,end,size,deadline,cancelled,parallel):
 
 
 def download_parts(url,token,target,size,workers,deadline):
+    started=time.monotonic()
     cancelled=Event()
     chunk=(size+workers-1)//workers
     with target.open('wb'):
         pass
-    if workers==1:
-        download_part(url,token,target,0,size-1,size,deadline,cancelled,False)
-        return
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futures=[pool.submit(download_part,url,token,target,i*chunk,
-                min(size-1,(i+1)*chunk-1),size,deadline,cancelled,True)
-                for i in range(workers)]
-            try:
-                for future in concurrent.futures.as_completed(futures):future.result()
-            finally:
-                # Stop peers before cleaning scratch files or starting fallback.
-                cancelled.set()
-                for future in futures:future.cancel()
-    except RangeUnsupported:
-        print('Artifact storage ignored ranges; falling back to one stream',flush=True)
-        # All workers have stopped before the single-stream retry truncates.
-        download_parts(url,token,target,size,1,deadline)
+        if workers==1:
+            download_part(url,token,target,0,size-1,size,deadline,cancelled,False)
+            return
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                futures=[pool.submit(download_part,url,token,target,i*chunk,
+                    min(size-1,(i+1)*chunk-1),size,deadline,cancelled,True)
+                    for i in range(workers)]
+                try:
+                    for future in concurrent.futures.as_completed(futures):future.result()
+                finally:
+                    # Stop peers before cleaning scratch files or starting fallback.
+                    cancelled.set()
+                    for future in futures:future.cancel()
+        except RangeUnsupported:
+            print('Artifact storage ignored ranges; falling back to one stream',flush=True)
+            # All workers have stopped before the single-stream retry truncates.
+            download_parts(url,token,target,size,1,deadline)
+    finally:
+        elapsed=time.monotonic()-started
+        print(f'Artifact download completed in {elapsed:.1f}s ({size} bytes, {workers} workers)',flush=True)
 
 
 class GitHubAPI:
@@ -341,6 +346,7 @@ def restore_handoff(manifest,leg,destination,api):
     # The runner clears RUNNER_TEMP at job boundaries, including after a
     # forced cancellation that bypasses TemporaryDirectory's Python cleanup.
     # Default /tmp scratch survived cancelled jobs on persistent pool VMs.
+    restore_started=time.monotonic()
     with tempfile.TemporaryDirectory(prefix='ci-handoff-',dir=os.environ.get('RUNNER_TEMP') or None) as tmp:
         downloaded=Path(tmp)/'handoff.zip'
         api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest'),verify=False)
@@ -363,7 +369,9 @@ def restore_handoff(manifest,leg,destination,api):
                     raise
                 except Exception:
                     pass
+            print(f'Handoff restore failed after {time.monotonic()-restore_started:.1f}s',flush=True)
             raise
+    print(f'Handoff restore completed in {time.monotonic()-restore_started:.1f}s',flush=True)
     metadata=json.loads((destination/'src/ci-tier.json').read_text())
     for key,value in [('execution_id',manifest['execution_id']),('sha',manifest['sha']),('tier',leg['tier']),('mode',leg['mode'])]:
         if metadata.get(key)!=value:raise ValueError('restored metadata mismatch: '+key)
