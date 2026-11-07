@@ -352,7 +352,9 @@ def restore_handoff(manifest,leg,destination,api):
         api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest'),verify=False)
         try:
             with zipfile.ZipFile(downloaded) as archive:
-                with archive.open('cache_full.tar.zst') as packed, handoff_archive(packed) as tar:
+                members=[m for m in archive.namelist() if m.endswith('.tar.zst')]
+                if len(members)!=1:raise ValueError('expected one tar.zst member, found '+str(len(members)))
+                with archive.open(members[0]) as packed, handoff_archive(packed) as tar:
                     destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
                     tar.extractall(destination,filter=handoff_stream_filter)
         except Exception as error:
@@ -394,6 +396,8 @@ def restore_artifact(api, build_id, name, destination, digest=None):
         downloaded=Path(tmp)/'handoff.zip'
         api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest') or digest,verify=False)
         with zipfile.ZipFile(downloaded) as archive:
-            with archive.open('cache_full.tar.zst') as packed, handoff_archive(packed) as tar:
+            members=[m for m in archive.namelist() if m.endswith('.tar.zst')]
+            if len(members)!=1:raise ValueError('expected one tar.zst member, found '+str(len(members)))
+            with archive.open(members[0]) as packed, handoff_archive(packed) as tar:
                 destination.mkdir(parents=True,exist_ok=True)
                 tar.extractall(destination,filter=handoff_stream_filter)
