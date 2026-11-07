@@ -2826,8 +2826,9 @@ bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	
 	}
 
 	if (!strcasecmp(name,"auditlog_filename")) {
-                if (value[strlen(value) - 1] == '/') {
-                        proxy_error("%s is an invalid value for auditlog_filename, please specify a filename not just the path\n", value);
+		size_t value_len = strlen(value);
+		if (value_len > 0 && value[value_len - 1] == '/') {
+			proxy_error("%s is an invalid value for auditlog_filename, please specify a filename not just the path\n", value);
 			return false;
 		} else if (value[0] == '/') {
 			char *full_path = strdup(value);
@@ -2851,8 +2852,9 @@ bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	
 		}
 	}
 	if (!strcasecmp(name,"eventslog_filename")) {
-                if (value[strlen(value) - 1] == '/') {
-                        proxy_error("%s is an invalid value for eventslog_filename, please specify a filename not just the path\n", value);
+			size_t value_len = strlen(value);
+			if (value_len > 0 && value[value_len - 1] == '/') {
+					proxy_error("%s is an invalid value for eventslog_filename, please specify a filename not just the path\n", value);
 			return false;
 		} else if (value[0] == '/') {
 			char *full_path = strdup(value);

@@ -2139,7 +2139,8 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	}
 
 	if (!strcasecmp(name, "auditlog_filename")) {
-		if (value[strlen(value) - 1] == '/') {
+		size_t value_len = strlen(value);
+		if (value_len > 0 && value[value_len - 1] == '/') {
 			proxy_error("%s is an invalid value for auditlog_filename, please specify a filename not just the path\n", value);
 			return false;
 		}
@@ -2166,7 +2167,8 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		}
 	}
 	if (!strcasecmp(name, "eventslog_filename")) {
-		if (value[strlen(value) - 1] == '/') {
+		size_t value_len = strlen(value);
+		if (value_len > 0 && value[value_len - 1] == '/') {
 			proxy_error("%s is an invalid value for eventslog_filename, please specify a filename not just the path\n", value);
 			return false;
 		}

@@ -1944,7 +1944,8 @@ char* get_stage_digest_end(shared_st* shared_st, stage_1_st* stage_1_st) {
 static __attribute__((always_inline)) inline
 void set_stage_next_start_pos(shared_st* shared_st, char* digest_end, char* next_start_pos) {
 	bool initial_it = shared_st->res_init_pos == shared_st->res_it_init_pos;
-	bool valid_next_start_pos = next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end;
+	bool valid_next_start_pos = next_start_pos != nullptr &&
+		next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end;
 
 	if (initial_it == 0 && valid_next_start_pos) {
 		shared_st->res_cur_pos = next_start_pos;
@@ -1969,7 +1970,9 @@ void set_stage_next_start_pos(shared_st* shared_st, char* digest_end, char* next
  */
 static __attribute__((always_inline)) inline
 void end_compression_stage_it(shared_st* shared_st, char* digest_end, stage_1_st* stage_1_st, char** stage_pre_it_pos) {
-	if (digest_end == stage_1_st->literal_dig_st.start_pos - 1 && stage_1_st->new_end_pos) {
+	if (stage_1_st->literal_dig_st.start_pos &&
+		digest_end == stage_1_st->literal_dig_st.start_pos - 1 && stage_1_st->new_end_pos)
+	{
 		char* f_digits = stage_1_st->literal_dig_st.start_pos;
 		stage_1_st->literal_dig_st.start_pos = shared_st->res_pre_pos;
 		*stage_pre_it_pos = stage_1_st->literal_dig_st.start_pos;
@@ -2262,7 +2265,7 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 	// ```
 	//
 	// Using an offset of at least `6` should prevent missing patterns in this current iteration.
-	char* next_start_pos = stage_2_st->pre_it_pos - (shared_st->gl_c_offset - stage_2_st->c_offset) - (5 + 1);
+	char* next_start_pos = stage_2_st->pre_it_pos ? stage_2_st->pre_it_pos - (shared_st->gl_c_offset - stage_2_st->c_offset) - (5 + 1) : nullptr;
 	set_stage_next_start_pos(shared_st, digest_end, next_start_pos);
 
 	// second stage: Space and (+|-) replacement
@@ -2380,8 +2383,8 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 	//   * 7: sizeof('...+ ') + sizeof('(') + 1.
 	//
 	int min_group_size = opts->grouping_limit*2 + 7;
-	char* next_start_pos =
-		stage_3_st->pre_it_pos - (shared_st->gl_c_offset - stage_3_st->c_offset) - (min_group_size + 1);
+	char* next_start_pos = stage_3_st->pre_it_pos ?
+		stage_3_st->pre_it_pos - (shared_st->gl_c_offset - stage_3_st->c_offset) - (min_group_size + 1) : nullptr;
 
 	set_stage_next_start_pos(shared_st, digest_end, next_start_pos);
 
@@ -2636,7 +2639,7 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 	// ```
 	// (group_pattern_size * (opts->groups_grouping_limit + 2))
 	// ```
-	char* next_start_pos = stage_4_st->pre_it_pos - (group_pattern_size * (opts->groups_grouping_limit + 2));
+	char* next_start_pos = stage_4_st->pre_it_pos ? stage_4_st->pre_it_pos - (group_pattern_size * (opts->groups_grouping_limit + 2)) : nullptr;
 
 	// compute the starting point for the fourth stage
 	set_stage_next_start_pos(shared_st, digest_end, next_start_pos);
