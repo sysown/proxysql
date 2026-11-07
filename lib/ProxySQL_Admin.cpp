@@ -1295,6 +1295,9 @@ void flush_logs_handler() {
 	GloAdmin->flush_logs();
 }
 
+/**
+ * @brief Flush protocol logs, reopen the error log, and refresh the configured TLS key log.
+ */
 void ProxySQL_Admin::flush_logs() {
 	if (GloMyLogger) {
 		GloMyLogger->flush_log();
@@ -1302,7 +1305,7 @@ void ProxySQL_Admin::flush_logs() {
 	if (GloPgSQL_Logger) {
 		GloPgSQL_Logger->flush_log();
 	}
-	this->flush_error_log();
+	ProxySQL_Admin::flush_error_log();
 	proxysql_keylog_close();
 	char* ssl_keylog_file = this->get_variable((char*)"ssl_keylog_file");
 	if (ssl_keylog_file != NULL) {

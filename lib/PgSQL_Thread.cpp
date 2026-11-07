@@ -1717,6 +1717,12 @@ bool PgSQL_Threads_Handler::validate_variable(const char* name, const char* valu
 }
 #endif
 
+/**
+ * @brief Validate and update a PostgreSQL runtime variable through the admin interface.
+ * @param name Null-terminated variable name.
+ * @param value Null-terminated value; nullptr is rejected. Empty log filenames disable logging.
+ * @return True if the variable accepts the supplied value, false otherwise.
+ */
 bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// this is the public function, accessible from admin
 	// IN:
 	// name: variable name
@@ -2139,7 +2145,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	}
 
 	if (!strcasecmp(name, "auditlog_filename")) {
-		if (value[strlen(value) - 1] == '/') {
+		if (vallen > 0 && value[vallen - 1] == '/') {
 			proxy_error("%s is an invalid value for auditlog_filename, please specify a filename not just the path\n", value);
 			return false;
 		}
@@ -2166,7 +2172,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		}
 	}
 	if (!strcasecmp(name, "eventslog_filename")) {
-		if (value[strlen(value) - 1] == '/') {
+		if (vallen > 0 && value[vallen - 1] == '/') {
 			proxy_error("%s is an invalid value for eventslog_filename, please specify a filename not just the path\n", value);
 			return false;
 		}
