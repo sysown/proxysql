@@ -384,3 +384,16 @@ def restore_handoff(manifest,leg,destination,api):
         if not isinstance(version,str) or not version.strip():
             raise ValueError('restored metadata invalid product version')
         validate_binary(leg['tier'],version)
+
+
+def restore_artifact(api, build_id, name, destination, digest=None):
+    """Download and extract a named handoff artifact without manifest validation."""
+    record=select_artifact(api.artifacts(build_id),name)
+    destination=Path(destination)
+    with tempfile.TemporaryDirectory(prefix='ci-handoff-',dir=os.environ.get('RUNNER_TEMP') or None) as tmp:
+        downloaded=Path(tmp)/'handoff.zip'
+        api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest') or digest,verify=False)
+        with zipfile.ZipFile(downloaded) as archive:
+            with archive.open('cache_full.tar.zst') as packed, handoff_archive(packed) as tar:
+                destination.mkdir(parents=True,exist_ok=True)
+                tar.extractall(destination,filter=handoff_stream_filter)
