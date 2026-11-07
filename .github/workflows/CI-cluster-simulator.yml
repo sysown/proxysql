@@ -172,8 +172,15 @@ jobs:
       id: require-lcov
       if: always()
       run: test -s ci_infra_logs/${{ env.INFRA_ID }}/coverage-report/${{ env.INFRA_ID }}.info
+    - name: Archive simulator coverage
+      if: ${{ !cancelled() && steps.require-lcov.outcome == 'success' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ matrix.group }}-coverage-run${{ github.run_number }}-${{ matrix.tier }}-attempt${{ github.run_attempt }}
+        path: ci_infra_logs/${{ env.INFRA_ID }}/coverage-report/
+        if-no-files-found: error
     - name: Upload coverage to Codecov
-      if: always() && steps.require-lcov.outcome == 'success'
+      if: ${{ (always() && steps.require-lcov.outcome == 'success') && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
       with:
         codecov_yml_path: codecov.yml
