@@ -577,8 +577,14 @@ void Base_Session<S,DS,B,T>::update_expired_conns(const vector<function<bool(Typ
 			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
 			const bool is_idle = myconn->async_state_machine == ASYNC_IDLE;
 
+			// A PostgreSQL connection still holding a client's extended-query group (no Sync yet) belongs
+			// to that client: handing it back would roll its work back behind its back.
+			bool holds_group = false;
+			if constexpr (std::is_same_v<S, PgSQL_Session>) {
+				holds_group = myconn->is_pipeline_active();
+			}
 			// Make sure the connection is reusable before performing any check
-			if (myconn->reusable == true && is_active_transaction == false && multiplex_disabled == false && is_idle) {
+			if (myconn->reusable == true && is_active_transaction == false && multiplex_disabled == false && is_idle && !holds_group) {
 				for (const function<bool(TypeConn*)>& check : checks) {
 					if (check(myconn)) {
 						// If a connection is found to be expired based on the provided checks,
