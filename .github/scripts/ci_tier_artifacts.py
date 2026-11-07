@@ -99,28 +99,33 @@ def download_part(url,token,target,start,end,size,deadline,cancelled,parallel):
 
 
 def download_parts(url,token,target,size,workers,deadline):
+    started=time.monotonic()
     cancelled=Event()
     chunk=(size+workers-1)//workers
     with target.open('wb'):
         pass
-    if workers==1:
-        download_part(url,token,target,0,size-1,size,deadline,cancelled,False)
-        return
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futures=[pool.submit(download_part,url,token,target,i*chunk,
-                min(size-1,(i+1)*chunk-1),size,deadline,cancelled,True)
-                for i in range(workers)]
-            try:
-                for future in concurrent.futures.as_completed(futures):future.result()
-            finally:
-                # Stop peers before cleaning scratch files or starting fallback.
-                cancelled.set()
-                for future in futures:future.cancel()
-    except RangeUnsupported:
-        print('Artifact storage ignored ranges; falling back to one stream',flush=True)
-        # All workers have stopped before the single-stream retry truncates.
-        download_parts(url,token,target,size,1,deadline)
+        if workers==1:
+            download_part(url,token,target,0,size-1,size,deadline,cancelled,False)
+            return
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                futures=[pool.submit(download_part,url,token,target,i*chunk,
+                    min(size-1,(i+1)*chunk-1),size,deadline,cancelled,True)
+                    for i in range(workers)]
+                try:
+                    for future in concurrent.futures.as_completed(futures):future.result()
+                finally:
+                    # Stop peers before cleaning scratch files or starting fallback.
+                    cancelled.set()
+                    for future in futures:future.cancel()
+        except RangeUnsupported:
+            print('Artifact storage ignored ranges; falling back to one stream',flush=True)
+            # All workers have stopped before the single-stream retry truncates.
+            download_parts(url,token,target,size,1,deadline)
+    finally:
+        elapsed=time.monotonic()-started
+        print(f'Artifact download completed in {elapsed:.1f}s ({size} bytes, {workers} workers)',flush=True)
 
 
 class GitHubAPI:
@@ -165,7 +170,7 @@ class GitHubAPI:
                 raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode} after {attempt+1} attempts: {diagnostic}')
             time.sleep(60 if 'rate limit' in error or '429' in error else min(30,2**attempt))
 
-    def download(self,path,destination,size,digest=None):
+    def download(self,path,destination,size,digest=None,verify=True):
         """Download up to eight resumable ranges directly into one archive."""
         if size<=0:raise ValueError('invalid artifact size')
         if digest and not re.fullmatch(r'sha256:[0-9a-fA-F]{64}',digest):
@@ -183,7 +188,7 @@ class GitHubAPI:
         with tempfile.TemporaryDirectory(dir=destination.parent,prefix='.artifact-') as tmp:
             assembled=Path(tmp)/'complete.zip'
             download_parts(url,token,assembled,size,workers,deadline)
-            if digest:
+            if digest and verify:
                 checksum=hashlib.sha256()
                 with assembled.open('rb') as source:
                     while chunk:=source.read(1024*1024):
@@ -341,13 +346,32 @@ def restore_handoff(manifest,leg,destination,api):
     # The runner clears RUNNER_TEMP at job boundaries, including after a
     # forced cancellation that bypasses TemporaryDirectory's Python cleanup.
     # Default /tmp scratch survived cancelled jobs on persistent pool VMs.
+    restore_started=time.monotonic()
     with tempfile.TemporaryDirectory(prefix='ci-handoff-',dir=os.environ.get('RUNNER_TEMP') or None) as tmp:
         downloaded=Path(tmp)/'handoff.zip'
-        api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest'))
-        with zipfile.ZipFile(downloaded) as archive:
-            with archive.open('cache_full.tar.zst') as packed, handoff_archive(packed) as tar:
-                destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
-                tar.extractall(destination,filter=handoff_stream_filter)
+        api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest'),verify=False)
+        try:
+            with zipfile.ZipFile(downloaded) as archive:
+                with archive.open('cache_full.tar.zst') as packed, handoff_archive(packed) as tar:
+                    destination=Path(destination);destination.mkdir(parents=True,exist_ok=True)
+                    tar.extractall(destination,filter=handoff_stream_filter)
+        except Exception as error:
+            digest=record.get('digest')
+            if digest:
+                try:
+                    checksum=hashlib.sha256()
+                    with downloaded.open('rb') as source:
+                        while chunk:=source.read(1024*1024):
+                            checksum.update(chunk)
+                    if 'sha256:'+checksum.hexdigest()!=digest.lower():
+                        raise RuntimeError('handoff extraction failed and artifact checksum mismatch (corrupt download)') from error
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+            print(f'Handoff restore failed after {time.monotonic()-restore_started:.1f}s',flush=True)
+            raise
+    print(f'Handoff restore completed in {time.monotonic()-restore_started:.1f}s',flush=True)
     metadata=json.loads((destination/'src/ci-tier.json').read_text())
     for key,value in [('execution_id',manifest['execution_id']),('sha',manifest['sha']),('tier',leg['tier']),('mode',leg['mode'])]:
         if metadata.get(key)!=value:raise ValueError('restored metadata mismatch: '+key)
@@ -360,3 +384,16 @@ def restore_handoff(manifest,leg,destination,api):
         if not isinstance(version,str) or not version.strip():
             raise ValueError('restored metadata invalid product version')
         validate_binary(leg['tier'],version)
+
+
+def restore_artifact(api, build_id, name, destination, digest=None):
+    """Download and extract a named handoff artifact without manifest validation."""
+    record=select_artifact(api.artifacts(build_id),name)
+    destination=Path(destination)
+    with tempfile.TemporaryDirectory(prefix='ci-handoff-',dir=os.environ.get('RUNNER_TEMP') or None) as tmp:
+        downloaded=Path(tmp)/'handoff.zip'
+        api.download(f"repos/{api.repository}/actions/artifacts/{record['id']}/zip",downloaded,record['size_in_bytes'],digest=record.get('digest') or digest,verify=False)
+        with zipfile.ZipFile(downloaded) as archive:
+            with archive.open('cache_full.tar.zst') as packed, handoff_archive(packed) as tar:
+                destination.mkdir(parents=True,exist_ok=True)
+                tar.extractall(destination,filter=handoff_stream_filter)

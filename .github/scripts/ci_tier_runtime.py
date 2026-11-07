@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from ci_tier_plan import resolve_selection, make_plan, consumer_matrix, applicable_tests, validate_manifest, check_key
-from ci_tier_artifacts import GitHubAPI, resolve_producer, load_manifest, select_artifact, restore_handoff, verify_binding
+from ci_tier_artifacts import GitHubAPI, resolve_producer, load_manifest, select_artifact, restore_handoff, restore_artifact, verify_binding
 from ci_tier_checks import register, publish_result, reconcile, reporting_repository
 from ci_cancel_superseded import cancel_if_superseded
 
@@ -143,7 +143,7 @@ def artifact_status():
     plan=read_plan();leg=json.loads(os.environ['CI_LEG'])
     names={a['name'] for a in api_for(plan).artifacts(plan['build_id']) if not a.get('expired')}
     emit(publish_metadata=f"ci-leg-{plan['execution_id']}-{leg['tier']}" not in names,
-         publish_handoff=leg['artifact_name'] not in names)
+         publish_handoff=(leg['artifact_name'] not in names) or (leg.get('unit_artifact_name') not in names))
 
 def consumer_instance(manifest,workflow,instance,supplied):
     checks=[c for c in manifest['checks'] if c['workflow']==workflow]
@@ -282,7 +282,18 @@ def result():
     publish_result(plan,key,os.environ['CHECK_STATUS'],reporting_api(plan),gh['run_id'],gh['run_attempt'],run_repository=gh['repository'])
 
 def restore():
-    plan=bound_manifest();leg=json.loads(os.environ['CI_LEG']);restore_handoff(plan,leg,Path('proxysql'),api_for(plan))
+    plan=bound_manifest();leg=json.loads(os.environ['CI_LEG']);api=api_for(plan)
+    restore_handoff(plan,leg,Path('proxysql'),api)
+    if leg.get('needs_unit_binaries') and leg.get('unit_artifact_name'):
+        restore_artifact(api,plan['build_id'],leg['unit_artifact_name'],Path('proxysql'))
+
+def restore_unit():
+    plan=bound_manifest();leg=json.loads(os.environ['CI_LEG'])
+    name=leg.get('unit_artifact_name')
+    if not name:
+        print('No unit artifact configured; skipping',flush=True)
+        return
+    restore_artifact(api_for(plan),plan['build_id'],name,Path('proxysql'))
 
 def summary():
     plan=bound_manifest();reconcile(plan,reporting_api(plan))
@@ -321,5 +332,5 @@ def producer_lookup():
     raise RuntimeError('timed out waiting for producer completion')
 
 if __name__=='__main__':
-    commands={'selection':standalone_selection,'artifact-status':artifact_status,'plan':plan_command,'stamp':stamp,'finalize':finalize,'consumer':consumer,'result':result,'restore':restore,'summary':summary,'wait-build':producer_lookup}
+    commands={'selection':standalone_selection,'artifact-status':artifact_status,'plan':plan_command,'stamp':stamp,'finalize':finalize,'consumer':consumer,'result':result,'restore':restore,'restore-unit':restore_unit,'summary':summary,'wait-build':producer_lookup}
     commands[sys.argv[1]]()

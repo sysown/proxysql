@@ -7,6 +7,7 @@ import json
 import re
 
 TIERS = {'v40': 'v4.0', 'v30': 'v3.0', 'v31': 'v3.1'}
+UNIT_GROUPS = {'unit-tests-g1','ai-g1','ai-g2','mysqlx-g1','mysqlx-tsan-g1','no-infra-g1'}
 
 def resolve_selection(context, trusted, fetch_pr):
     result = {'tiers': ['v40'], 'mode': 'normal', 'pr_number': None}
@@ -54,7 +55,8 @@ def make_plan(context, selection, catalogue):
         mode = selection['mode']
         leg = dict(tier=tier, mode=mode, coverage=True,
                    variant=f'ubuntu24-tap-{tier}-{mode}',
-                   artifact_name=f'ci-handoff-{eid}-{tier}-{mode}-full')
+                   artifact_name=f'ci-handoff-{eid}-{tier}-{mode}-slim',
+                   unit_artifact_name=f'ci-handoff-{eid}-{tier}-{mode}-unit')
         plan['legs'].append(leg)
         plan['checks'].append(dict(key=check_key('CI-builds','builds',tier,{}),workflow='CI-builds',job='builds',
             tier=tier,mode=mode,cell={},groups=[],required=True,applicable=True,
@@ -79,9 +81,10 @@ def make_plan(context, selection, catalogue):
                     groups = [cell[group_axis]]
                 info = ', '.join(str(v) for k,v in cell.items() if k not in ('testdist','ci_instance'))
                 middle = (info + ', ') if info else ''
+                needs_unit = any(g in UNIT_GROUPS for g in groups)
                 plan['checks'].append(dict(key=check_key(consumer['workflow'],consumer['job'],tier,cell),
                     workflow=consumer['workflow'],job=consumer['job'],tier=tier,mode=mode,cell=cell,
-                    groups=groups,required=True,applicable=True,
+                    groups=groups,required=True,applicable=True,needs_unit_binaries=needs_unit,
                     name=f"{consumer['workflow']} / {consumer['job']} ({TIERS[tier]}, {middle}{mode_label(tier,mode)})"))
     return plan
 
@@ -96,15 +99,19 @@ def validate_manifest(plan):
     for leg in plan['legs']:
         if leg['tier'] not in TIERS or leg['mode'] not in ('normal','asan'):
             raise ValueError('invalid manifest leg')
-        if leg['artifact_name'] != f"ci-handoff-{expected}-{leg['tier']}-{leg['mode']}-full":
+        if leg['artifact_name'] != f"ci-handoff-{expected}-{leg['tier']}-{leg['mode']}-slim":
             raise ValueError('handoff identity mismatch')
+        if leg.get('unit_artifact_name') != f"ci-handoff-{expected}-{leg['tier']}-{leg['mode']}-unit":
+            raise ValueError('unit handoff identity mismatch')
 
 def consumer_matrix(plan, workflow, job, instance=None):
     validate_manifest(plan)
     return [dict(c['cell'],tier=c['tier'],mode=c['mode'],coverage=next(l['coverage'] for l in plan['legs'] if l['tier']==c['tier']),
                  check_key=c['key'],check_name=c['name'],check_id=c.get('check_id',0),
                  execution_id=plan['execution_id'],build_id=plan['build_id'],build_attempt=plan['build_attempt'],
-                 artifact_name=next(l['artifact_name'] for l in plan['legs'] if l['tier']==c['tier']))
+                 artifact_name=next(l['artifact_name'] for l in plan['legs'] if l['tier']==c['tier']),
+                 unit_artifact_name=next((l.get('unit_artifact_name') for l in plan['legs'] if l['tier']==c['tier']),None),
+                 needs_unit_binaries=c.get('needs_unit_binaries',False))
             for c in plan['checks'] if c['workflow']==workflow and c['job']==job and c['applicable'] and (instance is None or c['cell'].get('ci_instance','run')==instance)]
 
 def version_tuple(version):

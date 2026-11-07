@@ -487,11 +487,9 @@ jobs:
         name: ci-leg-${{ needs.plan.outputs.execution_id }}-${{ matrix.tier }}
         path: metadata.json
         retention-days: 3
-    - name: Pack complete regular handoff (zstd-15)
-      # Tier-agnostic. This used to be gated on the '-gcov' substring, i.e. on
-      # the v40 leg only. The pack itself is tier-agnostic already: every entry
-      # is nullglob-guarded, so a downgrade leg with no .gcno and no plugins
-      # simply omits them.
+    - name: Pack slim handoff (zstd-15)
+      # Tier-agnostic. Contains everything except unit-test binaries, so the
+      # majority of consumer groups do not download the ~8 GB unit payload.
       if: ${{ inputs.trusted && success() }}
       run: |
         set -euo pipefail
@@ -501,14 +499,23 @@ jobs:
         gcno=(lib/obj/*.gcno plugins/*/obj/*.gcno)
         matrix_files=(tap-matrix*)
         plugin_files=(plugins/*/*.so)
-        echo ">>> packing handoff: tier=${TIER} variant=${VARIANT} gcno=${#gcno[@]} matrix=${#matrix_files[@]} plugins=${#plugin_files[@]}"
-        # "${arr[@]}" on an empty array is a no-op under set -u on bash >= 4.4
-        # (all packaging containers), which is what lets the tier-agnostic
-        # pack work with no .gcno / no plugins.
-        tar -cf - src/ test/ "${gcno[@]}" "${matrix_files[@]}" "${plugin_files[@]}" \
-          | zstd -15 -T0 -o ../cache_full.tar.zst
+        echo ">>> packing slim handoff: tier=${TIER} variant=${VARIANT} gcno=${#gcno[@]} matrix=${#matrix_files[@]} plugins=${#plugin_files[@]}"
+        # Exclude the unit-test directory; it is shipped by the unit handoff.
+        tar -cf - src/ test/ --exclude='test/tap/tests/unit' "${gcno[@]}" "${matrix_files[@]}" "${plugin_files[@]}" \
+          | zstd -15 -T0 -o ../cache_slim.tar.zst
 
-    - name: Upload complete regular handoff
+    - name: Pack unit test handoff (zstd-15)
+      if: ${{ inputs.trusted && success() }}
+      run: |
+        set -euo pipefail
+        command -v zstd >/dev/null || sudo apt-get install -y zstd
+        cd proxysql/
+        shopt -s nullglob
+        unit_files=(test/tap/tests/unit/*)
+        echo ">>> packing unit handoff: files=${#unit_files[@]}"
+        tar -cf - "${unit_files[@]}" | zstd -15 -T0 -o ../cache_unit.tar.zst
+
+    - name: Upload slim handoff
       if: ${{ inputs.trusted && success() && steps.artifacts.outputs.publish_handoff == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
@@ -520,7 +527,17 @@ jobs:
         # CPU. See issue #6232.
         compression-level: 0
         if-no-files-found: error
-        path: cache_full.tar.zst
+        path: cache_slim.tar.zst
+
+    - name: Upload unit handoff
+      if: ${{ inputs.trusted && success() && steps.artifacts.outputs.publish_handoff == 'true' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ matrix.unit_artifact_name }}
+        retention-days: 3
+        compression-level: 0
+        if-no-files-found: error
+        path: cache_unit.tar.zst
 
 
     # Nuke ALL docker state before leaving the runner clean for its next job.
