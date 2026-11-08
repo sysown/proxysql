@@ -1,3 +1,4 @@
+#include "AdminResponseDrain.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -866,16 +867,19 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (GloVars.prometheus_registry)
 			GloVars.prometheus_registry->ResetCounters();
 
-		// Signal shutdown and wait for completion
+		// Teardown drains this Admin client before deleting SPA. Acknowledge
+		// the request and return so the session can flush its reply and exit;
+		// waiting here for reload would deadlock against shutdown_threads().
+		// STOP rebuilds Admin in --no-start mode; clients reconnect afterward.
+		SPA->send_ok_msg_to_client(sess, "ProxySQL stop requested", 0, query_no_space);
+		// Admin exits its I/O loop once shutdown is set. Drain both protocol
+		// buffers, including TLS ciphertext, while this client is still live.
+		if (!proxysql_drain_admin_response(*sess->client_myds, 1000)) {
+			proxy_warning("STOP response did not fully drain before shutdown\n");
+		}
 		__sync_bool_compare_and_swap(&glovars.shutdown, 0, 1);
 		GloMTH->signal_all_threads(0);
 		GloPTH->signal_all_threads(0);
-
-		while (__sync_fetch_and_add(&glovars.shutdown, 0) == 1) {
-			usleep(1000);
-		}
-
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 
 		return false;
 	}
@@ -2744,6 +2748,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			const bool pgsql = query_no_space[5] == 'P' || query_no_space[5] == 'p';
+			if ((pgsql && !GloPgQPro) || (!pgsql && !GloMyQPro)) {
+				SPA->send_error_msg_to_client(sess, "Global Query Processor not started: cannot save unavailable runtime state");
+				return false;
+			}
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 				SPA->save_pgsql_firewall_from_runtime(false);
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql firewall from RUNTIME\n");
@@ -2866,6 +2875,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+			const bool pgsql = query_no_space[5] == 'P' || query_no_space[5] == 'p';
+			if ((pgsql && !GloPgQPro) || (!pgsql && !GloMyQPro)) {
+				SPA->send_error_msg_to_client(sess, "Global Query Processor not started: cannot save unavailable runtime state");
+				return false;
+			}
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 				SPA->save_pgsql_query_rules_from_runtime(false);
 				SPA->save_pgsql_query_rules_fast_routing_from_runtime(false);
@@ -3516,7 +3530,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES) - 1)) {
+		if (GloMyQPro && !strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES) - 1)) {
 			GloMyQPro->wrlock();
 			resultset = GloMyQPro->get_current_query_rules_inner();
 			if (resultset == NULL) {
@@ -3536,7 +3550,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				goto __run_query;
 			}
 		}
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
+		if (GloMyQPro && !strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
 			GloMyQPro->wrlock();
 			resultset = GloMyQPro->get_current_query_rules_fast_routing_inner();
 			if (resultset == NULL) {
@@ -3559,7 +3573,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES) - 1)) {
+		if (GloPgQPro && !strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES) - 1)) {
 			GloPgQPro->wrlock();
 			resultset = GloPgQPro->get_current_query_rules_inner();
 			if (resultset == NULL) {
@@ -3582,7 +3596,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				goto __run_query;
 			}
 		}
-		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
+		if (GloPgQPro && !strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
 			GloPgQPro->wrlock();
 			resultset = GloPgQPro->get_current_query_rules_fast_routing_inner();
 			if (resultset == NULL) {
@@ -3631,7 +3645,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing
 	// we just return the count
 	if (strcmp("SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing", query_no_space)==0) {
-		int cnt = GloMyQPro->get_current_query_rules_fast_routing_count();
+		int cnt = GloMyQPro ? GloMyQPro->get_current_query_rules_fast_routing_count() : 0;
 		l_free(query_length,query);
 		char buf[256];
 		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
@@ -3644,7 +3658,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// SELECT COUNT(*) FROM runtime_pgsql_query_rules_fast_routing
 	// we just return the count
 	if (strcmp("SELECT COUNT(*) FROM runtime_pgsql_query_rules_fast_routing", query_no_space) == 0) {
-		int cnt = GloPgQPro->get_current_query_rules_fast_routing_count();
+		int cnt = GloPgQPro ? GloPgQPro->get_current_query_rules_fast_routing_count() : 0;
 		l_free(query_length, query);
 		char buf[256];
 		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
@@ -3682,7 +3696,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_mysql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					int r1 = GloMyQPro->purge_query_digests(true, false);
+					int r1 = GloMyQPro ? GloMyQPro->purge_query_digests(true, false) : 0;
 					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query=false;
 					goto __run_query;
@@ -3716,7 +3730,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_pgsql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					int r1 = GloPgQPro->purge_query_digests(true, false);
+					int r1 = GloPgQPro ? GloPgQPro->purge_query_digests(true, false) : 0;
 					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query = false;
 					goto __run_query;
@@ -3738,17 +3752,17 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			enum SERVER_TYPE type = std::get<1>(result);
 			time_t last_seen = std::get<2>(result);
 
-			if (last_seen > 0) {
-				if (type == SERVER_TYPE_MYSQL) {
-					ret = GloMyQPro->purge_query_digests(true, false, last_seen);
-				} else if (type == SERVER_TYPE_PGSQL) {
-					ret = GloPgQPro->purge_query_digests(true, false, last_seen);
-				}
-
-				pa->send_ok_msg_to_client(sess, NULL, ret, query_no_space);
-			} else {
+			if (last_seen <= 0) {
 				pa->send_error_msg_to_client(sess, "Invalid timestamp");
+				run_query = false;
+				goto __run_query;
 			}
+			if (type == SERVER_TYPE_MYSQL && GloMyQPro) {
+				ret = GloMyQPro->purge_query_digests(true, false, last_seen);
+			} else if (type == SERVER_TYPE_PGSQL && GloPgQPro) {
+				ret = GloPgQPro->purge_query_digests(true, false, last_seen);
+			}
+			pa->send_ok_msg_to_client(sess, NULL, ret, query_no_space);
 
 			run_query = false;
 			goto __run_query;
@@ -5215,7 +5229,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		SQLite3_result* resultset = new SQLite3_result(1);
 		resultset->add_column_definition(SQLITE_TEXT,"Data");
 
-		if (__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
+		if (GloVars.prometheus_registry) {
 			auto result = pa->serial_exposer({});
 			pta[0] = (char*)result.second.c_str();
 			resultset->add_row(pta);
@@ -5628,19 +5642,9 @@ __run_query:
 		}
 		delete resultset;
 	}
-	if (run_query == true) {
-		proxysql_admin_global_sql_unlock(pa->sql_query_global_mutex);
-	} else {
-		// The admin module may have already been freed in case of "PROXYSQL STOP"
-		if (query_no_space && strcasecmp(query_no_space, "PROXYSQL STOP") == 0) {
-			// Command is "PROXYSQL STOP"
-			if (admin_nostart_ && __sync_fetch_and_add((uint8_t*)&GloVars.global.nostart, 0)) {
-				proxysql_admin_global_sql_unlock(pa->sql_query_global_mutex);
-			}
-		} else {
-			proxysql_admin_global_sql_unlock(pa->sql_query_global_mutex);
-		}
-	}
+	// Main drains Admin clients before destroying this object, including
+	// the session issuing STOP. Every statement releases its own acquisition.
+	proxysql_admin_global_sql_unlock(pa->sql_query_global_mutex);
 
 	if (query_no_space) {
 		l_free(query_length, query_no_space);

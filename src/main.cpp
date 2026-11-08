@@ -830,6 +830,22 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				}
 			}
 		}
+		// Per-component startup permissions; CLI overrides are applied below.
+		const std::pair<const char*, bool*> startup_permissions[] = {
+			{ "mysql-workers", &GloVars.mysql_workers },
+			{ "pgsql-workers", &GloVars.pgsql_workers },
+			{ "mysql-admin", &GloVars.mysql_admin },
+			{ "pgsql-admin", &GloVars.pgsql_admin },
+			{ "mysql-monitor", &GloVars.global.my_monitor },
+			{ "pgsql-monitor", &GloVars.global.pg_monitor },
+		};
+		for (const auto& permission : startup_permissions) {
+			if (root.exists(permission.first) && !root.lookupValue(permission.first, *permission.second)) {
+				proxy_error("Invalid boolean startup setting '%s'\n", permission.first);
+				exit(EXIT_FAILURE);
+			}
+		}
+
 		// if cluster_sync_interfaces is true, interfaces variables are synced too
 		if (root.exists("cluster_sync_interfaces")==true) {
 			bool value_bool;
@@ -1043,6 +1059,12 @@ void ProxySQL_Main_init_main_modules() {
 	PgSQL_Threads_Handler* _tmp_GloPTH = NULL;
 	_tmp_GloPTH = new PgSQL_Threads_Handler();
 	GloPTH = _tmp_GloPTH;
+
+	// LOAD ... SERVERS and monitor statistics use these objects even in
+	// --no-start mode. Construct them before accepting Admin connections;
+	// scheduler/worker threads still start only in phase 3 when permitted.
+	GloMyMon = new MySQL_Monitor();
+	GloPgMon = new PgSQL_Monitor();
 }
 
 void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
@@ -1768,12 +1790,12 @@ static void ProxySQL_Main_exit_on_listener_conflicts() {
 	char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
 
 	std::vector<proxysql_listen_validator::module_listener_config> modules {
-		{ "Admin", admin_mysql_ifaces },
-		{ "Admin PostgreSQL", admin_pgsql_ifaces },
+		{ "Admin", GloVars.mysql_admin ? admin_mysql_ifaces : "" },
+		{ "Admin PostgreSQL", GloVars.pgsql_admin ? admin_pgsql_ifaces : "" },
 		{ "Admin Telnet", admin_telnet_ifaces },
 		{ "Admin Stats Telnet", admin_stats_ifaces },
-		{ "MySQL", mysql_ifaces },
-		{ "PostgreSQL", pgsql_ifaces },
+		{ "MySQL", GloVars.mysql_workers ? mysql_ifaces : "" },
+		{ "PostgreSQL", GloVars.pgsql_workers ? pgsql_ifaces : "" },
 	};
 	std::string error {};
 	const bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
@@ -1823,9 +1845,6 @@ bool ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : GloPgSQL_Logger initialized in ";
 #endif
 	}
-	// Initialized monitor, no matter if it will be started or not
-	GloMyMon = new MySQL_Monitor();
-	GloPgMon = new PgSQL_Monitor();
 	// load all mysql servers to GloHGH
 	{
 		cpu_timer t;
