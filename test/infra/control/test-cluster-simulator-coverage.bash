@@ -28,6 +28,7 @@ decode_line=$(grep -nF 'fastcov -b' "${runner}" | head -n1 | cut -d: -f1)
 test "${dump_line}" -lt "${decode_line}"
 grep -Fq 'id: require-lcov' "${workflow}"
 grep -Fq 'run: test -s ci_infra_logs/${{ env.INFRA_ID }}/coverage-report/${{ env.INFRA_ID }}.info' "${workflow}"
-grep -Fq "if: always() && steps.require-lcov.outcome == 'success'" "${workflow}"
+# Actual upload and artifact conditions are exercised by
+# test_codecov_fork_uploads.py, including successful external fork runs.
 
 echo "cluster simulator coverage contract passed"

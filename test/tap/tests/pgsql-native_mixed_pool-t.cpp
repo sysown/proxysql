@@ -353,6 +353,12 @@ int main(int, char**) {
 		BAIL_OUT("No pgsql_servers in hostgroup %d", BACKEND_HG);
 		return exit_status();
 	}
+	// The scenarios cap the server at 6 connections. At the default 10%, a worker's idle round
+	// may keep no free connection, and closes the libpq connections parked for the switch.
+	if (!setVar(admin.get(), "pgsql-free_connections_pct", "100")) {
+		BAIL_OUT("Could not set pgsql-free_connections_pct");
+		return exit_status();
+	}
 
 	scenario_mixed_pool(admin.get(), be.get(), saved);
 	scenario_one_of_each_at_once(admin.get(), be.get(), saved);

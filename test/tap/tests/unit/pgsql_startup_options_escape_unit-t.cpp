@@ -211,14 +211,14 @@ static void test_timezone_validator() {
 	ok(v != nullptr && v->validate != nullptr, "TimeZone: tracked variable has a validator");
 	if (v == nullptr || v->validate == nullptr) {
 		// Keep the plan: the remaining checks cannot run without a validator.
-		for (int i = 0; i < 1 + 11 + 5; i++) ok(0, "TimeZone: skipped, no validator");
+		for (int i = 0; i < 1 + 9 + 7; i++) ok(0, "TimeZone: skipped, no validator");
 		return;
 	}
 	ok(v == &pgsql_variable_validator_timezone, "TimeZone: validator is pgsql_variable_validator_timezone");
 
 	const char* good[] = {
 		"GMT", "UTC", "America/New_York", "Europe/Rome", "+02:00", "-5", "5.5",
-		"EST5EDT,M3.2.0,M11.1.0", "<+0330>-3:30", "INTERVAL '+02:00' HOUR TO MINUTE", "LOCAL",
+		"EST5EDT,M3.2.0,M11.1.0", "<+0330>-3:30",
 	};
 	for (const char* g : good) {
 		std::string t;
@@ -232,6 +232,11 @@ static void test_timezone_validator() {
 		"UTC\r",
 		"\x01UTC",
 		"UTC\x7f",
+		// PostgreSQL reads any INTERVAL value as an INTERVAL, which cannot be applied
+		// again on another backend connection; LOCAL is only a SET TIME ZONE keyword.
+		// Both are refused as tracked TimeZone values (upstream validation contract).
+		"INTERVAL '+02:00' HOUR TO MINUTE",
+		"LOCAL",
 	};
 	for (const char* b : bad) {
 		ok(validate(v, b) == false, "TimeZone: '%s' rejected", printable(b).c_str());

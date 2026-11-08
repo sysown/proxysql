@@ -8944,7 +8944,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// the client formatted the query. See issue #5686 follow-up and
 			// the customer report on PR #5708.
 			if (strncasecmp(dig, (char *)"SET STATEMENT ", 14) == 0 && strcasestr(dig, (char *)" FOR ")) {
-				return false;
+				// Forward without tracking a session SET, but still apply query-rule routing.
+				goto __exit_set_destination_hostgroup;
 			}
 			if (
 				(

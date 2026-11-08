@@ -40,7 +40,9 @@ class TimeoutCommandSelectionTests(unittest.TestCase):
         self.command('gnutimeout', 'timeout (GNU coreutils) 9.7')
         result = self.select()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), 'timeout')
+        # The runner prefers the explicit GNU provider over the standard name,
+        # so Ubuntu's uutils timeout can never shadow a GNU gnutimeout.
+        self.assertEqual(result.stdout.strip(), 'gnutimeout')
 
     def test_non_gnu_timeout_falls_back_to_gnutimeout(self):
         self.command('timeout', 'timeout (uutils coreutils) 0.10.0')
@@ -223,6 +225,68 @@ class IsolatedUnitRunnerTimeoutTests(UnitRunnerTimeoutTests):
         if dependency.returncode == 77:
             raise unittest.SkipTest('isolated runner selector requires Python packaging')
         dependency.check_returncode()
+
+
+class UnitTimeoutProviderTests(unittest.TestCase):
+    """The runners require GNU process-group and kill-after behavior."""
+
+    def select_provider(self, providers):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Restrict PATH so the host's other timeout providers cannot hide
+            # missing-provider or incompatible-provider cases.
+            (root / 'grep').symlink_to(shutil.which('grep'))
+            for name, version in providers.items():
+                executable = root / name
+                executable.write_text('#!/bin/sh\nprintf "%s\\n" "' + version + '"\n')
+                executable.chmod(0o755)
+            return subprocess.run(
+                [shutil.which('bash'), '-c',
+                 'source "$1" || exit $?; printf "%s\\n" "$UNIT_TEST_TIMEOUT_COMMAND"',
+                 'provider-test', str(RUNNER.with_name('unit-test-execution.bash'))],
+                env=dict(os.environ, PATH=str(root)), capture_output=True, text=True,
+                timeout=5)
+
+    def test_rejects_uutils_timeout_without_a_gnu_provider(self):
+        result = self.select_provider({'timeout': 'timeout (uutils coreutils) 0.10.0'})
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('requires GNU timeout', result.stderr)
+
+    def test_prefers_gnutimeout_over_uutils_timeout(self):
+        result = self.select_provider({'timeout': 'timeout (uutils coreutils) 0.10.0',
+                                       'gnutimeout': 'timeout (GNU coreutils) 9.7'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'gnutimeout')
+
+    def test_accepts_homebrew_gtimeout_over_uutils_timeout(self):
+        result = self.select_provider({'timeout': 'timeout (uutils coreutils) 0.10.0',
+                                       'gtimeout': 'timeout (GNU coreutils) 9.7'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'gtimeout')
+
+    def test_accepts_gnu_timeout_under_its_standard_name(self):
+        result = self.select_provider({'timeout': 'timeout (GNU coreutils) 9.7'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'timeout')
+
+    def test_provider_names_do_not_substitute_for_gnu_identity(self):
+        result = self.select_provider({'gnutimeout': 'timeout (uutils coreutils) 0.10.0',
+                                       'gtimeout': 'timeout (uutils coreutils) 0.10.0',
+                                       'timeout': 'timeout (GNU coreutils) 9.7'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'timeout')
+
+    def test_prefers_explicit_gnu_provider_over_standard_name(self):
+        result = self.select_provider({'gnutimeout': 'timeout (GNU coreutils) 9.7',
+                                       'gtimeout': 'timeout (GNU coreutils) 9.7',
+                                       'timeout': 'timeout (GNU coreutils) 9.7'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), 'gnutimeout')
+
+    def test_missing_timeout_provider_fails_clearly(self):
+        result = self.select_provider({})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('requires GNU timeout', result.stderr)
 
 
 if __name__ == '__main__':

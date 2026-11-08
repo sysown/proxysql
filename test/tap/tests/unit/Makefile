@@ -486,12 +486,15 @@ $(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEA
 $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
 
-# The daemon probe skips before inspecting its binary outside Linux.
+# These daemon probes skip before inspecting their binaries outside Linux.
 # Keep that skip independent of the platform's daemon build requirements.
 STARTUP_TLS_BINARY :=
 ifeq ($(UNAME_S),Linux)
 STARTUP_TLS_BINARY := $(PROXYSQL_BINARY)
 endif
+
+module_lifecycle_unit-t: $(STARTUP_TLS_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
+module_startup_unit-t: $(STARTUP_TLS_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_startup.py $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
 
 startup_tls_ownership_unit-t: startup_tls_ownership_unit-t.cpp $(STARTUP_TLS_BINARY) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/test/infra/control/test_startup_tls_ownership.py
 	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
@@ -638,6 +641,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_txn_state_unit-t pgsql_txn_end_classifier_unit-t \
 	pgsql_midbatch_reset_refused_unit-t \
 	pgsql_local_error_txn_state_unit-t \
+	pgsql_poison_rollback_cancel_unit-t \
 	pgsql_conn_liveness_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
@@ -664,9 +668,11 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	query_processor_firewall_unit-t \
 	statistics_unit-t \
 	log_utils_unit-t \
+	log_filename_variables_unit-t \
 	listen_validator_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
+	pgsql_digest_bounds_unit-t \
 	ezoption_parser_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
@@ -703,7 +709,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
-UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
+UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t module_lifecycle_unit-t module_startup_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
 UNIT_TESTS += worker_scheduler_cost_unit-t
 
 ifeq ($(PROXYSQL31),1)
@@ -1492,6 +1498,14 @@ vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERS
 
 # This test includes the cache source to inject allocator failure locally.
 pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
+
+# The bounds fixture exercises the production tokenizer's internal compression stages.
+pgsql_digest_bounds_unit-t: $(PROXYSQL_PATH)/lib/pgsql_tokenizer.cpp
+ifeq ($(UNAME_S),Linux)
+ifeq ($(WITHASAN),1)
+pgsql_digest_bounds_unit-t: private OPT += -fsanitize=pointer-compare,pointer-subtract
+endif
+endif
 
 # The allocation fixture includes the protocol source for failure injection.
 # Compile libpq's private-header access separately so its configuration macros

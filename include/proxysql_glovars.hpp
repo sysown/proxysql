@@ -222,6 +222,12 @@ class ProxySQL_GlobalVariables {
 	// The profile only selects startup configuration/lifecycle.
 	bool aws_managed{false};
 #endif
+	// Append startup permissions to preserve the existing public data prefix
+	// read by plugins. Shared Auth/HGM objects remain available.
+	bool mysql_workers{true};
+	bool pgsql_workers{true};
+	bool mysql_admin{true};
+	bool pgsql_admin{true};
 };
 
 #ifdef PROXYSQL40

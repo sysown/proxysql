@@ -8,12 +8,15 @@ fi
 UNIT_TEST_TIMEOUT_COMMAND=
 # Process-group cleanup below relies on GNU timeout's --kill-after behavior.
 # Ubuntu 26 can put uutils timeout first on PATH; its GNU alternative is
-# gnutimeout. Homebrew installs GNU timeout as gtimeout on macOS.
-for unit_timeout_candidate in timeout gtimeout gnutimeout; do
+# gnutimeout. Homebrew installs GNU timeout as gtimeout on macOS. Prefer the
+# explicit GNU providers, then the standard name, and check the implementation
+# identity without an external grep (the runner is also tested with a PATH that
+# contains only the fake timeout commands).
+for unit_timeout_candidate in gnutimeout gtimeout timeout; do
     if command -v "${unit_timeout_candidate}" >/dev/null 2>&1 &&
-       unit_timeout_version="$("${unit_timeout_candidate}" --version 2>/dev/null)"; then
+       unit_timeout_version="$(LC_ALL=C "${unit_timeout_candidate}" --version 2>/dev/null)"; then
         case "${unit_timeout_version}" in
-            *"(GNU coreutils)"*)
+            "timeout (GNU coreutils)"*)
                 UNIT_TEST_TIMEOUT_COMMAND="${unit_timeout_candidate}"
                 break
                 ;;
@@ -22,7 +25,7 @@ for unit_timeout_candidate in timeout gtimeout gnutimeout; do
 done
 unset unit_timeout_candidate unit_timeout_version
 if [ -z "${UNIT_TEST_TIMEOUT_COMMAND}" ]; then
-    echo "The unit runner requires GNU timeout (timeout, gtimeout or gnutimeout)" >&2
+    echo "The unit runner requires GNU timeout (gnutimeout, gtimeout or timeout)" >&2
     return 1
 fi
 export TSAN_OPTIONS="${TSAN_OPTIONS:-halt_on_error=1:exitcode=66}"
