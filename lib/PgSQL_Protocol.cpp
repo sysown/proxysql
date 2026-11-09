@@ -1442,6 +1442,18 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 		for (const auto&[param_key, param_val] : parameters) {
 
+			// application_name is a connection-level parameter, so when it reaches this list it came
+			// from the "options" parameter ("-c application_name=..."), as sent by PGOPTIONS and some
+			// drivers. Handle it like the connection parameter instead of as an untracked variable,
+			// which would lock the session on its hostgroup. A value given as a connection parameter
+			// takes precedence, as it does in PostgreSQL.
+			if (param_key == "application_name") {
+				if ((*myds)->myconn->conn_params.get_value(PG_APPLICATION_NAME) == nullptr) {
+					(*myds)->myconn->conn_params.set_value("application_name", param_val.c_str());
+				}
+				continue;
+			}
+
 			int idx = PGSQL_NAME_LAST_HIGH_WM;
 			for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
 				if (i == PGSQL_NAME_LAST_LOW_WM)

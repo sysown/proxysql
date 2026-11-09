@@ -18,6 +18,9 @@
 #include "command_line.h"
 #include "tap.h"
 #include "utils.h"
+#include "json.hpp"
+
+using nlohmann::json;
 
 CommandLine cl;
 using PGConnPtr = std::unique_ptr<PGconn, decltype(&PQfinish)>;
@@ -31,11 +34,15 @@ struct TestCase {
 };
 
 // Helper to create connection
-PGConnPtr createConnection(const std::string& options, std::string& error_msg) {
+PGConnPtr createConnection(const std::string& options, std::string& error_msg,
+                           const std::string& application_name = "") {
     std::stringstream ss;
     ss << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port;
     ss << " user=" << cl.pgsql_username << " password=" << cl.pgsql_password;
     ss << " sslmode=disable";
+    if (!application_name.empty()) {
+        ss << " application_name=" << application_name;
+    }
     if (!options.empty()) {
         ss << " options='" << options << "'";
     }
@@ -61,6 +68,26 @@ std::string getVar(PGconn* conn, const char* name) {
     std::string result = val ? val : "";
     PQclear(res);
     return result;
+}
+
+// Helper to get the hostgroup the session is locked on (-1 when not locked).
+// The lock for untracked options is set when the first query is routed, so run one first.
+int getLockedHostgroup(PGconn* conn) {
+    PGresult* res = PQexec(conn, "SELECT 1");
+    PQclear(res);
+    res = PQexec(conn, "PROXYSQL INTERNAL SESSION");
+    if (!res || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        PQclear(res);
+        return -2;
+    }
+    const std::string json_str = PQgetvalue(res, 0, 0);
+    PQclear(res);
+    try {
+        const json j = json::parse(json_str);
+        return j.at("locked_on_hostgroup").get<int>();
+    } catch (...) {
+        return -2;
+    }
 }
 
 int main(int argc, char** argv) {
@@ -323,7 +350,7 @@ int main(int argc, char** argv) {
     // Verify DateStyle is actually set
     // This will be verified separately after connection
 
-    const int num_tests = tests.size() + 6; // +4 verification tests, +2 conninfo-quoting tests
+    const int num_tests = tests.size() + 11; // +4 verification tests, +2 conninfo-quoting tests, +5 application_name tests
     plan(num_tests);
 
     int pass_count = 0;
@@ -509,6 +536,63 @@ int main(int argc, char** argv) {
         } else {
             diag("Connection failed: %s", error.c_str());
             ok(false, "quote+keyword in an option value stays a literal (connect failed)");
+        }
+    }
+
+    // Test 7 (issue #6478): application_name given in options ("-c application_name=...", as
+    // set by PGOPTIONS and some drivers) is a connection parameter, not an untracked variable.
+    // It must be reported back to the client and must not lock the session on its hostgroup.
+    // When it is also given as a connection parameter, that value wins, as in PostgreSQL.
+    {
+        diag("\n--- Verifying application_name in options ---");
+        std::string error;
+        PGConnPtr conn = createConnection("-c application_name=options_app", error);
+        if (conn) {
+            const char* val = PQparameterStatus(conn.get(), "application_name");
+            diag("Expected: options_app");
+            diag("Got: %s", val ? val : "(null)");
+            ok(val && std::string(val) == "options_app",
+               "application_name in options is reported to the client");
+            int hg = getLockedHostgroup(conn.get());
+            diag("locked_on_hostgroup: %d", hg);
+            ok(hg == -1, "application_name in options does not lock the hostgroup");
+        } else {
+            diag("Connection failed: %s", error.c_str());
+            ok(false, "application_name in options is reported to the client (connect failed)");
+            ok(false, "application_name in options does not lock the hostgroup (connect failed)");
+        }
+    }
+    {
+        diag("\n--- Verifying application_name as connection parameter and in options ---");
+        std::string error;
+        PGConnPtr conn = createConnection("-c application_name=options_app", error, "startup_app");
+        if (conn) {
+            const char* val = PQparameterStatus(conn.get(), "application_name");
+            diag("Expected: startup_app");
+            diag("Got: %s", val ? val : "(null)");
+            ok(val && std::string(val) == "startup_app",
+               "application_name connection parameter takes precedence over options");
+            int hg = getLockedHostgroup(conn.get());
+            diag("locked_on_hostgroup: %d", hg);
+            ok(hg == -1, "application_name in both places does not lock the hostgroup");
+        } else {
+            diag("Connection failed: %s", error.c_str());
+            ok(false, "application_name connection parameter takes precedence over options (connect failed)");
+            ok(false, "application_name in both places does not lock the hostgroup (connect failed)");
+        }
+    }
+    // Control: an untracked option still locks the hostgroup, so the checks above can fail.
+    {
+        diag("\n--- Verifying an untracked option still locks the hostgroup ---");
+        std::string error;
+        PGConnPtr conn = createConnection("-c geqo=off", error);
+        if (conn) {
+            int hg = getLockedHostgroup(conn.get());
+            diag("locked_on_hostgroup: %d", hg);
+            ok(hg >= 0, "untracked option (geqo) locks the hostgroup");
+        } else {
+            diag("Connection failed: %s", error.c_str());
+            ok(false, "untracked option (geqo) locks the hostgroup (connect failed)");
         }
     }
 
