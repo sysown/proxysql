@@ -13,10 +13,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <exception>
+#include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -36,15 +40,20 @@ using std::string;
 static const char* RESTAPI_ROUTE = "reload6552";
 static const int RESTAPI_TEST_PORT = 6070;
 
+struct variable_row {
+	string name;
+	string value;
+};
+
 struct http_result {
 	long code { 0 };
 	CURLcode rc { CURLE_OK };
 	string body {};
 };
 
-static size_t write_body_cb(void* data, size_t size, size_t nmemb, void* userp) {
+static size_t write_body_cb(char* data, size_t size, size_t nmemb, void* userp) {
 	string* out = static_cast<string*>(userp);
-	out->append(static_cast<char*>(data), size * nmemb);
+	out->append(data, size * nmemb);
 	return size * nmemb;
 }
 
@@ -66,6 +75,7 @@ static http_result http_get(
 	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
 	curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_s);
+	curl_easy_setopt(curl, CURLOPT_SSLVERSION, static_cast<long>(CURL_SSLVERSION_TLSv1_2));
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_body_cb);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.body);
 	if (!unix_socket.empty()) {
@@ -74,12 +84,7 @@ static http_result http_get(
 	if (!ca.empty()) {
 		curl_easy_setopt(curl, CURLOPT_CAINFO, ca.c_str());
 		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-		// Chain verification is what matters here; the fixture CN may not be
-		// the address used by the shared Docker network.
-		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-	} else {
-		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 	}
 	if (!cert.empty()) {
 		curl_easy_setopt(curl, CURLOPT_SSLCERT, cert.c_str());
@@ -124,6 +129,19 @@ static void drain_results(MYSQL* mysql) {
 	}
 }
 
+static bool tcp_port_closed(const string& url) {
+	CURL* curl = curl_easy_init();
+	if (curl == nullptr) return false;
+	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 1L);
+	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 2L);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3L);
+	const CURLcode rc = curl_easy_perform(curl);
+	curl_easy_cleanup(curl);
+	return rc == CURLE_COULDNT_CONNECT;
+}
+
 static bool admin_query(MYSQL* admin, const string& query, bool log_failure = true) {
 	if (mysql_query(admin, query.c_str()) != 0) {
 		if (log_failure) {
@@ -149,6 +167,121 @@ static string scalar(MYSQL* admin, const string& query) {
 	}
 	drain_results(admin);
 	return value;
+}
+
+static string sql_quote(const string& value) {
+	string quoted;
+	quoted.reserve(value.size());
+	for (const char c : value) {
+		// Admin SQL is executed by SQLite, whose literals escape apostrophes
+		// by doubling them. Backslashes are ordinary characters.
+		if (c == '\'') quoted.push_back('\'');
+		quoted.push_back(c);
+	}
+	return quoted;
+}
+
+static bool cleanup_query(MYSQL* admin, const string& query, const string& step) {
+	if (mysql_query(admin, query.c_str()) != 0) {
+		diag("Cleanup failed at %s: %s", step.c_str(), mysql_error(admin));
+		return false;
+	}
+	drain_results(admin);
+	return true;
+}
+
+static bool query_rows(
+	MYSQL* admin, const string& query, std::vector<variable_row>& rows,
+	const string& purpose
+) {
+	rows.clear();
+	if (mysql_query(admin, query.c_str()) != 0) {
+		diag("Snapshot query failed for %s: %s", purpose.c_str(), mysql_error(admin));
+		return false;
+	}
+	MYSQL_RES* res = mysql_store_result(admin);
+	if (res == nullptr) {
+		diag("Snapshot result failed for %s: %s", purpose.c_str(), mysql_error(admin));
+		drain_results(admin);
+		return false;
+	}
+	MYSQL_ROW row = nullptr;
+	while ((row = mysql_fetch_row(res)) != nullptr) {
+		rows.push_back({
+			row[0] != nullptr ? row[0] : "",
+			row[1] != nullptr ? row[1] : ""
+		});
+	}
+	mysql_free_result(res);
+	drain_results(admin);
+	return true;
+}
+
+static bool read_variable(
+	MYSQL* admin, const string& table, const string& name, string& value
+) {
+	std::vector<variable_row> rows;
+	if (!query_rows(
+			admin,
+			"SELECT variable_name, variable_value FROM " + table +
+				" WHERE variable_name='" + sql_quote(name) + "'",
+			rows, table + " " + name)) {
+		return false;
+	}
+	if (rows.size() != 1) {
+		diag("Snapshot row count for %s in %s was %zu, expected 1",
+			name.c_str(), table.c_str(), rows.size());
+		return false;
+	}
+	value = rows[0].value;
+	return true;
+}
+
+static bool log_offset(const string& path, std::streamoff& offset) {
+	std::ifstream log(path, std::ios::binary | std::ios::ate);
+	if (!log.is_open()) return false;
+	offset = log.tellg();
+	return offset >= 0;
+}
+
+static bool wait_for_log_text_after(
+	const string& path, std::streamoff offset, const string& needle,
+	int timeout_ms = 15000
+) {
+	if (offset < 0) return false;
+	const auto deadline = std::chrono::steady_clock::now() +
+		std::chrono::milliseconds(timeout_ms);
+	do {
+		std::ifstream log(path, std::ios::binary);
+		if (!log.is_open()) return false;
+		log.seekg(offset);
+		if (!log) return false;
+		std::ostringstream content;
+		content << log.rdbuf();
+		if (content.str().find(needle) != string::npos) return true;
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	} while (std::chrono::steady_clock::now() < deadline);
+	return false;
+}
+
+static bool wait_for_mtls_ready(
+	const string& url, const string& ca, const string& cert, const string& key,
+	long& trusted_code, long& missing_code, int timeout_ms = 15000
+) {
+	const auto deadline = std::chrono::steady_clock::now() +
+		std::chrono::milliseconds(timeout_ms);
+	do {
+		http_result trusted = http_get(url, ca, cert, key);
+		http_result missing = http_get(url, ca);
+		trusted_code = trusted.rc == CURLE_OK ? trusted.code : -1;
+		missing_code = missing.rc == CURLE_OK ? missing.code : -1;
+		if (trusted.rc == CURLE_OK && trusted.code == 200 &&
+			missing.rc == CURLE_OK && missing.code == 403) {
+			return true;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	} while (std::chrono::steady_clock::now() < deadline);
+	return false;
 }
 
 static string read_file(const string& path) {
@@ -203,13 +336,39 @@ public:
 			contents_.push_back(read_file(path));
 		}
 	}
+	pem_backup(const pem_backup&) = delete;
+	pem_backup& operator=(const pem_backup&) = delete;
+	pem_backup(pem_backup&&) = delete;
+	pem_backup& operator=(pem_backup&&) = delete;
 	~pem_backup() {
+		try {
+			if (!restored_) {
+				if (!restore()) {
+					diag("Fallback PEM restoration failed; see diagnostics above");
+				}
+			}
+		} catch (const std::exception& e) {
+			diag("Fallback PEM restoration threw: %s", e.what());
+		} catch (...) {
+			diag("Fallback PEM restoration threw an unknown exception");
+		}
+	}
+	bool restore() {
+		bool ok = true;
 		for (size_t i = 0; i < paths_.size(); ++i) {
-			if (!contents_[i].empty()) {
-				const mode_t mode = paths_[i].find("-key.pem") != string::npos ? 0600 : 0644;
-				write_file(paths_[i], contents_[i], mode);
+			if (contents_[i].empty()) {
+				ok = false;
+				diag("Cannot restore empty PEM snapshot for %s", paths_[i].c_str());
+				continue;
+			}
+			const mode_t mode = paths_[i].find("-key.pem") != string::npos ? 0600 : 0644;
+			if (!write_file(paths_[i], contents_[i], mode)) {
+				ok = false;
+				diag("Cannot restore PEM file %s", paths_[i].c_str());
 			}
 		}
+		restored_ = ok;
+		return ok;
 	}
 	bool complete() const {
 		for (const auto& content : contents_) {
@@ -220,6 +379,60 @@ public:
 private:
 	std::vector<string> paths_;
 	std::vector<string> contents_;
+	bool restored_ { false };
+};
+
+/**
+ * Own a unique fixture tree below the shared datadir. Never removes a path this
+ * test did not create. The tree stays world-traversable so the ProxySQL process
+ * can read fixture CAs; only explicitly created files are removed with it.
+ */
+class owned_fixture_tree {
+public:
+	explicit owned_fixture_tree(const string& parent) {
+		const string template_value = parent + "/reg_test_6552-XXXXXX";
+		std::vector<char> template_path(template_value.begin(), template_value.end());
+		template_path.push_back('\0');
+		char* made = mkdtemp(template_path.data());
+		if (made != nullptr) {
+			path_ = made;
+			chmod(path_.c_str(), 0755);
+		}
+	}
+	~owned_fixture_tree() {
+		try {
+			if (!cleaned_ && !path_.empty()) {
+				if (!cleanup()) {
+					diag("Fallback fixture cleanup failed for %s", path_.c_str());
+				}
+			}
+		} catch (const std::exception& e) {
+			diag("Fallback fixture cleanup threw: %s", e.what());
+		} catch (...) {
+			diag("Fallback fixture cleanup threw an unknown exception");
+		}
+	}
+	owned_fixture_tree(const owned_fixture_tree&) = delete;
+	owned_fixture_tree& operator=(const owned_fixture_tree&) = delete;
+
+	bool cleanup() {
+		if (path_.empty()) return true;
+		if (cleaned_) return true;
+		std::error_code ec;
+		std::filesystem::remove_all(path_, ec);
+		if (ec) {
+			diag("Cannot remove owned fixture tree %s: %s",
+				path_.c_str(), ec.message().c_str());
+			return false;
+		}
+		cleaned_ = true;
+		return true;
+	}
+	bool valid() const { return !path_.empty(); }
+	const string& path() const { return path_; }
+private:
+	string path_ {};
+	bool cleaned_ { false };
 };
 
 static bool install_pem(const string& src, const string& dst, mode_t mode) {
@@ -295,12 +508,12 @@ static bool create_expired_client_certificate(
 	material.cert = dir + "/expired-client.pem";
 	material.ca = ca_pem;
 	const string ca_dir = dir + "/expired-ca";
-	mkdir(ca_dir.c_str(), 0755);
+	mkdir(ca_dir.c_str(), 0700);
 	const string config = ca_dir + "/ca.cnf";
 	const string database = ca_dir + "/index.txt";
 	const string serial_file = ca_dir + "/serial";
 	const string newcerts = ca_dir + "/newcerts";
-	mkdir(newcerts.c_str(), 0755);
+	mkdir(newcerts.c_str(), 0700);
 	write_file(database, "", 0600);
 	write_file(serial_file, "1000\n", 0600);
 
@@ -399,30 +612,166 @@ static bool wait_for_serial(
 }
 
 struct cleanup_guard {
+	cleanup_guard() = default;
+	cleanup_guard(const cleanup_guard&) = delete;
+	cleanup_guard& operator=(const cleanup_guard&) = delete;
+	cleanup_guard(cleanup_guard&&) = delete;
+	cleanup_guard& operator=(cleanup_guard&&) = delete;
+
 	MYSQL* admin { nullptr };
 	pem_backup* backup { nullptr };
-	~cleanup_guard() {
-		if (!admin) return;
-		admin_query(admin, "DELETE FROM restapi_routes WHERE uri='" + string(RESTAPI_ROUTE) + "'", false);
-		admin_query(admin, "LOAD RESTAPI TO RUNTIME", false);
-		admin_query(admin, "SET admin-restapi_use_ssl='false'", false);
-		admin_query(admin, "SET admin-restapi_ssl_verify_client='false'", false);
-		admin_query(admin, "SET admin-restapi_interface=''", false);
-		admin_query(admin, "SET admin-restapi_ssl_ca=''", false);
-		admin_query(admin, "SET admin-restapi_enabled='true'", false);
-		if (backup) {
-			// Destructor restores the PEM files; reload them before the next
-			// listener apply so later tests see ProxySQL's original cert.
-			delete backup;
-			backup = nullptr;
+	owned_fixture_tree* fixtures { nullptr };
+	std::vector<variable_row> disk_admin_before {};
+	std::vector<variable_row> memory_admin_before {};
+	std::vector<variable_row> runtime_admin_before {};
+	bool state_ready { false };
+	bool done { false };
+
+	bool restore_admin_rows(
+		const string& table, const std::vector<variable_row>& before
+	) {
+		bool ok = cleanup_query(
+			admin,
+			"DELETE FROM " + table + " WHERE variable_name LIKE 'admin-%'",
+			"clear admin variables in " + table);
+		for (const variable_row& row : before) {
+			const string query =
+				"INSERT OR REPLACE INTO " + table + " "
+				"(variable_name, variable_value) VALUES ('" +
+				sql_quote(row.name) + "','" + sql_quote(row.value) + "')";
+			ok = cleanup_query(admin, query, "restore " + row.name + " in " + table) && ok;
 		}
-		admin_query(admin, "PROXYSQL RELOAD TLS", false);
-		admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME", false);
+		return ok;
+	}
+
+	bool restore_disk_admin() {
+		return restore_admin_rows("disk.global_variables", disk_admin_before);
+	}
+
+	bool restore_runtime_and_memory() {
+		// Apply the original runtime values through memory, then put the
+		// original memory values back. This preserves intentional
+		// memory/runtime differences for every admin variable: LOAD applies
+		// the entire admin scope, including values unrelated to this test.
+		bool ok = restore_admin_rows("global_variables", runtime_admin_before);
+		ok = cleanup_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME",
+			"load runtime baseline") && ok;
+		ok = restore_admin_rows("global_variables", memory_admin_before) && ok;
+		return ok;
+	}
+
+	bool matches_baseline(const string& table, const std::vector<variable_row>& before) {
+		std::vector<variable_row> actual;
+		if (!query_rows(admin,
+				"SELECT variable_name, variable_value FROM " + table +
+				" WHERE variable_name LIKE 'admin-%' ORDER BY variable_name",
+				actual, "verify restored " + table)) return false;
+		if (actual.size() != before.size()) return false;
+		for (size_t i = 0; i < before.size(); ++i) {
+			if (actual[i].name != before[i].name || actual[i].value != before[i].value) return false;
+		}
+		return true;
+	}
+
+	bool run() {
+		if (done) return true;
+		done = true;
+		bool ok = true;
+		if (state_ready && admin != nullptr) {
+			ok = cleanup_query(
+				admin,
+				"DELETE FROM restapi_routes WHERE uri='" + string(RESTAPI_ROUTE) + "'",
+				"delete RESTAPI route") && ok;
+			ok = cleanup_query(admin, "LOAD RESTAPI TO RUNTIME", "load RESTAPI routes") && ok;
+			ok = restore_disk_admin() && ok;
+			ok = restore_runtime_and_memory() && ok;
+		}
+		if (backup != nullptr) {
+			ok = backup->restore() && ok;
+		}
+		if (state_ready && admin != nullptr) {
+			ok = cleanup_query(admin, "PROXYSQL RELOAD TLS", "reload restored TLS material") && ok;
+		}
+		if (fixtures != nullptr) {
+			ok = fixtures->cleanup() && ok;
+		}
+		return ok;
+	}
+
+	~cleanup_guard() {
+		try {
+			if (!done) {
+				if (!run()) {
+					diag("Fallback cleanup failed; see diagnostics above");
+				}
+			}
+		} catch (const std::exception& e) {
+			diag("Fallback cleanup threw: %s", e.what());
+		} catch (...) {
+			diag("Fallback cleanup threw an unknown exception");
+		}
 	}
 };
 
-static int configure_reload_route(MYSQL* admin, const string& datadir, const CommandLine& cl) {
-	const string script = datadir + "/reg_test_6552_reload.sh";
+static bool snapshot_test_state(MYSQL* admin, cleanup_guard& cleanup) {
+	return query_rows(admin,
+		"SELECT variable_name, variable_value FROM global_variables "
+		"WHERE variable_name LIKE 'admin-%' ORDER BY variable_name",
+		cleanup.memory_admin_before, "memory admin rows") &&
+		query_rows(admin,
+		"SELECT variable_name, variable_value FROM runtime_global_variables "
+		"WHERE variable_name LIKE 'admin-%' ORDER BY variable_name",
+		cleanup.runtime_admin_before, "runtime admin rows") && query_rows(
+		admin,
+		"SELECT variable_name, variable_value FROM disk.global_variables "
+		"WHERE variable_name LIKE 'admin-%' ORDER BY variable_name",
+		cleanup.disk_admin_before, "disk.global_variables admin rows");
+}
+
+static void test_distinct_admin_baselines(MYSQL* admin, cleanup_guard& original) {
+	// Use an unrelated setting to prove that the SAVE/LOAD scope is wider
+	// than REST, and a quoted value to exercise SQLite literal restoration.
+	const string quoted_ca = "disk's\\CA.pem";
+	const bool seeded =
+		admin_query(admin, "SET admin-refresh_interval='2222'") &&
+		admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME") &&
+		admin_query(admin, "SET admin-refresh_interval='3333'") &&
+		admin_query(admin, "UPDATE disk.global_variables SET variable_value='1111' "
+			"WHERE variable_name='admin-refresh_interval'") &&
+		admin_query(admin, "UPDATE disk.global_variables SET variable_value='" +
+			sql_quote(quoted_ca) + "' WHERE variable_name='admin-restapi_ssl_ca'");
+	ok(seeded, "created distinct unrelated disk, memory and runtime admin baselines");
+	cleanup_guard probe;
+	probe.admin = admin;
+	probe.done = true; // The outer guard owns restoration on every exit path.
+	const bool captured = seeded && snapshot_test_state(admin, probe);
+	ok(captured, "captured all three distinct admin baselines");
+	if (captured) {
+		const bool overwritten = admin_query(admin, "SET admin-refresh_interval='4444'") &&
+			admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME") &&
+			admin_query(admin, "SAVE ADMIN VARIABLES TO DISK");
+		const bool disk_restored = probe.restore_disk_admin();
+		const bool runtime_restored = probe.restore_runtime_and_memory();
+		const bool restored = disk_restored && runtime_restored;
+		ok(overwritten && restored &&
+			probe.matches_baseline("disk.global_variables", probe.disk_admin_before) &&
+			probe.matches_baseline("global_variables", probe.memory_admin_before) &&
+			probe.matches_baseline("runtime_global_variables", probe.runtime_admin_before),
+			"restoration preserves the complete, independently differing admin layers");
+		string restored_ca;
+		ok(read_variable(admin, "disk.global_variables", "admin-restapi_ssl_ca", restored_ca) &&
+			restored_ca == quoted_ca, "disk restoration preserves apostrophes and backslashes");
+	} else {
+		skip(2, "distinct-baseline fixture could not be prepared");
+	}
+	const bool disk_restored = original.restore_disk_admin();
+	const bool runtime_restored = original.restore_runtime_and_memory();
+	const bool restored = disk_restored && runtime_restored;
+	ok(restored, "returned to the original admin state after the mismatch probe");
+}
+
+static int configure_reload_route(MYSQL* admin, const string& fixture_runtime_dir, const CommandLine& cl) {
+	const string script = fixture_runtime_dir + "/reg_test_6552_reload.sh";
 	char content[1024];
 	snprintf(
 		content, sizeof(content),
@@ -433,7 +782,7 @@ static int configure_reload_route(MYSQL* admin, const string& datadir, const Com
 		"touch '%s/reg_test_6552_sync_marker'\n"
 		"echo '{\"ok\":true}'\n",
 		cl.admin_password, cl.admin_username, cl.admin_port,
-		cl.admin_username, cl.admin_port, datadir.c_str()
+		cl.admin_username, cl.admin_port, fixture_runtime_dir.c_str()
 	);
 	if (content[0] == '\0' || !write_file(script, content, 0755)) {
 		diag("Cannot create /sync reload script %s", script.c_str());
@@ -464,8 +813,21 @@ int main() {
 
 	const char* datadir_env = getenv("REGULAR_INFRA_DATADIR");
 	const string datadir = datadir_env ? datadir_env : "/var/lib/proxysql";
-	const string cert_dir = datadir + "/reg_test_6552_certs";
-	mkdir(cert_dir.c_str(), 0755);
+	owned_fixture_tree fixture_tree(datadir);
+	if (!fixture_tree.valid()) {
+		diag("Cannot create owned fixture tree under %s: %s",
+			datadir.c_str(), strerror(errno));
+		return EXIT_FAILURE;
+	}
+	const string fixture_root = fixture_tree.path();
+	const string cert_dir = fixture_root;
+	const string runtime_dir = fixture_root + "/runtime";
+	if ((mkdir(runtime_dir.c_str(), 0777) != 0 && errno != EEXIST) ||
+		chmod(runtime_dir.c_str(), 0777) != 0) {
+		diag("Cannot create runtime fixture directory %s: %s",
+			runtime_dir.c_str(), strerror(errno));
+		return EXIT_FAILURE;
+	}
 	temporary_certificate_directory client_fixtures(cert_dir);
 	if (!client_fixtures.valid()) {
 		diag("Cannot create client certificate fixture directory under %s", cert_dir.c_str());
@@ -478,15 +840,15 @@ int main() {
 	const string server_cert = cert_dir + "/server.pem";
 	const string server_cert2 = cert_dir + "/server2.pem";
 	const string server_key2 = cert_dir + "/server2.key";
+	const string retry_ca = cert_dir + "/retry-ca.pem";
 
 	const string installed_ca = datadir + "/proxysql-ca.pem";
 	const string installed_key = datadir + "/proxysql-key.pem";
 	const string installed_cert = datadir + "/proxysql-cert.pem";
 
-	pem_backup* backup = new pem_backup({ installed_ca, installed_key, installed_cert });
-	if (!backup->complete()) {
+	pem_backup backup({ installed_ca, installed_key, installed_cert });
+	if (!backup.complete()) {
 		diag("Cannot back up existing ProxySQL PEM files in %s", datadir.c_str());
-		delete backup;
 		return EXIT_FAILURE;
 	}
 
@@ -500,15 +862,24 @@ int main() {
 
 	cleanup_guard cleanup;
 	cleanup.admin = admin;
-	cleanup.backup = backup;
+	cleanup.backup = &backup;
+	cleanup.fixtures = &fixture_tree;
+	if (!snapshot_test_state(admin, cleanup)) {
+		diag("Cannot snapshot REST/admin state before test mutations");
+		mysql_close(admin);
+		return EXIT_FAILURE;
+	}
+	cleanup.state_ready = true;
 
 	curl_global_init(CURL_GLOBAL_ALL);
 	plan(NO_PLAN);
+	test_distinct_admin_baselines(admin, cleanup);
 
 	const string host = cl.admin_host;
 	const string restapi_host = host + ":" + std::to_string(RESTAPI_TEST_PORT);
 	const string http_url = "http://" + restapi_host + "/metrics";
 	const string https_url = "https://" + restapi_host + "/metrics";
+	const string proxysql_log = datadir + "/proxysql.log";
 
 	// ---------------------------------------------------------------- setup
 	ok(create_ca(ca_key, ca_pem), "generated test CA");
@@ -539,6 +910,9 @@ int main() {
 		"SELECT variable_value FROM global_variables WHERE variable_name='admin-restapi_ssl_verify_client'") == "false",
 		"global_variables round-trips admin-restapi_ssl_verify_client=false");
 	ok(scalar(admin,
+		"SELECT COUNT(*) FROM global_variables WHERE variable_name='admin-restapi_interface'") == "1",
+		"global_variables contains the admin-restapi_interface row");
+	ok(scalar(admin,
 		"SELECT variable_value FROM global_variables WHERE variable_name='admin-restapi_interface'").empty(),
 		"global_variables round-trips empty admin-restapi_interface");
 	ok(scalar(admin,
@@ -547,18 +921,29 @@ int main() {
 	ok(scalar(admin,
 		"SELECT variable_value FROM runtime_global_variables WHERE variable_name='admin-restapi_ssl_verify_client'") == "false",
 		"runtime_global_variables has admin-restapi_ssl_verify_client");
+	ok(admin_query(admin, "SET admin-restapi_ssl_ca='proxysql-ca.pem'"),
+		"set admin-restapi_ssl_ca for persistence round-trip");
+	ok(scalar(admin,
+		"SELECT COUNT(*) FROM global_variables WHERE variable_name='admin-restapi_ssl_ca'") == "1",
+		"global_variables contains the admin-restapi_ssl_ca row");
+	ok(scalar(admin,
+		"SELECT variable_value FROM global_variables WHERE variable_name='admin-restapi_ssl_ca'") == "proxysql-ca.pem",
+		"global_variables round-trips explicit admin-restapi_ssl_ca");
 	ok(admin_query(admin, "SAVE ADMIN VARIABLES TO DISK"),
 		"SAVE ADMIN VARIABLES TO DISK succeeds");
 	ok(scalar(admin,
 		"SELECT variable_value FROM disk.global_variables WHERE variable_name='admin-restapi_use_ssl'") == "false",
 		"disk.global_variables round-trips admin-restapi_use_ssl=false");
+	ok(scalar(admin,
+		"SELECT variable_value FROM disk.global_variables WHERE variable_name='admin-restapi_ssl_ca'") == "proxysql-ca.pem",
+		"disk.global_variables round-trips explicit admin-restapi_ssl_ca");
 
 	// ------------------------------------------------------------- HTTPS
 	admin_query(admin, "SET admin-restapi_use_ssl='true'");
 	admin_query(admin, "SET admin-restapi_ssl_verify_client='false'");
 	admin_query(admin, "SET admin-restapi_ssl_ca=''");
 	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-	ok(wait_for_http(https_url, 200), "HTTPS listener serves /metrics with ProxySQL cert");
+	ok(wait_for_http(https_url, 200, ca_pem), "HTTPS listener serves /metrics with ProxySQL cert");
 	{
 		http_result plain = http_get(http_url);
 		ok(!(plain.rc == CURLE_OK && plain.code == 200),
@@ -567,18 +952,18 @@ int main() {
 	}
 
 	// ----------------------------------- /sync calls RELOAD TLS + new admin
-	ok(configure_reload_route(admin, datadir, cl) == EXIT_SUCCESS,
+	ok(configure_reload_route(admin, runtime_dir, cl) == EXIT_SUCCESS,
 		"configured /sync route that reloads TLS and opens a second admin connection");
 	{
-		const string sync_marker = datadir + "/reg_test_6552_sync_marker";
+		const string sync_marker = runtime_dir + "/reg_test_6552_sync_marker";
 		unlink(sync_marker.c_str());
 		http_result sync_result {};
 		const auto started = std::chrono::steady_clock::now();
 		// curl has its own bounded timeout; always join before cleanup.
-		std::thread sync_call([&]() {
+		std::thread sync_call([&sync_result, &restapi_host, &ca_pem]() {
 			sync_result = http_get(
 				"https://" + restapi_host + "/sync/" + RESTAPI_ROUTE,
-				"", "", "", "", 20);
+				ca_pem, "", "", "", 20);
 		});
 		sync_call.join();
 		const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -604,7 +989,7 @@ int main() {
 			skip(1, "/sync response body unavailable on restarted listener");
 		}
 	}
-	ok(wait_for_http(https_url, 200), "HTTPS listener recovered after /sync TLS reload");
+	ok(wait_for_http(https_url, 200, ca_pem), "HTTPS listener recovered after /sync TLS reload");
 
 	// TLS reload changes the served certificate without process restart.
 	{
@@ -637,30 +1022,32 @@ int main() {
 	ok(create_expired_client_certificate(cert_dir, ca_pem, ca_key, expired),
 		"generated expired client certificate");
 
+	// The empty CA value exercises GloVars.get_SSL_ca_pem_mem() fallback to
+	// ProxySQL's global proxysql-ca.pem before the explicit path variant.
 	admin_query(admin, "SET admin-restapi_ssl_verify_client='true'");
-	admin_query(admin, "SET admin-restapi_ssl_ca='proxysql-ca.pem'");
+	admin_query(admin, "SET admin-restapi_ssl_ca=''");
 	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 	// Readiness means BOTH the positive and the enforced-negative paths work
 	// simultaneously; a closed port during async restart would otherwise make
 	// a rejection assertion pass spuriously.
-	bool mtls_ready = false;
-	http_result mtls_trusted {};
-	http_result mtls_missing {};
-	const auto mtls_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-	do {
-		mtls_trusted = http_get(https_url, ca_pem, trusted.cert, trusted.key);
-		mtls_missing = http_get(https_url, ca_pem);
-		if (mtls_trusted.rc == CURLE_OK && mtls_trusted.code == 200 &&
-			mtls_missing.rc == CURLE_OK && mtls_missing.code == 403) {
-			mtls_ready = true;
-			break;
-		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(200));
-	} while (std::chrono::steady_clock::now() < mtls_deadline);
-	ok(mtls_ready,
-		"mTLS listener enforces certs while still accepting the trusted client "
-		"(trusted=%ld missing=%ld)", mtls_trusted.code, mtls_missing.code);
+	long mtls_trusted_code = 0;
+	long mtls_missing_code = 0;
+	ok(wait_for_mtls_ready(
+			https_url, ca_pem, trusted.cert, trusted.key,
+			mtls_trusted_code, mtls_missing_code),
+		"mTLS listener accepts trusted clients and rejects missing certs "
+		"through ProxySQL's global CA fallback (trusted=%ld missing=%ld)",
+		mtls_trusted_code, mtls_missing_code);
+
+	admin_query(admin, "SET admin-restapi_ssl_ca='proxysql-ca.pem'");
+	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	ok(wait_for_mtls_ready(
+			https_url, ca_pem, trusted.cert, trusted.key,
+			mtls_trusted_code, mtls_missing_code),
+		"mTLS listener accepts trusted clients and rejects missing certs "
+		"through the explicit custom CA path (trusted=%ld missing=%ld)",
+		mtls_trusted_code, mtls_missing_code);
 
 	{
 		http_result invalid = http_get(https_url, ca_pem, untrusted.cert, untrusted.key);
@@ -684,7 +1071,7 @@ int main() {
 	}
 
 	// Every resource is behind the same gate, including /sync and TSDB.
-	const string sync_marker = datadir + "/reg_test_6552_sync_marker";
+	const string sync_marker = runtime_dir + "/reg_test_6552_sync_marker";
 	unlink(sync_marker.c_str());
 	{
 		http_result sync_missing = http_get(
@@ -705,31 +1092,84 @@ int main() {
 	ok(wait_for_http(https_url, 200, ca_pem, trusted.cert, trusted.key),
 		"mTLS listener still accepts the trusted client after rejections");
 
+	// A failed apply for a missing explicit CA must be retried by an identical
+	// LOAD after the CA appears at the same path. Poll the shared error log for
+	// the unique path so the CA cannot be installed before the first async
+	// apply has definitely failed.
+	{
+		unlink(retry_ca.c_str());
+		admin_query(admin, "SET admin-restapi_use_ssl='true'");
+		admin_query(admin, "SET admin-restapi_ssl_verify_client='true'");
+		admin_query(admin, "SET admin-restapi_ssl_ca='" + retry_ca + "'");
+		std::streamoff log_start = -1;
+		const bool have_log_start = log_offset(proxysql_log, log_start);
+		admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+		ok(have_log_start && wait_for_log_text_after(
+				proxysql_log, log_start,
+				"cannot read admin-restapi_ssl_ca '" + retry_ca + "'"),
+			"failed listener apply for the missing custom CA completed");
+		http_result absent_ca = http_get(https_url, ca_pem, trusted.cert, trusted.key);
+		ok(!(absent_ca.rc == CURLE_OK && absent_ca.code == 200),
+			"missing custom CA leaves no mTLS listener (rc=%d code=%ld)",
+			static_cast<int>(absent_ca.rc), absent_ca.code);
+
+		ok(install_pem(ca_pem, retry_ca, 0644),
+			"installed a valid CA at the previously missing path");
+		admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+		ok(wait_for_mtls_ready(
+				https_url, ca_pem, trusted.cert, trusted.key,
+				mtls_trusted_code, mtls_missing_code),
+			"identical LOAD retries and recovers the listener after the CA appears "
+			"(trusted=%ld missing=%ld)", mtls_trusted_code, mtls_missing_code);
+	}
+
 	// ---------------------------------------------- fail closed configuration
 	admin_query(admin, "SET admin-restapi_use_ssl='false'");
 	admin_query(admin, "SET admin-restapi_ssl_verify_client='true'");
+	std::streamoff fail_closed_log_start = -1;
+	const bool have_fail_closed_log_start = log_offset(proxysql_log, fail_closed_log_start);
 	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-	std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-	{
-		http_result plain = http_get(http_url);
-		http_result tls = http_get(https_url);
-		ok(!(plain.rc == CURLE_OK && plain.code == 200),
-			"verify_client without use_ssl does not serve plain HTTP (rc=%d code=%ld)",
-			static_cast<int>(plain.rc), plain.code);
-		ok(!(tls.rc == CURLE_OK && tls.code == 200),
-			"verify_client without use_ssl does not silently become HTTPS either");
-	}
+	ok(have_fail_closed_log_start && wait_for_log_text_after(
+			proxysql_log, fail_closed_log_start,
+			"admin-restapi_ssl_verify_client=true requires admin-restapi_use_ssl=true"),
+		"rejected verify_client/use_ssl combination completed after this LOAD");
+	http_result plain {};
+	http_result trusted_tls {};
+	bool listener_stopped = false;
+	const auto stopped_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	do {
+		plain = http_get(http_url);
+		// The old listener was mTLS, so a trusted client would still get 200
+		// if the invalid configuration had been ignored.
+		trusted_tls = http_get(https_url, ca_pem, trusted.cert, trusted.key);
+		if (plain.rc != CURLE_OK && trusted_tls.rc != CURLE_OK && tcp_port_closed(http_url)) {
+			listener_stopped = true;
+			break;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(150));
+	} while (std::chrono::steady_clock::now() < stopped_deadline);
+	ok(listener_stopped,
+		"verify_client without use_ssl stops the previous mTLS listener "
+		"(plain rc=%d code=%ld trusted_tls rc=%d code=%ld)",
+		static_cast<int>(plain.rc), plain.code,
+		static_cast<int>(trusted_tls.rc), trusted_tls.code);
+	ok(plain.rc != CURLE_OK,
+		"verify_client without use_ssl does not serve plain HTTP");
+	ok(trusted_tls.rc != CURLE_OK,
+		"verify_client without use_ssl does not keep the old trusted HTTPS listener");
 
 	// ---------------------------------------------------------- interface bind
 	admin_query(admin, "SET admin-restapi_ssl_verify_client='false'");
 	admin_query(admin, "SET admin-restapi_port=" + std::to_string(RESTAPI_TEST_PORT));
+	string last_bound_url;
 	const string proxysql_ip = resolve_ipv4(host);
 	ok(!proxysql_ip.empty(), "resolved ProxySQL container address");
 	if (!proxysql_ip.empty()) {
 		const string bound_url = "http://" + proxysql_ip + ":" + std::to_string(RESTAPI_TEST_PORT) + "/metrics";
 		admin_query(admin, "SET admin-restapi_interface='" + proxysql_ip + "'");
 		ok(admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME"), "LOAD bound interface");
-		ok(wait_for_http(bound_url, 200), "listener binds the configured IPv4 address");
+		if (wait_for_http(bound_url, 200)) last_bound_url = bound_url;
+		ok(!last_bound_url.empty(), "listener binds the configured IPv4 address");
 	}
 
 	const string proxysql_ip6 = resolve_ipv6(host);
@@ -738,32 +1178,76 @@ int main() {
 			"http://[" + proxysql_ip6 + "]:" + std::to_string(RESTAPI_TEST_PORT) + "/metrics";
 		admin_query(admin, "SET admin-restapi_interface='" + proxysql_ip6 + "'");
 		ok(admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME"), "LOAD bound IPv6 interface");
-		ok(wait_for_http(bound_url6, 200), "listener actually binds the configured IPv6 address");
+		if (wait_for_http(bound_url6, 200)) last_bound_url = bound_url6;
+		ok(last_bound_url == bound_url6, "listener actually binds the configured IPv6 address");
 	} else {
 		skip(2, "ProxySQL container has no IPv6 address to bind");
 	}
 
 	admin_query(admin, "SET admin-restapi_interface='not-an-ip'");
+	std::streamoff invalid_log_start = -1;
+	const bool have_invalid_log_start = log_offset(proxysql_log, invalid_log_start);
 	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-	std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-	{
-		http_result invalid = http_get(http_url);
-		ok(!(invalid.rc == CURLE_OK && invalid.code == 200),
-			"invalid interface fails closed instead of binding all interfaces (rc=%d code=%ld)",
-			static_cast<int>(invalid.rc), invalid.code);
-	}
+	ok(have_invalid_log_start && wait_for_log_text_after(
+			proxysql_log, invalid_log_start,
+			"Invalid admin-restapi_interface 'not-an-ip'"),
+		"rejected invalid interface completed after this LOAD");
+	http_result invalid {};
+	http_result previous {};
+	bool previous_stopped = false;
+	const auto invalid_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	do {
+		invalid = http_get(http_url);
+		if (!last_bound_url.empty()) previous = http_get(last_bound_url);
+		const bool previous_serving = !last_bound_url.empty() &&
+			previous.rc == CURLE_OK && previous.code == 200;
+		if (!previous_serving && tcp_port_closed(http_url) &&
+			(last_bound_url.empty() || tcp_port_closed(last_bound_url))) {
+			previous_stopped = true;
+			break;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(150));
+	} while (std::chrono::steady_clock::now() < invalid_deadline);
+	ok(previous_stopped,
+		"invalid interface stops the prior listener and does not bind all interfaces "
+		"(default rc=%d code=%ld previous rc=%d code=%ld)",
+		static_cast<int>(invalid.rc), invalid.code,
+		static_cast<int>(previous.rc), previous.code);
 
-	// A pre-existing non-socket path must be rejected and left untouched.
-	const string blocked_path = datadir + "/reg_test_6552_blocked.sock";
+	// Restore a known TCP listener, then prove an existing Unix path is
+	// rejected without leaving that listener running.
+	admin_query(admin, "SET admin-restapi_interface=''");
+	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	ok(wait_for_http(http_url, 200), "recovered default listener before blocked-path test");
+
+	const string blocked_path = runtime_dir + "/blocked.sock";
 	ok(write_file(blocked_path, "do-not-delete", 0644), "created non-socket path fixture");
 	admin_query(admin, "SET admin-restapi_interface='" + blocked_path + "'");
+	std::streamoff blocked_log_start = -1;
+	const bool have_blocked_log_start = log_offset(proxysql_log, blocked_log_start);
 	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-	std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+	ok(have_blocked_log_start && wait_for_log_text_after(
+			proxysql_log, blocked_log_start,
+			"Unix socket path '" + blocked_path + "' already exists; refusing to replace it"),
+		"rejected pre-existing Unix path completed after this LOAD");
+	bool blocked_listener_stopped = false;
+	const auto blocked_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	do {
+		plain = http_get(http_url);
+		if (tcp_port_closed(http_url)) {
+			blocked_listener_stopped = true;
+			break;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(150));
+	} while (std::chrono::steady_clock::now() < blocked_deadline);
+	ok(blocked_listener_stopped,
+		"blocked Unix path stops the prior listener (rc=%d code=%ld)",
+		static_cast<int>(plain.rc), plain.code);
 	ok(read_file(blocked_path) == "do-not-delete",
 		"pre-existing non-socket path is not unlinked");
 	unlink(blocked_path.c_str());
 
-	const string unix_socket_path = datadir + "/reg_test_6552.sock";
+	const string unix_socket_path = runtime_dir + "/restapi.sock";
 	unlink(unix_socket_path.c_str());
 	admin_query(admin, "SET admin-restapi_interface='" + unix_socket_path + "'");
 	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
@@ -785,27 +1269,36 @@ int main() {
 	}
 
 	// ---------------------------------------------- rapid reload coalescing
-	for (int i = 0; i < 5; ++i) {
-		admin_query(admin, "PROXYSQL RELOAD TLS");
-		admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-	}
-	ok(wait_for_http(http_url, 200), "rapid RELOAD TLS / LOAD coalesces to a serving listener");
-
-	// Restore the original files and HTTP defaults before other tests run.
-	admin_query(admin, "DELETE FROM restapi_routes WHERE uri='" + string(RESTAPI_ROUTE) + "'");
-	admin_query(admin, "LOAD RESTAPI TO RUNTIME");
-	admin_query(admin, "SET admin-restapi_use_ssl='false'");
+	// Exercise the HTTPS path so RELOAD TLS is not intentionally ignored.
+	admin_query(admin, "SET admin-restapi_use_ssl='true'");
 	admin_query(admin, "SET admin-restapi_ssl_verify_client='false'");
 	admin_query(admin, "SET admin-restapi_interface=''");
 	admin_query(admin, "SET admin-restapi_ssl_ca=''");
 	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-	delete cleanup.backup;
-	cleanup.backup = nullptr;
-	ok(admin_query(admin, "PROXYSQL RELOAD TLS"), "restore original TLS material");
-	ok(wait_for_http(http_url, 200), "restored default HTTP listener is healthy");
+	ok(wait_for_http(https_url, 200, ca_pem), "HTTPS listener ready for rapid reload test");
+	ok(install_pem(server_key, installed_key, 0600) &&
+		install_pem(server_cert, installed_cert, 0644),
+		"installed replacement certificate for rapid reload test");
+	const string expected_rapid_serial = cert_serial_from_file(server_cert);
+	ok(!expected_rapid_serial.empty(), "read expected serial for rapid reload test");
+	for (int i = 0; i < 5; ++i) {
+		admin_query(admin, "PROXYSQL RELOAD TLS");
+		admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	}
+	ok(wait_for_serial(host, RESTAPI_TEST_PORT, expected_rapid_serial),
+		"rapid RELOAD TLS / LOAD coalesces to HTTPS serving the rotated certificate serial");
 
+	const bool cleanup_ok = cleanup.run();
+	ok(cleanup_ok, "cleanup restored disk, memory, runtime and PEM state");
+	ok(cleanup.matches_baseline("disk.global_variables", cleanup.disk_admin_before),
+		"all original disk admin rows are restored exactly");
+	ok(cleanup.matches_baseline("global_variables", cleanup.memory_admin_before),
+		"all original memory admin rows are restored exactly");
+	ok(cleanup.matches_baseline("runtime_global_variables", cleanup.runtime_admin_before),
+		"all original runtime admin rows are restored exactly");
+	ok(access(fixture_root.c_str(), F_OK) != 0 && errno == ENOENT,
+		"the complete owned fixture tree is removed");
 	curl_global_cleanup();
-	cleanup.admin = nullptr;
 	mysql_close(admin);
 	return exit_status();
 }
