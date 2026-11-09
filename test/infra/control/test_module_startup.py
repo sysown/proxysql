@@ -104,9 +104,10 @@ class ModuleStartup(IsolatedDaemonTest):
                         for path in tasks.glob("*/comm"):
                             try:
                                 names.append(path.read_text().strip())
-                            except FileNotFoundError:
+                            except (FileNotFoundError, ProcessLookupError):
                                 # Transient tasks can exit between enumeration and open.
                                 continue
+                        self.assertIsNone(daemon.process.poll(), daemon.output()[-6000:])
                         for dialect, enabled in (("MySQL", mysql_workers), ("PgSQL", pgsql_workers)):
                             workers = [n for n in names if n.startswith((dialect + "Worker", dialect + "Idle"))]
                             self.assertEqual(bool(workers), enabled, names)
