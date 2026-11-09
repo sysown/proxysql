@@ -459,6 +459,7 @@ private:
 	// (caching_sha2_password `$A$...`) that cannot be replayed as a
 	// backend secret.
 	std::string frontend_plain_secret_;
+	bool frontend_plain_secret_present_ { false };
 	int target_hostgroup_;
 	std::string target_address_;
 	int target_port_;

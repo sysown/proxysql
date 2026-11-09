@@ -119,11 +119,11 @@ public:
 
 	// Plaintext secret verified during a frontend PLAIN exchange. Only
 	// used for mapped backend authentication after the proxy->backend
-	// leg has actually completed a TLS handshake; it is never sent over
-	// a plaintext socket. A non-empty value switches the backend auth
-	// mechanism to PLAIN (one-shot AuthenticateStart -> AuthenticateOk)
-	// when tls_active_ is true. Cleared securely on auth completion,
-	// auth failure, reset() and destruction.
+	// leg has completed a TLS handshake whose peer was verified against
+	// the configured endpoint identity. `nullptr` and clear() mean the
+	// credential is absent; a non-null empty string means a PRESENT empty
+	// password. Cleared securely on auth completion, auth failure,
+	// reset() and destruction.
 	void set_backend_plain_password(const char* p);
 	void clear_backend_plain_password();
 
@@ -185,6 +185,9 @@ private:
 	std::string backend_user_;
 	std::string backend_password_;
 	std::string backend_plain_password_;
+	bool backend_plain_password_present_ { false };
+	bool plain_peer_verify_configured_ { false };
+	bool plain_peer_identity_verified_ { false };
 	bool backend_auth_plain_active_ { false };
 	std::string backend_schema_;
 	std::vector<uint8_t> backend_challenge_;
@@ -197,13 +200,16 @@ private:
 	SSL_CTX* backend_ssl_ctx_;
 
 	int step_auth_impl();
+	bool configure_plain_peer_verification();
+	bool verify_plain_peer_after_handshake();
 	int step_auth_capabilities_get();
 	int step_auth_capabilities_get_sent();
 	int step_auth_capabilities_set_sent();
 	int step_auth_tls_handshake();
 	int step_auth_authenticate_start_sent();
 	int step_auth_continue_sent();
-	int send_client_frame(uint8_t msg_type, const std::string& payload);
+	int send_client_frame(uint8_t msg_type, const std::string& payload,
+	                      bool sensitive = false);
 	std::optional<MysqlxFrame> read_auth_frame();
 
 	// Per-state policy for backend-auth-phase NOTICE frames (issue
@@ -235,7 +241,7 @@ public:
 	// Boolean-only credential observer used by the cleanup tests; the
 	// secret itself is never exposed through a test accessor.
 	bool has_backend_plain_password_for_test() const {
-		return !backend_plain_password_.empty();
+		return backend_plain_password_present_;
 	}
 #endif
 };

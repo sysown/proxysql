@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstring>
 #include <algorithm>
+#include <openssl/crypto.h>
 
 MysqlxDataStream::MysqlxDataStream()
 	: fd_(-1), type_(XDS_FRONTEND), status_(XDS_NOT_CONNECTED),
@@ -14,6 +15,7 @@ MysqlxDataStream::MysqlxDataStream()
 	  ssl_write_offset_(0), ssl_handshake_done_(false), ssl_failed_(false) {}
 
 MysqlxDataStream::~MysqlxDataStream() {
+	discard_sensitive_write();
 	if (ssl_) {
 		SSL_set_quiet_shutdown(ssl_, 1);
 		SSL_shutdown(ssl_);
@@ -30,6 +32,7 @@ void MysqlxDataStream::init(mysqlx_ds_type type, int fd) {
 	status_ = XDS_CONNECTED;
 	read_buf_.clear();
 	read_offset_ = 0;
+	discard_sensitive_write();
 	write_buf_.clear();
 	write_offset_ = 0;
 	parse_error_ = false;
@@ -38,6 +41,7 @@ void MysqlxDataStream::init(mysqlx_ds_type type, int fd) {
 }
 
 void MysqlxDataStream::close_and_reset() {
+	discard_sensitive_write();
 	if (ssl_) {
 		SSL_set_quiet_shutdown(ssl_, 1);
 		SSL_shutdown(ssl_);
@@ -65,9 +69,20 @@ void MysqlxDataStream::close_and_reset() {
 	type_ = XDS_FRONTEND;
 }
 
+void MysqlxDataStream::discard_sensitive_write() {
+	if (!sensitive_write_) return;
+	if (!write_buf_.empty()) {
+		OPENSSL_cleanse(write_buf_.data(), write_buf_.size());
+	}
+	write_buf_.clear();
+	write_offset_ = 0;
+	sensitive_write_ = false;
+}
+
 void MysqlxDataStream::clear_io_buffers() {
 	read_buf_.clear();
 	read_offset_ = 0;
+	discard_sensitive_write();
 	write_buf_.clear();
 	write_offset_ = 0;
 	complete_frames_.clear();
@@ -371,8 +386,12 @@ ssize_t MysqlxDataStream::write_to_net() {
 		}
 		write_offset_ += static_cast<size_t>(n);
 		if (write_offset_ >= write_buf_.size()) {
-			write_buf_.clear();
-			write_offset_ = 0;
+			if (sensitive_write_) {
+				discard_sensitive_write();
+			} else {
+				write_buf_.clear();
+				write_offset_ = 0;
+			}
 		}
 
 		queue_encrypted_output();
@@ -388,8 +407,12 @@ ssize_t MysqlxDataStream::write_to_net() {
 	if (r > 0) {
 		write_offset_ += static_cast<size_t>(r);
 		if (write_offset_ >= write_buf_.size()) {
-			write_buf_.clear();
-			write_offset_ = 0;
+			if (sensitive_write_) {
+				discard_sensitive_write();
+			} else {
+				write_buf_.clear();
+				write_offset_ = 0;
+			}
 		}
 	}
 	return r;

@@ -299,6 +299,7 @@ MysqlxSession::~MysqlxSession() {
 		close(client_ds_.get_fd());
 	}
 	secure_clear_string(frontend_plain_secret_);
+	frontend_plain_secret_present_ = false;
 	reset_compression_state();
 }
 
@@ -335,6 +336,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr, const std::string& l
 	listener_route_name_ = listener_route;
 	identity_.reset();
 	secure_clear_string(frontend_plain_secret_);
+	frontend_plain_secret_present_ = false;
 	start_time_ = monotonic_time_ms();
 	last_active_time_ = start_time_;
 	compression_algo_ = MYSQLX_COMPR_NONE;
@@ -365,6 +367,7 @@ void MysqlxSession::reset() {
 	listener_route_name_.clear();
 	identity_.reset();
 	secure_clear_string(frontend_plain_secret_);
+	frontend_plain_secret_present_ = false;
 	compression_algo_ = MYSQLX_COMPR_NONE;
 	compression_combine_mixed_messages_ = false;
 	compression_max_combine_messages_ = 0;
@@ -912,6 +915,15 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 
 	username_ = auth_data.substr(1, second_nul - 1);
 	std::string password = auth_data.substr(second_nul + 1);
+	// Wipe the local plaintext on every return path, including failures and
+	// the successful copy into frontend_plain_secret_.
+	struct LocalSecretGuard {
+		std::string& value;
+		~LocalSecretGuard() { secure_clear_string(value); }
+	} password_guard{password};
+	(void)password_guard;
+	secure_clear_string(frontend_plain_secret_);
+	frontend_plain_secret_present_ = false;
 
 	if (!identity_lookup_) {
 		// No identity source wired — refuse auth rather than falling through
@@ -980,6 +992,7 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 	// MysqlxConnection::send_authenticate_start).
 	secure_clear_string(frontend_plain_secret_);
 	frontend_plain_secret_ = password;
+	frontend_plain_secret_present_ = true;
 
 	last_active_time_ = monotonic_time_ms();
 	send_auth_ok();
@@ -2490,7 +2503,7 @@ void MysqlxSession::handler_connecting_server() {
 				identity_->backend_auth_mode == MysqlxBackendAuthMode::mapped &&
 				identity_->backend_username.empty() &&
 				identity_->backend_password.empty() &&
-				!frontend_plain_secret_.empty();
+				frontend_plain_secret_present_;
 			if (mapped_fallback) {
 				backend_conn_->set_backend_plain_password(frontend_plain_secret_.c_str());
 			} else {
@@ -2507,7 +2520,8 @@ void MysqlxSession::handler_connecting_server() {
 		}
 		if (auth_rc == -1) {
 			if (backend_conn_->get_auth_state() == MysqlxConnection::BACKEND_AUTH_TLS_HANDSHAKE ||
-			    backend_conn_->backend_ds().ssl_handshake_failed()) {
+			    backend_conn_->backend_ds().ssl_handshake_failed() ||
+			    backend_conn_->get_tls_error_class() != MysqlxTlsErrorClass::UNKNOWN) {
 				// Issue #5698: emit a classified error code/message
 				// based on what the OpenSSL error queue / cert chain
 				// said. step_auth_tls_handshake() recorded the class

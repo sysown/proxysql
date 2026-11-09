@@ -383,34 +383,48 @@ TLS was tied to the frontend leg's TLS state.
 
 The per-endpoint flag `mysqlx_backend_endpoints.use_ssl=1` is an
 operator-controlled override that **promotes** plaintext to TLS for that
-specific endpoint regardless of mode (it can never demote — there is no
-way to opt a single backend out of `mode=required`). Use it when one
-sensitive backend must always be encrypted under a deployment-wide
-`mode=disabled` or `mode=as_client` policy.
+specific endpoint (it can never demote — there is no way to opt a single
+backend out of `mode=required`). Under `mode=preferred` the promoted
+connection still permits the documented plaintext fallback; use
+`mode=required` when the override must guarantee encryption.
 
 #### Frontend PLAIN and caching_sha2_password backend accounts
 
 A frontend user that authenticates with PLAIN over proxy-terminated TLS
 may have a `$A$...` `caching_sha2_password` hash in the canonical
 `mysql_users.password` column (projected through `runtime_mysql_users`;
-`mysqlx_users` holds the optional X-specific policy/route fields and has
-no password column). The proxy verifies that hash directly and keeps
-the verified PLAIN secret only for the lifetime of that session. For an
-implicit `mapped` backend identity (same username, no explicit
-`backend_username` / `backend_password`), the secret is replayed to the
-backend with the X-Protocol PLAIN mechanism **only after the
-proxy→backend TLS handshake has completed**. It is never sent on a
-plaintext backend connection.
+`mysqlx_users` has no frontend-password column, but does carry the
+optional `backend_password` service-account credential). The proxy
+verifies the frontend hash directly and keeps the verified PLAIN secret
+only for the lifetime of that session.
 
-Consequently, a `caching_sha2_password` backend account used through a
-mapped identity needs an encrypted backend leg: set
-`mysqlx-tls_backend_mode='required'` or enable
-`mysqlx_backend_endpoints.use_ssl=1` for that endpoint.
-With backend TLS disabled and no endpoint override, the proxy cannot
-safely replay the secret. It uses the historical MYSQL41 mechanism and the backend
-login will fail for a hash-only credential. Explicit service-account
-mappings keep using their own `backend_*` credentials and are not
-affected by this fallback.
+For an implicit `mapped` backend identity (same username, no explicit
+`backend_username` / `backend_password`), the secret is replayed with the
+X-Protocol PLAIN mechanism only after all of the following hold:
+
+1. the proxy→backend TLS handshake completed;
+2. the backend certificate chain verified against the core trust store
+   loaded from the ProxySQL datadir (`proxysql-ca.pem` and the hashed CA
+   path); OS default root stores are not added automatically;
+3. the backend certificate identity matched the configured endpoint
+   address. DNS names use OpenSSL hostname verification (including normal
+   CN fallback when the certificate has no SAN), with SNI set to the
+   configured hostname. Numeric IPv4/IPv6 addresses must match an IP SAN.
+
+If any check fails, PLAIN is not selected and the backend authentication
+fails closed. The secret is never sent on a plaintext backend connection.
+
+`mysqlx-tls_backend_mode='as_client'` (the default) already encrypts the
+backend leg for PLAIN clients because PLAIN itself requires frontend TLS.
+`required` also guarantees encryption. `preferred` may fall back to
+plaintext even when `mysqlx_backend_endpoints.use_ssl=1`; in that case
+PLAIN is blocked (an availability failure, not a plaintext password
+leak), and hash-only backend credentials cannot log in.
+
+With backend TLS disabled and no endpoint override, the proxy uses the
+historical MYSQL41 mechanism and hash-only backend login fails. Explicit
+service-account mappings keep using their own `backend_*` credentials and
+are not affected by this fallback.
 
 #### Migration notes from MySQL Router AsClient
 
