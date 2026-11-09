@@ -854,19 +854,21 @@ static void test_mapped_plain_secret_selection() {
 	                      backend_server_ctx),
 	   "mapped: malformed native marker does not select backend PLAIN");
 
-	// Session reset must wipe the retained secret: after reset a mapped
-	// identity no longer selects PLAIN.
+	// Session reset must clear retained credential presence: a recognized
+	// hash would select PLAIN if the presence flag survived. This proves
+	// selection state is cleared; secret-byte cleansing is verified in
+	// source, not by this assertion.
 	sess.reset();
 	sess.client_ds().set_encrypted(true);
 	MysqlxResolvedIdentity after_reset {};
 	after_reset.username = "testuser";
 	after_reset.x_enabled = true;
-	after_reset.password = "testpass";
+	after_reset.password = SHA2_HASH_5000;
 	after_reset.default_route = "tls_route";
 	after_reset.backend_auth_mode = MysqlxBackendAuthMode::mapped;
 	ok(attach_and_observe(after_reset, "MYSQL41", std::string("\0\0", 2),
 	                      backend_server_ctx),
-	   "mapped: session reset wipes the retained PLAIN secret");
+	   "mapped: session reset clears retained PLAIN credential presence");
 
 	sess.client_ds().init(XDS_FRONTEND, -1);
 	close(cfds[0]); close(cfds[1]);
