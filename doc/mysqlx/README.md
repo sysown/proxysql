@@ -417,7 +417,10 @@ recognized verifier: a `*` followed by 40 hex characters, or a structurally
 valid 70-byte `$A$...` hash. Cleartext stored mapped passwords keep the
 historical MYSQL41 mechanism and do not acquire the strict PLAIN backend
 trust requirement. Malformed verifier-like strings are not treated as
-hashes.
+hashes. These shape rules govern backend mechanism selection only. The
+frontend PLAIN verifier independently rejects malformed `$A$...` values
+and malformed native `*...` values before backend selection; they are not
+accepted as literal cleartext passwords.
 
 If any check fails, PLAIN is not selected and the backend authentication
 fails closed. The secret is never sent on a plaintext backend connection.
