@@ -77,6 +77,7 @@ using json = nlohmann::json;
 #endif // DEBUG
 #include "ProxySQL_StartupGate.h"
 #include "ProxySQL_ClusterPluginHash.h"
+#include "ProxySQL_VersionCheckThread.h"
 
 static char *make_path(const char *directory, const char *filename) {
 	std::string path(directory);
@@ -2858,7 +2859,7 @@ unsigned int check_heartbeats(ThreadType* threads, unsigned int num_threads,
 	return missing;
 }
 
-void watchdog_main_loop() {
+void watchdog_main_loop(ProxySQL_VersionCheckThread& version_check_owner) {
 #if 0
 	{
 		// the following commented code is here only to manually test handleProcessRestart()
@@ -2879,19 +2880,30 @@ void watchdog_main_loop() {
 	unsigned long long loop_prev_time = monotonic_time();
 	while (glovars.shutdown == 0) {
 		std::this_thread::sleep_for(std::chrono::microseconds(200000));
-		
+
+		// A shutdown signalled during the sleep must not start late work.
+		if (glovars.shutdown != 0) break;
+
 		if (disable_watchdog) continue;
 
 		const unsigned long long curtime = monotonic_time();
 
 		// Version check handling
 		if (GloVars.global.version_check && curtime > time_next_version_check) {
-			pthread_attr_t attr;
-			pthread_attr_init(&attr);
-			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-			pthread_t thr;
-			if (pthread_create(&thr, &attr, main_check_latest_version_thread, NULL) != 0) {
-				perror("Thread creation");
+			int join_rc = version_check_owner.drain();
+			if (join_rc != 0) {
+				proxy_error("Failed to join version check thread: %s\n", strerror(join_rc));
+				abort();
+			}
+			// Recheck after reaping the previous owner and before creating one.
+			if (glovars.shutdown != 0) break;
+			int create_rc = version_check_owner.start(main_check_latest_version_thread, NULL);
+			if (create_rc != 0) {
+				proxy_error("Version check thread creation failed: %s\n", strerror(create_rc));
+				if (version_check_owner.owned()) {
+					// Never exit with an unjoined owned thread.
+					abort();
+				}
 				exit(EXIT_FAILURE);
 			}
 			if (time_next_version_check == 0)
@@ -3030,6 +3042,10 @@ void watchdog_main_loop() {
  * @return Process exit status.
  */
 int main(int argc, const char * argv[]) {
+
+	// Main-thread-owned for the whole daemon lifetime; __shutdown drains it
+	// before any plugin or module teardown.
+	ProxySQL_VersionCheckThread version_check_owner;
 
 	if (check_openssl_version() == false) {
 		exit(EXIT_FAILURE);
@@ -3516,7 +3532,7 @@ __start_label:
 	proxy_info("For support visit: https://proxysql.com/services/support/\n");
 	proxy_info("For consultancy visit: https://proxysql.com/services/consulting/\n");
 
-	watchdog_main_loop();
+	watchdog_main_loop(version_check_owner);
 
 __shutdown:
 #ifdef PROXYSQL40
@@ -3524,6 +3540,18 @@ __shutdown:
 		__atomic_store_n(&glovars.shutdown, 1, __ATOMIC_RELEASE);
 	}
 #endif
+
+	// The common coordinated-shutdown anchor. Drain the version checker before
+	// v3.x plugin unload and before phase4/other module teardown on all tiers.
+	// A failed join retains ownership, so continuing to teardown is forbidden.
+	{
+		int version_check_join_rc = version_check_owner.drain();
+		if (version_check_join_rc != 0) {
+			proxy_error("Failed to join version check thread during shutdown: %s\n",
+				strerror(version_check_join_rc));
+			abort();
+		}
+	}
 
 	proxy_info("Starting shutdown...\n");
 
