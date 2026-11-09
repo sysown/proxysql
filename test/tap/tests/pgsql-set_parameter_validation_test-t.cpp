@@ -620,8 +620,134 @@ static void test_empty_search_path_syncs() {
     ok(reloadServers(admin.get(), hg, servers, false), "servers of hostgroup %d restored", hg);
 }
 
+// ---------------------------------------------------------------------------
+// Only the unquoted keyword DEFAULT resets a setting. A quoted 'DEFAULT' is an ordinary
+// value: PostgreSQL refuses it for TimeZone and bytea_output, stores it as a schema name
+// for search_path, and reads it as the word DEFAULT inside a DateStyle list (the session's
+// reset value, which a later word in the list still overrides). Expectations measured on
+// PostgreSQL 16.
+// ---------------------------------------------------------------------------
+
+struct QuotedDefaultCase {
+    std::string options;     // connect-time options
+    std::string setup;       // run first on the same connection, "" for none
+    std::string set;
+    std::string sqlstate;    // "" = the SET must succeed
+    std::string message;     // primary error message when sqlstate is set, "" not checked
+    std::string show;        // setting read back with SHOW on success
+    std::string expected;    // its expected value
+};
+
+static const std::vector<QuotedDefaultCase> quoted_default_cases = {
+    { "", "", "SET TimeZone = 'DEFAULT'", "22023",
+        "invalid value for parameter \"TimeZone\": \"DEFAULT\"", "", "" },
+    { "", "", "SET bytea_output = 'DEFAULT'", "22023",
+        "invalid value for parameter \"bytea_output\": \"DEFAULT\"", "", "" },
+    { "", "", "SET search_path = 'DEFAULT'", "", "", "search_path", "\"DEFAULT\"" },
+    { "", "SET DateStyle = 'SQL, DMY'", "SET DateStyle = 'DEFAULT'", "", "", "DateStyle", "ISO, MDY" },
+    { "", "", "SET DateStyle = 'DEFAULT, DMY'", "", "", "DateStyle", "ISO, DMY" },
+    { "", "", "SET DateStyle = 'DEFAULT, BOGUS'", "22023",
+        "invalid value for parameter \"DateStyle\": \"DEFAULT, BOGUS\"", "", "" },
+    // DEFAULT in a DateStyle list is the session's reset value: the connect-time DateStyle.
+    { "-c DateStyle=SQL,DMY", "SET DateStyle = 'Postgres, YMD'", "SET DateStyle = 'DEFAULT'", "", "",
+        "DateStyle", "SQL, DMY" },
+    // The unquoted keyword still resets to the connect-time value.
+    { "-c TimeZone=Asia/Tokyo", "SET TimeZone = 'UTC'", "SET TimeZone TO DEFAULT", "", "",
+        "TimeZone", "Asia/Tokyo" },
+};
+
+// Every tracked setting, in both forms: a quoted 'DEFAULT' is a value (refused by all but
+// search_path and DateStyle), the bare keyword resets to the connect-time value. Only the
+// SQLSTATE of a refusal is checked: PostgreSQL words a boolean's refusal differently.
+struct DefaultVar { const char* name; const char* connect; const char* other; const char* shown; };
+
+static const DefaultVar default_vars[] = {
+    { "client_encoding", "LATIN1", "LATIN9", "LATIN1" },
+    { "DateStyle", "SQL,DMY", "German", "SQL, DMY" },
+    { "IntervalStyle", "sql_standard", "iso_8601", "sql_standard" },
+    { "standard_conforming_strings", "off", "on", "off" },
+    { "TimeZone", "UTC", "Asia/Tokyo", "UTC" },
+    { "search_path", "zz_a", "zz_b", "zz_a" },
+    { "allow_in_place_tablespaces", "on", "off", "on" },
+    { "bytea_output", "escape", "hex", "escape" },
+    { "client_min_messages", "warning", "error", "warning" },
+    { "enable_bitmapscan", "off", "on", "off" },
+    { "enable_hashjoin", "off", "on", "off" },
+    { "enable_indexscan", "off", "on", "off" },
+    { "enable_nestloop", "off", "on", "off" },
+    { "enable_seqscan", "off", "on", "off" },
+    { "enable_sort", "off", "on", "off" },
+    { "escape_string_warning", "off", "on", "off" },
+    { "extra_float_digits", "2", "0", "2" },
+    { "maintenance_work_mem", "32MB", "128MB", "32MB" },
+    { "synchronous_commit", "off", "local", "off" },
+};
+
+static std::vector<QuotedDefaultCase> all_default_cases() {
+    std::vector<QuotedDefaultCase> v = quoted_default_cases;
+    for (const auto& d : default_vars) {
+        const std::string name = d.name;
+        const std::string opts = "-c " + name + "=" + d.connect;
+        const std::string setup = "SET " + name + " = '" + d.other + "'";
+        if (name == "search_path") {
+            v.push_back({ opts, setup, "SET search_path = 'DEFAULT'", "", "", name, "\"DEFAULT\"" });
+        } else if (name == "DateStyle") {
+            v.push_back({ opts, setup, "SET DateStyle = 'DEFAULT'", "", "", name, d.shown });
+        } else {
+            v.push_back({ opts, setup, "SET " + name + " = 'DEFAULT'", "22023", "", "", "" });
+        }
+        v.push_back({ opts, setup, "SET " + name + " TO DEFAULT", "", "", name, d.shown });
+    }
+    return v;
+}
+
+static std::string resultField(const PGresult* res, int field) {
+    const char* v = res ? PQresultErrorField(res, field) : nullptr;
+    return v ? v : "";
+}
+
+static void test_quoted_default_is_a_value() {
+    for (const auto& c : all_default_cases()) {
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, c.options);
+        if (!conn) {
+            ok(false, "quoted DEFAULT: %s (no connection)", c.set.c_str());
+            continue;
+        }
+        std::string err;
+        if (!c.setup.empty()) {
+            PGresult* r = PQexec(conn.get(), c.setup.c_str());
+            if (PQresultStatus(r) != PGRES_COMMAND_OK) err = "setup failed: " + std::string(PQerrorMessage(conn.get()));
+            PQclear(r);
+        }
+        if (err.empty()) {
+            PGresult* r = PQexec(conn.get(), c.set.c_str());
+            const ExecStatusType st = PQresultStatus(r);
+            if (c.sqlstate.empty()) {
+                if (st != PGRES_COMMAND_OK) err = "SET failed: " + std::string(PQerrorMessage(conn.get()));
+            } else {
+                const std::string state = resultField(r, PG_DIAG_SQLSTATE);
+                const std::string msg = resultField(r, PG_DIAG_MESSAGE_PRIMARY);
+                if (st != PGRES_FATAL_ERROR || state != c.sqlstate || (!c.message.empty() && msg != c.message)) {
+                    err = "expected " + c.sqlstate + " '" + c.message + "', got status " + PQresStatus(st) +
+                        " " + state + " '" + msg + "'";
+                }
+            }
+            PQclear(r);
+        }
+        if (err.empty() && !c.show.empty()) {
+            PGresult* r = PQexec(conn.get(), ("SHOW " + c.show).c_str());
+            const std::string v = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : "<no result>";
+            if (v != c.expected) err = "SHOW " + c.show + " is '" + v + "', expected '" + c.expected + "'";
+            PQclear(r);
+        }
+        ok(err.empty(), "quoted DEFAULT: [%s] %s%s%s %s", c.options.c_str(), c.setup.c_str(),
+            c.setup.empty() ? "" : "; ", c.set.c_str(), err.c_str());
+    }
+}
+
 int main(int argc, char** argv) {
     int total_tests = 2 + untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE + 1; // + servers restored
+    total_tests += all_default_cases().size();
     total_tests += EMPTY_SEARCH_PATH_TESTS;
 
 	for (const auto& test_case : test_cases) {
@@ -736,6 +862,7 @@ int main(int argc, char** argv) {
     // Close the connection first: an earlier case may have locked it on the hostgroup,
     // holding a backend connection that would leave none for the single-connection pool.
     conn.reset();
+    test_quoted_default_is_a_value();
     usleep(500000); // let its backend connection finish resetting before the pool is flushed
     test_untracked_set_does_not_leak();
     usleep(500000);

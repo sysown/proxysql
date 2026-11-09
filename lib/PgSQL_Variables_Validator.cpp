@@ -1,6 +1,7 @@
 
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_Session.h"
+#include "PgSQL_Data_Stream.h"
 #include "cpp.h"
 #include <cmath>
 #include <string_view>
@@ -146,10 +147,18 @@ bool pgsql_variable_validate_datestyle(const char* value, const params_t* params
 	}
 	//------------------------------------------------------------------------------------------------------
 
+	// The word DEFAULT in the list means the session's reset value, as in PostgreSQL: the client's
+	// connect-time DateStyle, or pgsql-default_datestyle while the client is still logging in.
+	const PgSQL_Connection* client_conn = session->client_myds ? session->client_myds->myconn : nullptr;
+	const char* reset_text = (client_conn && client_conn->startup_parameters_hash[PGSQL_DATESTYLE] != 0)
+		? client_conn->startup_parameters[PGSQL_DATESTYLE] : pgsql_thread___default_variables[PGSQL_DATESTYLE];
+	const PgSQL_DateStyle_t reset_datestyle = PgSQL_DateStyle_Util::parse_datestyle(reset_text);
+
 	// Convert DateStyle to a string. Any missing parts will be filled using the current DateStyle value.
 	// For example:
 	// If current DateStyle is 'ISO, MDY' and the user sets 'DMY' the resulting DateStyle will be 'ISO, DMY'
-	const std::string& value_tmp = PgSQL_DateStyle_Util::datestyle_to_string(value, current_datestyle);
+	const std::string& value_tmp = PgSQL_DateStyle_Util::datestyle_to_string(
+		PgSQL_DateStyle_Util::parse_datestyle(value, &reset_datestyle), current_datestyle);
 	// if something goes wrong, the value will be empty
 	if (value_tmp.empty()) {
 		return false;
@@ -467,7 +476,8 @@ bool pgsql_variable_validate_timezone(const char* value, const params_t* params,
 	// and keeps its connection, but at login or as pgsql-default_timezone it is refused.
 	if (strncasecmp(value, "INTERVAL", 8) == 0) return false;
 	// LOCAL is only a keyword of SET TIME ZONE, meaning DEFAULT; as a value PostgreSQL refuses it.
-	if (strcasecmp(value, "LOCAL") == 0) return false;
+	// So is a quoted 'DEFAULT': it is no zone, and stored it would fail every later sync.
+	if (strcasecmp(value, "LOCAL") == 0 || strcasecmp(value, "DEFAULT") == 0) return false;
 	for (const char* c = value; *c; c++) {
 		if (!isalnum((unsigned char)*c) && strchr("/_-+,.:<>", *c) == nullptr) return false;
 	}

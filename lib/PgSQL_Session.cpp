@@ -5231,6 +5231,10 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 					// "datestyle" message leaves their cached "DateStyle" untouched and stale.
 					var = pgsql_tracked_variables[idx].set_variable_name;
 
+					// Only the bare keyword DEFAULT resets. Checked before unquoting: PostgreSQL reads a
+					// quoted 'DEFAULT' as a value, refused for TimeZone, a schema name for search_path.
+					const bool default_keyword = strcasecmp(value1.c_str(), "DEFAULT") == 0;
+
 					if (IS_PGTRACKED_VAR_OPTION_SET_NO_STRIP_VALUE(pgsql_tracked_variables[idx]) == 0) {
 						PgSQL_Set_Stmt_Parser::unquote_if_quoted(value1);
 					}
@@ -5247,8 +5251,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 					const bool time_zone_local = idx == PGSQL_TIMEZONE && RE2::PartialMatch(nq, re_set_time_zone_local);
 
 					uint32_t current_hash = pgsql_variables.client_get_hash(this, idx);
-					if (time_zone_local ||
-						((value1.size() == sizeof("DEFAULT") - 1) && strncasecmp(value1.c_str(), "DEFAULT", sizeof("DEFAULT") - 1) == 0)) {
+					if (time_zone_local || default_keyword) {
 						auto [value, hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
 						if (hash == 0) {
 							if (current_hash != 0) {
@@ -10423,11 +10426,12 @@ std::vector<std::string> PgSQL_DateStyle_Util::split_datestyle(std::string_view 
 	return result;
 }
 
-PgSQL_DateStyle_t PgSQL_DateStyle_Util::parse_datestyle(std::string_view input) {
+PgSQL_DateStyle_t PgSQL_DateStyle_Util::parse_datestyle(std::string_view input, const PgSQL_DateStyle_t* reset_datestyle) {
     PgSQL_DateStyleFormat_t newDateStyle = DATESTYLE_FORMAT_NONE;
     PgSQL_DateStyleOrder_t newDateOrder = DATESTYLE_ORDER_NONE;
     bool have_style = false;
     bool have_order = false;
+    bool have_default = false;
     bool ok = true;
 
     auto split_tokens = split_datestyle(input);
@@ -10486,10 +10490,22 @@ PgSQL_DateStyle_t PgSQL_DateStyle_Util::parse_datestyle(std::string_view input) 
             newDateOrder = DATESTYLE_ORDER_MDY;
             have_order = true;
         }
+        else if (reset_datestyle && strcasecmp(tok, "DEFAULT") == 0) {
+            // As in PostgreSQL: DEFAULT fills what no earlier word set, from the session's reset
+            // value, and a later word still overrides it. Without this, 'DEFAULT, DMY' is refused.
+            if (!have_style)
+                newDateStyle = reset_datestyle->format;
+            if (!have_order)
+                newDateOrder = reset_datestyle->order;
+            have_default = true;
+        }
+        else {
+            ok = false;     /* unrecognized key word, refused by PostgreSQL */
+        }
     }
 
 	// if the provided datestyle includes both style and order, ensure both values are valid.
-	if (split_tokens.size() == 2 && (have_style && have_order) == false) {
+	if (split_tokens.size() == 2 && have_default == false && (have_style && have_order) == false) {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Invalid \"datestyle\" value. %s\n", input.data());
 		return { DATESTYLE_FORMAT_NONE, DATESTYLE_ORDER_NONE };
 	}

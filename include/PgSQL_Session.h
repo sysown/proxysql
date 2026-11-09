@@ -95,10 +95,11 @@ public:
 	  * function returns a default DateStyle with none format and order.
 	  *
 	  * @param input A string_view representing the DateStyle input to be parsed.
+	  * @param reset_datestyle The session's reset value, used for the word DEFAULT; when null, DEFAULT is refused.
 	  * @return A PgSQL_DateStyle_t structure containing the parsed DateStyle format and order.
 	  *
 	  */
-	static PgSQL_DateStyle_t parse_datestyle(std::string_view input);
+	static PgSQL_DateStyle_t parse_datestyle(std::string_view input, const PgSQL_DateStyle_t* reset_datestyle = nullptr);
 
 	/**
 	  * @brief Converts a PgSQL_DateStyle_t structure to a string representation.
