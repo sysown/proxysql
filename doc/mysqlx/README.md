@@ -409,7 +409,8 @@ X-Protocol PLAIN mechanism only after all of the following hold:
 3. the backend certificate identity matched the configured endpoint
    address. DNS names use OpenSSL hostname verification (including normal
    CN fallback when the certificate has no SAN), with SNI set to the
-   configured hostname. Numeric IPv4/IPv6 addresses must match an IP SAN.
+   configured hostname. Numeric IPv4 addresses must match an IP SAN;
+   IPv6 backend connections are not currently supported.
 
 If any check fails, PLAIN is not selected and the backend authentication
 fails closed. The secret is never sent on a plaintext backend connection.
