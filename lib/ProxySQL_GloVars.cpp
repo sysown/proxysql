@@ -16,6 +16,11 @@
 
 extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 
+// Defined here so standalone lib consumers stay linkable; src/main.cpp declares
+// it locally and writes it once before signal installation. File-local
+// declaration only: intentionally not part of a public header.
+volatile sig_atomic_t proxysql_diag_version_lifetime = 0;
+
 void (*flush_logs_function)() = NULL;
 
 /*
@@ -50,10 +55,11 @@ void crash_handler(int sig) {
 #ifdef __GLIBC__
 #define DEBUG_MSG_MAXSIZE	1024
 	char debugbuff[DEBUG_MSG_MAXSIZE];
-	void *arr[20];
+	void *arr[64];
 	size_t s;
+	const size_t frame_limit = proxysql_diag_version_lifetime ? 64 : 20;
 
-	s = backtrace(arr, 20);
+	s = backtrace(arr, frame_limit);
 
 	fprintf(stderr, "Error: signal %d:\n", sig);
 	backtrace_symbols_fd(arr, s, STDERR_FILENO);

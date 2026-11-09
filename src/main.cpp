@@ -177,6 +177,79 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 char * know_latest_version = NULL;
 static unsigned int randID = 0;
 
+// Passive version-check lifetime diagnostics. The flag is defined in
+// lib/ProxySQL_GloVars.cpp so standalone lib consumers stay linkable, and it is
+// written once in main() before signal handlers are installed. File-local
+// extern only: no public header change. Off by default: no markers and the
+// original 20 frames.
+extern volatile sig_atomic_t proxysql_diag_version_lifetime;
+static std::atomic<unsigned long long> diag_vl_active{0};
+static std::atomic<unsigned long long> diag_vl_attempted{0};
+static std::atomic<unsigned long long> diag_vl_entered{0};
+static std::atomic<unsigned long long> diag_vl_ended{0};
+static std::atomic<unsigned long long> diag_vl_spawn_failed{0};
+
+// ONE bounded stack buffer and ONE best-effort raw stderr write. No proxy
+// logger, allocation or runtime teardown object is touched here.
+static void diag_version_lifetime_marker(const char *event, long result = 0, bool has_result = false, unsigned long long elapsed_us = 0) {
+	if (!proxysql_diag_version_lifetime) return;
+	const int saved_errno = errno;
+	char buffer[512];
+	const long pid = (long)getpid();
+	// Linux logs the kernel TID; other platforms log the pthread identifier
+	// representation, not the Linux kernel TID.
+#ifdef __linux__
+	const long tid = (long)syscall(SYS_gettid);
+#else
+	const long tid = (long)pthread_self();
+#endif
+	const unsigned long long now_us = monotonic_time();
+	const unsigned long long active = diag_vl_active.load(std::memory_order_relaxed);
+	const unsigned long long attempted = diag_vl_attempted.load(std::memory_order_relaxed);
+	const unsigned long long entered = diag_vl_entered.load(std::memory_order_relaxed);
+	const unsigned long long ended = diag_vl_ended.load(std::memory_order_relaxed);
+	const unsigned long long spawn_failed = diag_vl_spawn_failed.load(std::memory_order_relaxed);
+	int length;
+	if (has_result) {
+		length = snprintf(buffer, sizeof(buffer),
+			"# VERSION_LIFETIME %s pid=%ld tid=%ld t_us=%llu active=%llu attempted=%llu entered=%llu ended=%llu spawn_failed=%llu result=%ld elapsed_us=%llu\n",
+			event, pid, tid, now_us, active, attempted, entered, ended, spawn_failed, result, elapsed_us);
+	} else {
+		length = snprintf(buffer, sizeof(buffer),
+			"# VERSION_LIFETIME %s pid=%ld tid=%ld t_us=%llu active=%llu attempted=%llu entered=%llu ended=%llu spawn_failed=%llu\n",
+			event, pid, tid, now_us, active, attempted, entered, ended, spawn_failed);
+	}
+	if (length > 0) {
+		const size_t used = (size_t)length < sizeof(buffer) ? (size_t)length : sizeof(buffer) - 1;
+		const ssize_t ignored = write(STDERR_FILENO, buffer, used);
+		(void)ignored;
+	}
+	errno = saved_errno;
+}
+
+// Narrow worker-exit guard: the destructor runs after the existing cleanup,
+// version update, optional log and free(latest_version), and is the last
+// diagnostic/runtime work before the worker returns.
+struct DiagVersionLifetimeEndGuard {
+	~DiagVersionLifetimeEndGuard() {
+		if (!proxysql_diag_version_lifetime) return;
+		diag_vl_ended.fetch_add(1, std::memory_order_relaxed);
+		diag_vl_active.fetch_sub(1, std::memory_order_relaxed);
+		diag_version_lifetime_marker("END");
+	}
+};
+
+// Passive OpenSSL stop-callback marker. OPENSSL_atexit() registers a handler
+// that runs after OpenSSL's current-thread cleanup and before later
+// process-wide cleanup; it is not a cleanup-begin marker and does not measure
+// object-lock freedom. The callback only performs the existing bounded raw
+// diagnostic write, with no OpenSSL, logger or runtime-object calls.
+static bool diag_openssl_stop_registration_attempted = false;
+
+static void diag_openssl_stop_callback(void) {
+	diag_version_lifetime_marker("OPENSSL_STOP_CALLBACK");
+}
+
 /**
  * @brief Checks for the latest version of ProxySQL by querying the specified URL.
  *
@@ -225,7 +298,14 @@ static char * main_check_latest_version() {
 	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
 
 	// Perform the HTTP request
+	unsigned long long diag_perform_start_us = 0;
+	if (proxysql_diag_version_lifetime) {
+		diag_perform_start_us = monotonic_time();
+	}
 	res = curl_easy_perform(curl_handle);
+	if (proxysql_diag_version_lifetime) {
+		diag_version_lifetime_marker("PERFORM_RETURN", (long)res, true, monotonic_time() - diag_perform_start_us);
+	}
 
 	// Check if the request was successful
 	if (res != CURLE_OK) {
@@ -267,6 +347,11 @@ static char * main_check_latest_version() {
  */
 void * main_check_latest_version_thread(void *arg) {
 	set_thread_name("CheckLatestVers");
+	if (proxysql_diag_version_lifetime) {
+		diag_vl_entered.fetch_add(1, std::memory_order_relaxed);
+		diag_version_lifetime_marker("ENTER");
+	}
+	DiagVersionLifetimeEndGuard diag_end_guard;
 	// Fetch the latest version information
 	char * latest_version = main_check_latest_version();
 	// we check for potential invalid data , see issue #4042
@@ -406,6 +491,13 @@ void ProxySQL_Main_init_SSL_module() {
 	int rc = SSL_library_init();
 	if (rc==0) {
 		proxy_error("%s\n", SSL_alert_desc_string_long(rc));
+	}
+	if (rc != 0 && proxysql_diag_version_lifetime && !diag_openssl_stop_registration_attempted) {
+		diag_openssl_stop_registration_attempted = true;
+		const int saved_errno = errno;
+		const int stop_rc = OPENSSL_atexit(diag_openssl_stop_callback);
+		errno = saved_errno;
+		diag_version_lifetime_marker("OPENSSL_STOP_REGISTER", stop_rc, true);
 	}
 	init_locks();
 	SSL_METHOD *ssl_method;
@@ -2890,7 +2982,16 @@ void watchdog_main_loop() {
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 			pthread_t thr;
+			if (proxysql_diag_version_lifetime) {
+				diag_vl_active.fetch_add(1, std::memory_order_relaxed);
+				diag_vl_attempted.fetch_add(1, std::memory_order_relaxed);
+			}
 			if (pthread_create(&thr, &attr, main_check_latest_version_thread, NULL) != 0) {
+				if (proxysql_diag_version_lifetime) {
+					diag_vl_active.fetch_sub(1, std::memory_order_relaxed);
+					diag_vl_spawn_failed.fetch_add(1, std::memory_order_relaxed);
+					diag_version_lifetime_marker("SPAWN_FAILED");
+				}
 				perror("Thread creation");
 				exit(EXIT_FAILURE);
 			}
@@ -3030,6 +3131,13 @@ void watchdog_main_loop() {
  * @return Process exit status.
  */
 int main(int argc, const char * argv[]) {
+
+	// Cache the passive diagnostic opt-in exactly once, before any signal
+	// handler is installed or the version checker can be created.
+	{
+		const char *diag_version_lifetime = getenv("PROXYSQL_DIAG_VERSION_LIFETIME");
+		proxysql_diag_version_lifetime = (diag_version_lifetime != NULL && strcmp(diag_version_lifetime, "1") == 0) ? 1 : 0;
+	}
 
 	if (check_openssl_version() == false) {
 		exit(EXIT_FAILURE);
@@ -3564,6 +3672,7 @@ finish:
 		}
 	}
 #endif
+	diag_version_lifetime_marker("MAIN_RETURN");
 #ifdef PROXYSQL40
 	if (managed_startup_exit_code >= 0) return managed_startup_exit_code;
 #endif
