@@ -709,7 +709,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
-UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t module_lifecycle_unit-t module_startup_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
+UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t module_lifecycle_unit-t module_startup_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t version_check_thread_owner_unit-t
 UNIT_TESTS += worker_scheduler_cost_unit-t
 
 ifeq ($(PROXYSQL31),1)
@@ -1475,13 +1475,16 @@ worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
 endif
 worker_scheduler_cost_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb
 
+version_check_thread_owner_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=pthread_create -Wl,--wrap=pthread_join
+version_check_thread_owner_unit-t: version_check_thread_owner_unit-t.cpp $(PROXYSQL_PATH)/include/ProxySQL_VersionCheckThread.h
+
 pgsql_result_flush_allocation_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=free -Wl,--wrap=PQgetCopyData
 
 STATIC_LIBPROXYSQL_TESTS := genai_thread_unit-t pgsql_result_flush_allocation_unit-t caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
 	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
-STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t
+STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t version_check_thread_owner_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive
 
