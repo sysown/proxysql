@@ -745,8 +745,113 @@ static void test_quoted_default_is_a_value() {
     }
 }
 
+// The value ProxySQL records for the client (PROXYSQL INTERNAL SESSION, client.conn.<name>).
+static std::string stored(PGconn* conn, const std::string& name) {
+    PGresult* res = PQexec(conn, "PROXYSQL INTERNAL SESSION");
+    std::string v = "<no result>";
+    if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) {
+        try {
+            const json j = json::parse(PQgetvalue(res, 0, 0));
+            v = j.at("client").at("conn").at(name).get<std::string>();
+        } catch (const std::exception& e) {
+            v = std::string("<") + e.what() + ">";
+        }
+    }
+    PQclear(res);
+    return v;
+}
+
+// ---------------------------------------------------------------------------
+// ProxySQL must record extra_float_digits and maintenance_work_mem in the form PostgreSQL
+// prints them. Two spellings of one value ('1024MB' and '1GB') are then the same string,
+// so pooled connections carrying either match. Expectations measured on PostgreSQL 16.
+// ---------------------------------------------------------------------------
+
+// expected "": PostgreSQL refuses the value (22023) and the recorded value must not change.
+struct StoredFormCase { std::string name, input, expected; };
+
+static const std::vector<StoredFormCase> stored_form_cases = {
+    { "extra_float_digits", "'03'", "3" },
+    { "extra_float_digits", "'-02'", "-2" },
+    { "extra_float_digits", "'-010'", "-8" },      // octal, as PostgreSQL reads it
+    { "extra_float_digits", "'0x3'", "3" },
+    { "extra_float_digits", "2.5", "2" },          // rounded half to even
+    { "extra_float_digits", "3.4", "3" },
+    { "maintenance_work_mem", "'1024MB'", "1GB" },
+    { "maintenance_work_mem", "'65536'", "64MB" },
+    { "maintenance_work_mem", "'2048kB'", "2MB" },
+    { "maintenance_work_mem", "'1025kB'", "1025kB" },
+    { "maintenance_work_mem", "'1.5GB'", "1536MB" },
+    { "maintenance_work_mem", "'1.0001GB'", "1GB" },
+    { "maintenance_work_mem", "'1048576B'", "1MB" },
+    { "maintenance_work_mem", "'02000'", "1MB" },
+    { "maintenance_work_mem", "'1.5MB'", "1536kB" },
+    { "maintenance_work_mem", "'1024.5'", "1MB" },
+    { "maintenance_work_mem", "'2 GB'", "2GB" },
+    { "extra_float_digits", "-15.4", "-15" },
+    { "extra_float_digits", "'+2'", "2" },
+    { "extra_float_digits", "' 2 '", "2" },
+    { "extra_float_digits", "'1e0'", "1" },
+    { "extra_float_digits", "3.5", "" },           // rounds to 4, out of range
+    { "extra_float_digits", "-15.5", "" },         // rounds to -16, out of range
+    { "extra_float_digits", "'2abc'", "" },
+    { "extra_float_digits", "'0x'", "" },
+    { "extra_float_digits", "''", "" },
+    { "extra_float_digits", "'08'", "" },          // 8 is no octal digit
+    { "maintenance_work_mem", "'1TB'", "1TB" },
+    { "maintenance_work_mem", "'1GB '", "1GB" },
+    { "maintenance_work_mem", "' 1GB'", "1GB" },
+    { "maintenance_work_mem", "'0x400'", "1MB" },
+    { "maintenance_work_mem", "'1e3MB'", "1000MB" },
+    { "maintenance_work_mem", "'1023'", "" },      // below the 1024 kB minimum
+    { "maintenance_work_mem", "'0.5MB'", "" },
+    { "maintenance_work_mem", "'1.5kB'", "" },     // rounds to 2 kB
+    { "maintenance_work_mem", "'-1MB'", "" },
+    { "maintenance_work_mem", "'64 MB x'", "" },
+    { "maintenance_work_mem", "''", "" },
+};
+
+static void test_stored_form_matches_postgresql() {
+    PGConnPtr conn = createNewConnection(ConnType::BACKEND);
+    for (const auto& c : stored_form_cases) {
+        const std::string set = "SET " + c.name + " = " + c.input;
+        std::string err, v;
+        const bool refused = c.expected.empty();
+        std::string want = c.expected;
+        if (!conn) {
+            err = "no connection";
+        } else {
+            if (refused) want = stored(conn.get(), c.name);
+            PGresult* r = PQexec(conn.get(), set.c_str());
+            if (refused) {
+                const std::string state = resultField(r, PG_DIAG_SQLSTATE);
+                if (PQresultStatus(r) != PGRES_FATAL_ERROR || state != "22023") err = "expected 22023, got '" + state + "'";
+            } else if (PQresultStatus(r) != PGRES_COMMAND_OK) {
+                err = PQerrorMessage(conn.get());
+            }
+            PQclear(r);
+            v = stored(conn.get(), c.name);
+        }
+        ok(err.empty() && v == want, "stored form: %s -> %s '%s' (got '%s') %s", set.c_str(),
+            refused ? "refused, keeps" : "", want.c_str(), v.c_str(), err.c_str());
+    }
+
+    PGConnPtr a = createNewConnection(ConnType::BACKEND);
+    PGConnPtr b = createNewConnection(ConnType::BACKEND);
+    std::string va = "<no connection>", vb = "<no connection>";
+    if (a && b) {
+        PQclear(PQexec(a.get(), "SET maintenance_work_mem = '1024MB'"));
+        PQclear(PQexec(b.get(), "SET maintenance_work_mem = '1GB'"));
+        va = stored(a.get(), "maintenance_work_mem");
+        vb = stored(b.get(), "maintenance_work_mem");
+    }
+    ok(va == "1GB" && vb == "1GB", "stored form: '1024MB' and '1GB' are recorded alike (A '%s', B '%s')",
+        va.c_str(), vb.c_str());
+}
+
 int main(int argc, char** argv) {
     int total_tests = 2 + untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE + 1; // + servers restored
+    total_tests += stored_form_cases.size() + 1;
     total_tests += all_default_cases().size();
     total_tests += EMPTY_SEARCH_PATH_TESTS;
 
@@ -863,6 +968,7 @@ int main(int argc, char** argv) {
     // holding a backend connection that would leave none for the single-connection pool.
     conn.reset();
     test_quoted_default_is_a_value();
+    test_stored_form_matches_postgresql();
     usleep(500000); // let its backend connection finish resetting before the pool is flushed
     test_untracked_set_does_not_leak();
     usleep(500000);
