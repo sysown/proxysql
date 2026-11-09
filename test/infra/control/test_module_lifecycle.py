@@ -23,6 +23,33 @@ BINARY = Path(os.environ.get("PROXYSQL_TEST_BINARY", REPO / "src/proxysql")).res
 if len(sys.argv) > 1 and not sys.argv[1].startswith("-") and not sys.argv[1].startswith("Lifecycle."):
     BINARY = Path(sys.argv.pop(1)).resolve()
 
+DIAG_MARKER = "# VERSION_LIFETIME "
+DIAG_VERSION_LIFETIME_ENV = "PROXYSQL_DIAG_VERSION_LIFETIME"
+# Fixture-local opt-in for these private lifecycle daemons only: absent means
+# "1" (enabled), explicit "1" is enabled, and an explicit "0" (or any other
+# explicit non-"1" value, including empty) stays off. main.cpp keeps its own
+# global default of off for daemons that do not receive this fixture env.
+_DIAG_SETTING = os.environ.get(DIAG_VERSION_LIFETIME_ENV)
+DIAG_ENABLED = _DIAG_SETTING is None or _DIAG_SETTING == "1"
+DIAG_OPT_IN = DIAG_ENABLED
+DIAG_MAX_BYTES = 256 * 1024
+DIAG_MAX_LINES = 2000
+
+
+def daemon_environment():
+    """Inherited environment plus the effective flag; never rewrites proxy/ASAN vars."""
+    environment = os.environ.copy()
+    environment.setdefault(DIAG_VERSION_LIFETIME_ENV, "1")
+    return environment
+
+
+def emit_proxy_env_presence():
+    """Print proxy env *names and presence only*, once, never their values."""
+    names = ("http_proxy", "https_proxy", "all_proxy", "no_proxy",
+             "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+    presence = " ".join(f"{name}={'present' if name in os.environ else 'absent'}" for name in names)
+    print(f"{DIAG_MARKER}ENV {presence}", flush=True)
+
 
 class Daemon:
     def __init__(self, no_start=False, extra_args=(), config_prefix="", no_monitor=True, monitor_enabled=False,
@@ -52,6 +79,7 @@ class Daemon:
             for reservation in reservations:
                 reservation.close()
         self.stops = 0
+        self.marker_offset = 0
         self.log = (self.directory / "daemon.log").open("w+")
         args = [str(BINARY), "-f", "-c", str(config), "-D", str(self.directory)]
         if no_monitor:
@@ -59,19 +87,65 @@ class Daemon:
         if no_start:
             args.append("--no-start")
         self.args = args
-        self.process = subprocess.Popen(self.args + list(extra_args), stdout=self.log, stderr=self.log)
+        self.process = subprocess.Popen(self.args + list(extra_args), stdout=self.log, stderr=self.log,
+                                        env=daemon_environment())
 
     def restart(self, extra_args=()):
         """Relaunch the same datadir, retaining saved configuration and ports."""
         self.shutdown()
         self.stops = 0
+        self.extract_markers()
         self.log.seek(0)
         self.log.truncate()
-        self.process = subprocess.Popen(self.args + list(extra_args), stdout=self.log, stderr=self.log)
+        self.marker_offset = 0
+        self.process = subprocess.Popen(self.args + list(extra_args), stdout=self.log, stderr=self.log,
+                                        env=daemon_environment())
 
     def output(self):
         self.log.flush()
         return (self.directory / "daemon.log").read_text(errors="replace")
+
+    def extract_markers(self, cleanup_safe=False):
+        """Print only exact-prefix markers from daemon.log, bounded and deduplicated by offset."""
+        if not DIAG_OPT_IN:
+            return
+        try:
+            self.log.flush()
+            emitted = 0
+            consumed = 0
+            truncated_reason = None
+            with (self.directory / "daemon.log").open("rb") as handle:
+                handle.seek(self.marker_offset)
+                while consumed < DIAG_MAX_BYTES and emitted < DIAG_MAX_LINES:
+                    line = handle.readline(DIAG_MAX_BYTES + 1)
+                    if not line:
+                        break
+                    if len(line) > DIAG_MAX_BYTES:
+                        self.marker_offset += consumed + len(line)
+                        print(f"{DIAG_MARKER}DIAG_TRUNCATED oversized_line offset={self.marker_offset}", flush=True)
+                        return
+                    if not line.endswith(b"\n"):
+                        break
+                    if consumed + len(line) > DIAG_MAX_BYTES:
+                        truncated_reason = f"byte_bound offset={self.marker_offset + consumed}"
+                        break
+                    consumed += len(line)
+                    text = line.decode("utf-8", "replace").rstrip("\n")
+                    if text.startswith(DIAG_MARKER):
+                        print(text, flush=True)
+                        emitted += 1
+                at_bound = consumed >= DIAG_MAX_BYTES or emitted >= DIAG_MAX_LINES
+            self.marker_offset += consumed
+            if truncated_reason is None and at_bound:
+                reason = "line_bound" if emitted >= DIAG_MAX_LINES else "byte_bound"
+                truncated_reason = f"{reason} offset={self.marker_offset}"
+            if truncated_reason is not None:
+                print(f"{DIAG_MARKER}DIAG_TRUNCATED {truncated_reason}", flush=True)
+        except Exception as error:
+            if cleanup_safe:
+                print(f"{DIAG_MARKER}DIAG_EXTRACT_ERROR {type(error).__name__}", flush=True)
+            else:
+                raise
 
     def query(self, sql, protocol="mysql", timeout=8, check=True):
         environment = os.environ.copy()
@@ -134,6 +208,7 @@ class Daemon:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=4)
+        self.extract_markers(cleanup_safe=True)
         self.log.close()
         self.temporary.cleanup()
 
@@ -244,6 +319,8 @@ class Lifecycle(IsolatedDaemonTest):
 
 
 def run_probe_tests():
+    if DIAG_OPT_IN:
+        emit_proxy_env_presence()
     missing = [tool for tool in ("mysql", "psql") if shutil.which(tool) is None]
     if sys.platform != "linux" or missing:
         reason = "Linux is required" if sys.platform != "linux" else "missing " + ", ".join(missing)
