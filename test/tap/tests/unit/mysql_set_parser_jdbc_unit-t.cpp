@@ -22,7 +22,10 @@
  * behaviour that must be preserved: malformed nesting and non-connector RHS
  * shapes still produce no parse result from the regex parsers. An unrecognised
  * *variable name* may still be parsed, as before; rejecting it is the session
- * layer's job and is covered end-to-end by the TAP routing test.
+ * layer's job and is covered end-to-end by the TAP routing test. The narrow
+ * helper is also disabled for the rest of a statement once an ordinary parse
+ * step has consumed adjacent input without a comma, so missing-delimiter
+ * statements keep their pre-feature forward/lock fallback.
  */
 
 #include "tap.h"
@@ -89,6 +92,10 @@ constexpr const char* SESSION_TRACK_VALUE =
 
 using SetMap = std::map<std::string, std::vector<std::string>>;
 
+/**
+ * @brief Builds the expected parse result for the connector initialization SET.
+ * @return Map containing NAMES, the two session-tracking variables, and sql_mode.
+ */
 SetMap expected_jdbc_set() {
 	return {
 		{"names", {"utf8mb4"}},
@@ -98,6 +105,11 @@ SetMap expected_jdbc_set() {
 	};
 }
 
+/**
+ * @brief Emits TAP diagnostics for a parser result that did not match expectations.
+ * @param parser Parser path that produced @p actual.
+ * @param actual Parsed assignment map.
+ */
 void diag_map(const char* parser, const SetMap& actual) {
 	diag("%s returned %zu assignment(s)", parser, actual.size());
 	for (const auto& entry : actual) {
@@ -107,6 +119,11 @@ void diag_map(const char* parser, const SetMap& actual) {
 	}
 }
 
+/**
+ * @brief Checks that both regex SET parsers accept a supported connector variant.
+ * @param query SET statement to parse.
+ * @param label Human-readable variant name used in TAP output.
+ */
 void check_regex_parser(const char* query, const char* label) {
 	MySQL_Set_Stmt_Parser legacy(query);
 	MySQL_Set_Stmt_Parser current(query);
@@ -119,6 +136,11 @@ void check_regex_parser(const char* query, const char* label) {
 	ok(current_result == expected, "parse1v2 recognises %s", label);
 }
 
+/**
+ * @brief Checks that ParserSQL accepts a supported connector variant in both modes.
+ * @param query SET statement to parse.
+ * @param label Human-readable variant name used in TAP output.
+ */
 void check_parsersql(const char* query, const char* label) {
 	const SetMap expected = expected_jdbc_set();
 	ok(parsersql_parse_set_mysql(query, true) == expected,
@@ -127,6 +149,11 @@ void check_parsersql(const char* query, const char* label) {
 		"ParserSQL (full statement) recognises %s", label);
 }
 
+/**
+ * @brief Checks that both regex SET parsers reject a statement without a result.
+ * @param query SET statement that must not be acknowledged by the regex parsers.
+ * @param label Human-readable rejection case used in TAP output.
+ */
 void check_rejected(const std::string& query, const char* label) {
 	const SetMap empty;
 	MySQL_Set_Stmt_Parser legacy(query);
@@ -194,6 +221,26 @@ int main() {
 		std::string query = std::string("SET session_track_system_variables=") + SESSION_TRACK_VALUE;
 		query.replace(query.find(" OR "), 4, joined_or);
 		check_rejected(query, "a connector expression with joined OR tokens");
+	}
+
+	// A connector-shaped value must start at a real assignment boundary. The
+	// legacy grammar can leave the next token after a simple RHS; accepting it
+	// there would acknowledge malformed SQL and apply the preceding assignment.
+	const std::string connector_assignment =
+		std::string("session_track_system_variables=") + SESSION_TRACK_VALUE;
+	const std::string missing_comma_sets[] = {
+		std::string("SET autocommit=0 ") + connector_assignment,
+		std::string("SET NAMES utf8mb4 ") + connector_assignment,
+		std::string("SET sql_mode=CONCAT(@@sql_mode,',STRICT_TRANS_TABLES') ") +
+			connector_assignment,
+		// A missing delimiter earlier in the statement must not be repaired by
+		// a later comma: once the ordinary grammar has accepted adjacent
+		// assignments, the connector helper stays disabled for the statement.
+		std::string("SET autocommit=0 sql_mode='',") + connector_assignment,
+		std::string("SET NAMES utf8mb4 sql_mode='ANSI',") + connector_assignment,
+	};
+	for (const std::string& query : missing_comma_sets) {
+		check_rejected(query, "a connector expression without an assignment delimiter");
 	}
 
 	// A user-variable RHS on the ignored variable is outside the connector

@@ -11,6 +11,10 @@
  * neither evaluated nor replayed: ProxySQL configures backend session tracking
  * itself (including MariaDB last_gtid tracking).
  *
+ * Scope: this test uses the exact Connector/J 3.5.11 wire SQL captured in the
+ * issue. It does not run a Java/Spring client or capture a Connector/J 4.0.0
+ * statement, so those environments remain integration-validation limitations.
+ *
  * The test proves the fix through routing rather than through the SET reply
  * alone (a locked session still answers the SET forwarded to the backend):
  *   - the connector SET is accepted for set_parser_algorithm 1, 2 and 3;
@@ -27,6 +31,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -34,6 +39,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+#include "json.hpp"
 
 namespace {
 
@@ -79,6 +85,12 @@ constexpr const char* LOCKING_SETS[] = {
 	"SET session_track_system_variables=CONCAT('x',IF(@@sql_mode>0)",
 };
 
+/**
+ * @brief Executes a SQL statement on the admin connection.
+ * @param admin Open ProxySQL admin connection.
+ * @param sql Statement to execute.
+ * @return True when the statement succeeds.
+ */
 bool admin_exec(MYSQL* admin, const std::string& sql) {
 	if (mysql_query(admin, sql.c_str()) != 0) {
 		diag("admin query failed: %s: %s", sql.c_str(), mysql_error(admin));
@@ -87,6 +99,12 @@ bool admin_exec(MYSQL* admin, const std::string& sql) {
 	return true;
 }
 
+/**
+ * @brief Executes a single-value admin query.
+ * @param admin Open ProxySQL admin connection.
+ * @param sql Query expected to return one scalar in its first column.
+ * @return First column as a string, or empty on error.
+ */
 std::string admin_scalar(MYSQL* admin, const std::string& sql) {
 	if (!admin_exec(admin, sql)) return "";
 	MYSQL_RES* res = mysql_store_result(admin);
@@ -96,6 +114,55 @@ std::string admin_scalar(MYSQL* admin, const std::string& sql) {
 	return value;
 }
 
+/**
+ * @brief Quotes a value as an SQLite string literal.
+ * @details ProxySQL's admin SQLite uses standard SQL single-quote escaping.
+ *   Backslashes are ordinary characters and must not be escaped.
+ * @param value Raw string value.
+ * @return Quoted literal including the surrounding single quotes.
+ */
+std::string sqlite_string_literal(const std::string& value) {
+	std::string quoted;
+	quoted.reserve(value.size() + 2);
+	quoted.push_back('\'');
+	for (char c : value) {
+		if (c == '\'') quoted.push_back('\'');
+		quoted.push_back(c);
+	}
+	quoted.push_back('\'');
+	return quoted;
+}
+
+/**
+ * @brief Reads the cumulative query counter for a hostgroup.
+ * @details Uses the pool's direct Queries counter rather than asynchronous
+ *   query-rule hit statistics. A failed or malformed read is reported as
+ *   failure so it cannot accidentally satisfy a routing assertion.
+ * @param admin Open ProxySQL admin connection.
+ * @param hg Hostgroup to read.
+ * @param value Receives the cumulative Queries value on success.
+ * @return True when a valid numeric counter was read.
+ */
+bool hostgroup_queries(MYSQL* admin, int hg, unsigned long long& value) {
+	const std::string count = admin_scalar(admin,
+		"SELECT COALESCE(SUM(Queries),0) FROM stats_mysql_connection_pool "
+		"WHERE hostgroup=" + std::to_string(hg));
+	if (count.empty()) return false;
+	try {
+		std::size_t consumed = 0;
+		value = std::stoull(count, &consumed);
+		return consumed == count.size();
+	} catch (const std::exception&) {
+		return false;
+	}
+}
+
+/**
+ * @brief Switches the SET parser algorithm and reloads MySQL variables.
+ * @param admin Open ProxySQL admin connection.
+ * @param algorithm mysql-set_parser_algorithm value to apply.
+ * @return True when both the configuration and reload succeed.
+ */
 bool admin_set_parser(MYSQL* admin, int algorithm) {
 	return admin_exec(admin,
 		"SET mysql-set_parser_algorithm=" + std::to_string(algorithm)) &&
@@ -103,6 +170,11 @@ bool admin_set_parser(MYSQL* admin, int algorithm) {
 		admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 }
 
+/**
+ * @brief Opens a frontend connection to ProxySQL.
+ * @param cl TAP command-line/environment settings.
+ * @return Connected handle, or nullptr on failure.
+ */
 MYSQL* connect_client(const CommandLine& cl) {
 	MYSQL* client = mysql_init(nullptr);
 	if (!mysql_real_connect(client, cl.host, cl.username, cl.password,
@@ -114,6 +186,13 @@ MYSQL* connect_client(const CommandLine& cl) {
 	return client;
 }
 
+/**
+ * @brief Executes a query and returns its first scalar value.
+ * @param client Open frontend connection.
+ * @param sql Query to execute.
+ * @param value Receives the first column of the first row.
+ * @return True when a result set was returned and read.
+ */
 bool run_scalar(MYSQL* client, const char* sql, std::string& value) {
 	if (mysql_query(client, sql) != 0) {
 		diag("query failed: %s: %s", sql, mysql_error(client));
@@ -131,14 +210,48 @@ bool run_scalar(MYSQL* client, const char* sql, std::string& value) {
 }
 
 /**
+ * @brief Reads the session's current and locked hostgroups.
+ * @param client Open frontend connection.
+ * @param current_hostgroup Receives current_hostgroup; this is diagnostic only.
+ *   The next client command resets it to the default hostgroup before the
+ *   special command dumps state, so it cannot prove the previous query's route.
+ * @param locked_hostgroup Receives locked_on_hostgroup from the session state.
+ * @return True when PROXYSQL INTERNAL SESSION returned parseable state.
+ */
+bool read_session_route_state(MYSQL* client, int& current_hostgroup,
+	int& locked_hostgroup)
+{
+	try {
+		const nlohmann::json state = fetch_internal_session(client, false);
+		if (!state.is_object()) return false;
+		current_hostgroup = state.value("current_hostgroup", -2);
+		locked_hostgroup = state.value("locked_on_hostgroup", -2);
+		return true;
+	} catch (const std::exception& e) {
+		diag("PROXYSQL INTERNAL SESSION failed: %s", e.what());
+		return false;
+	}
+}
+
+/**
  * @brief Checks that @p set_query does not pin the session to its default
  *   hostgroup.
  *
  * After the SET, a marker query is routed to @p destination by a query rule.
- * A locked session rejects it with ProxySQL error 9006. A query afterwards must
- * still be able to use the default hostgroup @p source.
+ * The destination's backend pool Queries counter must increase and the session
+ * must remain unlocked. A locked session rejects the marker with ProxySQL
+ * error 9006. The INTERNAL SESSION current_hostgroup is only diagnostic: the
+ * next command resets it to the default hostgroup before dumping state. A
+ * query afterwards must still be able to use the default hostgroup @p source.
+ *
+ * @param cl TAP command-line/environment settings.
+ * @param admin Open ProxySQL admin connection used for pool statistics.
+ * @param set_query Initialization SET to execute.
+ * @param label Human-readable algorithm label used in TAP output.
+ * @param source Session default hostgroup.
+ * @param destination Hostgroup targeted by the marker query rule.
  */
-void check_set_routing(const CommandLine& cl, const char* set_query,
+void check_set_routing(const CommandLine& cl, MYSQL* admin, const char* set_query,
 	const char* label, int source, int destination)
 {
 	MYSQL* client = connect_client(cl);
@@ -152,16 +265,33 @@ void check_set_routing(const CommandLine& cl, const char* set_query,
 		mysql_error(client));
 
 	std::string marker;
+	unsigned long long queries_before = 0;
+	unsigned long long queries_after = 0;
+	const bool before_ok = hostgroup_queries(admin, destination, queries_before);
 	const bool marker_ok = run_scalar(client, ROUTE_MARKER, marker);
-	ok(marker_ok && marker == "6562",
-		"%s: routed query reaches hostgroup %d instead of the locked default %d "
-		"(value='%s')", label, destination, source, marker.c_str());
+	const bool after_ok = hostgroup_queries(admin, destination, queries_after);
+	int current_hostgroup = -2;
+	int locked_hostgroup = -2;
+	const bool state_ok = read_session_route_state(
+		client, current_hostgroup, locked_hostgroup);
+	ok(marker_ok && marker == "6562" && before_ok && after_ok &&
+		queries_after > queries_before && state_ok && locked_hostgroup == -1,
+		"%s: marker matched rule 1 and executed on hostgroup %d "
+		"(Queries %llu -> %llu, locked_on_hostgroup=%d, "
+		"diagnostic current_hostgroup=%d, value='%s')",
+		label, destination, queries_before, queries_after,
+		locked_hostgroup, current_hostgroup, marker.c_str());
 
 	std::string plain;
-	const bool plain_ok = run_scalar(client, "SELECT 1", plain);
-	ok(plain_ok && plain == "1",
-		"%s: follow-up query can route back to the default hostgroup %d",
-		label, source);
+	unsigned long long source_before = 0;
+	unsigned long long source_after = 0;
+	const bool source_before_ok = hostgroup_queries(admin, source, source_before);
+	const bool plain_ok = run_scalar(client, "SELECT 1 AS jdbc_default_6562", plain);
+	const bool source_after_ok = hostgroup_queries(admin, source, source_after);
+	ok(plain_ok && plain == "1" && source_before_ok && source_after_ok &&
+		source_after > source_before,
+		"%s: follow-up query executes on default hostgroup %d (Queries %llu -> %llu)",
+		label, source, source_before, source_after);
 
 	mysql_close(client);
 }
@@ -169,6 +299,10 @@ void check_set_routing(const CommandLine& cl, const char* set_query,
 /**
  * @brief Verifies that a statement ProxySQL must not understand keeps locking
  *   the session to its default hostgroup.
+ * @param cl TAP command-line/environment settings.
+ * @param set_query SET statement expected to trigger the lock fallback.
+ * @param label Human-readable case label used in TAP output.
+ * @param source Session default hostgroup.
  */
 void check_still_locks(const CommandLine& cl, const char* set_query,
 	const char* label, int source)
@@ -194,6 +328,9 @@ void check_still_locks(const CommandLine& cl, const char* set_query,
 /**
  * @brief Verifies that an unsupported @-free RHS is not acknowledged locally:
  *   the backend receives it and the session is not locked.
+ * @param cl TAP command-line/environment settings.
+ * @param set_query Unsupported SET statement to forward.
+ * @param label Human-readable case label used in TAP output.
  */
 void check_forwarded_not_tracked(const CommandLine& cl, const char* set_query,
 	const char* label)
@@ -217,6 +354,11 @@ void check_forwarded_not_tracked(const CommandLine& cl, const char* set_query,
 	mysql_close(client);
 }
 
+/**
+ * @brief Verifies session state after the connector initialization SET.
+ * @param cl TAP command-line/environment settings.
+ * @param label Human-readable case label used in TAP output.
+ */
 void check_session_state(const CommandLine& cl, const char* label) {
 	MYSQL* client = connect_client(cl);
 	if (!client) {
@@ -262,19 +404,18 @@ int main(int argc, char** argv) {
 	}
 
 	// Resolve the routing source for this test's user, not an arbitrary
-	// frontend user. Runtime usernames are SQLite strings in the admin schema.
-	std::string escaped_username;
-	{
-		std::vector<char> buffer(strlen(cl.username) * 2 + 1);
-		const unsigned long len = mysql_real_escape_string(admin, buffer.data(),
-			cl.username, strlen(cl.username));
-		escaped_username.assign(buffer.data(), len);
-	}
+	// frontend user. Runtime usernames are SQLite strings in the shared admin
+	// database, so quote them with SQLite's doubled-single-quote rule rather
+	// than the MySQL client escaping API.
 	const std::string source_text = admin_scalar(admin,
-		"SELECT default_hostgroup FROM runtime_mysql_users WHERE username='" +
-		escaped_username + "' AND frontend=1 LIMIT 1");
+		"SELECT default_hostgroup FROM runtime_mysql_users WHERE username=" +
+		sqlite_string_literal(cl.username) + " AND frontend=1 LIMIT 1");
 	const std::string destination_text = admin_scalar(admin,
-		"SELECT MAX(hostgroup_id)+1 FROM runtime_mysql_servers");
+		// Stay above both persisted and loaded configuration: an admin-only
+		// (not currently loaded) hostgroup may already exist at max(runtime)+1.
+		"SELECT MAX(hostgroup_id)+1 FROM ("
+		"SELECT hostgroup_id FROM main.mysql_servers "
+		"UNION SELECT hostgroup_id FROM runtime_mysql_servers)");
 	const std::string saved_algorithm = admin_scalar(admin,
 		"SELECT variable_value FROM global_variables WHERE variable_name='mysql-set_parser_algorithm'");
 	const std::string saved_qp_parser = admin_scalar(admin,
@@ -288,21 +429,31 @@ int main(int argc, char** argv) {
 	const int source = std::atoi(source_text.c_str());
 	const int destination = std::atoi(destination_text.c_str());
 
-	bool config_ok =
-		admin_exec(admin, "CREATE TEMP TABLE test_6562_rules AS SELECT * FROM mysql_query_rules") &&
-		admin_exec(admin, "DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(destination)) &&
+	const bool snapshot_created =
+		admin_exec(admin, "DROP TABLE IF EXISTS temp.test_6562_rules") &&
 		admin_exec(admin,
-			"INSERT INTO mysql_servers(hostgroup_id,hostname,port,use_ssl) "
+			"CREATE TEMP TABLE temp.test_6562_rules "
+			"AS SELECT * FROM main.mysql_query_rules");
+	bool config_ok = snapshot_created;
+	bool destination_inserted = false;
+	if (config_ok) {
+		config_ok = admin_exec(admin,
+			"INSERT INTO main.mysql_servers(hostgroup_id,hostname,port,use_ssl) "
 			"SELECT " + std::to_string(destination) + ",hostname,port,use_ssl "
 			"FROM runtime_mysql_servers WHERE status='ONLINE' AND hostgroup_id=" +
-			std::to_string(source) + " LIMIT 1") &&
-		admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME") &&
-		admin_exec(admin, "DELETE FROM mysql_query_rules") &&
-		admin_exec(admin,
-			"INSERT INTO mysql_query_rules(rule_id,active,match_pattern,destination_hostgroup,apply) "
-			"VALUES (1,1,'^SELECT 6562 AS jdbc_route_6562$'," +
-			std::to_string(destination) + ",1)") &&
-		admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+			std::to_string(source) + " LIMIT 1");
+		destination_inserted = config_ok;
+	}
+	if (config_ok) {
+		config_ok =
+			admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME") &&
+			admin_exec(admin, "DELETE FROM main.mysql_query_rules") &&
+			admin_exec(admin,
+				"INSERT INTO main.mysql_query_rules(rule_id,active,match_pattern,destination_hostgroup,apply) "
+				"VALUES (1,1,'^SELECT 6562 AS jdbc_route_6562$'," +
+				std::to_string(destination) + ",1)") &&
+			admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	}
 	ok(config_ok, "routing fixture configures source=%d destination=%d",
 		source, destination);
 
@@ -316,7 +467,8 @@ int main(int argc, char** argv) {
 			for (const char* query : variants) {
 				const std::string label =
 					"algorithm " + std::to_string(algorithm);
-				check_set_routing(cl, query, label.c_str(), source, destination);
+				check_set_routing(cl, admin, query, label.c_str(), source,
+					destination);
 			}
 		}
 
@@ -341,13 +493,20 @@ int main(int argc, char** argv) {
 			"SET mysql-query_processor_parser=" + saved_qp_parser + ";") && restored;
 	}
 	restored = admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME") && restored;
-	restored = admin_exec(admin, "DELETE FROM mysql_query_rules") && restored;
-	restored = admin_exec(admin, "INSERT INTO mysql_query_rules SELECT * FROM test_6562_rules") && restored;
-	restored = admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME") && restored;
-	restored = admin_exec(admin, "DROP TABLE test_6562_rules") && restored;
-	restored = admin_exec(admin,
-		"DELETE FROM mysql_servers WHERE hostgroup_id=" + std::to_string(destination)) && restored;
-	restored = admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME") && restored;
+	if (snapshot_created) {
+		restored = admin_exec(admin, "DELETE FROM main.mysql_query_rules") && restored;
+		restored = admin_exec(admin,
+			"INSERT INTO main.mysql_query_rules "
+			"SELECT * FROM temp.test_6562_rules") && restored;
+		restored = admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME") && restored;
+		restored = admin_exec(admin, "DROP TABLE temp.test_6562_rules") && restored;
+	}
+	if (destination_inserted) {
+		restored = admin_exec(admin,
+			"DELETE FROM main.mysql_servers WHERE hostgroup_id=" +
+			std::to_string(destination)) && restored;
+		restored = admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME") && restored;
+	}
 	ok(restored, "routing fixture is restored");
 
 	mysql_close(admin);
