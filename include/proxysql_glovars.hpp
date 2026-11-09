@@ -116,8 +116,10 @@ class ProxySQL_GlobalVariables {
 	/**
 	 * @brief Duplicate ProxySQL's configured CA certificate PEM.
 	 *
-	 * Returns nullptr when the CA file is not configured/readable. The caller
-	 * owns the returned buffer and must free() it.
+	 * On success, sets *ca to a malloc()-allocated NUL-terminated copy of the
+	 * configured TLS CA file. Sets *ca to nullptr when no CA file is
+	 * configured or the file cannot be read. The caller owns *ca and must
+	 * free() it.
 	 */
 	void get_SSL_ca_pem_mem(char **ca);
 	std::shared_ptr<prometheus::Registry> prometheus_registry { nullptr };

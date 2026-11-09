@@ -4161,7 +4161,14 @@ void ProxySQL_Admin::apply_restapi_config(bool force_tls_reload) {
 		desired.interface_name == applied.interface_name &&
 		desired.ca_config == applied.ca_config;
 
-	if (same_config && !force_tls_reload) {
+	// A queued apply that failed leaves the last desired configuration in
+	// restapi_worker_applied with no live listener. An identical later LOAD
+	// must retry it (for example after the CA file appears) instead of
+	// treating the failed apply as satisfied.
+	const bool listener_matches =
+		!desired.enabled ||
+		(AdminRestApiServer != NULL && AdminRestApiServer->is_running());
+	if (same_config && !force_tls_reload && listener_matches) {
 		return;
 	}
 

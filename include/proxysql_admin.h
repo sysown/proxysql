@@ -29,12 +29,14 @@ class ProxySQL_RESTAPI_Server;
 #include "query_digest_topk.h"
 
 /**
- * @brief Queue a REST API listener reload on the admin main loop.
+ * @brief Queue a REST API listener reload on the REST lifecycle worker.
  *
  * TLS reloads can originate from an active REST handler (for example a /sync
  * script that runs PROXYSQL RELOAD TLS). Restarting the listener from that
  * call stack would wait for the very callback that is blocked on the admin
- * reply. The admin main loop consumes this flag after the command returns.
+ * reply. The dedicated REST listener lifecycle worker consumes this request
+ * off the admin command's call stack; it does not guarantee that reconfiguration
+ * has completed when the SQL reply is returned.
  */
 void ProxySQL_request_restapi_reload();
 
@@ -728,7 +730,9 @@ class ProxySQL_Admin {
 	 * AdminRestApiServer exclusively.
 	 */
 	void load_restapi_server(bool force_tls_reload = false);
+	/** @brief Start the joinable worker that owns REST listener reconfiguration. */
 	void start_restapi_worker();
+	/** @brief Join the REST lifecycle worker after it destroys its listener. */
 	void stop_restapi_worker();
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }

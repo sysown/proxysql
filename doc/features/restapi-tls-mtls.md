@@ -11,8 +11,8 @@ all-interfaces behavior.
 |----------|---------|-------------|
 | `admin-restapi_use_ssl` | `false` | `true` serves HTTPS on `admin-restapi_port` using ProxySQL's existing TLS key/certificate. |
 | `admin-restapi_ssl_verify_client` | `false` | `true` requires a client certificate signed by the configured CA. Requires `admin-restapi_use_ssl=true`. |
-| `admin-restapi_interface` | `""` | Empty/`0.0.0.0`/`::` binds all interfaces. A numeric IPv4 or IPv6 address binds only that address. A path starting with `/`, or prefixed with `unix:`, creates a Unix-domain socket. |
-| `admin-restapi_ssl_ca` | `""` | CA certificate PEM used to validate client certificates. Empty uses ProxySQL's own CA (`datadir/proxysql-ca.pem`, as loaded by `PROXYSQL RELOAD TLS`). Relative paths resolve against the ProxySQL datadir. |
+| `admin-restapi_interface` | `""` | Empty/`0.0.0.0` binds all IPv4 interfaces. `::` binds all IPv6 interfaces and, on platforms with IPv6-only sockets, does not accept IPv4 connections. A numeric IPv4 or IPv6 address binds only that address. A path starting with `/`, or prefixed with `unix:`, creates a Unix-domain socket. |
+| `admin-restapi_ssl_ca` | `""` | CA certificate PEM used to validate client certificates. Empty reads ProxySQL's configured CA file (normally `datadir/proxysql-ca.pem`). Relative paths resolve against the ProxySQL datadir. |
 
 All variables are available through `SET`/`SHOW`, `global_variables`,
 `runtime_global_variables`, `LOAD/SAVE ADMIN VARIABLES`, and the
@@ -21,6 +21,7 @@ All variables are available through `SET`/`SHOW`, `global_variables`,
 ## Enabling HTTPS
 
 ```sql
+SET admin-restapi_enabled='true';
 SET admin-restapi_use_ssl='true';
 LOAD ADMIN VARIABLES TO RUNTIME;
 ```
@@ -42,17 +43,29 @@ response is interrupted.
 
 ## Enabling mutual TLS
 
-1. Replace `proxysql-ca.pem` (or set `admin-restapi_ssl_ca` to another CA
-   PEM) with the CA that signs your client certificates.
-2. Load the CA and server certificate with `PROXYSQL RELOAD TLS`.
+1. Leave `proxysql-ca.pem` unchanged. Set `admin-restapi_ssl_ca` to the PEM
+   of the CA that signs your client certificates (a path relative to the
+   datadir, or absolute). This keeps ProxySQL's global CA available for the
+   server certificate and other TLS verification.
+2. If replacing ProxySQL's server identity, load it with `PROXYSQL RELOAD TLS`.
 3. Enable verification:
 
 ```sql
 SET admin-restapi_use_ssl='true';
 SET admin-restapi_ssl_verify_client='true';
-SET admin-restapi_ssl_ca='';   -- use ProxySQL's CA, or an explicit path
+SET admin-restapi_ssl_ca='client-ca.pem';   -- explicit client CA path
 LOAD ADMIN VARIABLES TO RUNTIME;
 ```
+
+An explicit `admin-restapi_ssl_ca` path is read when the listener
+configuration is applied, including `LOAD ADMIN VARIABLES TO RUNTIME`.
+`PROXYSQL RELOAD TLS` rereads ProxySQL's global server identity and forces an
+HTTPS REST listener restart, which reapplies the listener configuration and
+rereads the client CA.
+
+Leaving `admin-restapi_ssl_ca` empty continues to use ProxySQL's own CA
+(`datadir/proxysql-ca.pem`) for client verification; an explicit path avoids
+overloading the CA that also issues ProxySQL's server certificate.
 
 When verification is enabled, every request must present a client
 certificate whose chain is trusted by the configured CA, whose validity

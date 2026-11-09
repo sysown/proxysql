@@ -10,7 +10,11 @@ using json = nlohmann::json;
 #include <cerrno>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <string>
+
+#include <gnutls/gnutls.h>
+#include <gnutls/x509.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -618,6 +622,79 @@ static bool ensure_unix_socket_path_available(const std::string& path, std::stri
 	return true;
 }
 
+// libmicrohttpd creates and binds its listen socket before it initializes TLS.
+// If the trust store or the certificate/key pair is rejected there, MHD closes
+// the socket fd but cannot unlink a Unix socket pathname, and ProxySQL cannot
+// claim that inode because it records ownership only after a successful start.
+// Parse exactly the PEM material MHD is about to parse, before any path is
+// bound, so invalid TLS settings cannot leave a Unix artifact behind.
+static bool validate_restapi_tls_material(
+	const ProxySQL_RESTAPI_Config& config,
+	std::string& error
+) {
+	// libmicrohttpd consumes these as NUL-terminated C strings. Measure the
+	// same prefix it will parse so embedded NUL bytes cannot make prevalidation
+	// inspect a longer PEM than MHD later installs.
+	const size_t key_len = std::strlen(config.ssl_key_pem.c_str());
+	const size_t cert_len = std::strlen(config.ssl_cert_pem.c_str());
+	const size_t ca_len = std::strlen(config.ssl_ca_pem.c_str());
+	if (key_len > std::numeric_limits<unsigned int>::max() ||
+		cert_len > std::numeric_limits<unsigned int>::max() ||
+		ca_len > std::numeric_limits<unsigned int>::max()) {
+		error = "REST TLS material is too large";
+		return false;
+	}
+
+	gnutls_certificate_credentials_t credentials = nullptr;
+	int rc = gnutls_certificate_allocate_credentials(&credentials);
+	if (rc != GNUTLS_E_SUCCESS) {
+		error = "cannot allocate TLS credentials: " + std::string(gnutls_strerror(rc));
+		return false;
+	}
+
+	bool valid = true;
+	if (config.verify_client) {
+		gnutls_datum_t trust {};
+		trust.data = reinterpret_cast<unsigned char*>(
+			const_cast<char*>(config.ssl_ca_pem.data()));
+		trust.size = static_cast<unsigned int>(ca_len);
+
+		rc = gnutls_certificate_set_x509_trust_mem(
+			credentials, &trust, GNUTLS_X509_FMT_PEM);
+		if (rc < 0) {
+			error = "admin-restapi_ssl_ca is not valid PEM: " +
+				std::string(gnutls_strerror(rc));
+			valid = false;
+		} else if (rc == 0) {
+			error = "admin-restapi_ssl_ca contains no trust anchors";
+			valid = false;
+		}
+	}
+
+	if (valid) {
+		gnutls_datum_t key {};
+		key.data = reinterpret_cast<unsigned char*>(
+			const_cast<char*>(config.ssl_key_pem.data()));
+		key.size = static_cast<unsigned int>(key_len);
+
+		gnutls_datum_t cert {};
+		cert.data = reinterpret_cast<unsigned char*>(
+			const_cast<char*>(config.ssl_cert_pem.data()));
+		cert.size = static_cast<unsigned int>(cert_len);
+
+		rc = gnutls_certificate_set_x509_key_mem(
+			credentials, &cert, &key, GNUTLS_X509_FMT_PEM);
+		if (rc < 0) {
+			error = "REST TLS certificate/key pair is invalid: " +
+				std::string(gnutls_strerror(rc));
+			valid = false;
+		}
+	}
+
+	gnutls_certificate_free_credentials(credentials);
+	return valid;
+}
+
 static ProxySQL_RESTAPI_Config make_default_restapi_config(int port) {
 	ProxySQL_RESTAPI_Config config {};
 	config.port = port;
@@ -663,6 +740,15 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 			"requires a non-empty CA (admin-restapi_ssl_ca or ProxySQL's CA PEM).\n"
 		);
 		return;
+	}
+	if (config_.use_ssl) {
+		std::string tls_error;
+		if (!validate_restapi_tls_material(config_, tls_error)) {
+			proxy_error(
+				"Unable to start 'ProxySQL_RestAPI_Server': %s\n", tls_error.c_str()
+			);
+			return;
+		}
 	}
 
 	if (!unix_socket_path.empty()) {

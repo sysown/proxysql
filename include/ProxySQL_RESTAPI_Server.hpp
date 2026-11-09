@@ -13,8 +13,9 @@
 /**
  * @brief Runtime configuration for the REST API / Prometheus listener.
  *
- * The PEM strings are owned by this structure for the lifetime of the
- * listener. They are copied from ProxySQL's global TLS material at
+ * The PEM strings are read only during listener construction; libhttpserver
+ * copies them into its own configuration and the server does not retain this
+ * structure. They are copied from ProxySQL's global TLS material at
  * (re)configuration time; the caller must free any temporary buffers returned
  * by GloVars.get_SSL_pem_mem().
  */
@@ -86,6 +87,16 @@ class ProxySQL_RESTAPI_Server {
 					std::string,
 					std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)>>> {}
 	);
+	/**
+	 * @brief Construct a listener from an explicit REST API configuration.
+	 *
+	 * Validates bind-address, TLS material and fail-closed combinations before
+	 * creating any listener artifact. The configuration is consumed only for
+	 * construction; libhttpserver copies the PEM strings it needs.
+	 *
+	 * @param config Listener port, interface, TLS and client-verification settings.
+	 * @param endpoints Custom GET routes to register before the listener starts.
+	 */
 	ProxySQL_RESTAPI_Server(
 		const ProxySQL_RESTAPI_Config& config,
 		std::vector<
@@ -101,6 +112,11 @@ class ProxySQL_RESTAPI_Server {
 	~ProxySQL_RESTAPI_Server();
 	void init();
 	void print_version();
+	/**
+	 * @brief Report whether the listener was successfully started.
+	 *
+	 * @return true when the underlying webserver exists and reports running.
+	 */
 	bool is_running() const;
 };
 #endif /* CLASS_PROXYSQL_RESTAPI_SERVER */
