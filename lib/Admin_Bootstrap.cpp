@@ -1486,6 +1486,10 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 
 
 
+	// Dedicated, joinable listener lifecycle worker. LOAD/startup/TLS-reload
+	// paths only queue work; the worker owns AdminRestApiServer exclusively.
+	start_restapi_worker();
+
 //	pthread_t admin_thr;
 	struct _main_args *arg=(struct _main_args *)malloc(sizeof(struct _main_args));
 	arg->nfds=main_poll_nfds;

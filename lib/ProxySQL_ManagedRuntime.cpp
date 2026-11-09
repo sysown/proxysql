@@ -248,7 +248,9 @@ bool valid_admin_variable(const std::string &name, const std::string &value) {
   // to process startup/shutdown, and the existing plugin start operation cannot
   // rebind a live port.
   if (name == "web_enabled" || name == "web_port" || name == "restapi_enabled" ||
-      name == "restapi_port")
+      name == "restapi_port" || name == "restapi_use_ssl" ||
+      name == "restapi_ssl_verify_client" || name == "restapi_interface" ||
+      name == "restapi_ssl_ca")
     return false;
   if (name.compare(0, 8, "cluster_") == 0 || name.compare(0, 9, "checksum_") == 0 ||
       name == "version" || name == "hash_passwords" || name.find("ifaces") != std::string::npos)

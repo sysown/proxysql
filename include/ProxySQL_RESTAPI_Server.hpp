@@ -5,19 +5,74 @@
 #include <string>
 #include <memory>
 #include <functional>
+#include <sys/socket.h>
+#include <sys/types.h>
 
 #include "httpserver.hpp"
+
+/**
+ * @brief Runtime configuration for the REST API / Prometheus listener.
+ *
+ * The PEM strings are owned by this structure for the lifetime of the
+ * listener. They are copied from ProxySQL's global TLS material at
+ * (re)configuration time; the caller must free any temporary buffers returned
+ * by GloVars.get_SSL_pem_mem().
+ */
+struct ProxySQL_RESTAPI_Config {
+	int port { 6070 };
+	/**
+	 * @brief Empty = bind all interfaces (historical behavior). Otherwise an
+	 * IPv4/IPv6 numeric address, or a Unix socket path (absolute, or prefixed
+	 * with "unix:").
+	 */
+	std::string interface_name {};
+	bool use_ssl { false };
+	bool verify_client { false };
+	std::string ssl_key_pem {};
+	std::string ssl_cert_pem {};
+	std::string ssl_ca_pem {};
+};
+
+/**
+ * @brief Parse an admin-restapi_interface value into a bind address.
+ *
+ * @param interface_name Value of admin-restapi_interface.
+ * @param port TCP port to place in the IPv4/IPv6 sockaddr (ignored for Unix).
+ * @param has_bind_address Set true when addr/addr_len must be passed to
+ *        libhttpserver; false for the historical "all interfaces" default.
+ * @param addr Filled for IPv4/IPv6 addresses.
+ * @param addr_len Filled with the sockaddr length.
+ * @param unix_socket_path Filled for Unix socket paths.
+ * @param error Human-readable error on failure.
+ * @return true on success, false for malformed/invalid input.
+ */
+bool ProxySQL_RESTAPI_parse_bind_address(
+	const std::string& interface_name,
+	uint16_t port,
+	bool& has_bind_address,
+	struct sockaddr_storage& addr,
+	socklen_t& addr_len,
+	std::string& unix_socket_path,
+	std::string& error
+);
 
 class ProxySQL_RESTAPI_Server {
 	private:
 	std::unique_ptr<httpserver::webserver> ws;
 	int port;
-	pthread_t thread_id;
+	struct sockaddr_storage bind_addr {};
+	socklen_t bind_addr_len { 0 };
+	bool has_bind_address { false };
+	std::string unix_socket_path {};
+	bool unix_socket_path_owned { false };
+	dev_t unix_socket_dev { 0 };
+	ino_t unix_socket_ino { 0 };
 	std::unique_ptr<httpserver::http_resource> endpoint;
 	std::unique_ptr<httpserver::http_resource> tsdb_endpoint;
 	std::unique_ptr<httpserver::http_resource> tsdb_dashboard_endpoint;
 	std::unique_ptr<httpserver::http_resource> tsdb_chart_js_endpoint;
 	std::vector<std::pair<std::string, std::unique_ptr<httpserver::http_resource>>> _endpoints {};
+	void cleanup_unix_socket();
 	public:
 	ProxySQL_RESTAPI_Server(
 		int p,
@@ -31,8 +86,21 @@ class ProxySQL_RESTAPI_Server {
 					std::string,
 					std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)>>> {}
 	);
+	ProxySQL_RESTAPI_Server(
+		const ProxySQL_RESTAPI_Config& config,
+		std::vector<
+			std::pair<
+				std::string,
+				std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)>>
+		> endpoints =
+			std::vector<
+				std::pair<
+					std::string,
+					std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)>>> {}
+	);
 	~ProxySQL_RESTAPI_Server();
 	void init();
 	void print_version();
+	bool is_running() const;
 };
 #endif /* CLASS_PROXYSQL_RESTAPI_SERVER */

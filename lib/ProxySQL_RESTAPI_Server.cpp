@@ -7,6 +7,17 @@ using json = nlohmann::json;
 #include "httpserver.hpp"
 
 #include <functional>
+#include <cerrno>
+#include <cstddef>
+#include <cstring>
+#include <string>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <strings.h>
+#include <unistd.h>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 #include "ProxySQL_Statistics.hpp"
@@ -488,43 +499,224 @@ public:
 	}
 };
 
-void * restapi_server_thread(void *arg) {
-	set_thread_name("RESTAPI_Server", GloVars.set_thread_name);
-	httpserver::webserver * ws = (httpserver::webserver *)arg;
-    ws->start(true);
-	return NULL;
-}
-
 using std::vector;
 using std::pair;
 using std::function;
 using std::shared_ptr;
 
+static std::string trim_restapi_interface(const std::string& value) {
+	size_t first = value.find_first_not_of(" \t\r\n");
+	if (first == std::string::npos) {
+		return {};
+	}
+	size_t last = value.find_last_not_of(" \t\r\n");
+	return value.substr(first, last - first + 1);
+}
+
+bool ProxySQL_RESTAPI_parse_bind_address(
+	const std::string& interface_name,
+	uint16_t port,
+	bool& has_bind_address,
+	struct sockaddr_storage& addr,
+	socklen_t& addr_len,
+	std::string& unix_socket_path,
+	std::string& error
+) {
+	has_bind_address = false;
+	addr = sockaddr_storage {};
+	addr_len = 0;
+	unix_socket_path.clear();
+	error.clear();
+
+	std::string value = trim_restapi_interface(interface_name);
+	if (value.empty()) {
+		return true;
+	}
+
+	bool unix_prefixed = false;
+	if (value.size() > 5 && strncasecmp(value.c_str(), "unix:", 5) == 0) {
+		unix_prefixed = true;
+		value = trim_restapi_interface(value.substr(5));
+	}
+
+	if (!value.empty() && value[0] == '/') {
+		if (value.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
+			error = "Unix socket path is too long: '" + value + "'";
+			return false;
+		}
+		struct sockaddr_un un {};
+		un.sun_family = AF_UNIX;
+		memcpy(un.sun_path, value.c_str(), value.size() + 1);
+		memcpy(&addr, &un, sizeof(un));
+		addr_len = static_cast<socklen_t>(
+			offsetof(struct sockaddr_un, sun_path) + value.size() + 1);
+		has_bind_address = true;
+		unix_socket_path = value;
+		return true;
+	}
+	if (unix_prefixed) {
+		error = "admin-restapi_interface 'unix:' requires an absolute socket path";
+		return false;
+	}
+
+	std::string host = value;
+	if (host.size() >= 2 && host.front() == '[' && host.back() == ']') {
+		host = host.substr(1, host.size() - 2);
+	}
+
+	struct sockaddr_in addr4 {};
+	if (inet_pton(AF_INET, host.c_str(), &addr4.sin_addr) == 1) {
+		addr4.sin_family = AF_INET;
+		addr4.sin_port = htons(port);
+		memcpy(&addr, &addr4, sizeof(addr4));
+		addr_len = sizeof(addr4);
+		has_bind_address = true;
+		return true;
+	}
+
+	struct sockaddr_in6 addr6 {};
+	if (inet_pton(AF_INET6, host.c_str(), &addr6.sin6_addr) == 1) {
+		addr6.sin6_family = AF_INET6;
+		addr6.sin6_port = htons(port);
+		memcpy(&addr, &addr6, sizeof(addr6));
+		addr_len = sizeof(addr6);
+		has_bind_address = true;
+		return true;
+	}
+
+	error = "Invalid admin-restapi_interface '" + interface_name +
+		"': expected a numeric IPv4/IPv6 address or an absolute Unix socket path";
+	return false;
+}
+
+void ProxySQL_RESTAPI_Server::cleanup_unix_socket() {
+	if (unix_socket_path_owned && !unix_socket_path.empty()) {
+		struct stat st {};
+		if (lstat(unix_socket_path.c_str(), &st) == 0 &&
+			S_ISSOCK(st.st_mode) &&
+			st.st_dev == unix_socket_dev &&
+			st.st_ino == unix_socket_ino) {
+			unlink(unix_socket_path.c_str());
+		}
+	}
+	unix_socket_path_owned = false;
+}
+
+// Unix paths are never replaced. Rejecting any pre-existing path avoids
+// probing/unlinking a foreign or stale socket and lets MHD create the listener
+// from a sockaddr (with an exact MHD_OPTION_SOCK_ADDR_LEN) like any TCP bind.
+static bool ensure_unix_socket_path_available(const std::string& path, std::string& error) {
+	struct stat st {};
+	if (lstat(path.c_str(), &st) == 0) {
+		error = "Unix socket path '" + path + "' already exists; refusing to replace it";
+		return false;
+	}
+	if (errno != ENOENT) {
+		error = "Cannot inspect Unix socket path '" + path + "': " + strerror(errno);
+		return false;
+	}
+	return true;
+}
+
+static ProxySQL_RESTAPI_Config make_default_restapi_config(int port) {
+	ProxySQL_RESTAPI_Config config {};
+	config.port = port;
+	return config;
+}
+
 ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	int p,
 	vector<pair<std::string, function<shared_ptr<http_response>(const http_request&)>>> endpoints
-) {
-	// NOTE: Right now ProxySQL is using the simplest mode of 'libhttpserver' for serving 'REST' queries,
-	// in the current mode concurrency on serving requests is low, and throughput is directly related with
-	// the time required to execute the target script, since each of the calls are blocking.
+) : ProxySQL_RESTAPI_Server(make_default_restapi_config(p), std::move(endpoints)) {
+}
+
+ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
+	const ProxySQL_RESTAPI_Config& config_,
+	vector<pair<std::string, function<shared_ptr<http_response>(const http_request&)>>> endpoints
+) : port(config_.port) {
+	std::string parse_error;
+	if (!ProxySQL_RESTAPI_parse_bind_address(
+			config_.interface_name, static_cast<uint16_t>(config_.port),
+			has_bind_address, bind_addr, bind_addr_len, unix_socket_path, parse_error)) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': %s\n", parse_error.c_str());
+		return;
+	}
+
+	if (config_.verify_client && !config_.use_ssl) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': "
+			"admin-restapi_ssl_verify_client=true requires admin-restapi_use_ssl=true. "
+			"Refusing to serve plain HTTP.\n"
+		);
+		return;
+	}
+	if (config_.use_ssl && (config_.ssl_key_pem.empty() || config_.ssl_cert_pem.empty())) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': SSL certificates are not loaded. "
+			"Refusing to fall back to plain HTTP.\n"
+		);
+		return;
+	}
+	if (config_.verify_client && config_.ssl_ca_pem.empty()) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': client certificate verification "
+			"requires a non-empty CA (admin-restapi_ssl_ca or ProxySQL's CA PEM).\n"
+		);
+		return;
+	}
+
+	if (!unix_socket_path.empty()) {
+		std::string unix_error;
+		if (!ensure_unix_socket_path_available(unix_socket_path, unix_error)) {
+			proxy_error("Unable to start 'ProxySQL_RestAPI_Server': %s\n", unix_error.c_str());
+			return;
+		}
+	}
+
+	try {
+		// NOTE: Right now ProxySQL is using the simplest mode of 'libhttpserver' for serving 'REST' queries,
+		// in the current mode concurrency on serving requests is low, and throughput is directly related with
+		// the time required to execute the target script, since each of the calls are blocking.
 #if defined(__FreeBSD__) || defined(__APPLE__)
-	ws = std::unique_ptr<httpserver::webserver>(new webserver(
-		create_webserver(p)
+		auto server_config = create_webserver(port)
 			.no_post_process()
-			.start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION)
-	));
+			.start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION);
 #else
-	ws = std::unique_ptr<httpserver::webserver>(new webserver(
-		create_webserver(p).no_post_process()
-	));
+		auto server_config = create_webserver(port).no_post_process();
 #endif
-	// NOTE: Enable for benchmarking purposes. In this mode each request will be served by it's own thread.
-	// ws = std::unique_ptr<httpserver::webserver>(new webserver(create_webserver(p).start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION)));
+		if (config_.use_ssl) {
+			server_config.use_ssl()
+				.raw_https_mem_key(config_.ssl_key_pem)
+				.raw_https_mem_cert(config_.ssl_cert_pem);
+			if (config_.verify_client) {
+				// Only mTLS listeners install a trust store; ordinary HTTPS
+				// must not request a client certificate.
+				server_config.raw_https_mem_trust(config_.ssl_ca_pem)
+					.require_client_cert();
+			}
+		} else {
+			server_config.no_ssl();
+		}
+		if (has_bind_address) {
+			if (bind_addr.ss_family == AF_INET6) {
+				server_config.use_ipv6();
+			}
+			server_config.bind_address(
+				reinterpret_cast<const struct sockaddr*>(&bind_addr), bind_addr_len);
+		}
+
+		ws = std::unique_ptr<httpserver::webserver>(new webserver(server_config));
+	} catch (const std::exception& e) {
+		proxy_error("Unable to create 'ProxySQL_RestAPI_Server': %s\n", e.what());
+		cleanup_unix_socket();
+		return;
+	}
+
 	auto sr = new sync_resource();
 
 	endpoint = std::unique_ptr<httpserver::http_resource>(sr);
 
-    ws->register_resource("/sync", endpoint.get(), true);
+	ws->register_resource("/sync", endpoint.get(), true);
 
 #ifdef PROXYSQLTSDB
 	auto tsdb_res = new tsdb_resource();
@@ -552,17 +744,51 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	}
 
 	// Finish constructing and registering resources before requests can read them.
-	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws.get()) !=0 ) {
-		perror("Thread creation");
-		exit(EXIT_FAILURE);
+	// Start non-blocking so bind/TLS/CA failures are reported here instead of
+	// escaping a thread and calling std::terminate.
+	try {
+		ws->start(false);
+	} catch (const std::exception& e) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server' on port %d: %s\n", port, e.what());
+		ws.reset();
+		cleanup_unix_socket();
+		return;
 	}
+	if (!ws->is_running()) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server' on port %d\n", port);
+		ws.reset();
+		cleanup_unix_socket();
+		return;
+	}
+	if (!unix_socket_path.empty()) {
+		struct stat st {};
+		if (lstat(unix_socket_path.c_str(), &st) == 0 && S_ISSOCK(st.st_mode)) {
+			unix_socket_dev = st.st_dev;
+			unix_socket_ino = st.st_ino;
+			unix_socket_path_owned = true;
+		} else {
+			proxy_error(
+				"Unable to verify Unix socket '%s' after listener start: %s\n",
+				unix_socket_path.c_str(), strerror(errno));
+		}
+	}
+	proxy_info(
+		"Started 'ProxySQL_RestAPI_Server' on %s (%s%s)\n",
+		unix_socket_path.empty() ? std::to_string(port).c_str() : unix_socket_path.c_str(),
+		config_.use_ssl ? "HTTPS" : "HTTP",
+		config_.verify_client ? ", client certificates required" : ""
+	);
 }
 
 ProxySQL_RESTAPI_Server::~ProxySQL_RESTAPI_Server() {
 	if (ws) {
-    	ws->stop();
-		pthread_join(thread_id, NULL);
+		ws->stop();
 	}
+	cleanup_unix_socket();
+}
+
+bool ProxySQL_RESTAPI_Server::is_running() const {
+	return ws && ws->is_running();
 }
 
 void ProxySQL_RESTAPI_Server::init() {

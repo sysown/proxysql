@@ -5,6 +5,7 @@ using json = nlohmann::json;
 #include <iostream>     // std::cout
 #include <sstream>      // std::stringstream
 #include <fstream>
+#include <iterator>
 #include <algorithm>    // std::sort
 #include <memory>
 #include <mutex>
@@ -13,6 +14,7 @@ using json = nlohmann::json;
 #include <vector>       // std::vector
 #include <unordered_set>
 #include <optional>
+#include <utility>
 #include "prometheus/exposer.h"
 #include "prometheus/counter.h"
 #include "openssl/ssl.h"
@@ -48,6 +50,7 @@ using json = nlohmann::json;
 #include "MySQL_Query_Processor.h"
 #include "PgSQL_Query_Processor.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
+#include "ProxySQL_RESTAPI_Server.hpp"
 #include "MySQL_Authentication.hpp"
 #include "PgSQL_Authentication.h"
 #include "scram_hmac_cached.h"
@@ -577,6 +580,10 @@ static char * admin_variables_names[]= {
 	(char *)"checksum_pgsql_variables",
 	(char *)"restapi_enabled",
 	(char *)"restapi_port",
+	(char *)"restapi_use_ssl",
+	(char *)"restapi_ssl_verify_client",
+	(char *)"restapi_interface",
+	(char *)"restapi_ssl_ca",
 	(char *)"web_enabled",
 	(char *)"web_port",
 	(char *)"web_verbosity",
@@ -3167,6 +3174,10 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.restapi_enabled_old = false;
 	variables.restapi_port = 6070;
 	variables.restapi_port_old = variables.restapi_port;
+	variables.restapi_use_ssl = false;
+	variables.restapi_ssl_verify_client = false;
+	variables.restapi_interface = strdup("");
+	variables.restapi_ssl_ca = strdup("");
 	variables.web_enabled = false;
 	variables.web_enabled_old = false;
 	variables.web_port = 6080;
@@ -3422,6 +3433,13 @@ void ProxySQL_Admin::shutdown_threads() {
 		return;
 	}
 	admin_threads_shutdown = true;
+
+	// Stop the REST lifecycle worker while the admin interface is still
+	// accepting connections: its MHD_stop_daemon may wait for an active /sync
+	// callback that needs an admin reply. The worker owns AdminRestApiServer
+	// and destroys it before returning.
+	stop_restapi_worker();
+
 	shutdown_server_discovery_updates();
 	__atomic_store_n(&main_shutdown, 1, __ATOMIC_RELEASE);
 
@@ -3432,10 +3450,6 @@ void ProxySQL_Admin::shutdown_threads() {
 		}
 	}
 	delete AdminHTTPServer;
-	if (AdminRestApiServer) {
-		delete AdminRestApiServer;
-		AdminRestApiServer = NULL;
-	}
 	AdminHTTPServer = NULL;
 	pthread_join(admin_thr, NULL);
 	while (__sync_fetch_and_add(&admin_client_threads_active, 0) != 0) {
@@ -3504,6 +3518,12 @@ void ProxySQL_Admin::admin_shutdown() {
 	}
 	if (variables.ssl_keylog_file) {
 		free(variables.ssl_keylog_file);
+	}
+	if (variables.restapi_interface) {
+		free(variables.restapi_interface);
+	}
+	if (variables.restapi_ssl_ca) {
+		free(variables.restapi_ssl_ca);
 	}
 };
 
@@ -4015,71 +4035,246 @@ void ProxySQL_Admin::load_or_update_global_settings(SQLite3DB *db) {
 	}
 }
 
-void ProxySQL_Admin::load_restapi_server() {
+void ProxySQL_request_restapi_reload() {
+	if (GloAdmin) {
+		GloAdmin->load_restapi_server(true);
+	}
+}
+
+static bool restapi_read_pem_file(const std::string& path, std::string& out) {
+	std::ifstream input(path, std::ios::in | std::ios::binary);
+	if (!input.is_open()) {
+		return false;
+	}
+	out.assign(
+		std::istreambuf_iterator<char>(input),
+		std::istreambuf_iterator<char>()
+	);
+	return !out.empty();
+}
+
+void ProxySQL_Admin::load_restapi_server(bool force_tls_reload) {
 	if (!all_modules_started) { return; }
 
-	std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)> prometheus_callback {
-		[this](const httpserver::http_request& request) {
-			auto headers = request_headers(request);
-			auto serial_response = this->serial_exposer(headers);
-			auto http_response = make_response(serial_response);
+	{
+		std::lock_guard<std::mutex> lock(restapi_queue_mutex);
+		restapi_queue_pending = true;
+		restapi_queue_force_tls = restapi_queue_force_tls || force_tls_reload;
+	}
+	restapi_queue_cv.notify_one();
+}
 
-			return http_response;
+void * ProxySQL_Admin::restapi_worker_main(void *arg) {
+	static_cast<ProxySQL_Admin*>(arg)->restapi_worker_loop();
+	return NULL;
+}
+
+void ProxySQL_Admin::start_restapi_worker() {
+	if (restapi_worker_started) {
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lock(restapi_queue_mutex);
+		restapi_queue_stop = false;
+		restapi_queue_pending = false;
+		restapi_queue_force_tls = false;
+	}
+	restapi_worker_started = true;
+	if (pthread_create(&restapi_worker_thread, NULL, restapi_worker_main, this) != 0) {
+		restapi_worker_started = false;
+		perror("Thread creation");
+		exit(EXIT_FAILURE);
+	}
+}
+
+void ProxySQL_Admin::stop_restapi_worker() {
+	if (!restapi_worker_started) {
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lock(restapi_queue_mutex);
+		restapi_queue_stop = true;
+	}
+	restapi_queue_cv.notify_all();
+	pthread_join(restapi_worker_thread, NULL);
+	restapi_worker_started = false;
+}
+
+void ProxySQL_Admin::restapi_worker_loop() {
+	set_thread_name("RESTAPI_Life", GloVars.set_thread_name);
+	for (;;) {
+		bool force_tls_reload = false;
+		{
+			std::unique_lock<std::mutex> lock(restapi_queue_mutex);
+			restapi_queue_cv.wait(lock, [this]() {
+				return restapi_queue_pending || restapi_queue_stop;
+			});
+			if (restapi_queue_stop) {
+				break;
+			}
+			restapi_queue_pending = false;
+			force_tls_reload = restapi_queue_force_tls;
+			restapi_queue_force_tls = false;
 		}
-	};
+		// No queue/admin/global-SQL lock is held while the listener is
+		// destroyed or started. This is what allows /sync callbacks to finish.
+		apply_restapi_config(force_tls_reload);
+	}
 
-	bool free_restapi_port = false;
+	// Worker owns the listener for its whole lifetime.
+	if (AdminRestApiServer) {
+		delete AdminRestApiServer;
+		AdminRestApiServer = NULL;
+	}
+}
 
-	// Helper lambda taking a boolean reference as a parameter to check if 'restapi_port' is available.
-	// In case of port not being free or error, logs an error 'ProxySQL_RestAPI_Server' isn't able to be started.
-	const auto check_restapi_port = [&](bool& restapi_port_free) -> void {
-		int e_port_check = check_port_availability(variables.restapi_port, &restapi_port_free);
+void ProxySQL_Admin::apply_restapi_config(bool force_tls_reload) {
+	RestapiWorkerSettings desired {};
+	{
+		// Snapshot the desired configuration briefly. The worker (not the LOAD
+		// caller) owns the applied snapshot, so a newer LOAD cannot be
+		// overwritten by an older in-flight apply.
+		wrlock();
+		desired.valid = true;
+		desired.enabled = variables.restapi_enabled;
+		desired.port = variables.restapi_port;
+		desired.use_ssl = variables.restapi_use_ssl;
+		desired.verify_client = variables.restapi_ssl_verify_client;
+		desired.interface_name = variables.restapi_interface ? variables.restapi_interface : "";
+		desired.ca_config = variables.restapi_ssl_ca ? variables.restapi_ssl_ca : "";
+		wrunlock();
+	}
 
-		if (restapi_port_free == false) {
-			if (e_port_check == -1) {
-				proxy_error("Unable to start 'ProxySQL_RestAPI_Server', failed to set 'SO_REUSEADDR' to check port availability.\n");
-			} else {
+	// A TLS reload only affects an HTTPS listener. Do not churn an unchanged
+	// plain-HTTP listener just because PROXYSQL RELOAD TLS ran.
+	if (force_tls_reload && !desired.use_ssl) {
+		force_tls_reload = false;
+	}
+
+	const RestapiWorkerSettings& applied = restapi_worker_applied;
+	const bool same_config =
+		applied.valid &&
+		desired.enabled == applied.enabled &&
+		desired.port == applied.port &&
+		desired.use_ssl == applied.use_ssl &&
+		desired.verify_client == applied.verify_client &&
+		desired.interface_name == applied.interface_name &&
+		desired.ca_config == applied.ca_config;
+
+	if (same_config && !force_tls_reload) {
+		return;
+	}
+
+	// Stop the previous listener first so a failed new configuration cannot
+	// leave an older, possibly weaker listener serving traffic.
+	if (AdminRestApiServer) {
+		delete AdminRestApiServer;
+		AdminRestApiServer = NULL;
+	}
+
+	if (!desired.enabled) {
+		restapi_worker_applied = std::move(desired);
+		return;
+	}
+
+	do {
+		if (desired.verify_client && !desired.use_ssl) {
+			proxy_error(
+				"Unable to start 'ProxySQL_RestAPI_Server': "
+				"admin-restapi_ssl_verify_client=true requires admin-restapi_use_ssl=true. "
+				"Refusing to serve plain HTTP.\n"
+			);
+			break;
+		}
+
+		bool has_bind_address = false;
+		struct sockaddr_storage bind_address {};
+		socklen_t bind_address_len = 0;
+		std::string unix_socket_path;
+		std::string parse_error;
+		if (!ProxySQL_RESTAPI_parse_bind_address(
+				desired.interface_name, static_cast<uint16_t>(desired.port),
+				has_bind_address, bind_address, bind_address_len,
+				unix_socket_path, parse_error)) {
+			proxy_error("Unable to start 'ProxySQL_RestAPI_Server': %s\n", parse_error.c_str());
+			break;
+		}
+
+		ProxySQL_RESTAPI_Config config {};
+		config.port = desired.port;
+		config.interface_name = desired.interface_name;
+		config.use_ssl = desired.use_ssl;
+		config.verify_client = desired.verify_client;
+
+		if (config.use_ssl) {
+			char* key_pem = NULL;
+			char* cert_pem = NULL;
+			GloVars.get_SSL_pem_mem(&key_pem, &cert_pem);
+			if (key_pem && cert_pem) {
+				config.ssl_key_pem.assign(key_pem);
+				config.ssl_cert_pem.assign(cert_pem);
+			}
+			free(key_pem);
+			free(cert_pem);
+			if (config.ssl_key_pem.empty() || config.ssl_cert_pem.empty()) {
 				proxy_error(
-					"Unable to start 'ProxySQL_RestAPI_Server', port '%d' already in use.\n",
-					variables.restapi_port
+					"Unable to start 'ProxySQL_RestAPI_Server': SSL certificates are not loaded. "
+					"Refusing to fall back to plain HTTP.\n"
 				);
+				break;
 			}
 		}
-	};
 
-	if (variables.restapi_enabled != variables.restapi_enabled_old) {
-		if (variables.restapi_enabled) {
-			check_restapi_port(free_restapi_port);
+		if (config.verify_client) {
+			if (!desired.ca_config.empty()) {
+				std::string ca_path = desired.ca_config;
+				if (ca_path[0] != '/') {
+					ca_path = std::string(GloVars.datadir) + "/" + ca_path;
+				}
+				if (!restapi_read_pem_file(ca_path, config.ssl_ca_pem)) {
+					proxy_error(
+						"Unable to start 'ProxySQL_RestAPI_Server': cannot read "
+						"admin-restapi_ssl_ca '%s'.\n", ca_path.c_str()
+					);
+					break;
+				}
+			} else {
+				char* ca_pem = NULL;
+				GloVars.get_SSL_ca_pem_mem(&ca_pem);
+				if (ca_pem) {
+					config.ssl_ca_pem.assign(ca_pem);
+				}
+				free(ca_pem);
+			}
+			if (config.ssl_ca_pem.empty()) {
+				proxy_error(
+					"Unable to start 'ProxySQL_RestAPI_Server': client certificate verification "
+					"requires a non-empty CA (admin-restapi_ssl_ca or ProxySQL's CA PEM).\n"
+				);
+				break;
+			}
 		}
 
-		if (variables.restapi_enabled && free_restapi_port) {
-			AdminRestApiServer = new ProxySQL_RESTAPI_Server(
-				variables.restapi_port, {{"/metrics", prometheus_callback}}
-			);
-		} else {
+		std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)> prometheus_callback {
+			[this](const httpserver::http_request& request) {
+				auto headers = request_headers(request);
+				auto serial_response = this->serial_exposer(headers);
+				auto http_response = make_response(serial_response);
+
+				return http_response;
+			}
+		};
+
+		AdminRestApiServer = new ProxySQL_RESTAPI_Server(
+			config, {{"/metrics", prometheus_callback}}
+		);
+		if (!AdminRestApiServer->is_running()) {
 			delete AdminRestApiServer;
 			AdminRestApiServer = NULL;
 		}
-		variables.restapi_enabled_old = variables.restapi_enabled;
-	} else {
-		if (variables.restapi_port != variables.restapi_port_old) {
-			if (AdminRestApiServer) {
-				delete AdminRestApiServer;
-				AdminRestApiServer = NULL;
-			}
+	} while (false);
 
-			if (variables.restapi_enabled) {
-				check_restapi_port(free_restapi_port);
-			}
-
-			if (variables.restapi_enabled && free_restapi_port) {
-				AdminRestApiServer = new ProxySQL_RESTAPI_Server(
-					variables.restapi_port, {{"/metrics", prometheus_callback}}
-				);
-			}
-			variables.restapi_port_old = variables.restapi_port;
-		}
-	}
+	restapi_worker_applied = std::move(desired);
 }
 
 
@@ -4387,6 +4582,18 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"restapi_port")) {
 		snprintf(intbuf, sizeof(intbuf),"%d",variables.restapi_port);
 		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"restapi_use_ssl")) {
+		return strdup(variables.restapi_use_ssl ? "true" : "false");
+	}
+	if (!strcasecmp(name,"restapi_ssl_verify_client")) {
+		return strdup(variables.restapi_ssl_verify_client ? "true" : "false");
+	}
+	if (!strcasecmp(name,"restapi_interface")) {
+		return strdup(variables.restapi_interface ? variables.restapi_interface : "");
+	}
+	if (!strcasecmp(name,"restapi_ssl_ca")) {
+		return strdup(variables.restapi_ssl_ca ? variables.restapi_ssl_ca : "");
 	}
 	if (!strcasecmp(name,"web_enabled")) {
 		return strdup(variables.web_enabled ? "true" : "false");
@@ -5015,6 +5222,39 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name,"restapi_use_ssl")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.restapi_use_ssl=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.restapi_use_ssl=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"restapi_ssl_verify_client")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.restapi_ssl_verify_client=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.restapi_ssl_verify_client=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"restapi_interface")) {
+		// Empty is valid and preserves the historical "all interfaces" bind.
+		free(variables.restapi_interface);
+		variables.restapi_interface=strdup(vallen ? value : "");
+		return true;
+	}
+	if (!strcasecmp(name,"restapi_ssl_ca")) {
+		free(variables.restapi_ssl_ca);
+		variables.restapi_ssl_ca=strdup(vallen ? value : "");
+		return true;
 	}
 	if (!strcasecmp(name,"web_enabled")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {

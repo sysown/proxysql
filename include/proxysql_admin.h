@@ -13,13 +13,30 @@
 #include <vector>
 #include <array>
 #include <limits>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <string>
 
-#include "ProxySQL_RESTAPI_Server.hpp"
+// Forward declaration: the REST server header itself pulls in proxysql.h,
+// which reaches this header through cpp.h. Including it here creates a
+// circular include where AdminRestApiServer's type is not yet declared.
+class ProxySQL_RESTAPI_Server;
 
 #include "ProxySQL_Plugin.h"
 
 #include "proxysql_typedefs.h"
 #include "query_digest_topk.h"
+
+/**
+ * @brief Queue a REST API listener reload on the admin main loop.
+ *
+ * TLS reloads can originate from an active REST handler (for example a /sync
+ * script that runs PROXYSQL RELOAD TLS). Restarting the listener from that
+ * call stack would wait for the very callback that is blocked on the admin
+ * reply. The admin main loop consumes this flag after the command returns.
+ */
+void ProxySQL_request_restapi_reload();
 
 #define PROCESSLIST_MAX_QUERY_LEN_DEFAULT    (2 * 1024 * 1024)  //  2 MiB
 #define PROCESSLIST_MAX_QUERY_LEN_MIN        (1 * 1024)         //  1 KiB
@@ -378,6 +395,27 @@ class ProxySQL_Admin {
 	void wrlock();
 	void wrunlock();
 
+	void restapi_worker_loop();
+	void apply_restapi_config(bool force_tls_reload);
+	static void * restapi_worker_main(void *arg);
+	struct RestapiWorkerSettings {
+		bool valid { false };
+		int port { 0 };
+		bool enabled { false };
+		bool use_ssl { false };
+		bool verify_client { false };
+		std::string interface_name {};
+		std::string ca_config {};
+	};
+	RestapiWorkerSettings restapi_worker_applied {};
+	pthread_t restapi_worker_thread {};
+	bool restapi_worker_started { false };
+	std::mutex restapi_queue_mutex;
+	std::condition_variable restapi_queue_cv;
+	bool restapi_queue_pending { false };
+	bool restapi_queue_force_tls { false };
+	bool restapi_queue_stop { false };
+
 	struct {
 		char *admin_credentials;
 		char *stats_credentials;
@@ -430,6 +468,10 @@ class ProxySQL_Admin {
 		bool restapi_enabled_old;
 		int restapi_port;
 		int restapi_port_old;
+		bool restapi_use_ssl;
+		bool restapi_ssl_verify_client;
+		char* restapi_interface;
+		char* restapi_ssl_ca;
 		bool web_enabled;
 		bool web_enabled_old;
 		int web_verbosity;
@@ -678,7 +720,16 @@ class ProxySQL_Admin {
 	 * @brief Loads the RESTAPI server config to runtime if all modules are ready, no-op otherwise.
 	 * @details Modules ready when 'all_modules_started=true'. See 'all_modules_started'.
 	 */
-	void load_restapi_server();
+	/**
+	 * @brief Queue a REST listener (re)configuration on the lifecycle worker.
+	 *
+	 * Never tears down/starts MHD from the caller: a caller may be a /sync
+	 * script waiting for an admin reply. The joinable worker owns
+	 * AdminRestApiServer exclusively.
+	 */
+	void load_restapi_server(bool force_tls_reload = false);
+	void start_restapi_worker();
+	void stop_restapi_worker();
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool has_variable(const char *name);
