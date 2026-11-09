@@ -99,6 +99,12 @@ elif [ -f "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh" ]; then
     source "${WORKSPACE}/test/tap/groups/${BASE_GROUP}/env.sh"
 fi
 
+# TEMPORARY CI investigation: bound evidence collection after the target while
+# preserving the original executed prefix; caller-provided filters still win.
+if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "${TAP_GROUP:-}" = "legacy-g4" ] && [ -z "${TEST_PY_TAP_INCL:-}" ]; then
+    export TEST_PY_TAP_INCL='^(mysql-pool_waiters-t|mysql-user-variable-tracking-t|mysql-watchdog_test-t|pgsql-admin_metacmds-t|pgsql-admin_metacmds_describe_all_tables-t|pgsql-admin_metacmds_describe_queries-t|pgsql-admin_resultset_protocol-t|pgsql-auth_method_matrix-t|pgsql-datatype_matrix-t|pgsql-discard_all_txn_block-t|pgsql-extended_query_flush-t)$'
+fi
+
 if [ -n "${TAP_GROUP}" ]; then
     if [ -f "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst" ]; then
         INFRAS_TO_CHECK=$(expand_infra_list "${WORKSPACE}/test/tap/groups/${TAP_GROUP}/infras.lst")
@@ -451,6 +457,8 @@ docker run \
     -e SCRIPT_DIR="${SCRIPT_DIR}" \
     -e MYSQL_BINLOG_BIN="${MYSQL_BINLOG_BIN}" \
     -e TAP_USE_NOISE="${TAP_USE_NOISE:-0}" \
+    -e FLUSH_ONLY="${FLUSH_ONLY:-}" \
+    -e FLUSH_DIAG_PASSIVE="${FLUSH_DIAG_PASSIVE:-}" \
     -e TAP_PGSQL_SYNC_REPLICA_PORT="${TAP_PGSQL_SYNC_REPLICA_PORT:-}" \
     -e MULTI_GROUP="${MULTI_GROUP:-0}" \
     -e GCOV_PREFIX="/gcov/tap" \

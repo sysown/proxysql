@@ -21,11 +21,14 @@
  * Replies are read until the socket stays quiet; a closed socket fails the case.
  * Configuration is only loaded to runtime, never saved to disk.
  */
+#include <cerrno>
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <poll.h>
 #include <sstream>
 #include <string>
+#include <sys/socket.h>
 #include <vector>
 #include <unistd.h>
 #include "libpq-fe.h"
@@ -196,6 +199,101 @@ static std::string uniq() {
 static void check(const std::string& got, const std::string& want, const char* what, Mode m, bool txn) {
 	ok(got == want, "%s [%s%s]: got '%s', expected '%s'", what, mode_name(m), txn ? ", in txn" : "",
 		got.c_str(), want.c_str());
+}
+
+static long long since_ms(const std::chrono::steady_clock::time_point& a,
+		const std::chrono::steady_clock::time_point& b) {
+	return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+}
+
+// Diagnostic-only first-byte observation for the first CREATE in case_release_other_hostgroup.
+// The runner forwards FLUSH_DIAG_PASSIVE as absent-or-empty when the host did not set it, so
+// absent and empty both enable this observation; an explicit "1" enables and every other
+// explicit value (including "0") stays off and runs only the original check(run(...)).
+// A positive peek only proves a byte was queued before any later client write: not a complete
+// frame, the expected tokens, or exact wire arrival. No byte only means none was observed in 2 s.
+static void check_create_first_byte(PgConnection& c, const std::function<void()>& send,
+		const std::string& want, const char* what, Mode m, bool txn) {
+	const char* enabled = getenv("FLUSH_DIAG_PASSIVE");
+	const bool diag_enabled = enabled == nullptr || enabled[0] == '\0' || std::string(enabled) == "1";
+	if (!diag_enabled) {
+		check(run(c, send), want, what, m, txn);
+		return;
+	}
+
+	const auto t0 = std::chrono::steady_clock::now();
+	auto send_end = t0;
+	Msgs msgs;
+	std::string got;
+	try {
+		send();  // exactly the original bytes, once
+		send_end = std::chrono::steady_clock::now();
+		msgs = c.readUntilQuiet(QUIET_MS);
+		got = tokens(msgs);
+	} catch (const PgException& e) {
+		check(std::string("CLOSED:") + e.what(), want, what, m, txn);
+		diag("%s [%s]: DIAG initial exception; no passive observation", what, mode_name(m));
+		return;
+	}
+
+	const auto initial_end = std::chrono::steady_clock::now();
+	check(got, want, what, m, txn);  // unchanged exact assertion
+	diag("%s [%s]: DIAG raw_msgs=%zu got='%s' send_end=+%lldms initial_end=+%lldms",
+		what, mode_name(m), msgs.size(), got.c_str(), since_ms(t0, send_end), since_ms(t0, initial_end));
+	if (!got.empty()) return;
+
+	// Passive observation: poll only and MSG_PEEK (reads without consuming); never consume or write.
+	const int fd = c.getSocket();
+	const auto deadline = send_end + std::chrono::milliseconds(2000);
+	std::string outcome;
+	for (;;) {
+		const auto before_poll = std::chrono::steady_clock::now();
+		if (before_poll >= deadline) { outcome = "deadline"; break; }
+		auto remain = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - before_poll).count();
+		if (remain < 1) remain = 1;
+		struct pollfd p = { fd, POLLIN | POLLHUP | POLLERR, 0 };
+		const int r = poll(&p, 1, static_cast<int>(remain));
+		const int poll_errno = (r < 0) ? errno : 0;
+		const auto poll_end = std::chrono::steady_clock::now();
+		if (r < 0) {
+			if (poll_errno == EINTR) continue;  // the absolute deadline is recomputed at the top
+			outcome = "poll-error(errno=" + std::to_string(poll_errno) + ")";
+			break;
+		}
+		if (r == 0) continue;  // rounded-down timeout; the deadline is rechecked at the top
+		if (p.revents & POLLNVAL) { outcome = "socket-invalid"; break; }
+		if (p.revents & POLLERR) { outcome = "socket-error"; break; }
+		if (p.revents & POLLIN) {
+			if (std::chrono::steady_clock::now() >= deadline) { outcome = "deadline"; break; }
+			uint8_t one = 0;
+			const ssize_t n = recv(fd, &one, 1, MSG_PEEK | MSG_DONTWAIT);
+			const int recv_errno = (n < 0) ? errno : 0;
+			const auto peek_end = std::chrono::steady_clock::now();
+			if (n == 1) {
+				const char* peek_outcome = (peek_end >= deadline)
+					? "peek-positive-after-deadline" : "peek-positive";
+				diag("%s [%s]: DIAG peek_byte=%u poll_ret=%d poll_revents=0x%x poll_end=+%lldms "
+					"peek_end=+%lldms outcome=%s", what, mode_name(m), unsigned(one), r,
+					unsigned(p.revents), since_ms(t0, poll_end), since_ms(t0, peek_end), peek_outcome);
+				outcome = peek_outcome;
+				break;
+			}
+			if (n == 0) { outcome = "closed"; break; }
+			if (recv_errno == EINTR) continue;
+			if (recv_errno == EAGAIN || recv_errno == EWOULDBLOCK) {
+				poll(nullptr, 0, 1);  // bounded 1 ms pause; the deadline is rechecked at the top
+				continue;
+			}
+			outcome = "recv-error(errno=" + std::to_string(recv_errno) + ")";
+			break;
+		}
+		if (p.revents & POLLHUP) { outcome = "closed"; break; }
+		outcome = "unexpected-revents";
+		break;
+	}
+	diag("%s [%s]: DIAG observation_end=+%lldms deadline=+%lldms outcome=%s",
+		what, mode_name(m), since_ms(t0, std::chrono::steady_clock::now()),
+		since_ms(t0, deadline), outcome.c_str());
 }
 
 // BEGIN as a simple Query, when the case runs inside an explicit transaction.
@@ -873,8 +971,8 @@ static void case_release_other_hostgroup(Mode mode, bool) {
 	{
 		auto a = client(m);
 		auto b = client(m);
-		check(run(*a, [&] { a->sendQuery("CREATE TEMP TABLE flush_tmp (x int)"); }), "C(CREATE TABLE) Z(I)",
-			"release other hostgroup: A CREATE TEMP TABLE", m, false);
+		check_create_first_byte(*a, [&] { a->sendQuery("CREATE TEMP TABLE flush_tmp (x int)"); },
+			"C(CREATE TABLE) Z(I)", "release other hostgroup: A CREATE TEMP TABLE", m, false);
 		check(run(*a, [&] { a->prepareStatement("", uniq() + "SELECT 'flush_other_hg'", false); a->describeStatement("", false);
 				a->sendFlush(); }), "1 t T", "release other hostgroup: A P D(S) H", m, false);
 		check(run(*b, [&] { b->sendQuery("BEGIN; SELECT 'flush_other_hg'"); }), "C(BEGIN) T D C(SELECT 1) Z(T)",
