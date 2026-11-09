@@ -100,9 +100,97 @@ MysqlxBackendTlsDecision mysqlx_resolve_backend_tls_decision(
 	return out;
 }
 
+// Core SHA-256 crypt implementation (lib/sha256crypt.cpp). MySQL stores
+// caching_sha2_password credentials as `$A$<rounds>$<salt><digest>`, where
+// <digest> is the SHA-256 crypt digest of the plaintext with
+// `$5$rounds=<rounds*1000>$<salt>`. Reuse the same core routine that
+// MySQL_Protocol::PPHR_verify_sha2 uses rather than duplicating the
+// algorithm in the plugin.
+extern "C" char * sha256_crypt_r(const char *key, const char *salt, char *buffer, int buflen);
+
 namespace {
 
 constexpr size_t CHALLENGE_LENGTH = 20;
+
+// Wipe a std::string that held a credential. clear() alone leaves the
+// bytes in the string's capacity, which may outlive the logical value
+// (pooled sessions, allocator reuse). OPENSSL_cleanse is the same
+// primitive OpenSSL uses for key material.
+void secure_clear_string(std::string& s) {
+	if (!s.empty()) {
+		OPENSSL_cleanse(&s[0], s.size());
+	}
+	s.clear();
+}
+
+bool is_sha256_crypt_char(char c) {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+	       (c >= '0' && c <= '9') || c == '.' || c == '/';
+}
+
+int sha2_rounds_hex_value(char c) {
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+// Verify a MySQL caching_sha2_password stored hash without throwing.
+// Format (70 bytes): "$A$" + 3 uppercase-hex digits (rounds/1000) + "$"
+// + 20-char salt + 43-char digest. Malformed input MUST fail closed; the
+// previous code path (derive_stored_hash) treated the stored hash as a
+// literal cleartext password, so a $A$ user could never log in over
+// frontend PLAIN.
+bool verify_caching_sha2_hash(const std::string& stored, const std::string& password) {
+	// MySQL's MAX_PLAINTEXT_LENGTH. sha256_crypt_r allocates the key on
+	// the stack and its first pass is O(key_len^2); an X auth frame can
+	// carry up to 16 MiB, so bound before invoking crypt. An embedded
+	// NUL would make c_str() verify a truncated secret that then differs
+	// from the value replayed to the backend.
+	constexpr size_t MYSQL_MAX_PLAINTEXT_LENGTH = 256;
+	if (password.size() > MYSQL_MAX_PLAINTEXT_LENGTH) return false;
+	if (password.find('\0') != std::string::npos) return false;
+	if (stored.size() != 70) return false;
+	if (stored[0] != '$' || stored[1] != 'A' || stored[2] != '$' || stored[6] != '$') {
+		return false;
+	}
+	unsigned int rounds_k = 0;
+	for (size_t i = 3; i < 6; ++i) {
+		const int v = sha2_rounds_hex_value(stored[i]);
+		if (v < 0) return false;
+		rounds_k = (rounds_k << 4) | static_cast<unsigned int>(v);
+	}
+	// $A$000$ is rejected upstream (sha2_password-t.cc); do not let
+	// sha256_crypt_r silently clamp zero rounds to its 1000 minimum.
+	if (rounds_k == 0) return false;
+	const std::string salt = stored.substr(7, 20);
+	const std::string expected = stored.substr(27, 43);
+	// MySQL's generate_user_salt() keeps arbitrary 7-bit bytes, excluding
+	// only NUL and `$` (mysys/crypt_genhash_impl.cc). Those two cannot be
+	// embedded in the `$5$rounds=...$<salt>` setting we hand to crypt.
+	// The digest, by contrast, is produced by sha256_crypt and therefore
+	// uses the crypt base64 alphabet.
+	for (char c : salt) {
+		if (c == '\0' || c == '$') return false;
+	}
+	for (char c : expected) {
+		if (!is_sha256_crypt_char(c)) return false;
+	}
+
+	const std::string setting =
+		"$5$rounds=" + std::to_string(static_cast<unsigned long long>(rounds_k) * 1000ULL) +
+		"$" + salt;
+	char crypt_buf[128];
+	char* out = sha256_crypt_r(password.c_str(), setting.c_str(), crypt_buf, sizeof(crypt_buf));
+	if (out == nullptr) return false;
+	const std::string result(out);
+	const size_t digest_pos = result.rfind('$');
+	if (digest_pos == std::string::npos ||
+	    result.size() - digest_pos - 1 != expected.size()) {
+		return false;
+	}
+	return CRYPTO_memcmp(result.data() + digest_pos + 1,
+	                     expected.data(), expected.size()) == 0;
+}
 
 // Hard cap on the amount of bytes a single Compression message is allowed to
 // produce after decompression. The X Protocol spec leaves this open-ended;
@@ -210,6 +298,7 @@ MysqlxSession::~MysqlxSession() {
 	if (client_ds_.get_fd() >= 0) {
 		close(client_ds_.get_fd());
 	}
+	secure_clear_string(frontend_plain_secret_);
 	reset_compression_state();
 }
 
@@ -245,6 +334,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr, const std::string& l
 	route_name_.clear();
 	listener_route_name_ = listener_route;
 	identity_.reset();
+	secure_clear_string(frontend_plain_secret_);
 	start_time_ = monotonic_time_ms();
 	last_active_time_ = start_time_;
 	compression_algo_ = MYSQLX_COMPR_NONE;
@@ -274,6 +364,7 @@ void MysqlxSession::reset() {
 	route_name_.clear();
 	listener_route_name_.clear();
 	identity_.reset();
+	secure_clear_string(frontend_plain_secret_);
 	compression_algo_ = MYSQLX_COMPR_NONE;
 	compression_combine_mixed_messages_ = false;
 	compression_max_combine_messages_ = 0;
@@ -314,13 +405,25 @@ int MysqlxSession::handler() {
 		return healthy ? 0 : -1;
 	}
 
-	ssize_t r = client_ds_.read_from_net();
-	if (client_ds_.has_parse_error()) {
-		healthy = false; return -1;
-	}
-	if (r == 0) { healthy = false; return -1; }
-	if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-		healthy = false; return -1;
+	// Once the client has requested a TLS upgrade we must not read raw
+	// socket bytes until the SSL object exists. The client's next bytes
+	// are a TLS ClientHello, not an X-Protocol frame: feeding them to the
+	// frame parser marks the session unhealthy (the TLS record header
+	// decodes as an oversize payload) and drops the connection. This
+	// window exists while the plaintext CapabilitiesSet Ok is still
+	// draining and while handler_tls_accept_init() initializes SSL, so
+	// both the backpressure retry and the very next poll tick are safe.
+	const bool defer_client_read =
+		status_ == X_TLS_ACCEPT_INIT && !client_ds_.ssl_init_done();
+	if (!defer_client_read) {
+		ssize_t r = client_ds_.read_from_net();
+		if (client_ds_.has_parse_error()) {
+			healthy = false; return -1;
+		}
+		if (r == 0) { healthy = false; return -1; }
+		if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+			healthy = false; return -1;
+		}
 	}
 
 handler_again:
@@ -830,16 +933,27 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 		return;
 	}
 
-	std::vector<uint8_t> stored_hash;
-	if (!derive_stored_hash(identity_->password, stored_hash)) {
-		send_error(1045, "Access denied for user");
-		healthy = false;
-		return;
+	// Two stored-credential shapes are accepted for PLAIN:
+	//   * caching_sha2_password `$A$...` (MySQL 8 default). Verify with
+	//     the core SHA-256 crypt routine. Previously this shape was
+	//     treated as a literal password, so every caching_sha2 X user
+	//     failed PLAIN authentication.
+	//   * cleartext or `*HEX40` mysql_native_password: verify the
+	//     mysql41 double-SHA1 form exactly as before.
+	bool password_ok = false;
+	if (identity_->password.size() >= 3 &&
+	    identity_->password.compare(0, 3, "$A$") == 0) {
+		password_ok = verify_caching_sha2_hash(identity_->password, password);
+	} else {
+		std::vector<uint8_t> stored_hash;
+		if (derive_stored_hash(identity_->password, stored_hash)) {
+			std::vector<uint8_t> input_hash_vec = mysqlx_mysql41_hash(password);
+			password_ok = input_hash_vec.size() == 20 &&
+			              stored_hash.size() == 20 &&
+			              CRYPTO_memcmp(input_hash_vec.data(), stored_hash.data(), 20) == 0;
+		}
 	}
-
-	std::vector<uint8_t> input_hash_vec = mysqlx_mysql41_hash(password);
-	if (input_hash_vec.size() != 20 ||
-	    CRYPTO_memcmp(input_hash_vec.data(), stored_hash.data(), 20) != 0) {
+	if (!password_ok) {
 		send_error(1045, "Access denied for user");
 		healthy = false;
 		return;
@@ -857,6 +971,15 @@ void MysqlxSession::handle_auth_plain(const std::string& auth_data) {
 		status_ = X_SESSION_CLOSING;
 		return;
 	}
+
+	// Retain the verified PLAIN secret for the mapped backend-auth
+	// fallback. The stored credential may be a hash and therefore cannot
+	// be replayed to the backend; this is the only copy of the plaintext
+	// we have. It is wiped on reset/destruction and only handed to a
+	// backend connection while the proxy->backend leg is TLS-active (see
+	// MysqlxConnection::send_authenticate_start).
+	secure_clear_string(frontend_plain_secret_);
+	frontend_plain_secret_ = password;
 
 	last_active_time_ = monotonic_time_ms();
 	send_auth_ok();
@@ -2013,6 +2136,27 @@ void MysqlxSession::enter_passthrough_for_test(int backend_fd) {
 
 void MysqlxSession::handler_tls_accept_init() {
 	if (!client_ds_.ssl_init_done()) {
+		// Flush the plaintext CapabilitiesSet Ok before creating the SSL
+		// object. write_to_net() enters its TLS branch as soon as ssl_
+		// exists, so initializing SSL while write_buf_ still holds the
+		// Ok would strand the acknowledgement forever: the client never
+		// starts its ClientHello and the handshake cannot progress.
+		// Preserve partial writes and EAGAIN: stay in this state until
+		// the plaintext buffer drains, then initialize TLS. poll() keeps
+		// POLLOUT armed while write_buffer_size() > 0.
+		if (client_ds_.write_buffer_size() > 0) {
+			const ssize_t wr = client_ds_.write_to_net();
+			if (wr < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+				// The client is gone (EPIPE/ECONNRESET/...). Do not keep
+				// retrying a dead socket or initialize TLS on top of it.
+				healthy = false;
+				status_ = X_SESSION_CLOSING;
+				return;
+			}
+			if (client_ds_.write_buffer_size() > 0) {
+				return;
+			}
+		}
 		SSL_CTX* ctx = thread_ptr_ ? thread_ptr_->get_ssl_ctx() : nullptr;
 		if (!ctx) {
 			// NO_SSL_CTX class — distinct from "handshake failed"
@@ -2332,6 +2476,26 @@ void MysqlxSession::handler_connecting_server() {
 					? identity_->backend_password
 					: identity_->password;
 			backend_conn_->set_backend_password(backend_password.c_str());
+
+			// Mapped fallback for frontend PLAIN: identity_->password is
+			// a stored hash, so replaying it as a backend secret cannot
+			// work. Hand the connection the verified frontend PLAIN
+			// secret, but only for the implicit mapped identity (same
+			// user, no explicit backend_username/backend_password). The
+			// connection itself gates PLAIN on tls_active_, so this can
+			// never leak the secret over a plaintext proxy->backend leg.
+			// Explicit service-account mappings keep their own
+			// credentials and continue to use MYSQL41.
+			const bool mapped_fallback =
+				identity_->backend_auth_mode == MysqlxBackendAuthMode::mapped &&
+				identity_->backend_username.empty() &&
+				identity_->backend_password.empty() &&
+				!frontend_plain_secret_.empty();
+			if (mapped_fallback) {
+				backend_conn_->set_backend_plain_password(frontend_plain_secret_.c_str());
+			} else {
+				backend_conn_->clear_backend_plain_password();
+			}
 		}
 	}
 

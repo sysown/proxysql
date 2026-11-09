@@ -117,6 +117,16 @@ public:
 	void set_backend_password(const char* p) { backend_password_ = p; }
 	void set_backend_schema(const char* s) { backend_schema_ = s; }
 
+	// Plaintext secret verified during a frontend PLAIN exchange. Only
+	// used for mapped backend authentication after the proxy->backend
+	// leg has actually completed a TLS handshake; it is never sent over
+	// a plaintext socket. A non-empty value switches the backend auth
+	// mechanism to PLAIN (one-shot AuthenticateStart -> AuthenticateOk)
+	// when tls_active_ is true. Cleared securely on auth completion,
+	// auth failure, reset() and destruction.
+	void set_backend_plain_password(const char* p);
+	void clear_backend_plain_password();
+
 	// Test-only accessor: returns the last value passed to set_backend_user().
 	// Exists so unit tests can verify that the session's backend-connection
 	// setup site correctly chose between identity_->backend_username
@@ -174,6 +184,8 @@ private:
 
 	std::string backend_user_;
 	std::string backend_password_;
+	std::string backend_plain_password_;
+	bool backend_auth_plain_active_ { false };
 	std::string backend_schema_;
 	std::vector<uint8_t> backend_challenge_;
 	MysqlxDataStream backend_ds_;
@@ -184,6 +196,7 @@ private:
 	MysqlxTlsErrorClass tls_error_class_ { MysqlxTlsErrorClass::UNKNOWN };
 	SSL_CTX* backend_ssl_ctx_;
 
+	int step_auth_impl();
 	int step_auth_capabilities_get();
 	int step_auth_capabilities_get_sent();
 	int step_auth_capabilities_set_sent();
@@ -219,6 +232,11 @@ public:
 		return auth_phase_notice_is_drainable(body, body_len);
 	}
 	void set_auth_state_for_test(BackendAuthState s) { auth_state_ = s; }
+	// Boolean-only credential observer used by the cleanup tests; the
+	// secret itself is never exposed through a test accessor.
+	bool has_backend_plain_password_for_test() const {
+		return !backend_plain_password_.empty();
+	}
 #endif
 };
 

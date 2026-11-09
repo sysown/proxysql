@@ -388,6 +388,30 @@ way to opt a single backend out of `mode=required`). Use it when one
 sensitive backend must always be encrypted under a deployment-wide
 `mode=disabled` or `mode=as_client` policy.
 
+#### Frontend PLAIN and caching_sha2_password backend accounts
+
+A frontend user that authenticates with PLAIN over proxy-terminated TLS
+may have a `$A$...` `caching_sha2_password` hash in the canonical
+`mysql_users.password` column (projected through `runtime_mysql_users`;
+`mysqlx_users` holds the optional X-specific policy/route fields and has
+no password column). The proxy verifies that hash directly and keeps
+the verified PLAIN secret only for the lifetime of that session. For an
+implicit `mapped` backend identity (same username, no explicit
+`backend_username` / `backend_password`), the secret is replayed to the
+backend with the X-Protocol PLAIN mechanism **only after the
+proxy→backend TLS handshake has completed**. It is never sent on a
+plaintext backend connection.
+
+Consequently, a `caching_sha2_password` backend account used through a
+mapped identity needs an encrypted backend leg: set
+`mysqlx-tls_backend_mode='required'` or enable
+`mysqlx_backend_endpoints.use_ssl=1` for that endpoint.
+With backend TLS disabled and no endpoint override, the proxy cannot
+safely replay the secret. It uses the historical MYSQL41 mechanism and the backend
+login will fail for a hash-only credential. Explicit service-account
+mappings keep using their own `backend_*` credentials and are not
+affected by this fallback.
+
 #### Migration notes from MySQL Router AsClient
 
 Pre-mode-aware ProxySQL implicitly behaved like Router's AsClient mode:
