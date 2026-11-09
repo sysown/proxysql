@@ -511,16 +511,21 @@ static std::string backendPid(PGconn* conn) {
     return pid;
 }
 
-static void test_untracked_set_does_not_leak() {
-    PGConnPtr admin = createNewConnection(ConnType::ADMIN);
+// The default hostgroup of the root user, the one BACKEND connections use; -1 if unknown.
+static int rootDefaultHostgroup(PGconn* admin) {
     std::string hg_s;
     if (admin) {
-        PGresult* res = PQexec(admin.get(), ("SELECT default_hostgroup FROM runtime_pgsql_users WHERE username=" +
+        PGresult* res = PQexec(admin, ("SELECT default_hostgroup FROM runtime_pgsql_users WHERE username=" +
             sqlQuote(cl.pgsql_root_username) + " LIMIT 1").c_str());
         if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) hg_s = PQgetvalue(res, 0, 0);
         PQclear(res);
     }
-    const int hg = hg_s.empty() ? -1 : std::stoi(hg_s);
+    return hg_s.empty() ? -1 : std::stoi(hg_s);
+}
+
+static void test_untracked_set_does_not_leak() {
+    PGConnPtr admin = createNewConnection(ConnType::ADMIN);
+    const int hg = rootDefaultHostgroup(admin.get());
     const std::vector<std::string> servers = (hg >= 0) ? snapshotServers(admin.get(), hg) : std::vector<std::string>{};
     const bool capped = !servers.empty() && reloadServers(admin.get(), hg, servers, true);
     if (!capped) {
@@ -568,8 +573,56 @@ static void test_untracked_set_does_not_leak() {
     ok(reloadServers(admin.get(), hg, servers, false), "servers of hostgroup %d restored", hg);
 }
 
+// ---------------------------------------------------------------------------
+// A client that connects with an empty search_path ('-c search_path=', what pg_dump files
+// set) gets a pooled backend opened with another path. The sync must send
+// SET search_path TO '' -- a SET with no value at all is a syntax error (42601) and the
+// client's first query fails. One backend connection, so B must reuse A's.
+// ---------------------------------------------------------------------------
+
+static const int EMPTY_SEARCH_PATH_TESTS = 4; // query ok, value, same backend, servers restored
+
+static void test_empty_search_path_syncs() {
+    PGConnPtr admin = createNewConnection(ConnType::ADMIN);
+    const int hg = rootDefaultHostgroup(admin.get());
+    const std::vector<std::string> servers = (hg >= 0) ? snapshotServers(admin.get(), hg) : std::vector<std::string>{};
+    if (servers.empty() || !reloadServers(admin.get(), hg, servers, true)) {
+        skip(EMPTY_SEARCH_PATH_TESTS - 1, "cannot limit hostgroup %d to one backend connection", hg);
+        ok(servers.empty() || reloadServers(admin.get(), hg, servers, false), "servers of hostgroup %d restored", hg);
+        return;
+    }
+
+    std::string a_pid;
+    {
+        PGConnPtr a = createNewConnection(ConnType::BACKEND);
+        a_pid = a ? backendPid(a.get()) : "";
+    }
+    usleep(200000); // let A's backend connection go back to the pool
+
+    PGConnPtr b = createNewConnection(ConnType::BACKEND, "-c search_path=");
+    std::string err = b ? "" : "no connection", value = "<no result>", b_pid;
+    if (b) {
+        PGresult* res = PQexec(b.get(), "SELECT pg_catalog.pg_backend_pid(), current_setting('search_path')");
+        if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) {
+            b_pid = PQgetvalue(res, 0, 0);
+            value = PQgetvalue(res, 0, 1);
+        } else {
+            err = PQerrorMessage(b.get());
+        }
+        PQclear(res);
+    }
+    ok(err.empty(), "empty search_path: first query of the client succeeds (%s)", err.c_str());
+    ok(value == "\"\"", "empty search_path: backend search_path is '\"\"' (got '%s')", value.c_str());
+    ok(!a_pid.empty() && b_pid == a_pid, "empty search_path: the sync ran on the reused backend (A pid %s, B pid %s)",
+        a_pid.c_str(), b_pid.c_str());
+    b.reset();
+    usleep(200000);
+    ok(reloadServers(admin.get(), hg, servers, false), "servers of hostgroup %d restored", hg);
+}
+
 int main(int argc, char** argv) {
     int total_tests = 2 + untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE + 1; // + servers restored
+    total_tests += EMPTY_SEARCH_PATH_TESTS;
 
 	for (const auto& test_case : test_cases) {
 		total_tests += test_case.commands.size();
@@ -685,6 +738,8 @@ int main(int argc, char** argv) {
     conn.reset();
     usleep(500000); // let its backend connection finish resetting before the pool is flushed
     test_untracked_set_does_not_leak();
+    usleep(500000);
+    test_empty_search_path_syncs();
 
     return exit_status();
 }

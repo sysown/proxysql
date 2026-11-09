@@ -1460,6 +1460,11 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 		if (set_transaction == false) {
 			if (no_quote) {
 				q = (char*)"SET %s TO %s";
+				// An empty list (search_path from '-c search_path=') would send a SET with no value,
+				// a syntax error that fails the client's query. '' is PostgreSQL's empty list.
+				if (var_value[strspn(var_value, " \t\r\n")] == '\0') {
+					q = (char*)"SET %s TO ''"; // the unused value argument is ignored by sprintf
+				}
 			}
 			else {
 				q = (char*)"SET %s TO '%s'"; // default
