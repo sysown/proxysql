@@ -134,6 +134,62 @@ int sha2_rounds_hex_value(char c) {
 	return -1;
 }
 
+bool is_hex_char(char c) {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+	       (c >= 'A' && c <= 'F');
+}
+
+struct Sha2HashShape {
+	unsigned int rounds_k = 0;
+	std::string salt;
+	std::string digest;
+};
+
+// Parse and validate the 70-byte caching_sha2_password verifier shape only.
+// No KDF is performed; the caller decides whether to verify or merely select
+// a mechanism.
+bool parse_caching_sha2_hash_shape(const std::string& stored, Sha2HashShape& out) {
+	if (stored.size() != 70) return false;
+	if (stored[0] != '$' || stored[1] != 'A' || stored[2] != '$' || stored[6] != '$') {
+		return false;
+	}
+	unsigned int rounds_k = 0;
+	for (size_t i = 3; i < 6; ++i) {
+		const int v = sha2_rounds_hex_value(stored[i]);
+		if (v < 0) return false;
+		rounds_k = (rounds_k << 4) | static_cast<unsigned int>(v);
+	}
+	// $A$000$ is rejected upstream (sha2_password-t.cc); do not let
+	// sha256_crypt_r silently clamp zero rounds to its 1000 minimum.
+	if (rounds_k == 0) return false;
+	const std::string salt = stored.substr(7, 20);
+	const std::string digest = stored.substr(27, 43);
+	// MySQL's generate_user_salt() keeps arbitrary 7-bit bytes, excluding
+	// only NUL and `$` (mysys/crypt_genhash_impl.cc). Those two cannot be
+	// embedded in the `$5$rounds=...$<salt>` setting we hand to crypt.
+	for (char c : salt) {
+		if (c == '\0' || c == '$') return false;
+	}
+	for (char c : digest) {
+		if (!is_sha256_crypt_char(c)) return false;
+	}
+	out.rounds_k = rounds_k;
+	out.salt = salt;
+	out.digest = digest;
+	return true;
+}
+
+bool is_recognized_stored_hash(const std::string& stored) {
+	if (stored.size() == 41 && stored[0] == '*') {
+		for (size_t i = 1; i < stored.size(); ++i) {
+			if (!is_hex_char(stored[i])) return false;
+		}
+		return true;
+	}
+	Sha2HashShape shape;
+	return parse_caching_sha2_hash_shape(stored, shape);
+}
+
 // Verify a MySQL caching_sha2_password stored hash without throwing.
 // Format (70 bytes): "$A$" + 3 uppercase-hex digits (rounds/1000) + "$"
 // + 20-char salt + 43-char digest. Malformed input MUST fail closed; the
@@ -149,47 +205,24 @@ bool verify_caching_sha2_hash(const std::string& stored, const std::string& pass
 	constexpr size_t MYSQL_MAX_PLAINTEXT_LENGTH = 256;
 	if (password.size() > MYSQL_MAX_PLAINTEXT_LENGTH) return false;
 	if (password.find('\0') != std::string::npos) return false;
-	if (stored.size() != 70) return false;
-	if (stored[0] != '$' || stored[1] != 'A' || stored[2] != '$' || stored[6] != '$') {
-		return false;
-	}
-	unsigned int rounds_k = 0;
-	for (size_t i = 3; i < 6; ++i) {
-		const int v = sha2_rounds_hex_value(stored[i]);
-		if (v < 0) return false;
-		rounds_k = (rounds_k << 4) | static_cast<unsigned int>(v);
-	}
-	// $A$000$ is rejected upstream (sha2_password-t.cc); do not let
-	// sha256_crypt_r silently clamp zero rounds to its 1000 minimum.
-	if (rounds_k == 0) return false;
-	const std::string salt = stored.substr(7, 20);
-	const std::string expected = stored.substr(27, 43);
-	// MySQL's generate_user_salt() keeps arbitrary 7-bit bytes, excluding
-	// only NUL and `$` (mysys/crypt_genhash_impl.cc). Those two cannot be
-	// embedded in the `$5$rounds=...$<salt>` setting we hand to crypt.
-	// The digest, by contrast, is produced by sha256_crypt and therefore
-	// uses the crypt base64 alphabet.
-	for (char c : salt) {
-		if (c == '\0' || c == '$') return false;
-	}
-	for (char c : expected) {
-		if (!is_sha256_crypt_char(c)) return false;
-	}
+	Sha2HashShape shape;
+	if (!parse_caching_sha2_hash_shape(stored, shape)) return false;
 
 	const std::string setting =
-		"$5$rounds=" + std::to_string(static_cast<unsigned long long>(rounds_k) * 1000ULL) +
-		"$" + salt;
+		"$5$rounds=" +
+		std::to_string(static_cast<unsigned long long>(shape.rounds_k) * 1000ULL) +
+		"$" + shape.salt;
 	char crypt_buf[128];
 	char* out = sha256_crypt_r(password.c_str(), setting.c_str(), crypt_buf, sizeof(crypt_buf));
 	if (out == nullptr) return false;
 	const std::string result(out);
 	const size_t digest_pos = result.rfind('$');
 	if (digest_pos == std::string::npos ||
-	    result.size() - digest_pos - 1 != expected.size()) {
+	    result.size() - digest_pos - 1 != shape.digest.size()) {
 		return false;
 	}
 	return CRYPTO_memcmp(result.data() + digest_pos + 1,
-	                     expected.data(), expected.size()) == 0;
+	                     shape.digest.data(), shape.digest.size()) == 0;
 }
 
 // Hard cap on the amount of bytes a single Compression message is allowed to
@@ -2490,20 +2523,22 @@ void MysqlxSession::handler_connecting_server() {
 					: identity_->password;
 			backend_conn_->set_backend_password(backend_password.c_str());
 
-			// Mapped fallback for frontend PLAIN: identity_->password is
-			// a stored hash, so replaying it as a backend secret cannot
-			// work. Hand the connection the verified frontend PLAIN
-			// secret, but only for the implicit mapped identity (same
-			// user, no explicit backend_username/backend_password). The
-			// connection itself gates PLAIN on tls_active_, so this can
-			// never leak the secret over a plaintext proxy->backend leg.
-			// Explicit service-account mappings keep their own
-			// credentials and continue to use MYSQL41.
+			// Mapped fallback for frontend PLAIN: only a fully recognized
+			// stored verifier (*+40 hex or valid 70-byte $A$ shape) is
+			// replay-incompatible. Cleartext, empty, and malformed stored
+			// passwords keep the historical MYSQL41 path. Hand the
+			// connection the verified frontend PLAIN secret only for the
+			// implicit mapped identity (same user, no explicit
+			// backend_username/backend_password). The connection itself
+			// gates PLAIN on verified TLS, so this can never leak the
+			// secret over a plaintext proxy->backend leg. Explicit
+			// service-account mappings keep their own credentials.
 			const bool mapped_fallback =
 				identity_->backend_auth_mode == MysqlxBackendAuthMode::mapped &&
 				identity_->backend_username.empty() &&
 				identity_->backend_password.empty() &&
-				frontend_plain_secret_present_;
+				frontend_plain_secret_present_ &&
+				is_recognized_stored_hash(identity_->password);
 			if (mapped_fallback) {
 				backend_conn_->set_backend_plain_password(frontend_plain_secret_.c_str());
 			} else {

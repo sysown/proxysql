@@ -584,6 +584,10 @@ int MysqlxConnection::step_auth_capabilities_set_sent() {
 bool MysqlxConnection::configure_plain_peer_verification() {
 	SSL* ssl = backend_ds_.get_ssl();
 	if (ssl == nullptr || address_.empty()) return false;
+	// OpenSSL treats a leading dot on the checked host as an implicit
+	// sub-domain pattern. Endpoint identities must be exact configured
+	// names/IPs, not suffix patterns.
+	if (address_[0] == '.') return false;
 	X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
 	if (param == nullptr) return false;
 

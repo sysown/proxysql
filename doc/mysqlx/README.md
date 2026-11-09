@@ -400,7 +400,7 @@ only for the lifetime of that session.
 
 For an implicit `mapped` backend identity (same username, no explicit
 `backend_username` / `backend_password`), the secret is replayed with the
-X-Protocol PLAIN mechanism only after all of the following hold:
+X-Protocol PLAIN mechanism only after all the following hold:
 
 1. the proxy→backend TLS handshake completed;
 2. the backend certificate chain verified against the core trust store
@@ -411,6 +411,13 @@ X-Protocol PLAIN mechanism only after all of the following hold:
    CN fallback when the certificate has no SAN), with SNI set to the
    configured hostname. Numeric IPv4 addresses must match an IP SAN;
    IPv6 backend connections are not currently supported.
+
+This replay path applies only when the stored credential is a fully
+recognized verifier: a `*` followed by 40 hex characters, or a structurally
+valid 70-byte `$A$...` hash. Cleartext stored mapped passwords keep the
+historical MYSQL41 mechanism and do not acquire the strict PLAIN backend
+trust requirement. Malformed verifier-like strings are not treated as
+hashes.
 
 If any check fails, PLAIN is not selected and the backend authentication
 fails closed. The secret is never sent on a plaintext backend connection.
