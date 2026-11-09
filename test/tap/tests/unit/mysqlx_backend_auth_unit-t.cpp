@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cstring>
 #include <poll.h>
+#include <string>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
@@ -34,6 +35,22 @@ static void write_x_frame(int fd, uint8_t msg_type, const uint8_t* payload, size
 	if (payload_len > 0) {
 		write(fd, payload, payload_len);
 	}
+}
+
+static std::vector<uint8_t> build_x_frame(uint8_t msg_type,
+                                         const uint8_t* payload,
+                                         size_t payload_len) {
+	const uint32_t size = static_cast<uint32_t>(payload_len) + 1;
+	std::vector<uint8_t> frame(5 + payload_len);
+	frame[0] = size & 0xFF;
+	frame[1] = (size >> 8) & 0xFF;
+	frame[2] = (size >> 16) & 0xFF;
+	frame[3] = (size >> 24) & 0xFF;
+	frame[4] = msg_type;
+	if (payload_len > 0) {
+		memcpy(frame.data() + 5, payload, payload_len);
+	}
+	return frame;
 }
 
 static ssize_t read_x_frame_with_timeout(int fd, uint8_t* buf, size_t buf_size, int timeout_ms) {
@@ -84,7 +101,7 @@ static SSL_CTX* create_test_ssl_ctx() {
 	X509_set_pubkey(x509, pkey);
 	X509_NAME* name = X509_NAME_new();
 	X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-		(unsigned char*)"test", -1, -1, 0);
+		(const unsigned char*)"test", -1, -1, 0);
 	X509_set_subject_name(x509, name);
 	X509_set_issuer_name(x509, name);
 	X509_NAME_free(name);
@@ -93,6 +110,164 @@ static SSL_CTX* create_test_ssl_ctx() {
 	SSL_CTX_use_PrivateKey(ctx, pkey);
 	X509_free(x509);
 	EVP_PKEY_free(pkey);
+	return ctx;
+}
+
+static int permissive_peer_verify_cb(int, X509_STORE_CTX*) {
+	// Mirrors src/proxy_tls.cpp::callback_ssl_verify_peer. The shared core
+	// context accepts every certificate; the PLAIN peer check must not rely
+	// on this inherited callback.
+	return 1;
+}
+
+struct TestCa {
+	X509* cert = nullptr;
+	EVP_PKEY* key = nullptr;
+	~TestCa() {
+		X509_free(cert);
+		EVP_PKEY_free(key);
+	}
+};
+
+static EVP_PKEY* generate_test_rsa_key() {
+	EVP_PKEY* pkey = EVP_PKEY_new();
+	RSA* rsa = RSA_new();
+	BIGNUM* bn = BN_new();
+	if (!pkey || !rsa || !bn ||
+	    BN_set_word(bn, RSA_F4) != 1 ||
+	    RSA_generate_key_ex(rsa, 2048, bn, nullptr) != 1) {
+		BN_free(bn);
+		RSA_free(rsa);
+		EVP_PKEY_free(pkey);
+		return nullptr;
+	}
+	BN_free(bn);
+	EVP_PKEY_assign_RSA(pkey, rsa);
+	return pkey;
+}
+
+static bool add_x509_extension(X509* cert, X509* issuer, int nid, const char* value) {
+	X509V3_CTX ctx;
+	X509V3_set_ctx(&ctx, issuer, cert, nullptr, nullptr, 0);
+	X509_EXTENSION* ext = X509V3_EXT_conf_nid(nullptr, &ctx, nid,
+	                                          const_cast<char*>(value));
+	if (!ext) return false;
+	const int rc = X509_add_ext(cert, ext, -1);
+	X509_EXTENSION_free(ext);
+	return rc == 1;
+}
+
+static bool create_test_ca(TestCa& ca) {
+	ca.key = generate_test_rsa_key();
+	if (!ca.key) return false;
+	ca.cert = X509_new();
+	if (!ca.cert) return false;
+	X509_set_version(ca.cert, 2);
+	ASN1_INTEGER_set(X509_get_serialNumber(ca.cert), 1);
+	X509_gmtime_adj(X509_get_notBefore(ca.cert), 0);
+	X509_gmtime_adj(X509_get_notAfter(ca.cert), 31536000L);
+	X509_set_pubkey(ca.cert, ca.key);
+	X509_NAME* name = X509_NAME_new();
+	if (!name) return false;
+	X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+		(const unsigned char*)"ProxySQL MySQLX Test CA", -1, -1, 0);
+	X509_set_subject_name(ca.cert, name);
+	X509_set_issuer_name(ca.cert, name);
+	X509_NAME_free(name);
+	if (!add_x509_extension(ca.cert, ca.cert, NID_basic_constraints,
+	                        "critical,CA:TRUE")) {
+		return false;
+	}
+	return X509_sign(ca.cert, ca.key, EVP_sha256()) != 0;
+}
+
+static SSL_CTX* create_signed_backend_peer_ctx(const TestCa& ca, const char* san) {
+	SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+	if (!ctx) return nullptr;
+	SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+
+	EVP_PKEY* key = generate_test_rsa_key();
+	X509* cert = X509_new();
+	if (!key || !cert) {
+		EVP_PKEY_free(key);
+		X509_free(cert);
+		SSL_CTX_free(ctx);
+		return nullptr;
+	}
+	X509_set_version(cert, 2);
+	ASN1_INTEGER_set(X509_get_serialNumber(cert), 2);
+	X509_gmtime_adj(X509_get_notBefore(cert), 0);
+	X509_gmtime_adj(X509_get_notAfter(cert), 31536000L);
+	X509_set_pubkey(cert, key);
+
+	X509_NAME* name = X509_NAME_new();
+	if (!name) {
+		EVP_PKEY_free(key);
+		X509_free(cert);
+		SSL_CTX_free(ctx);
+		return nullptr;
+	}
+	X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+		(const unsigned char*)"backend.test", -1, -1, 0);
+	X509_set_subject_name(cert, name);
+	X509_set_issuer_name(cert, X509_get_subject_name(ca.cert));
+	X509_NAME_free(name);
+
+	if (!add_x509_extension(cert, ca.cert, NID_basic_constraints,
+	                        "critical,CA:FALSE") ||
+	    (san != nullptr && *san != '\0' &&
+	     !add_x509_extension(cert, ca.cert, NID_subject_alt_name, san)) ||
+	    X509_sign(cert, ca.key, EVP_sha256()) == 0) {
+		EVP_PKEY_free(key);
+		X509_free(cert);
+		SSL_CTX_free(ctx);
+		return nullptr;
+	}
+
+	const bool ok_ctx =
+		SSL_CTX_use_certificate(ctx, cert) == 1 &&
+		SSL_CTX_use_PrivateKey(ctx, key) == 1 &&
+		SSL_CTX_check_private_key(ctx) == 1;
+	X509_free(cert);
+	EVP_PKEY_free(key);
+	if (!ok_ctx) {
+		SSL_CTX_free(ctx);
+		return nullptr;
+	}
+	return ctx;
+}
+
+static SSL_CTX* create_permissive_shared_ctx(X509* trusted_ca) {
+	// Same shape as production: a server-method core SSL_CTX carrying a
+	// local certificate, with the permissive core verify callback installed.
+	SSL_CTX* ctx = create_test_ssl_ctx();
+	if (!ctx) return nullptr;
+	if (trusted_ca != nullptr &&
+	    X509_STORE_add_cert(SSL_CTX_get_cert_store(ctx), trusted_ca) != 1) {
+		SSL_CTX_free(ctx);
+		return nullptr;
+	}
+	SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE,
+	                   permissive_peer_verify_cb);
+	return ctx;
+}
+
+static bool enable_anonymous_tls12(SSL_CTX* ctx) {
+	if (!ctx) return false;
+	SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+	SSL_CTX_set_max_proto_version(ctx, TLS1_2_VERSION);
+	SSL_CTX_set_security_level(ctx, 0);
+	// Server-side ADH suites need group parameters; AECDH suites do not.
+	SSL_CTX_set_dh_auto(ctx, 1);
+	return SSL_CTX_set_cipher_list(ctx, "aNULL:@SECLEVEL=0") == 1;
+}
+
+static SSL_CTX* create_anonymous_backend_peer_ctx() {
+	SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+	if (!enable_anonymous_tls12(ctx)) {
+		SSL_CTX_free(ctx);
+		return nullptr;
+	}
 	return ctx;
 }
 
@@ -179,6 +354,647 @@ static bool server_write_plain(SSL* server_ssl, BIO* swbio, int peer_fd,
 	int n = SSL_write(server_ssl, data, static_cast<int>(len));
 	if (n != static_cast<int>(len)) return false;
 	return drain_wbio_to_fd(swbio, peer_fd) >= 0;
+}
+
+struct PlainTlsPeerResult {
+	bool cap_exchange_ok = false;
+	bool handshake_completed = false;
+	// Actual client-side SSL state, independent of the driver's early-break
+	// behavior on conn.step_auth() < 0.
+	bool client_tls_completed = false;
+	bool auth_error = false;
+	bool saw_auth_start = false;
+	std::string mechanism;
+	std::string auth_data;
+	std::vector<uint8_t> ciphertext;
+};
+
+// Drive the shipped backend auth state machine through CapabilitiesGet/Set
+// and a real TLS handshake against a test peer, then capture whether an
+// AuthenticateStart(PLAIN) reached the peer. The connection object is the
+// production one; only the peer and its certificate are test-owned.
+static PlainTlsPeerResult run_plain_tls_peer_case(
+	SSL_CTX* shared_ctx,
+	SSL_CTX* peer_ctx,
+	const char* endpoint,
+	const char* secret) {
+	PlainTlsPeerResult result;
+	int fds[2];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return result;
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_address(endpoint);
+	conn.set_backend_user("plainuser");
+	conn.set_backend_schema("testdb");
+	conn.set_backend_password("$A$005$not-a-replayable-secret");
+	if (secret != nullptr) {
+		// "" is a PRESENT empty credential; nullptr means absent.
+		conn.set_backend_plain_password(secret);
+	}
+	conn.set_backend_tls_required(true);
+	conn.set_backend_tls_fallback_allowed(false);
+	conn.set_ssl_ctx(shared_ctx);
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	uint8_t buf[4096];
+	ssize_t r = -1;
+	if (conn.step_auth() != 1) goto done;
+	r = read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	if (r < 5 || buf[4] != Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET) goto done;
+
+	{
+		Mysqlx::Connection::Capabilities caps;
+		std::string caps_str;
+		caps.SerializeToString(&caps_str);
+		write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+			reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+	}
+	if (conn.step_auth() != 1) goto done;
+	r = read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	if (r < 5 || buf[4] != Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET) goto done;
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_OK, nullptr, 0);
+	result.cap_exchange_ok = true;
+
+	{
+		// Enter BACKEND_AUTH_TLS_HANDSHAKE and emit the first ClientHello.
+		conn.step_auth();
+		SSL* server_ssl = SSL_new(peer_ctx);
+		BIO* srbio = BIO_new(BIO_s_mem());
+		BIO* swbio = BIO_new(BIO_s_mem());
+		if (!server_ssl || !srbio || !swbio) {
+			SSL_free(server_ssl);
+			BIO_free(srbio);
+			BIO_free(swbio);
+			goto done;
+		}
+		SSL_set_bio(server_ssl, srbio, swbio);
+		SSL_set_accept_state(server_ssl);
+
+		result.handshake_completed = drive_backend_tls_handshake(
+			conn, fds[1], server_ssl, srbio, swbio, &result.ciphertext);
+		// Capture the real client-side handshake state even when the driver
+		// broke out early on an auth rejection.
+		result.client_tls_completed =
+			conn.backend_ds().ssl_handshake_complete();
+		result.auth_error =
+			conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR;
+
+		const std::string frame = read_server_plain(
+			server_ssl, srbio, fds[1], 500, &result.ciphertext);
+		if (frame.size() >= 5 &&
+		    static_cast<uint8_t>(frame[4]) ==
+		        Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START) {
+			Mysqlx::Session::AuthenticateStart auth_start;
+			if (auth_start.ParseFromArray(
+					frame.data() + 5, static_cast<int>(frame.size() - 5))) {
+				result.saw_auth_start = true;
+				result.mechanism = auth_start.mech_name();
+				result.auth_data = auth_start.auth_data();
+			}
+		}
+		SSL_free(server_ssl);
+	}
+
+done:
+	close(fds[1]);
+	// conn owns fds[0] and closes it in its destructor.
+	return result;
+}
+
+static void expect_plain_tls_rejected(const PlainTlsPeerResult& result,
+                                      const char* label) {
+	ok(result.cap_exchange_ok,
+	   "%s: CapabilitiesGet/Set exchange completed", label);
+	ok(!result.client_tls_completed,
+	   "%s: client TLS handshake did not complete for the rejected peer", label);
+	ok(result.auth_error,
+	   "%s: auth state reports BACKEND_AUTH_ERROR", label);
+	ok(!result.saw_auth_start,
+	   "%s: no AuthenticateStart is sent to the rejected peer", label);
+	ok(result.auth_data.find("plain-secret") == std::string::npos,
+	   "%s: verified PLAIN secret is not replayed", label);
+}
+
+static void test_plain_tls_trusted_dns_positive() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "plain-tls-dns: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "DNS:backend.trusted.test");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-tls-dns: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	ok(SSL_CTX_get_verify_callback(shared_ctx) != nullptr,
+	   "plain-tls-dns: inherited permissive verify callback is installed");
+
+	const PlainTlsPeerResult result = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "backend.trusted.test", "plain-secret");
+	ok(result.handshake_completed,
+	   "plain-tls-dns: trusted matching DNS peer completes TLS");
+	ok(result.saw_auth_start && result.mechanism == "PLAIN",
+	   "plain-tls-dns: matching DNS peer receives PLAIN");
+	ok(result.auth_data ==
+	       std::string("testdb") + std::string("\0", 1) + "plainuser" +
+	           std::string("\0", 1) + "plain-secret",
+	   "plain-tls-dns: PLAIN data is schema\\0user\\0verified-secret");
+
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_plain_tls_trusted_ip_positive() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "plain-tls-ip: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "IP:127.0.0.1");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-tls-ip: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	const PlainTlsPeerResult result = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "127.0.0.1", "plain-secret");
+	ok(result.handshake_completed,
+	   "plain-tls-ip: trusted matching IP peer completes TLS");
+	ok(result.saw_auth_start && result.mechanism == "PLAIN",
+	   "plain-tls-ip: matching IP SAN peer receives PLAIN");
+
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_plain_tls_trusted_ipv6_positive() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "plain-tls-ipv6: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "IP:::1");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-tls-ipv6: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	// Socketpair transport; the endpoint string is only the peer identity.
+	const PlainTlsPeerResult result = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "::1", "plain-secret");
+	ok(result.handshake_completed,
+	   "plain-tls-ipv6: trusted matching IPv6 peer completes TLS");
+	ok(result.saw_auth_start && result.mechanism == "PLAIN",
+	   "plain-tls-ipv6: IPv6 IP SAN peer receives PLAIN");
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_plain_tls_rejects_empty_identity() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "plain-tls-empty-identity: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "DNS:backend.trusted.test");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-tls-empty-identity: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	// A trusted chain is not enough without a configured endpoint identity:
+	// fail closed rather than falling back to chain-only acceptance.
+	const PlainTlsPeerResult result = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "", "plain-secret");
+	expect_plain_tls_rejected(result, "plain-tls-empty-identity");
+	ok(SSL_CTX_get_verify_callback(shared_ctx) == permissive_peer_verify_cb,
+	   "plain-tls-empty-identity: shared permissive callback is unchanged");
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_plain_tls_rejects_untrusted_cert() {
+	diag(">>> %s", __func__);
+	// Isolate chain verification from hostname verification: the untrusted
+	// leaf has the SAME SAN DNS name as the endpoint, but its issuing CA is
+	// deliberately absent from the shared trust store. A hostname-only
+	// implementation must not pass this test.
+	TestCa untrusted_ca;
+	SSL_CTX* shared_ctx = create_permissive_shared_ctx(nullptr);
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(untrusted_ca)) {
+		ok(false, "plain-tls-untrusted: untrusted CA created");
+		SSL_CTX_free(shared_ctx);
+		return;
+	}
+	peer_ctx = create_signed_backend_peer_ctx(
+		untrusted_ca, "DNS:backend.trusted.test");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-tls-untrusted: contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	ok(SSL_CTX_get_verify_callback(shared_ctx) != nullptr,
+	   "plain-tls-untrusted: inherited permissive verify callback is installed");
+	const PlainTlsPeerResult result = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "backend.trusted.test", "plain-secret");
+	expect_plain_tls_rejected(result, "plain-tls-untrusted");
+	ok(SSL_CTX_get_verify_callback(shared_ctx) == permissive_peer_verify_cb,
+	   "plain-tls-untrusted: shared permissive callback is unchanged");
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_plain_tls_rejects_hostname_mismatch() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "plain-tls-host-mismatch: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "DNS:other.test");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-tls-host-mismatch: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	const PlainTlsPeerResult result = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "backend.trusted.test", "plain-secret");
+	expect_plain_tls_rejected(result, "plain-tls-host-mismatch");
+	ok(SSL_CTX_get_verify_callback(shared_ctx) == permissive_peer_verify_cb,
+	   "plain-tls-host-mismatch: shared permissive callback is unchanged");
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_plain_tls_rejects_ip_mismatch() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "plain-tls-ip-mismatch: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "IP:127.0.0.2");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-tls-ip-mismatch: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	const PlainTlsPeerResult result = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "127.0.0.1", "plain-secret");
+	expect_plain_tls_rejected(result, "plain-tls-ip-mismatch");
+	ok(SSL_CTX_get_verify_callback(shared_ctx) == permissive_peer_verify_cb,
+	   "plain-tls-ip-mismatch: shared permissive callback is unchanged");
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_plain_tls_rejects_missing_cert() {
+	diag(">>> %s", __func__);
+	SSL_CTX* shared_ctx = create_permissive_shared_ctx(nullptr);
+	if (!shared_ctx) {
+		ok(false, "plain-tls-missing-cert: shared context created");
+		return;
+	}
+	SSL_CTX* peer_ctx = create_anonymous_backend_peer_ctx();
+	if (!peer_ctx || !enable_anonymous_tls12(shared_ctx)) {
+		// OpenSSL builds without aNULL cannot exercise a genuinely
+		// certificate-less TLS 1.2 peer. The defensive "no peer cert"
+		// branch still requires the same fail-closed check; label this gap.
+		diag("plain-tls-missing-cert: aNULL TLS 1.2 unavailable; skipping");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		skip(6, "anonymous TLS 1.2 cipher unavailable in this OpenSSL build");
+		return;
+	}
+	// Control: the same certificate-less TLS 1.2 contexts must be capable of
+	// completing a handshake and sending the historical MYSQL41 mechanism
+	// when no frontend-derived PLAIN secret is present. Without this, a "no
+	// shared cipher" failure would make the negative test pass trivially.
+	const PlainTlsPeerResult control = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "backend.trusted.test", nullptr);
+	const bool control_ok =
+		control.cap_exchange_ok && control.handshake_completed &&
+		control.saw_auth_start && control.mechanism == "MYSQL41";
+	ok(control_ok,
+	   "plain-tls-missing-cert: control completes anonymous TLS and sends MYSQL41");
+	if (!control_ok) {
+		ok(false,
+		   "plain-tls-missing-cert: fixture cannot exercise certificate-less PLAIN guard");
+		skip(4, "anonymous TLS 1.2 fixture did not complete; negative case not exercised");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+
+	// Real anonymous TLS 1.2: the peer sends no certificate. The PLAIN path
+	// may complete the TLS handshake permissively (historical non-PLAIN
+	// semantics), but must fail auth before any AuthenticateStart/replay.
+	const PlainTlsPeerResult result = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "backend.trusted.test", "plain-secret");
+	ok(result.cap_exchange_ok,
+	   "plain-tls-missing-cert: CapabilitiesGet/Set exchange completed");
+	ok(result.auth_error,
+	   "plain-tls-missing-cert: auth fails closed without a peer certificate");
+	ok(!result.saw_auth_start,
+	   "plain-tls-missing-cert: no AuthenticateStart is sent");
+	ok(result.auth_data.find("plain-secret") == std::string::npos,
+	   "plain-tls-missing-cert: verified PLAIN secret is not replayed");
+	ok(SSL_CTX_get_verify_callback(shared_ctx) == permissive_peer_verify_cb,
+	   "plain-tls-missing-cert: shared permissive callback is unchanged");
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_plain_tls_empty_secret_presence() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "plain-empty-secret: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "DNS:backend.trusted.test");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-empty-secret: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+
+	// setter("") is a PRESENT empty credential and must select PLAIN.
+	const PlainTlsPeerResult present = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "backend.trusted.test", "");
+	ok(present.handshake_completed,
+	   "plain-empty-secret: trusted TLS completes");
+	ok(present.saw_auth_start && present.mechanism == "PLAIN",
+	   "plain-empty-secret: empty present credential selects PLAIN");
+	ok(present.auth_data ==
+	       std::string("testdb") + std::string("\0", 1) + "plainuser" +
+	           std::string("\0", 1),
+	   "plain-empty-secret: PLAIN data carries an empty password field");
+
+	// nullptr (or clear) means ABSENT and must keep historical MYSQL41.
+	const PlainTlsPeerResult absent = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, "backend.trusted.test", nullptr);
+	ok(absent.handshake_completed,
+	   "plain-empty-secret: trusted TLS completes for absent credential");
+	ok(absent.saw_auth_start && absent.mechanism == "MYSQL41",
+	   "plain-empty-secret: absent credential keeps MYSQL41");
+	ok(absent.auth_data.find("testdb") == 0,
+	   "plain-empty-secret: MYSQL41 carries the schema/user prefix");
+
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_backend_auth_tls_fatal_read_with_stale_eagain() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "tls-fatal-eagain: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "DNS:backend.trusted.test");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "tls-fatal-eagain: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_address("backend.trusted.test");
+	conn.set_backend_user("plainuser");
+	conn.set_backend_schema("testdb");
+	conn.set_backend_password("$A$005$not-a-replayable-secret");
+	conn.set_backend_plain_password("plain-secret");
+	conn.set_backend_tls_required(true);
+	conn.set_backend_tls_fallback_allowed(false);
+	conn.set_ssl_ctx(shared_ctx);
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	uint8_t buf[4096];
+	conn.step_auth();
+	read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	{
+		Mysqlx::Connection::Capabilities caps;
+		std::string caps_str;
+		caps.SerializeToString(&caps_str);
+		write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+			reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+	}
+	conn.step_auth();
+	read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_OK, nullptr, 0);
+	conn.step_auth();
+
+	SSL* server_ssl = SSL_new(peer_ctx);
+	BIO* srbio = BIO_new(BIO_s_mem());
+	BIO* swbio = BIO_new(BIO_s_mem());
+	SSL_set_bio(server_ssl, srbio, swbio);
+	SSL_set_accept_state(server_ssl);
+	ok(drive_backend_tls_handshake(conn, fds[1], server_ssl, srbio, swbio),
+	   "tls-fatal-eagain: trusted TLS handshake completed");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_AUTHENTICATE_START_SENT,
+	   "tls-fatal-eagain: PLAIN AuthenticateStart sent");
+
+	// A complete but corrupt TLS record must be a fatal read. errno is
+	// deliberately left at EAGAIN, mimicking the stale errno that a prior
+	// nonblocking read can leave behind.
+	const uint8_t corrupt_record[] = {
+		0x17, 0x03, 0x03, 0x00, 0x05, 0xde, 0xad, 0xbe, 0xef, 0x00
+	};
+	send(fds[1], corrupt_record, sizeof(corrupt_record), MSG_NOSIGNAL);
+
+	int rc = 1;
+	for (int i = 0; i < 8 && rc == 1; ++i) {
+		errno = EAGAIN;
+		rc = conn.step_auth();
+		usleep(1000);
+	}
+	ok(rc == -1,
+	   "tls-fatal-eagain: fatal SSL_read fails auth despite stale EAGAIN");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "tls-fatal-eagain: auth state ERROR promptly");
+
+	SSL_free(server_ssl);
+	close(fds[1]);
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_backend_auth_tls_notice_ok_then_eof() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "tls-notice-ok-eof: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "DNS:backend.trusted.test");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "tls-notice-ok-eof: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_address("backend.trusted.test");
+	conn.set_backend_user("plainuser");
+	conn.set_backend_schema("testdb");
+	conn.set_backend_password("$A$005$not-a-replayable-secret");
+	conn.set_backend_plain_password("plain-secret");
+	conn.set_backend_tls_required(true);
+	conn.set_backend_tls_fallback_allowed(false);
+	conn.set_ssl_ctx(shared_ctx);
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	uint8_t buf[4096];
+	conn.step_auth();
+	read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	{
+		Mysqlx::Connection::Capabilities caps;
+		std::string caps_str;
+		caps.SerializeToString(&caps_str);
+		write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+			reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+	}
+	conn.step_auth();
+	read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_OK, nullptr, 0);
+	conn.step_auth();
+
+	SSL* server_ssl = SSL_new(peer_ctx);
+	BIO* srbio = BIO_new(BIO_s_mem());
+	BIO* swbio = BIO_new(BIO_s_mem());
+	SSL_set_bio(server_ssl, srbio, swbio);
+	SSL_set_accept_state(server_ssl);
+	ok(drive_backend_tls_handshake(conn, fds[1], server_ssl, srbio, swbio),
+	   "tls-notice-ok-eof: trusted TLS handshake completed");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_AUTHENTICATE_START_SENT,
+	   "tls-notice-ok-eof: PLAIN AuthenticateStart sent");
+
+	Mysqlx::Notice::Frame notice;
+	notice.set_type(Mysqlx::Notice::Frame_Type_SESSION_STATE_CHANGED);
+	notice.set_scope(Mysqlx::Notice::Frame_Scope_GLOBAL);
+	std::string notice_str;
+	notice.SerializeToString(&notice_str);
+	const std::vector<uint8_t> notice_frame = build_x_frame(
+		Mysqlx::ServerMessages_Type_NOTICE,
+		reinterpret_cast<const uint8_t*>(notice_str.data()), notice_str.size());
+	Mysqlx::Session::AuthenticateOk auth_ok;
+	std::string ok_str;
+	auth_ok.SerializeToString(&ok_str);
+	const std::vector<uint8_t> ok_frame = build_x_frame(
+		Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_OK,
+		reinterpret_cast<const uint8_t*>(ok_str.data()), ok_str.size());
+	const bool sent_notice = server_write_plain(
+		server_ssl, swbio, fds[1], notice_frame.data(), notice_frame.size());
+	const bool sent_ok = server_write_plain(
+		server_ssl, swbio, fds[1], ok_frame.data(), ok_frame.size());
+	ok(sent_notice && sent_ok, "tls-notice-ok-eof: NOTICE and OK queued");
+	// Deliberately close without a TLS close_notify: data and FIN can arrive
+	// in the same read batch. The peer is gone either way, so there is no
+	// usable authenticated connection to preserve.
+	close(fds[1]);
+
+	int rc = 1;
+	for (int i = 0; i < 8 && rc == 1; ++i) {
+		rc = conn.step_auth();
+		usleep(1000);
+	}
+	ok(rc == -1,
+	   "tls-notice-ok-eof: buffered OK plus EOF fails auth promptly");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "tls-notice-ok-eof: auth state ERROR; peer is already unusable");
+
+	SSL_free(server_ssl);
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+static void test_send_authenticate_start_requires_verified_peer_gate() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("plainuser");
+	conn.set_backend_schema("testdb");
+	conn.set_backend_password("$A$005$not-a-replayable-secret");
+	conn.set_backend_plain_password("plain-secret");
+	conn.set_tls_active(true);
+	conn.init_backend_ds(fds[0]);
+	ok(conn.send_authenticate_start() == -1,
+	   "plain-gate: tls_active without verified peer fails closed");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "plain-gate: auth state is BACKEND_AUTH_ERROR");
+	uint8_t buf[4096];
+	const ssize_t r = read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 100);
+	ok(r < 5, "plain-gate: no AuthenticateStart is emitted on the unverified path");
+	conn.set_fd(-1);
+	close(fds[0]);
+	close(fds[1]);
+}
+
+static void test_start_connect_persists_configured_host() {
+	diag(">>> %s", __func__);
+	MysqlxConnection conn;
+	// Port 1 is intentionally not a backend. start_connect() must retain the
+	// operator-configured identity, not the resolved socket address, before
+	// any TLS/PLAIN decision. "localhost" exercises that distinction.
+	conn.start_connect("localhost", 1);
+	ok(std::string(conn.get_address()) == "localhost",
+	   "start_connect persists the configured DNS identity, not the resolved IP");
 }
 
 static void test_backend_auth_state_transitions() {
@@ -749,11 +1565,21 @@ static ssize_t read_auth_start_frame(int fd, uint8_t* buf, size_t buf_size,
 static void test_backend_auth_plain_over_tls() {
 	diag(">>> %s", __func__);
 	// Both contexts use TLS_server_method() like the production shared
-	// core context. The peer requests an optional client certificate and
-	// rejects any presented certificate; the backend client must clear
-	// its inherited frontend-server identity and therefore send none.
-	SSL_CTX* shared_ctx = create_test_ssl_ctx();
-	SSL_CTX* peer_ctx = create_test_ssl_ctx();
+	// core context. The shared context carries the same permissive verify
+	// callback as src/proxy_tls.cpp; the leaf is signed by a CA that is in
+	// the shared context's trust store and matches the configured DNS name.
+	// The peer requests an optional client certificate and rejects any
+	// presented certificate; the backend client must clear its inherited
+	// frontend-server identity and therefore send none.
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "plain-tls: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "DNS:backend.trusted.test");
 	if (!shared_ctx || !peer_ctx) {
 		ok(false, "plain-tls: test TLS contexts created");
 		SSL_CTX_free(shared_ctx);
@@ -767,6 +1593,7 @@ static void test_backend_auth_plain_over_tls() {
 
 	MysqlxConnection conn;
 	conn.set_fd(fds[0]);
+	conn.set_address("backend.trusted.test");
 	conn.set_backend_user("plainuser");
 	conn.set_backend_schema("testdb");
 	conn.set_backend_password("$A$005$not-a-replayable-secret");
@@ -871,8 +1698,15 @@ static void test_backend_auth_plain_over_tls() {
 // or TLS alert) must fail auth promptly instead of spinning on POLLHUP.
 static void test_backend_auth_tls_peer_close_fails() {
 	diag(">>> %s", __func__);
-	SSL_CTX* shared_ctx = create_test_ssl_ctx();
-	SSL_CTX* peer_ctx = create_test_ssl_ctx();
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "tls-eof: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	peer_ctx = create_signed_backend_peer_ctx(ca, "DNS:backend.trusted.test");
 	if (!shared_ctx || !peer_ctx) {
 		ok(false, "tls-eof: contexts created");
 		SSL_CTX_free(shared_ctx);
@@ -883,6 +1717,7 @@ static void test_backend_auth_tls_peer_close_fails() {
 	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
 	MysqlxConnection conn;
 	conn.set_fd(fds[0]);
+	conn.set_address("backend.trusted.test");
 	conn.set_backend_user("plainuser");
 	conn.set_backend_schema("testdb");
 	conn.set_backend_plain_password("plain-secret");
@@ -1119,6 +1954,22 @@ int main() {
 	test_backend_auth_tls_peer_close_fails();
 	test_backend_auth_plain_not_used_without_tls();
 	test_backend_auth_plain_failure_clears_secret();
+
+	// Backend peer identity must be verified before the frontend PLAIN
+	// secret is replayed. This is the #6553 P1 regression matrix.
+	test_plain_tls_trusted_dns_positive();
+	test_plain_tls_trusted_ip_positive();
+	test_plain_tls_trusted_ipv6_positive();
+	test_plain_tls_rejects_untrusted_cert();
+	test_plain_tls_rejects_hostname_mismatch();
+	test_plain_tls_rejects_ip_mismatch();
+	test_plain_tls_rejects_missing_cert();
+	test_plain_tls_rejects_empty_identity();
+	test_plain_tls_empty_secret_presence();
+	test_send_authenticate_start_requires_verified_peer_gate();
+	test_backend_auth_tls_fatal_read_with_stale_eagain();
+	test_backend_auth_tls_notice_ok_then_eof();
+	test_start_connect_persists_configured_host();
 
 	// Auth-phase NOTICE per-state policy (#5695 part 2).
 	test_auth_phase_notice_known_types_drained();

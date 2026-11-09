@@ -117,7 +117,14 @@ static int reject_client_cert_cb(int, X509_STORE_CTX*) {
 	return 0;
 }
 
-static SSL_CTX* create_test_ssl_ctx() {
+static int permissive_peer_verify_cb(int, X509_STORE_CTX*) {
+	// Mirrors src/proxy_tls.cpp::callback_ssl_verify_peer. The shared core
+	// context accepts every certificate; strict backend PLAIN peer checks
+	// must override this per SSL object instead of trusting it.
+	return 1;
+}
+
+static SSL_CTX* create_test_ssl_ctx(const char* san = nullptr) {
 	SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
 	if (!ctx) return nullptr;
 	SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
@@ -138,10 +145,23 @@ static SSL_CTX* create_test_ssl_ctx() {
 
 	X509_NAME* name = X509_NAME_new();
 	X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-		(unsigned char*)"test", -1, -1, 0);
+		(const unsigned char*)"test", -1, -1, 0);
 	X509_set_subject_name(x509, name);
 	X509_set_issuer_name(x509, name);
 	X509_NAME_free(name);
+
+	if (san != nullptr && *san != '\0') {
+		X509V3_CTX v3_ctx;
+		X509V3_set_ctx(&v3_ctx, x509, x509, nullptr, nullptr, 0);
+		X509_EXTENSION* ext = X509V3_EXT_conf_nid(
+			nullptr, &v3_ctx, NID_subject_alt_name,
+			const_cast<char*>(san));
+		if (ext) {
+			X509_add_ext(x509, ext, -1);
+			X509_EXTENSION_free(ext);
+		}
+	}
+
 	X509_sign(x509, pkey, EVP_sha256());
 
 	SSL_CTX_use_certificate(ctx, x509);
@@ -149,6 +169,21 @@ static SSL_CTX* create_test_ssl_ctx() {
 	X509_free(x509);
 	EVP_PKEY_free(pkey);
 	return ctx;
+}
+
+// Mirror the production shared core context: permissive verify callback plus
+// a trust store containing the intended backend leaf. The leaf is trusted by
+// adding its certificate to the same store SSL_CTX_load_verify_locations()
+// would populate in production.
+static void trust_peer_and_install_permissive_callback(SSL_CTX* shared_ctx,
+                                                       SSL_CTX* peer_ctx) {
+	if (!shared_ctx || !peer_ctx) return;
+	X509* peer_cert = SSL_CTX_get0_certificate(peer_ctx);
+	if (peer_cert != nullptr) {
+		X509_STORE_add_cert(SSL_CTX_get_cert_store(shared_ctx), peer_cert);
+	}
+	SSL_CTX_set_verify(shared_ctx, SSL_VERIFY_PEER | SSL_VERIFY_CLIENT_ONCE,
+	                   permissive_peer_verify_cb);
 }
 
 static void install_tls_route(MysqlxConfigStore& store) {
@@ -231,6 +266,25 @@ static bool take_x_frame(std::vector<uint8_t>& buf, uint8_t* msg_type,
 	payload.assign(buf.begin() + 5, buf.begin() + total);
 	buf.erase(buf.begin(), buf.begin() + total);
 	return true;
+}
+
+extern "C" char* sha256_crypt_r(const char* key, const char* salt,
+                                char* buffer, int buflen);
+
+// Test fixture for credential-presence checks. This uses the same core
+// SHA-256 crypt routine as production; it is not an independent algorithm
+// oracle. It only supplies a valid $A$ verifier for an empty password.
+static std::string make_sha2_hash_for_password(const std::string& password) {
+	static const char* salt = "0123456789abcdefghij";
+	const std::string setting = std::string("$5$rounds=5000$") + salt;
+	char crypt_buf[128];
+	char* out = sha256_crypt_r(password.c_str(), setting.c_str(),
+	                           crypt_buf, sizeof(crypt_buf));
+	if (out == nullptr) return std::string();
+	const std::string result(out);
+	const size_t digest_pos = result.rfind('$');
+	if (digest_pos == std::string::npos) return std::string();
+	return std::string("$A$005$") + salt + result.substr(digest_pos + 1);
 }
 
 static void send_frontend_plain_start(int fd, const std::string& user,
@@ -634,15 +688,22 @@ static bool observe_backend_auth_start(MysqlxSession& sess,
 
 static void test_mapped_plain_secret_selection() {
 	diag(">>> %s", __func__);
-	// Use a TLS_server_method() context for the shared worker SSL_CTX,
-	// exactly like src/main.cpp / proxy_tls.cpp. The connection must be
-	// able to use it as a client via the per-SSL method switch.
-	SSL_CTX* backend_server_ctx = create_test_ssl_ctx();
-	if (!backend_server_ctx) {
-		ok(false, "mapped: backend TLS context created");
+	// Use TLS_server_method() contexts exactly like src/main.cpp /
+	// proxy_tls.cpp. The shared worker context carries the core permissive
+	// verify callback; the peer leaf has an IP SAN for the socketpair
+	// endpoint and is added to the shared trust store. The connection must
+	// be able to use the shared context as a client via the per-SSL method
+	// switch and still enforce peer identity for PLAIN.
+	SSL_CTX* shared_ctx = create_test_ssl_ctx("IP:127.0.0.1");
+	SSL_CTX* backend_server_ctx = create_test_ssl_ctx("IP:127.0.0.1");
+	if (!shared_ctx || !backend_server_ctx) {
+		ok(false, "mapped: TLS contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(backend_server_ctx);
 		return;
 	}
-	GloVars.global.ssl_ctx = backend_server_ctx;
+	trust_peer_and_install_permissive_callback(shared_ctx, backend_server_ctx);
+	GloVars.global.ssl_ctx = shared_ctx;
 
 	MysqlxConfigStore store;
 	install_tls_route(store);
@@ -680,6 +741,9 @@ static void test_mapped_plain_secret_selection() {
 		socketpair(AF_UNIX, SOCK_STREAM, 0, bfds);
 		MysqlxConnection* conn = new MysqlxConnection();
 		conn->set_fd(bfds[0]);
+		// Test-only socketpair attachment: production start_connect()
+		// persists this identity instead.
+		conn->set_address("127.0.0.1");
 		conn->set_state(MysqlxConnection::AUTHENTICATING);
 		sess.backend_conn() = conn;
 		sess.set_status(MysqlxSession::CONNECTING_SERVER);
@@ -739,6 +803,87 @@ static void test_mapped_plain_secret_selection() {
 	sess.client_ds().init(XDS_FRONTEND, -1);
 	close(cfds[0]); close(cfds[1]);
 	GloVars.global.ssl_ctx = nullptr;
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(backend_server_ctx);
+}
+
+// Session-level credential presence: a valid $A$ verifier for the empty
+// password plus an empty frontend PLAIN secret is still a PRESENT credential.
+// The mapped backend must therefore select PLAIN with an empty password field,
+// not MYSQL41 with the stored verifier.
+static void test_mapped_plain_empty_secret_selection() {
+	diag(">>> %s", __func__);
+	SSL_CTX* shared_ctx = create_test_ssl_ctx("IP:127.0.0.1");
+	SSL_CTX* backend_server_ctx = create_test_ssl_ctx("IP:127.0.0.1");
+	if (!shared_ctx || !backend_server_ctx) {
+		ok(false, "mapped-empty-secret: TLS contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(backend_server_ctx);
+		return;
+	}
+	trust_peer_and_install_permissive_callback(shared_ctx, backend_server_ctx);
+	GloVars.global.ssl_ctx = shared_ctx;
+
+	const std::string empty_hash = make_sha2_hash_for_password("");
+	if (empty_hash.size() != 70) {
+		ok(false, "mapped-empty-secret: empty-password $A$ fixture generated");
+		GloVars.global.ssl_ctx = nullptr;
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(backend_server_ctx);
+		return;
+	}
+
+	MysqlxConfigStore store;
+	install_tls_route(store);
+	Mysqlx_Thread thr;
+	thr.init(0);
+	thr.set_config_store(&store);
+
+	int cfds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, cfds);
+	MysqlxSession sess;
+	sess.init(cfds[0], &thr, "tls_route");
+	sess.client_ds().set_encrypted(true);
+	sess.set_identity_lookup([empty_hash](const std::string& user)
+		-> std::optional<MysqlxResolvedIdentity> {
+		return plain_identity(user, empty_hash);
+	});
+	send_frontend_plain_start(cfds[1], "testuser", "");
+	sess.to_process = true;
+	sess.handler();
+	uint8_t response[4096];
+	const ssize_t response_n = read_frame_with_timeout(
+		cfds[1], response, sizeof(response), 500);
+	ok(response_n >= 5 &&
+	   response[4] == Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_OK,
+	   "mapped-empty-secret: frontend empty-password PLAIN authenticates");
+	ok(sess.get_status() == MysqlxSession::WAITING_CLIENT_XMSG,
+	   "mapped-empty-secret: session reaches WAITING_CLIENT_XMSG");
+
+	int bfds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, bfds);
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(bfds[0]);
+	conn->set_address("127.0.0.1");
+	conn->set_state(MysqlxConnection::AUTHENTICATING);
+	sess.backend_conn() = conn;
+	sess.set_status(MysqlxSession::CONNECTING_SERVER);
+	sess.to_process = true;
+	sess.handler();
+
+	const bool observed = observe_backend_auth_start(
+		sess, conn, bfds[1], backend_server_ctx, "PLAIN",
+		std::string("\0", 1) + "testuser" + std::string("\0", 1));
+	ok(observed,
+	   "mapped-empty-secret: present empty verified secret selects backend PLAIN");
+
+	sess.backend_conn() = nullptr;
+	delete conn;
+	close(bfds[1]);
+	sess.client_ds().init(XDS_FRONTEND, -1);
+	close(cfds[0]); close(cfds[1]);
+	GloVars.global.ssl_ctx = nullptr;
+	SSL_CTX_free(shared_ctx);
 	SSL_CTX_free(backend_server_ctx);
 }
 
@@ -934,8 +1079,14 @@ static int start_tcp_listener(int* port_out) {
 
 static void test_worker_progress_without_frontend_wakeups() {
 	diag(">>> %s", __func__);
-	SSL_CTX* shared_ctx = create_test_ssl_ctx();
-	SSL_CTX* peer_ctx = create_test_ssl_ctx();
+	// The route endpoint is the numeric address 127.0.0.1. The peer leaf
+	// carries an IP SAN for it and is in the shared context's trust store,
+	// so this positive worker test also proves start_connect() carries the
+	// configured endpoint identity into the backend PLAIN peer check
+	// without any test-only set_address() call.
+	SSL_CTX* shared_ctx = create_test_ssl_ctx("IP:127.0.0.1");
+	SSL_CTX* peer_ctx = create_test_ssl_ctx("IP:127.0.0.1");
+	trust_peer_and_install_permissive_callback(shared_ctx, peer_ctx);
 	SSL_CTX* client_ctx = SSL_CTX_new(TLS_method());
 	if (client_ctx) {
 		SSL_CTX_set_min_proto_version(client_ctx, TLS1_2_VERSION);
@@ -1094,6 +1245,7 @@ int main() {
 	test_plain_sha2_hash_verification();
 	test_plain_without_tls_rejected();
 	test_mapped_plain_secret_selection();
+	test_mapped_plain_empty_secret_selection();
 	test_worker_progress_without_frontend_wakeups();
 
 	test_cleanup_minimal();
