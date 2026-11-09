@@ -350,7 +350,7 @@ int main(int argc, char** argv) {
     // Verify DateStyle is actually set
     // This will be verified separately after connection
 
-    const int num_tests = tests.size() + 11; // +4 verification tests, +2 conninfo-quoting tests, +5 application_name tests
+    const int num_tests = tests.size() + 12; // +4 verification tests, +2 conninfo-quoting tests, +6 application_name tests
     plan(num_tests);
 
     int pass_count = 0;
@@ -542,7 +542,8 @@ int main(int argc, char** argv) {
     // Test 7 (issue #6478): application_name given in options ("-c application_name=...", as
     // set by PGOPTIONS and some drivers) is a connection parameter, not an untracked variable.
     // It must be reported back to the client and must not lock the session on its hostgroup.
-    // When it is also given as a connection parameter, that value wins, as in PostgreSQL.
+    // When it is also given as a connection parameter, that value wins, and among repeated
+    // options the last one wins, as in PostgreSQL.
     {
         diag("\n--- Verifying application_name in options ---");
         std::string error;
@@ -579,6 +580,21 @@ int main(int argc, char** argv) {
             diag("Connection failed: %s", error.c_str());
             ok(false, "application_name connection parameter takes precedence over options (connect failed)");
             ok(false, "application_name in both places does not lock the hostgroup (connect failed)");
+        }
+    }
+    {
+        diag("\n--- Verifying repeated application_name in options ---");
+        std::string error;
+        PGConnPtr conn = createConnection("-c application_name=first_app -c application_name=last_app", error);
+        if (conn) {
+            const char* val = PQparameterStatus(conn.get(), "application_name");
+            diag("Expected: last_app");
+            diag("Got: %s", val ? val : "(null)");
+            ok(val && std::string(val) == "last_app",
+               "last of repeated application_name options wins");
+        } else {
+            diag("Connection failed: %s", error.c_str());
+            ok(false, "last of repeated application_name options wins (connect failed)");
         }
     }
     // Control: an untracked option still locks the hostgroup, so the checks above can fail.
