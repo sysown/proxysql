@@ -979,6 +979,12 @@ int main(int argc, char** argv) {
         return exit_status();
 
     const int parser_algorithm = query_pgsql_set_parser_algorithm();
+    // The one-connection pools below park a backend for the next client. With max_connections=1
+    // the default free_connections_pct (10) keeps no free connection: an idle round closes it,
+    // and the next client gets a new backend instead of the one it must reuse.
+    PGConnPtr pct_admin = createNewConnection(ConnType::ADMIN);
+    const std::string saved_free_pct = pct_admin ? adminGet(pct_admin.get(), "pgsql-free_connections_pct") : "";
+    if (pct_admin) adminSet(pct_admin.get(), "pgsql-free_connections_pct", "100");
     diag("pgsql-set_parser_algorithm = %d (per-case algo3 override %s)",
          parser_algorithm, parser_algorithm == 3 ? "ACTIVE" : "ignored");
 
@@ -1086,5 +1092,6 @@ int main(int argc, char** argv) {
     usleep(500000);
     test_set_phases_in_every_mode();
 
+    if (pct_admin && !saved_free_pct.empty()) adminSet(pct_admin.get(), "pgsql-free_connections_pct", saved_free_pct);
     return exit_status();
 }
