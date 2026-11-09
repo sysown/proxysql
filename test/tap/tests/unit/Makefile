@@ -705,6 +705,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
+	restapi_tls_config_unit-t \
 	mcp_client_unit-t \
 	pgsql_waiter_list_unit-t
 
