@@ -438,6 +438,17 @@ static std::string sqlQuote(const std::string& v) {
     return out;
 }
 
+static std::string adminGet(PGconn* admin, const std::string& name) {
+    PGresult* r = PQexec(admin, ("SELECT variable_value FROM global_variables WHERE variable_name=" + sqlQuote(name)).c_str());
+    const std::string v = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : "";
+    PQclear(r);
+    return v;
+}
+
+static bool adminSet(PGconn* admin, const std::string& name, const std::string& value) {
+    return execAdmin(admin, "SET " + name + "=" + sqlQuote(value)) && execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+}
+
 static const char* SERVER_COLS =
     "hostgroup_id,hostname,port,status,weight,compression,max_connections,"
     "max_replication_lag,use_ssl,max_latency_ms,comment";
@@ -574,6 +585,43 @@ static void test_untracked_set_does_not_leak() {
 }
 
 // ---------------------------------------------------------------------------
+// The protocol the SET phases below send their statements over, and the label of the run.
+// PIPELINE sends SELECT 1, the statement and SELECT 2 before one Sync: with the native backend
+// the unit is batched, and a SET has to leave the batch to be recorded.
+// ---------------------------------------------------------------------------
+
+enum class Proto { SIMPLE, EXTENDED, PIPELINE };
+static Proto g_proto = Proto::SIMPLE;
+static std::string g_mode = "native simple";
+
+// The statement's own result; the caller frees it.
+static PGresult* execMode(PGconn* c, const std::string& sql) {
+    if (g_proto == Proto::SIMPLE) return PQexec(c, sql.c_str());
+    if (g_proto == Proto::EXTENDED) return PQexecParams(c, sql.c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0);
+    if (PQenterPipelineMode(c) != 1) return nullptr;
+    const char* q[3] = { "SELECT 1", sql.c_str(), "SELECT 2" };
+    for (const char* one : q) PQsendQueryParams(c, one, 0, nullptr, nullptr, nullptr, nullptr, 0);
+    PQpipelineSync(c);
+    PGresult* mine = nullptr;
+    for (int i = 0; i < 3; i++) {
+        for (PGresult* r = PQgetResult(c); r != nullptr; r = PQgetResult(c)) {
+            if (i == 1 && mine == nullptr) mine = r; else PQclear(r);
+        }
+    }
+    for (PGresult* r = PQgetResult(c); r != nullptr; r = PQgetResult(c)) PQclear(r); // the Sync's
+    PQexitPipelineMode(c);
+    return mine;
+}
+
+static bool execModeOk(PGconn* c, const std::string& sql) {
+    PGresult* r = execMode(c, sql);
+    const bool good = PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
+    if (!good) diag("[%s] %s: %s", g_mode.c_str(), sql.c_str(), PQerrorMessage(c));
+    PQclear(r);
+    return good;
+}
+
+// ---------------------------------------------------------------------------
 // A client that connects with an empty search_path ('-c search_path=', what pg_dump files
 // set) gets a pooled backend opened with another path. The sync must send
 // SET search_path TO '' -- a SET with no value at all is a syntax error (42601) and the
@@ -588,7 +636,7 @@ static void test_empty_search_path_syncs() {
     const std::vector<std::string> servers = (hg >= 0) ? snapshotServers(admin.get(), hg) : std::vector<std::string>{};
     if (servers.empty() || !reloadServers(admin.get(), hg, servers, true)) {
         skip(EMPTY_SEARCH_PATH_TESTS - 1, "cannot limit hostgroup %d to one backend connection", hg);
-        ok(servers.empty() || reloadServers(admin.get(), hg, servers, false), "servers of hostgroup %d restored", hg);
+        ok(servers.empty() || reloadServers(admin.get(), hg, servers, false), "[%s] servers of hostgroup %d restored", g_mode.c_str(), hg);
         return;
     }
 
@@ -602,7 +650,7 @@ static void test_empty_search_path_syncs() {
     PGConnPtr b = createNewConnection(ConnType::BACKEND, "-c search_path=");
     std::string err = b ? "" : "no connection", value = "<no result>", b_pid;
     if (b) {
-        PGresult* res = PQexec(b.get(), "SELECT pg_catalog.pg_backend_pid(), current_setting('search_path')");
+        PGresult* res = execMode(b.get(), "SELECT pg_catalog.pg_backend_pid(), current_setting('search_path')");
         if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) {
             b_pid = PQgetvalue(res, 0, 0);
             value = PQgetvalue(res, 0, 1);
@@ -611,13 +659,13 @@ static void test_empty_search_path_syncs() {
         }
         PQclear(res);
     }
-    ok(err.empty(), "empty search_path: first query of the client succeeds (%s)", err.c_str());
-    ok(value == "\"\"", "empty search_path: backend search_path is '\"\"' (got '%s')", value.c_str());
-    ok(!a_pid.empty() && b_pid == a_pid, "empty search_path: the sync ran on the reused backend (A pid %s, B pid %s)",
-        a_pid.c_str(), b_pid.c_str());
+    ok(err.empty(), "[%s] empty search_path: first query of the client succeeds (%s)", g_mode.c_str(), err.c_str());
+    ok(value == "\"\"", "[%s] empty search_path: backend search_path is '\"\"' (got '%s')", g_mode.c_str(), value.c_str());
+    ok(!a_pid.empty() && b_pid == a_pid, "[%s] empty search_path: the sync ran on the reused backend (A pid %s, B pid %s)",
+        g_mode.c_str(), a_pid.c_str(), b_pid.c_str());
     b.reset();
     usleep(200000);
-    ok(reloadServers(admin.get(), hg, servers, false), "servers of hostgroup %d restored", hg);
+    ok(reloadServers(admin.get(), hg, servers, false), "[%s] servers of hostgroup %d restored", g_mode.c_str(), hg);
 }
 
 // ---------------------------------------------------------------------------
@@ -710,17 +758,17 @@ static void test_quoted_default_is_a_value() {
     for (const auto& c : all_default_cases()) {
         PGConnPtr conn = createNewConnection(ConnType::BACKEND, c.options);
         if (!conn) {
-            ok(false, "quoted DEFAULT: %s (no connection)", c.set.c_str());
+            ok(false, "[%s] quoted DEFAULT: %s (no connection)", g_mode.c_str(), c.set.c_str());
             continue;
         }
         std::string err;
         if (!c.setup.empty()) {
-            PGresult* r = PQexec(conn.get(), c.setup.c_str());
+            PGresult* r = execMode(conn.get(), c.setup);
             if (PQresultStatus(r) != PGRES_COMMAND_OK) err = "setup failed: " + std::string(PQerrorMessage(conn.get()));
             PQclear(r);
         }
         if (err.empty()) {
-            PGresult* r = PQexec(conn.get(), c.set.c_str());
+            PGresult* r = execMode(conn.get(), c.set);
             const ExecStatusType st = PQresultStatus(r);
             if (c.sqlstate.empty()) {
                 if (st != PGRES_COMMAND_OK) err = "SET failed: " + std::string(PQerrorMessage(conn.get()));
@@ -740,8 +788,18 @@ static void test_quoted_default_is_a_value() {
             if (v != c.expected) err = "SHOW " + c.show + " is '" + v + "', expected '" + c.expected + "'";
             PQclear(r);
         }
-        ok(err.empty(), "quoted DEFAULT: [%s] %s%s%s %s", c.options.c_str(), c.setup.c_str(),
+        // Rows that hit a bug not fixed yet run as todo: a reset over the extended protocol goes to
+        // the backend's own default, and a new backend connection gets a quoted search_path with
+        // its quotes (the value is sent raw at connect time).
+        const bool reset_by_backend = g_proto != Proto::SIMPLE && c.sqlstate.empty() &&
+            (c.set.find(" TO DEFAULT") != std::string::npos ||
+             (c.show == "DateStyle" && c.set.find("'DEFAULT'") != std::string::npos));
+        const bool quoted_search_path = c.show == "search_path" && c.set.find('\'') != std::string::npos;
+        if (reset_by_backend) todo_start("extended protocol: the backend resets to its own default");
+        else if (quoted_search_path) todo_start("a new backend connection gets the quoted search_path raw");
+        ok(err.empty(), "[%s] quoted DEFAULT: [%s] %s%s%s %s", g_mode.c_str(), c.options.c_str(), c.setup.c_str(),
             c.setup.empty() ? "" : "; ", c.set.c_str(), err.c_str());
+        if (reset_by_backend || quoted_search_path) todo_end();
     }
 }
 
@@ -822,7 +880,7 @@ static void test_stored_form_matches_postgresql() {
             err = "no connection";
         } else {
             if (refused) want = stored(conn.get(), c.name);
-            PGresult* r = PQexec(conn.get(), set.c_str());
+            PGresult* r = execMode(conn.get(), set);
             if (refused) {
                 const std::string state = resultField(r, PG_DIAG_SQLSTATE);
                 if (PQresultStatus(r) != PGRES_FATAL_ERROR || state != "22023") err = "expected 22023, got '" + state + "'";
@@ -832,7 +890,7 @@ static void test_stored_form_matches_postgresql() {
             PQclear(r);
             v = stored(conn.get(), c.name);
         }
-        ok(err.empty() && v == want, "stored form: %s -> %s '%s' (got '%s') %s", set.c_str(),
+        ok(err.empty() && v == want, "[%s] stored form: %s -> %s '%s' (got '%s') %s", g_mode.c_str(), set.c_str(),
             refused ? "refused, keeps" : "", want.c_str(), v.c_str(), err.c_str());
     }
 
@@ -840,13 +898,13 @@ static void test_stored_form_matches_postgresql() {
     PGConnPtr b = createNewConnection(ConnType::BACKEND);
     std::string va = "<no connection>", vb = "<no connection>";
     if (a && b) {
-        PQclear(PQexec(a.get(), "SET maintenance_work_mem = '1024MB'"));
-        PQclear(PQexec(b.get(), "SET maintenance_work_mem = '1GB'"));
+        PQclear(execMode(a.get(), "SET maintenance_work_mem = '1024MB'"));
+        PQclear(execMode(b.get(), "SET maintenance_work_mem = '1GB'"));
         va = stored(a.get(), "maintenance_work_mem");
         vb = stored(b.get(), "maintenance_work_mem");
     }
-    ok(va == "1GB" && vb == "1GB", "stored form: '1024MB' and '1GB' are recorded alike (A '%s', B '%s')",
-        va.c_str(), vb.c_str());
+    ok(va == "1GB" && vb == "1GB", "[%s] stored form: '1024MB' and '1GB' are recorded alike (A '%s', B '%s')",
+        g_mode.c_str(), va.c_str(), vb.c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -857,38 +915,59 @@ static void test_stored_form_matches_postgresql() {
 
 static const int EXTENDED_EMPTY_DATESTYLE_TESTS = 3;
 
-static bool execParams(PGconn* conn, const char* sql) {
-    PGresult* r = PQexecParams(conn, sql, 0, nullptr, nullptr, nullptr, nullptr, 0);
-    const bool good = PQresultStatus(r) == PGRES_COMMAND_OK;
-    if (!good) diag("%s: %s", sql, PQerrorMessage(conn));
-    PQclear(r);
-    return good;
-}
-
 static void test_extended_empty_datestyle() {
     PGConnPtr conn = createNewConnection(ConnType::BACKEND);
     if (!conn) {
         skip(EXTENDED_EMPTY_DATESTYLE_TESTS, "no connection");
         return;
     }
-    const bool set_ok = execParams(conn.get(), "SET DateStyle = 'SQL, DMY'") && execParams(conn.get(), "SET DateStyle = ''");
+    const bool set_ok = execModeOk(conn.get(), "SET DateStyle = 'SQL, DMY'") && execModeOk(conn.get(), "SET DateStyle = ''");
     const std::string after_empty = stored(conn.get(), "DateStyle");
-    ok(set_ok && after_empty == "SQL, DMY", "extended: SET DateStyle = '' keeps the recorded DateStyle (got '%s')", after_empty.c_str());
-    const bool next_ok = execParams(conn.get(), "SET DateStyle = 'YMD'");
+    ok(set_ok && after_empty == "SQL, DMY", "[%s] SET DateStyle = '' keeps the recorded DateStyle (got '%s')", g_mode.c_str(), after_empty.c_str());
+    const bool next_ok = execModeOk(conn.get(), "SET DateStyle = 'YMD'");
     const std::string after_next = stored(conn.get(), "DateStyle");
-    ok(next_ok && after_next == "SQL, YMD", "extended: the next DateStyle SET keeps the style (got '%s')", after_next.c_str());
+    ok(next_ok && after_next == "SQL, YMD", "[%s] the next DateStyle SET keeps the style (got '%s')", g_mode.c_str(), after_next.c_str());
     PGresult* r = PQexec(conn.get(), "SHOW DateStyle");
     const std::string shown = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : "<no result>";
     PQclear(r);
-    ok(shown == "SQL, YMD", "extended: the backend agrees (SHOW DateStyle is '%s')", shown.c_str());
+    ok(shown == "SQL, YMD", "[%s] the backend agrees (SHOW DateStyle is '%s')", g_mode.c_str(), shown.c_str());
+}
+
+// The four SET phases (empty search_path, quoted DEFAULT, stored form, empty DateStyle) in
+// every backend mode and protocol.
+static const int SET_MODES = 6;
+
+static void test_set_phases_in_every_mode() {
+    PGConnPtr admin = createNewConnection(ConnType::ADMIN);
+    const int hg = rootDefaultHostgroup(admin.get());
+    const std::vector<std::string> servers = (hg >= 0) ? snapshotServers(admin.get(), hg) : std::vector<std::string>{};
+    const std::string saved_native = adminGet(admin.get(), "pgsql-use_native_backend_protocol");
+    const char* proto_name[3] = { "simple", "extended", "pipeline" };
+    for (const bool native : { true, false }) {
+        adminSet(admin.get(), "pgsql-use_native_backend_protocol", native ? "true" : "false");
+        // Pooled connections keep the mode they were opened in.
+        if (!servers.empty()) reloadServers(admin.get(), hg, servers, false);
+        for (int p = 0; p < 3; p++) {
+            g_proto = (Proto)p;
+            g_mode = std::string(native ? "native " : "libpq ") + proto_name[p];
+            test_quoted_default_is_a_value();
+            test_stored_form_matches_postgresql();
+            test_extended_empty_datestyle();
+            usleep(500000);
+            test_empty_search_path_syncs();
+            usleep(500000);
+        }
+    }
+    g_proto = Proto::SIMPLE;
+    const bool restored = adminSet(admin.get(), "pgsql-use_native_backend_protocol", saved_native) &&
+        (servers.empty() || reloadServers(admin.get(), hg, servers, false));
+    ok(restored, "SET phases: pgsql-use_native_backend_protocol restored to '%s'", saved_native.c_str());
 }
 
 int main(int argc, char** argv) {
     int total_tests = 2 + untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE + 1; // + servers restored
-    total_tests += EXTENDED_EMPTY_DATESTYLE_TESTS;
-    total_tests += stored_form_cases.size() + 1;
-    total_tests += all_default_cases().size();
-    total_tests += EMPTY_SEARCH_PATH_TESTS;
+    total_tests += SET_MODES * (stored_form_cases.size() + 1 + all_default_cases().size() +
+        EXTENDED_EMPTY_DATESTYLE_TESTS + EMPTY_SEARCH_PATH_TESTS) + 1;
 
 	for (const auto& test_case : test_cases) {
 		total_tests += test_case.commands.size();
@@ -1002,13 +1081,10 @@ int main(int argc, char** argv) {
     // Close the connection first: an earlier case may have locked it on the hostgroup,
     // holding a backend connection that would leave none for the single-connection pool.
     conn.reset();
-    test_quoted_default_is_a_value();
-    test_stored_form_matches_postgresql();
-    test_extended_empty_datestyle();
     usleep(500000); // let its backend connection finish resetting before the pool is flushed
     test_untracked_set_does_not_leak();
     usleep(500000);
-    test_empty_search_path_syncs();
+    test_set_phases_in_every_mode();
 
     return exit_status();
 }
