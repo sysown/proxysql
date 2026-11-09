@@ -54,7 +54,8 @@
 @@ -48,6 +48,9 @@
  #include <utility>
  #include <vector>
- 
+-
++
 +#include <gnutls/gnutls.h>
 +#include <gnutls/x509.h>
 +
@@ -92,7 +93,8 @@
          throw std::invalid_argument("Cannot specify maximum number of threads when using a thread per connection");
 @@ -317,21 +332,12 @@
  #endif
- 
+-
++
      daemon = NULL;
 -    if(bind_address == 0x0) {
 -        daemon = MHD_start_daemon
@@ -115,13 +117,15 @@
 +            &answer_to_connection, this, MHD_OPTION_ARRAY,
 +            &iov[0], MHD_OPTION_END
 +    );
- 
+-
++
      if(daemon == NULL)
      {
 @@ -748,6 +754,48 @@
      return finalize_answer(connection, mr, method);
  }
- 
+-
++
 +/**
 + * Validate the client certificate of the real GnuTLS session. libmicrohttpd
 + * only *requests* a client certificate when a trust PEM is configured; it
@@ -170,7 +174,8 @@
 @@ -757,6 +805,27 @@
      struct details::modded_request* mr =
          static_cast<struct details::modded_request*>(*con_cls);
- 
+-
++
 +    if (static_cast<webserver*>(cls)->require_client_cert &&
 +        !client_certificate_is_valid(connection))
 +    {
