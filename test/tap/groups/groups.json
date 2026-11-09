@@ -217,6 +217,7 @@
   "mysqlx_connection_unit-t" : [ "mysqlx-g1","mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysqlx_credential_verify_unit-t" : [ "mysqlx-g1","mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysqlx_data_stream_unit-t" : [ "mysqlx-g1","mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
+  "mysqlx_frontend_tls_unit-t" : [ "mysqlx-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysqlx_message_dispatch_unit-t" : [ "mysqlx-g1","mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysqlx_protocol_socket_unit-t" : [ "mysqlx-g1","mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],
   "mysqlx_protocol_unit-t" : [ "mysqlx-g1","mysqlx-tsan-g1","unit-tests-g1","@proxysql_min_version:4.0" ],

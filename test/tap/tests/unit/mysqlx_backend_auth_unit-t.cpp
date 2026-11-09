@@ -10,11 +10,17 @@
 #include "mysqlx_datatypes.pb.h"
 #include "mysqlx_notice.pb.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 static void write_x_frame(int fd, uint8_t msg_type, const uint8_t* payload, size_t payload_len) {
 	uint32_t size = static_cast<uint32_t>(payload_len) + 1;
@@ -28,6 +34,151 @@ static void write_x_frame(int fd, uint8_t msg_type, const uint8_t* payload, size
 	if (payload_len > 0) {
 		write(fd, payload, payload_len);
 	}
+}
+
+static ssize_t read_x_frame_with_timeout(int fd, uint8_t* buf, size_t buf_size, int timeout_ms) {
+	struct pollfd pfd { fd, POLLIN, 0 };
+	if (poll(&pfd, 1, timeout_ms) <= 0) return -1;
+	uint8_t header[5];
+	ssize_t r;
+	do {
+		r = read(fd, header, sizeof(header));
+	} while (r < 0 && errno == EINTR);
+	if (r != 5) return -1;
+	const uint32_t payload_size = static_cast<uint32_t>(header[0]) |
+		(static_cast<uint32_t>(header[1]) << 8) |
+		(static_cast<uint32_t>(header[2]) << 16) |
+		(static_cast<uint32_t>(header[3]) << 24);
+	const size_t total = 4 + payload_size;
+	if (total > buf_size) return -1;
+	memcpy(buf, header, 5);
+	if (payload_size > 1) {
+		if (poll(&pfd, 1, timeout_ms) <= 0) return -1;
+		do {
+			r = read(fd, buf + 5, payload_size - 1);
+		} while (r < 0 && errno == EINTR);
+		if (r != static_cast<ssize_t>(payload_size - 1)) return -1;
+	}
+	return static_cast<ssize_t>(total);
+}
+
+static int reject_client_cert_cb(int, X509_STORE_CTX*) {
+	return 0;
+}
+
+static SSL_CTX* create_test_ssl_ctx() {
+	SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+	if (!ctx) return nullptr;
+	SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+	EVP_PKEY* pkey = EVP_PKEY_new();
+	RSA* rsa = RSA_new();
+	BIGNUM* bn = BN_new();
+	BN_set_word(bn, RSA_F4);
+	RSA_generate_key_ex(rsa, 2048, bn, nullptr);
+	EVP_PKEY_assign_RSA(pkey, rsa);
+	BN_free(bn);
+	X509* x509 = X509_new();
+	ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
+	X509_gmtime_adj(X509_get_notBefore(x509), 0);
+	X509_gmtime_adj(X509_get_notAfter(x509), 31536000L);
+	X509_set_pubkey(x509, pkey);
+	X509_NAME* name = X509_NAME_new();
+	X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+		(unsigned char*)"test", -1, -1, 0);
+	X509_set_subject_name(x509, name);
+	X509_set_issuer_name(x509, name);
+	X509_NAME_free(name);
+	X509_sign(x509, pkey, EVP_sha256());
+	SSL_CTX_use_certificate(ctx, x509);
+	SSL_CTX_use_PrivateKey(ctx, pkey);
+	X509_free(x509);
+	EVP_PKEY_free(pkey);
+	return ctx;
+}
+
+static bool write_all_fd(int fd, const uint8_t* data, size_t len) {
+	size_t off = 0;
+	while (off < len) {
+		ssize_t n = send(fd, data + off, len - off, MSG_NOSIGNAL);
+		if (n > 0) { off += static_cast<size_t>(n); continue; }
+		if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) {
+			struct pollfd pfd { fd, POLLOUT, 0 };
+			if (poll(&pfd, 1, 1000) <= 0) return false;
+			continue;
+		}
+		return false;
+	}
+	return true;
+}
+
+static int drain_wbio_to_fd(BIO* wbio, int fd) {
+	char buf[16384];
+	int n;
+	int total = 0;
+	while ((n = BIO_read(wbio, buf, sizeof(buf))) > 0) {
+		if (!write_all_fd(fd, reinterpret_cast<const uint8_t*>(buf), n)) return -1;
+		total += n;
+	}
+	return total;
+}
+
+static void feed_fd_to_rbio(BIO* rbio, int fd,
+                            std::vector<uint8_t>* raw_out = nullptr) {
+	char buf[16384];
+	ssize_t r;
+	while ((r = recv(fd, buf, sizeof(buf), MSG_DONTWAIT)) > 0) {
+		if (raw_out) raw_out->insert(raw_out->end(), buf, buf + r);
+		BIO_write(rbio, buf, static_cast<int>(r));
+	}
+}
+
+// Drive a real TLS handshake between the connection's backend stream and a
+// test-owned server SSL object over a socketpair. Returns true when both
+// sides completed.
+static bool drive_backend_tls_handshake(MysqlxConnection& conn, int peer_fd,
+                                        SSL* server_ssl, BIO* srbio, BIO* swbio,
+                                        std::vector<uint8_t>* raw_out = nullptr) {
+	bool client_done = false;
+	bool server_done = false;
+	for (int i = 0; i < 3000 && !(client_done && server_done); ++i) {
+		if (conn.step_auth() < 0) break;
+		client_done = conn.backend_ds().ssl_handshake_complete();
+		feed_fd_to_rbio(srbio, peer_fd, raw_out);
+		int r = SSL_do_handshake(server_ssl);
+		if (r == 1) server_done = true;
+		drain_wbio_to_fd(swbio, peer_fd);
+		usleep(300);
+	}
+	return client_done && server_done;
+}
+
+static std::string read_server_plain(SSL* server_ssl, BIO* srbio, int peer_fd,
+                                     int timeout_ms,
+                                     std::vector<uint8_t>* raw_out = nullptr) {
+	std::string out;
+	for (int waited = 0; waited < timeout_ms; waited += 2) {
+		char net_buf[16384];
+		ssize_t nr;
+		while ((nr = recv(peer_fd, net_buf, sizeof(net_buf), MSG_DONTWAIT)) > 0) {
+			if (raw_out) raw_out->insert(raw_out->end(), net_buf, net_buf + nr);
+			BIO_write(srbio, net_buf, static_cast<int>(nr));
+		}
+		char buf[4096];
+		int n;
+		while ((n = SSL_read(server_ssl, buf, sizeof(buf))) > 0) {
+			out.append(buf, n);
+		}
+		if (!out.empty()) break;
+		usleep(2000);
+	}
+	return out;
+}
+
+static bool server_write_plain(SSL* server_ssl, BIO* swbio, int peer_fd,
+                               const uint8_t* data, size_t len) {
+	int n = SSL_write(server_ssl, data, static_cast<int>(len));
+	if (n != static_cast<int>(len)) return false;
+	return drain_wbio_to_fd(swbio, peer_fd) >= 0;
 }
 
 static void test_backend_auth_state_transitions() {
@@ -173,6 +324,28 @@ static void test_backend_auth_error_on_caps() {
 
 	close(fds[0]);
 	close(fds[1]);
+}
+
+// A backend EOF during auth must fail the connection, not look like "no
+// frame yet". Before this guard the worker spun on POLLHUP forever.
+static void test_backend_auth_eof_fails_auth() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("testuser");
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+	ok(conn.step_auth() == 1, "backend-eof: CapGet sent");
+	close(fds[1]);
+
+	ok(conn.step_auth() == -1, "backend-eof: EOF fails auth");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "backend-eof: auth state ERROR (no POLLHUP spin)");
+
+	close(fds[0]);
 }
 
 static void test_backend_auth_notice_skip() {
@@ -548,10 +721,300 @@ static void test_backend_reset_clears_auth() {
 	diag(">>> %s", __func__);
 	MysqlxConnection conn;
 	conn.set_state(MysqlxConnection::IDLE);
+	conn.set_backend_plain_password("pooled-secret");
 	conn.reset();
 	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_NOT_STARTED,
 	   "reset clears auth state");
 	ok(conn.is_reusable(), "reset marks reusable");
+	ok(!conn.has_backend_plain_password_for_test(),
+	   "reset wipes the frontend-derived PLAIN secret before pooling");
+}
+
+// Helper: drive a connection to the point where AuthenticateStart has
+// been emitted, returning the raw frame bytes for inspection. The caller
+// is responsible for the earlier CapGet/Capabilities exchange.
+static ssize_t read_auth_start_frame(int fd, uint8_t* buf, size_t buf_size,
+                                     Mysqlx::Session::AuthenticateStart& out) {
+	usleep(5000);
+	ssize_t r = read(fd, buf, buf_size);
+	if (r < 5) return r;
+	return out.ParseFromArray(buf + 5, static_cast<int>(r - 5)) ? r : -1;
+}
+
+// Fix #3: a mapped frontend PLAIN login retains the verified secret so a
+// TLS-protected backend can authenticate with PLAIN (one-shot
+// AuthenticateStart -> AuthenticateOk). This drives a real client-side
+// TLS handshake on the connection's backend stream; the test peer sees
+// only ciphertext until we decrypt with its SSL object.
+static void test_backend_auth_plain_over_tls() {
+	diag(">>> %s", __func__);
+	// Both contexts use TLS_server_method() like the production shared
+	// core context. The peer requests an optional client certificate and
+	// rejects any presented certificate; the backend client must clear
+	// its inherited frontend-server identity and therefore send none.
+	SSL_CTX* shared_ctx = create_test_ssl_ctx();
+	SSL_CTX* peer_ctx = create_test_ssl_ctx();
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-tls: test TLS contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	SSL_CTX_set_verify(peer_ctx, SSL_VERIFY_PEER, reject_client_cert_cb);
+
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("plainuser");
+	conn.set_backend_schema("testdb");
+	conn.set_backend_password("$A$005$not-a-replayable-secret");
+	conn.set_backend_plain_password("plain-secret");
+	conn.set_backend_tls_required(true);
+	conn.set_backend_tls_fallback_allowed(false);
+	conn.set_ssl_ctx(shared_ctx);
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	ok(conn.step_auth() == 1, "plain-tls: CapGet sent");
+	uint8_t buf[4096];
+	ssize_t r = read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	ok(r >= 5 && buf[4] == Mysqlx::ClientMessages_Type_CON_CAPABILITIES_GET,
+	   "plain-tls: plaintext CapGet observed by backend peer");
+
+	Mysqlx::Connection::Capabilities caps;
+	std::string caps_str;
+	caps.SerializeToString(&caps_str);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+		reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+
+	ok(conn.step_auth() == 1, "plain-tls: CapabilitiesSet(tls=true) sent");
+	r = read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	ok(r >= 5 && buf[4] == Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET,
+	   "plain-tls: plaintext CapabilitiesSet observed by backend peer");
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_OK, nullptr, 0);
+	ok(conn.step_auth() == 1, "plain-tls: backend Ok starts TLS handshake");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_TLS_HANDSHAKE,
+	   "plain-tls: state BACKEND_AUTH_TLS_HANDSHAKE");
+
+	SSL* server_ssl = SSL_new(peer_ctx);
+	BIO* srbio = BIO_new(BIO_s_mem());
+	BIO* swbio = BIO_new(BIO_s_mem());
+	SSL_set_bio(server_ssl, srbio, swbio);
+	SSL_set_accept_state(server_ssl);
+	std::vector<uint8_t> raw_ciphertext;
+	ok(drive_backend_tls_handshake(conn, fds[1], server_ssl, srbio, swbio,
+	                               &raw_ciphertext),
+	   "plain-tls: real encrypted backend TLS handshake completed");
+	ok(conn.is_tls_active(), "plain-tls: connection marked TLS-active after handshake");
+
+	for (int i = 0; i < 200 && conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_TLS_HANDSHAKE; ++i) {
+		conn.step_auth();
+		drive_backend_tls_handshake(conn, fds[1], server_ssl, srbio, swbio);
+	}
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_AUTHENTICATE_START_SENT,
+	   "plain-tls: state AUTHENTICATE_START_SENT after TLS");
+
+	const std::string auth_frame =
+		read_server_plain(server_ssl, srbio, fds[1], 1000, &raw_ciphertext);
+	ok(auth_frame.size() >= 5 && static_cast<uint8_t>(auth_frame[4]) ==
+	   Mysqlx::ClientMessages_Type_SESS_AUTHENTICATE_START,
+	   "plain-tls: encrypted AuthenticateStart decrypted by test peer");
+	Mysqlx::Session::AuthenticateStart auth_start;
+	const bool parsed = auth_frame.size() >= 5 &&
+		auth_start.ParseFromArray(auth_frame.data() + 5,
+		                          static_cast<int>(auth_frame.size() - 5));
+	ok(parsed && auth_start.mech_name() == "PLAIN",
+	   "plain-tls: mechanism is PLAIN inside the encrypted channel");
+	const std::string expected = std::string("testdb") + std::string("\0", 1) +
+	                             "plainuser" + std::string("\0", 1) + "plain-secret";
+	ok(parsed && auth_start.auth_data() == expected,
+	   "plain-tls: PLAIN auth_data is schema\\0user\\0verified-secret");
+	const uint8_t* secret_begin = reinterpret_cast<const uint8_t*>("plain-secret");
+	ok(!raw_ciphertext.empty() &&
+	   std::search(raw_ciphertext.begin(), raw_ciphertext.end(),
+	               secret_begin, secret_begin + 12) == raw_ciphertext.end(),
+	   "plain-tls: raw socket ciphertext does not expose the plaintext secret");
+
+	// PLAIN completes with a direct AuthenticateOk, no Continue round.
+	Mysqlx::Session::AuthenticateOk auth_ok;
+	std::string ok_str;
+	auth_ok.SerializeToString(&ok_str);
+	std::vector<uint8_t> ok_frame;
+	const uint32_t ok_payload = static_cast<uint32_t>(ok_str.size()) + 1;
+	ok_frame.push_back(ok_payload & 0xFF);
+	ok_frame.push_back((ok_payload >> 8) & 0xFF);
+	ok_frame.push_back((ok_payload >> 16) & 0xFF);
+	ok_frame.push_back((ok_payload >> 24) & 0xFF);
+	ok_frame.push_back(Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_OK);
+	ok_frame.insert(ok_frame.end(), ok_str.begin(), ok_str.end());
+	ok(server_write_plain(server_ssl, swbio, fds[1], ok_frame.data(), ok_frame.size()),
+	   "plain-tls: encrypted AuthenticateOk sent by test peer");
+	ok(conn.step_auth() == 0, "plain-tls: AuthenticateOk completes auth");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_DONE,
+	   "plain-tls: auth state DONE");
+	ok(conn.get_state() == MysqlxConnection::IDLE,
+	   "plain-tls: connection IDLE after auth");
+	ok(!conn.has_backend_plain_password_for_test(),
+	   "plain-tls: secret wiped after successful auth");
+
+	SSL_free(server_ssl);
+	conn.set_fd(-1);
+	close(fds[0]);
+	close(fds[1]);
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+// After a real TLS handshake and AuthenticateStart, a peer close (EOF
+// or TLS alert) must fail auth promptly instead of spinning on POLLHUP.
+static void test_backend_auth_tls_peer_close_fails() {
+	diag(">>> %s", __func__);
+	SSL_CTX* shared_ctx = create_test_ssl_ctx();
+	SSL_CTX* peer_ctx = create_test_ssl_ctx();
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "tls-eof: contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("plainuser");
+	conn.set_backend_schema("testdb");
+	conn.set_backend_plain_password("plain-secret");
+	conn.set_backend_tls_required(true);
+	conn.set_ssl_ctx(shared_ctx);
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	conn.step_auth();
+	uint8_t buf[4096];
+	read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES, nullptr, 0);
+	conn.step_auth();
+	read_x_frame_with_timeout(fds[1], buf, sizeof(buf), 500);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_OK, nullptr, 0);
+	conn.step_auth();
+
+	SSL* server_ssl = SSL_new(peer_ctx);
+	BIO* srbio = BIO_new(BIO_s_mem());
+	BIO* swbio = BIO_new(BIO_s_mem());
+	SSL_set_bio(server_ssl, srbio, swbio);
+	SSL_set_accept_state(server_ssl);
+	ok(drive_backend_tls_handshake(conn, fds[1], server_ssl, srbio, swbio),
+	   "tls-eof: handshake completed before peer close");
+	close(fds[1]);
+
+	int rc = 1;
+	for (int i = 0; i < 200 && rc == 1; ++i) {
+		rc = conn.step_auth();
+		usleep(1000);
+	}
+	ok(rc == -1, "tls-eof: peer close fails auth");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "tls-eof: auth state ERROR, no dead-backend spin");
+
+	SSL_free(server_ssl);
+	conn.set_fd(-1);
+	close(fds[0]);
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
+// TLS guard: the same retained secret must NOT switch the mechanism to
+// PLAIN when the backend leg is still plaintext. Fall back to the
+// historical MYSQL41 path and never put the secret on the wire.
+static void test_backend_auth_plain_not_used_without_tls() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("plainuser");
+	conn.set_backend_schema("testdb");
+	conn.set_backend_password("stored-password");
+	conn.set_backend_plain_password("plain-secret");
+	conn.set_tls_active(false);
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));
+	}
+	Mysqlx::Connection::Capabilities caps;
+	std::string caps_str;
+	caps.SerializeToString(&caps_str);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+		reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+
+	conn.step_auth();
+
+	uint8_t buf[4096];
+	Mysqlx::Session::AuthenticateStart auth_start;
+	ssize_t r = read_auth_start_frame(fds[1], buf, sizeof(buf), auth_start);
+	ok(r >= 5 && auth_start.mech_name() == "MYSQL41",
+	   "plain-no-tls: mechanism stays MYSQL41 on a plaintext backend");
+	const std::string plain_secret = "plain-secret";
+	ok(std::search(buf, buf + (r > 0 ? r : 0),
+	               plain_secret.begin(), plain_secret.end()) == buf + (r > 0 ? r : 0),
+	   "plain-no-tls: verified secret never appears on the wire");
+	ok(conn.has_backend_plain_password_for_test(),
+	   "plain-no-tls: secret is retained until auth completes or fails");
+
+	close(fds[0]);
+	close(fds[1]);
+}
+
+// Failure cleanup: any auth failure must wipe the retained secret so a
+// later pooled checkout cannot accidentally reuse it.
+static void test_backend_auth_plain_failure_clears_secret() {
+	diag(">>> %s", __func__);
+	int fds[2];
+	socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+
+	MysqlxConnection conn;
+	conn.set_fd(fds[0]);
+	conn.set_backend_user("plainuser");
+	conn.set_backend_schema("testdb");
+	conn.set_backend_plain_password("plain-secret");
+	conn.init_backend_ds(fds[0]);
+	conn.set_state(MysqlxConnection::AUTHENTICATING);
+
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));
+	}
+	Mysqlx::Connection::Capabilities caps;
+	std::string caps_str;
+	caps.SerializeToString(&caps_str);
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_CONN_CAPABILITIES,
+		reinterpret_cast<const uint8_t*>(caps_str.data()), caps_str.size());
+	conn.step_auth();
+	{
+		uint8_t buf[4096];
+		usleep(5000);
+		read(fds[1], buf, sizeof(buf));  // drain AuthenticateStart
+	}
+
+	write_x_frame(fds[1], Mysqlx::ServerMessages_Type_ERROR, nullptr, 0);
+	ok(conn.step_auth() == -1, "plain-failure: backend Error fails auth");
+	ok(conn.get_auth_state() == MysqlxConnection::BACKEND_AUTH_ERROR,
+	   "plain-failure: auth state ERROR");
+	ok(!conn.has_backend_plain_password_for_test(),
+	   "plain-failure: secret wiped on auth failure");
+
+	close(fds[0]);
+	close(fds[1]);
 }
 
 // =====================================================================
@@ -640,6 +1103,7 @@ int main() {
 
 	test_backend_auth_state_transitions();
 	test_backend_auth_error_on_caps();
+	test_backend_auth_eof_fails_auth();
 	test_backend_auth_notice_skip();
 	test_backend_auth_error_on_wrong_caps_response();
 	test_backend_auth_error_on_set_caps_reject();
@@ -649,6 +1113,12 @@ int main() {
 	test_backend_auth_required_mode_no_fallback_on_error();
 	test_backend_auth_not_started_returns_progress();
 	test_backend_reset_clears_auth();
+
+	// Frontend-PLAIN -> backend PLAIN mapped fallback (issue #6553).
+	test_backend_auth_plain_over_tls();
+	test_backend_auth_tls_peer_close_fails();
+	test_backend_auth_plain_not_used_without_tls();
+	test_backend_auth_plain_failure_clears_secret();
 
 	// Auth-phase NOTICE per-state policy (#5695 part 2).
 	test_auth_phase_notice_known_types_drained();
