@@ -508,7 +508,7 @@ class ifaces_desc {
 	}
 };
 
-class sqlite3server_main_loop_listeners {
+class clickhouseserver_main_loop_listeners {
 	private:
 	struct tokenizer_owner {
 		tokenizer_t value;
@@ -585,7 +585,7 @@ class sqlite3server_main_loop_listeners {
 	}
 	ifaces_desc *ifaces_mysql;
 	clickhouse_ifaces_desc_t descriptor_new;
-	sqlite3server_main_loop_listeners() {
+	clickhouseserver_main_loop_listeners() {
 		pthread_rwlock_init(&rwlock, NULL);
 		ifaces_mysql=new ifaces_desc();
 		version=0;
@@ -645,7 +645,7 @@ class sqlite3server_main_loop_listeners {
 	}
 };
 
-static sqlite3server_main_loop_listeners S_amll;
+static clickhouseserver_main_loop_listeners S_amll;
 
 void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *pkt) {
 	char *error=NULL;
