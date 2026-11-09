@@ -596,6 +596,37 @@ static void test_plain_tls_rejects_empty_identity() {
 	SSL_CTX_free(peer_ctx);
 }
 
+static void test_plain_tls_rejects_leading_dot_identity() {
+	diag(">>> %s", __func__);
+	TestCa ca;
+	SSL_CTX* shared_ctx = nullptr;
+	SSL_CTX* peer_ctx = nullptr;
+	if (!create_test_ca(ca)) {
+		ok(false, "plain-tls-leading-dot: test CA created");
+		return;
+	}
+	shared_ctx = create_permissive_shared_ctx(ca.cert);
+	// OpenSSL's X509 hostname checker treats a leading dot on the checked
+	// name as an implicit sub-domain pattern: ".example.com" matches the
+	// certificate identity "test.example.com". This identity is injected at
+	// the connection layer (the real AF_INET resolver rejects it); the test
+	// verifies the TLS configuration guard, not endpoint reachability.
+	peer_ctx = create_signed_backend_peer_ctx(ca, "DNS:test.example.com");
+	if (!shared_ctx || !peer_ctx) {
+		ok(false, "plain-tls-leading-dot: trusted contexts created");
+		SSL_CTX_free(shared_ctx);
+		SSL_CTX_free(peer_ctx);
+		return;
+	}
+	const PlainTlsPeerResult result = run_plain_tls_peer_case(
+		shared_ctx, peer_ctx, ".example.com", "plain-secret");
+	expect_plain_tls_rejected(result, "plain-tls-leading-dot");
+	ok(SSL_CTX_get_verify_callback(shared_ctx) == permissive_peer_verify_cb,
+	   "plain-tls-leading-dot: shared permissive callback is unchanged");
+	SSL_CTX_free(shared_ctx);
+	SSL_CTX_free(peer_ctx);
+}
+
 static void test_plain_tls_rejects_untrusted_cert() {
 	diag(">>> %s", __func__);
 	// Isolate chain verification from hostname verification: the untrusted
@@ -1960,6 +1991,7 @@ int main() {
 	test_plain_tls_trusted_dns_positive();
 	test_plain_tls_trusted_ip_positive();
 	test_plain_tls_trusted_ipv6_positive();
+	test_plain_tls_rejects_leading_dot_identity();
 	test_plain_tls_rejects_untrusted_cert();
 	test_plain_tls_rejects_hostname_mismatch();
 	test_plain_tls_rejects_ip_mismatch();

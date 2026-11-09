@@ -735,7 +735,8 @@ static void test_mapped_plain_secret_selection() {
 	// involved in this mapping-only test.
 	auto attach_and_observe = [&](const MysqlxResolvedIdentity& identity,
 	                              const std::string& expected_mech,
-	                              const std::string& expected_data) {
+	                              const std::string& expected_data,
+	                              SSL_CTX* peer_ctx) {
 		sess.inject_identity_for_test(identity);
 		int bfds[2];
 		socketpair(AF_UNIX, SOCK_STREAM, 0, bfds);
@@ -750,7 +751,7 @@ static void test_mapped_plain_secret_selection() {
 		sess.to_process = true;
 		sess.handler();
 		const bool match = observe_backend_auth_start(
-			sess, conn, bfds[1], backend_server_ctx, expected_mech, expected_data);
+			sess, conn, bfds[1], peer_ctx, expected_mech, expected_data);
 		sess.backend_conn() = nullptr;
 		delete conn;
 		close(bfds[1]);
@@ -760,11 +761,15 @@ static void test_mapped_plain_secret_selection() {
 	MysqlxResolvedIdentity mapped {};
 	mapped.username = "testuser";
 	mapped.x_enabled = true;
+	// Stored verifier is a recognized $A$ hash, so the frontend PLAIN
+	// secret is the only replayable backend credential.
+	mapped.password = SHA2_HASH_5000;
 	mapped.default_route = "tls_route";
 	mapped.backend_auth_mode = MysqlxBackendAuthMode::mapped;
 	ok(attach_and_observe(mapped, "PLAIN",
-	                      std::string("\0", 1) + "testuser" + std::string("\0", 1) + "testpass"),
-	   "mapped: implicit mapped backend authenticates with PLAIN over TLS");
+	                      std::string("\0", 1) + "testuser" + std::string("\0", 1) + "testpass",
+	                      backend_server_ctx),
+	   "mapped: implicit mapped backend with a stored hash authenticates with PLAIN over TLS");
 
 	MysqlxResolvedIdentity service {};
 	service.username = "testuser";
@@ -774,7 +779,8 @@ static void test_mapped_plain_secret_selection() {
 	service.backend_username = "svc_account";
 	service.backend_password = "svc_password";
 	ok(attach_and_observe(service, "MYSQL41",
-	                      std::string("\0", 1) + "svc_account" + std::string("\0", 1)),
+	                      std::string("\0", 1) + "svc_account" + std::string("\0", 1),
+	                      backend_server_ctx),
 	   "mapped: explicit service account keeps MYSQL41 and its own credentials");
 
 	MysqlxResolvedIdentity explicit_mapped {};
@@ -784,8 +790,69 @@ static void test_mapped_plain_secret_selection() {
 	explicit_mapped.backend_auth_mode = MysqlxBackendAuthMode::mapped;
 	explicit_mapped.backend_password = "explicit_backend_password";
 	ok(attach_and_observe(explicit_mapped, "MYSQL41",
-	                      std::string("\0", 1) + "testuser" + std::string("\0", 1)),
+	                      std::string("\0", 1) + "testuser" + std::string("\0", 1),
+	                      backend_server_ctx),
 	   "mapped: explicit mapped backend_password suppresses frontend-secret fallback");
+
+	// Legacy deployment: stored credential is cleartext, frontend used
+	// PLAIN, and backend TLS presents a self-signed certificate that the
+	// shared core context historically accepted permissively. The mapped
+	// backend must retain the historical MYSQL41 mechanism instead of
+	// switching to PLAIN and requiring strict backend trust.
+	SSL_CTX* untrusted_peer_ctx = create_test_ssl_ctx("IP:127.0.0.1");
+	if (!untrusted_peer_ctx) {
+		ok(false, "mapped: cleartext legacy TLS peer context created");
+	} else {
+		MysqlxResolvedIdentity cleartext_mapped {};
+		cleartext_mapped.username = "testuser";
+		cleartext_mapped.x_enabled = true;
+		cleartext_mapped.password = "testpass";
+		cleartext_mapped.default_route = "tls_route";
+		cleartext_mapped.backend_auth_mode = MysqlxBackendAuthMode::mapped;
+		ok(attach_and_observe(cleartext_mapped, "MYSQL41",
+		                      std::string("\0", 1) + "testuser" + std::string("\0", 1),
+		                      untrusted_peer_ctx),
+		   "mapped: cleartext stored password keeps MYSQL41 on legacy permissive backend TLS");
+		SSL_CTX_free(untrusted_peer_ctx);
+	}
+
+	// A fully recognized mysql_native_password verifier is also
+	// replay-incompatible and must select backend PLAIN.
+	MysqlxResolvedIdentity native_mapped {};
+	native_mapped.username = "testuser";
+	native_mapped.x_enabled = true;
+	native_mapped.password = "*00E247AC5F9AF26AE0194B41E1E769DEE1429A29";
+	native_mapped.default_route = "tls_route";
+	native_mapped.backend_auth_mode = MysqlxBackendAuthMode::mapped;
+	ok(attach_and_observe(native_mapped, "PLAIN",
+	                      std::string("\0", 1) + "testuser" + std::string("\0", 1) + "testpass",
+	                      backend_server_ctx),
+	   "mapped: valid native verifier selects backend PLAIN");
+
+	// Malformed verifier-like values are injected here: the frontend would
+	// already reject them before backend selection. They must not be
+	// mistaken for replay-incompatible hashes.
+	MysqlxResolvedIdentity malformed_sha2_mapped {};
+	malformed_sha2_mapped.username = "testuser";
+	malformed_sha2_mapped.x_enabled = true;
+	malformed_sha2_mapped.password = "$A$005$short";
+	malformed_sha2_mapped.default_route = "tls_route";
+	malformed_sha2_mapped.backend_auth_mode = MysqlxBackendAuthMode::mapped;
+	ok(attach_and_observe(malformed_sha2_mapped, "MYSQL41",
+	                      std::string("\0", 1) + "testuser" + std::string("\0", 1),
+	                      backend_server_ctx),
+	   "mapped: malformed $A$ value does not select backend PLAIN");
+
+	MysqlxResolvedIdentity malformed_native_mapped {};
+	malformed_native_mapped.username = "testuser";
+	malformed_native_mapped.x_enabled = true;
+	malformed_native_mapped.password = "*NOTHEX";
+	malformed_native_mapped.default_route = "tls_route";
+	malformed_native_mapped.backend_auth_mode = MysqlxBackendAuthMode::mapped;
+	ok(attach_and_observe(malformed_native_mapped, "MYSQL41",
+	                      std::string("\0", 1) + "testuser" + std::string("\0", 1),
+	                      backend_server_ctx),
+	   "mapped: malformed native marker does not select backend PLAIN");
 
 	// Session reset must wipe the retained secret: after reset a mapped
 	// identity no longer selects PLAIN.
@@ -797,7 +864,8 @@ static void test_mapped_plain_secret_selection() {
 	after_reset.password = "testpass";
 	after_reset.default_route = "tls_route";
 	after_reset.backend_auth_mode = MysqlxBackendAuthMode::mapped;
-	ok(attach_and_observe(after_reset, "MYSQL41", std::string("\0\0", 2)),
+	ok(attach_and_observe(after_reset, "MYSQL41", std::string("\0\0", 2),
+	                      backend_server_ctx),
 	   "mapped: session reset wipes the retained PLAIN secret");
 
 	sess.client_ds().init(XDS_FRONTEND, -1);
@@ -1133,7 +1201,7 @@ static void test_worker_progress_without_frontend_wakeups() {
 	endpoints[10].push_back(ep);
 	store.install_for_test(std::move(routes), std::move(endpoints));
 	std::unordered_map<std::string, MysqlxResolvedIdentity> identities;
-	MysqlxResolvedIdentity id = plain_identity("testuser", "testpass");
+	MysqlxResolvedIdentity id = plain_identity("testuser", SHA2_HASH_5000);
 	id.require_tls = true;
 	identities.emplace("testuser", id);
 	store.install_identities_for_test(std::move(identities));
