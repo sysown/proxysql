@@ -5313,6 +5313,9 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 								RequestEnd(NULL, false);
 								return PgSQL_Local_Reply::SENT;
 							}
+							// PostgreSQL keeps the DateStyle it has. Recorded, '' would leave no current
+							// style, and the next DateStyle SET fails the validator's assert.
+							continue;
 						}
 					}
 

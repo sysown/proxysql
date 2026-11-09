@@ -849,8 +849,43 @@ static void test_stored_form_matches_postgresql() {
         va.c_str(), vb.c_str());
 }
 
+// ---------------------------------------------------------------------------
+// PostgreSQL keeps the current DateStyle on SET DateStyle = ''. Over the extended protocol
+// ProxySQL recorded '' as the client's DateStyle, so the next DateStyle SET read an empty
+// current style.
+// ---------------------------------------------------------------------------
+
+static const int EXTENDED_EMPTY_DATESTYLE_TESTS = 3;
+
+static bool execParams(PGconn* conn, const char* sql) {
+    PGresult* r = PQexecParams(conn, sql, 0, nullptr, nullptr, nullptr, nullptr, 0);
+    const bool good = PQresultStatus(r) == PGRES_COMMAND_OK;
+    if (!good) diag("%s: %s", sql, PQerrorMessage(conn));
+    PQclear(r);
+    return good;
+}
+
+static void test_extended_empty_datestyle() {
+    PGConnPtr conn = createNewConnection(ConnType::BACKEND);
+    if (!conn) {
+        skip(EXTENDED_EMPTY_DATESTYLE_TESTS, "no connection");
+        return;
+    }
+    const bool set_ok = execParams(conn.get(), "SET DateStyle = 'SQL, DMY'") && execParams(conn.get(), "SET DateStyle = ''");
+    const std::string after_empty = stored(conn.get(), "DateStyle");
+    ok(set_ok && after_empty == "SQL, DMY", "extended: SET DateStyle = '' keeps the recorded DateStyle (got '%s')", after_empty.c_str());
+    const bool next_ok = execParams(conn.get(), "SET DateStyle = 'YMD'");
+    const std::string after_next = stored(conn.get(), "DateStyle");
+    ok(next_ok && after_next == "SQL, YMD", "extended: the next DateStyle SET keeps the style (got '%s')", after_next.c_str());
+    PGresult* r = PQexec(conn.get(), "SHOW DateStyle");
+    const std::string shown = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : "<no result>";
+    PQclear(r);
+    ok(shown == "SQL, YMD", "extended: the backend agrees (SHOW DateStyle is '%s')", shown.c_str());
+}
+
 int main(int argc, char** argv) {
     int total_tests = 2 + untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE + 1; // + servers restored
+    total_tests += EXTENDED_EMPTY_DATESTYLE_TESTS;
     total_tests += stored_form_cases.size() + 1;
     total_tests += all_default_cases().size();
     total_tests += EMPTY_SEARCH_PATH_TESTS;
@@ -969,6 +1004,7 @@ int main(int argc, char** argv) {
     conn.reset();
     test_quoted_default_is_a_value();
     test_stored_form_matches_postgresql();
+    test_extended_empty_datestyle();
     usleep(500000); // let its backend connection finish resetting before the pool is flushed
     test_untracked_set_does_not_leak();
     usleep(500000);
