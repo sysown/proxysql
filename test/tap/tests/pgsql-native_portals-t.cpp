@@ -472,9 +472,7 @@ static bool set_config_portal_executed_later(PGconn* admin, std::string& got) {
 		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
 	if (!execAdmin(admin, "SET pgsql-set_parser_algorithm=3") || !execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME")) {
 		got = "cannot enable pgsql-set_parser_algorithm=3";
-		return false;
-	}
-	try {
+	} else try {
 		auto c = connectProxy();
 		c->execute("BEGIN");
 		collectUntilReady(*c);

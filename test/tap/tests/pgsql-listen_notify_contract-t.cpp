@@ -243,7 +243,9 @@ int main(int, char**) {
 	}
 	for (size_t i = 0; i < N_NOT_REFUSED; i++) {
 		std::string st = run_pipeline(c, NOT_REFUSED[i].sql);
-		ok(st != "0A000", "pipelined statement not refused as LISTEN -- %s (got '%s')",
+		// The pipeline must have run and answered the statement: the sentinels are not results.
+		ok(st != "0A000" && st != "<no result>" && st != "<no pipeline>",
+		   "pipelined statement not refused as LISTEN -- %s (got '%s')",
 		   NOT_REFUSED[i].label, st.c_str());
 	}
 	for (size_t i = 0; i < N_MULTI_REFUSED; i++) {
