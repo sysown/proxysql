@@ -112,6 +112,27 @@ IFS= read -r -d '' TEST_SCRIPT << 'SCRIPT_BODY' || true
 set -euo pipefail
 PKG_TYPE="$1"
 HAS_PLUGINS="$2"
+DIAG="${3:-0}"
+
+# Forensic phase markers only; never alter a package-command exit status.
+diag_now() {
+    local up="" whole frac
+    if [[ "$(uname -s 2>/dev/null)" == "Linux" ]] && read -r up _ </proc/uptime 2>/dev/null && [[ "$up" == *.* ]]; then
+        whole="${up%%.*}"
+        frac="${up#*.}00"
+        printf '%s.%s' "$whole" "${frac:0:2}"
+    else
+        printf 'UNAVAILABLE'
+    fi
+}
+diag_begin() {
+    [[ "$DIAG" == "1" ]] || return 0
+    printf 'DIAG PHASE BEGIN %s BOOTTIME=%ss\n' "$1" "$(diag_now)" || true
+}
+diag_end() {
+    [[ "$DIAG" == "1" ]] || return 0
+    printf 'DIAG PHASE END %s RC=%s BOOTTIME=%ss\n' "$1" "$2" "$(diag_now)" || true
+}
 
 # Portable ELF check — minimal base images (debian-slim, etc.) may not ship
 # `file` or `which`, so validate the ELF magic bytes (7f 45 4c 46) directly.
@@ -120,32 +141,52 @@ is_elf() { [ "$(head -c4 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454
 echo "==> Installing package: /tmp/pkg.$PKG_TYPE"
 case "$PKG_TYPE" in
     deb)
-        apt-get update -qq 2>/dev/null || true
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /tmp/pkg.deb 2>&1
+        diag_begin apt_update
+        rc=0
+        if [[ "$DIAG" == "1" ]]; then
+            apt-get update -qq 2>&1 || rc=$?
+        else
+            apt-get update -qq 2>/dev/null || rc=$?
+        fi
+        diag_end apt_update "$rc"
+        diag_begin apt_install
+        rc=0
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /tmp/pkg.deb 2>&1 || rc=$?
+        diag_end apt_install "$rc"
+        [[ "$rc" == "0" ]] || exit "$rc"
         ;;
     rpm)
+        diag_begin rpm_install
+        rc=0
         if command -v dnf &>/dev/null; then
-            dnf install -y -q /tmp/pkg.rpm 2>&1
+            dnf install -y -q /tmp/pkg.rpm 2>&1 || rc=$?
         elif command -v yum &>/dev/null; then
-            yum install -y -q /tmp/pkg.rpm 2>&1
+            yum install -y -q /tmp/pkg.rpm 2>&1 || rc=$?
         elif command -v zypper &>/dev/null; then
             # Release-build RPMs are intentionally unsigned until the
             # release-kraken signing step.  Keep dependency resolution and
             # installation strict while deferring only the signature gate.
-            zypper --non-interactive --no-gpg-checks install -y /tmp/pkg.rpm 2>&1
+            zypper --non-interactive --no-gpg-checks install -y /tmp/pkg.rpm 2>&1 || rc=$?
         else
             echo "ERROR: no supported package manager (dnf/yum/zypper)" >&2
             exit 1
         fi
+        diag_end rpm_install "$rc"
+        [[ "$rc" == "0" ]] || exit "$rc"
         ;;
 esac
 echo ""
 
 echo "==> Binary smoke test (proxysql --version)"
-proxysql --version 2>&1 | head -5
+diag_begin proxysql_version
+rc=0
+proxysql --version 2>&1 | head -5 || rc=$?
+diag_end proxysql_version "$rc"
+[[ "$rc" == "0" ]] || exit "$rc"
 echo ""
 
 echo "==> Plugin .so presence check"
+diag_begin plugin_checks
 ALL_OK=0
 if [[ "$HAS_PLUGINS" == "true" ]]; then
     for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
@@ -175,6 +216,7 @@ else
     ALL_OK=1
 fi
 
+diag_end plugin_checks "$ALL_OK"
 if [[ "$ALL_OK" != "0" ]]; then
     echo "" >&2
     echo "==> Package verification FAILED" >&2
@@ -186,7 +228,35 @@ SCRIPT_BODY
 
 # ---- Run verification in clean distro container ----
 CID="proxysql-verify-$$"
+
+# CI-Linux bounded failure snapshot (measurement only; never gates cleanup).
+DIAG=0
+if [[ "${GITHUB_ACTIONS:-}" == "true" && "$(uname -s 2>/dev/null)" == "Linux" ]]; then
+    DIAG=1
+fi
+
+diag_container_state() {
+    local rc=0 out=""
+    if ! timeout --version 2>/dev/null | grep -q GNU; then
+        printf 'DIAGNOSTIC_UNAVAILABLE: GNU timeout missing; container metadata skipped\n'
+        return 0
+    fi
+    printf '==> DIAG container state for %s (bounded)\n' "$CID"
+    out="$(timeout --kill-after=1s 4s docker inspect --format '{{.State.Status}} running={{.State.Running}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' "$CID" 2>&1)" || rc=$?
+    printf 'DIAG inspect rc=%s %s\n' "$rc" "$out"
+    [[ "$rc" == "0" ]] || printf 'DIAGNOSTIC_UNAVAILABLE: docker inspect rc=%s\n' "$rc"
+    rc=0
+    out="$(timeout --kill-after=1s 4s docker top "$CID" -eo pid,comm 2>&1 | sed -n '1,40p')" || rc=$?
+    printf 'DIAG top rc=%s\n%s\n' "$rc" "$out"
+    [[ "$rc" == "0" ]] || printf 'DIAGNOSTIC_UNAVAILABLE: docker top rc=%s\n' "$rc"
+    return 0
+}
+
 cleanup() {
+    local rc=$?
+    if [[ "$DIAG" == "1" && "$rc" != "0" ]]; then
+        diag_container_state || true
+    fi
     docker kill "$CID" >/dev/null 2>&1 || true
     docker rm "$CID" >/dev/null 2>&1 || true
 }
@@ -202,7 +272,7 @@ fi
 docker cp "$PKG_PATH" "$CID:/tmp/pkg.$PKG_TYPE"
 
 # Run the test script inside the container
-if docker exec -i "$CID" bash -s "$PKG_TYPE" "$HAS_PLUGINS" <<< "$TEST_SCRIPT"; then
+if docker exec -i "$CID" bash -s "$PKG_TYPE" "$HAS_PLUGINS" "$DIAG" <<< "$TEST_SCRIPT"; then
     echo ""
     echo "==> Package verification PASSED for $PKG_FILE"
     exit 0
