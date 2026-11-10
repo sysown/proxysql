@@ -135,7 +135,7 @@ jobs:
           -e TSAN_OPTIONS \
           --entrypoint bash \
           ubuntu24_dbg_build \
-          -lc 'apt-get update -qq && apt-get install -y --no-install-recommends python3-packaging libprotobuf-dev && cd /opt/proxysql && test/infra/control/run-tests-isolated.bash'
+          -lc 'apt-get update -qq && apt-get install -y --no-install-recommends python3-packaging libprotobuf-dev default-mysql-client postgresql-client && command -v mysql && command -v psql && cd /opt/proxysql && test/infra/control/run-tests-isolated.bash'
 
     - name: Fix artifact permissions
       if: ${{ failure() && !cancelled() }}
