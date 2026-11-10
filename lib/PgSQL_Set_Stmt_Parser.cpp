@@ -93,6 +93,51 @@ void PgSQL_Set_Stmt_Parser::unquote_if_quoted(std::string& v) {
 	}
 }
 
+PgSQL_Set_Stmt_Parser::GucListResult PgSQL_Set_Stmt_Parser::guc_list_to_set_list(const std::string& raw, std::string* out) {
+	// PostgreSQL's SplitIdentifierString() with ',' as the separator.
+	auto space = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; };
+	out->clear();
+	size_t p = 0;
+	const size_t n = raw.size();
+	while (p < n && space(raw[p])) p++;
+	if (p == n) return GucListResult::OK; // an empty list
+	for (;;) {
+		std::string name;
+		if (raw[p] == '"') {
+			for (p++;; p++) {
+				if (p >= n) return GucListResult::INVALID; // no closing quote
+				if (raw[p] == '"') {
+					if (p + 1 < n && raw[p + 1] == '"') { name += '"'; p++; continue; }
+					p++;
+					break;
+				}
+				name += raw[p];
+			}
+		} else {
+			const size_t start = p;
+			while (p < n && raw[p] != ',' && !space(raw[p])) p++;
+			if (p == start) return GucListResult::INVALID; // empty unquoted name
+			name = raw.substr(start, p - start);
+			for (char& c : name) {
+				if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+			}
+		}
+		if (name.empty() || name.size() > 63) return GucListResult::UNSUPPORTED;
+		if (out->empty() == false) *out += ", ";
+		*out += '"';
+		for (char c : name) {
+			*out += c;
+			if (c == '"') *out += '"';
+		}
+		*out += '"';
+		while (p < n && space(raw[p])) p++;
+		if (p == n) return GucListResult::OK;
+		if (raw[p] != ',') return GucListResult::INVALID;
+		p++;
+		while (p < n && space(raw[p])) p++;
+	}
+}
+
 std::map<std::string,std::vector<std::string>> PgSQL_Set_Stmt_Parser::parse1v2() {
 
 	std::map<std::string,std::vector<std::string>> result = {};

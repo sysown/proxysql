@@ -17,6 +17,7 @@
 
 #include "setparser_test_common.h"
 #include "Query_Processor_ParserSQL.h"
+#include "PgSQL_Set_Stmt_Parser.h"
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
@@ -1045,6 +1046,46 @@ void TestSetConfigClassifier() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// set_config('search_path', ...) takes a raw GUC list, SET takes SQL: the list is rewritten as
+// SET would write it, every name double-quoted. Splitting measured on PostgreSQL 16.
+// ---------------------------------------------------------------------------
+
+using GL = PgSQL_Set_Stmt_Parser::GucListResult;
+struct GucListCase { const char* raw; GL result; const char* out; };
+
+static const GucListCase guc_list_cases[] = {
+	{ "a, b", GL::OK, "\"a\", \"b\"" },
+	{ "A,   b", GL::OK, "\"a\", \"b\"" },
+	{ "a-b;c, \"X y\", B, 'q'", GL::OK, "\"a-b;c\", \"X y\", \"b\", \"'q'\"" },
+	{ "\"$user\", public", GL::OK, "\"$user\", \"public\"" },
+	{ "$user", GL::OK, "\"$user\"" },
+	{ "\"a\"\"b\"", GL::OK, "\"a\"\"b\"" },
+	{ "A\"b", GL::OK, "\"a\"\"b\"" },
+	{ "  a  ,  \"B\"  ", GL::OK, "\"a\", \"B\"" },
+	{ "\xd1\x81\xd1\x85\xd0\xb5\xd0\xbc\xd0\xb0, public", GL::OK, "\"\xd1\x81\xd1\x85\xd0\xb5\xd0\xbc\xd0\xb0\", \"public\"" },
+	{ "", GL::OK, "" },
+	{ "  ", GL::OK, "" },
+	{ "a b", GL::INVALID, "" },
+	{ "a,,b", GL::INVALID, "" },
+	{ "\"a", GL::INVALID, "" },
+	{ "a,", GL::INVALID, "" },
+	{ ",a", GL::INVALID, "" },
+	{ "\"a\"b", GL::INVALID, "" },
+	{ "a\tb", GL::INVALID, "" },
+	// PostgreSQL takes these; SET cannot write them.
+	{ "\"\"", GL::UNSUPPORTED, "" },
+	{ "a123456789012345678901234567890123456789012345678901234567890123", GL::UNSUPPORTED, "" },
+};
+
+void TestGucListToSetList() {
+	for (const auto& c : guc_list_cases) {
+		std::string out = "<untouched>";
+		const GL r = PgSQL_Set_Stmt_Parser::guc_list_to_set_list(c.raw, &out);
+		const bool good = r == c.result && (r != GL::OK || out == c.out);
+		ok(good, "guc_list_to_set_list('%s') -> %d '%s' (got %d '%s')", c.raw, (int)c.result, c.out, (int)r, out.c_str());
+	}
+}
 
 int main(int argc, char** argv) {
 	unsigned int p = 0;
@@ -1076,6 +1117,7 @@ int main(int argc, char** argv) {
 	p += std::size(parsersql_partial_ast_strict);  // TestPartialAstGate
 	p += 13;  // TestPgsqlProtocolTerminator
 	p += std::size(set_config_cases);  // TestSetConfigClassifier
+	p += std::size(guc_list_cases);  // TestGucListToSetList
 	plan(p);
 	TestParse(sql_mode, std::size(sql_mode), "sql_mode");
 	TestParse(time_zone, std::size(time_zone), "time_zone");
@@ -1104,6 +1146,7 @@ int main(int argc, char** argv) {
 	TestPartialAstGate();
 	TestPgsqlProtocolTerminator();
 	TestSetConfigClassifier();
+	TestGucListToSetList();
 
 	return exit_status();
 }
