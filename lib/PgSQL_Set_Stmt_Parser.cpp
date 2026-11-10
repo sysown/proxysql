@@ -101,6 +101,9 @@ PgSQL_Set_Stmt_Parser::GucListResult PgSQL_Set_Stmt_Parser::guc_list_to_set_list
 	const size_t n = raw.size();
 	while (p < n && space(raw[p])) p++;
 	if (p == n) return GucListResult::OK; // an empty list
+	// A name SET cannot write is reported only once the whole list is read: a list PostgreSQL
+	// refuses gets PostgreSQL's error locally instead of locking the session.
+	bool unsupported = false;
 	for (;;) {
 		std::string name;
 		if (raw[p] == '"') {
@@ -122,7 +125,7 @@ PgSQL_Set_Stmt_Parser::GucListResult PgSQL_Set_Stmt_Parser::guc_list_to_set_list
 				if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
 			}
 		}
-		if (name.empty() || name.size() > 63) return GucListResult::UNSUPPORTED;
+		if (name.empty() || name.size() > 63) unsupported = true;
 		if (out->empty() == false) *out += ", ";
 		*out += '"';
 		for (char c : name) {
@@ -131,7 +134,7 @@ PgSQL_Set_Stmt_Parser::GucListResult PgSQL_Set_Stmt_Parser::guc_list_to_set_list
 		}
 		*out += '"';
 		while (p < n && space(raw[p])) p++;
-		if (p == n) return GucListResult::OK;
+		if (p == n) return unsupported ? GucListResult::UNSUPPORTED : GucListResult::OK;
 		if (raw[p] != ',') return GucListResult::INVALID;
 		p++;
 		while (p < n && space(raw[p])) p++;

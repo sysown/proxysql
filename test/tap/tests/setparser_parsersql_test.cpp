@@ -1078,6 +1078,9 @@ static const GucListCase guc_list_cases[] = {
 	{ "a\tb", GL::INVALID, "" },
 	// PostgreSQL takes these; SET cannot write them.
 	{ "\"\"", GL::UNSUPPORTED, "" },
+	// A list PostgreSQL refuses is INVALID even after a name SET cannot write.
+	{ "\"\", a b", GL::INVALID, "" },
+	{ "a123456789012345678901234567890123456789012345678901234567890123, ,", GL::INVALID, "" },
 	{ "a123456789012345678901234567890123456789012345678901234567890123", GL::UNSUPPORTED, "" },
 };
 
