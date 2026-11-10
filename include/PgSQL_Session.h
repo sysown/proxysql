@@ -232,6 +232,8 @@ public:
 	// Simple-query cache seed, computed at lookup and reused when the result is stored.
 	// 0 means not computed for this query; begin() clears it so no query uses another's.
 	uint64_t simple_cache_seed {};
+	// PGSQL_SCAN_* targets found in this query by pgsql_query_scan(); begin() clears them.
+	uint32_t scan_found {};
 	PgSQL_Session* sess;
 	unsigned char* QueryPointer;
 	SQP_par_t QueryParserArgs;

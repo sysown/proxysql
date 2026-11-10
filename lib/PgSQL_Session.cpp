@@ -328,6 +328,7 @@ void PgSQL_Query_Info::begin(unsigned char *_p, int len, bool header, const PgSQ
 	QueryPointer=NULL;
 	QueryLength=0;
 	simple_cache_seed = 0;
+	scan_found = 0;
 	memset(&QueryParserArgs, 0, sizeof(QueryParserArgs));
 	start_time=sess->thread->curtime;
 	init(_p, len, header);
@@ -376,6 +377,7 @@ void PgSQL_Query_Info::swap(PgSQL_Query_Info& o) noexcept {
 	std::swap(stmt_cache_valid, o.stmt_cache_valid);
 #endif
 	std::swap(simple_cache_seed, o.simple_cache_seed);
+	std::swap(scan_found, o.scan_found);
 	std::swap(QueryPointer, o.QueryPointer);
 	std::swap(QueryLength, o.QueryLength);
 	std::swap(PgQueryCmd, o.PgQueryCmd);
@@ -2532,8 +2534,8 @@ __implicit_flush:
 								// holding the word is digested in full for this check. Leading
 								// comments are skipped: the digest keeps them with
 								// query_digests_keep_comment.
-								listen_pending = pgsql_query_has_stmt_keyword(CurrentQuery.get_digest_text(),
-									query_ptr, "LISTEN");
+								CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(), query_ptr);
+								listen_pending = (CurrentQuery.scan_found & PGSQL_SCAN_LISTEN) != 0;
 								if (listen_pending && listen_can_be_supported() == false) {
 									listen_pending = false;
 									handler_refuse_listen(&pkt);
@@ -7935,8 +7937,8 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	// Recomputed per statement; see the simple-query path. PostgreSQL rejects a Parse holding
 	// more than one statement, but the digest still goes through the same scan: it skips the
 	// comments kept by query_digests_keep_comment, including one cut short of its terminator.
-	listen_pending = pgsql_query_has_stmt_keyword(CurrentQuery.get_digest_text(),
-		parse_data.query_string, "LISTEN");
+	CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(), parse_data.query_string);
+	listen_pending = (CurrentQuery.scan_found & PGSQL_SCAN_LISTEN) != 0;
 	if (listen_pending && listen_can_be_supported() == false) {
 		listen_pending = false;
 		proxy_warning("LISTEN command is not supported\n");
