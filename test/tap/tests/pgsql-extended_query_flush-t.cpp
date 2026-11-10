@@ -18,7 +18,8 @@
  *
  * Expected reply sequences were taken from PostgreSQL 17 directly
  * (docs/superpowers/specs/2026-10-26-pgsql-client-flush-design.md, section 2).
- * Replies are read until the socket stays quiet; a closed socket fails the case.
+ * Flush probes read until the socket stays quiet; known Simple Query cycles wait for ReadyForQuery.
+ * A closed socket fails the case.
  * Configuration is only loaded to runtime, never saved to disk.
  */
 #include <chrono>
@@ -162,6 +163,38 @@ static std::string run(PgConnection& c, const std::function<void()>& send, int q
 	try {
 		send();
 		return tokens(c.readUntilQuiet(quiet_ms));
+	} catch (const PgException& e) {
+		return std::string("CLOSED:") + e.what();
+	}
+}
+
+// A Simple Query completes at ReadyForQuery ('Z'), not at an idle socket interval.
+// Flush-without-Sync probes stay on run() with the original QUIET_MS (300ms).
+// After that first 'Z' the socket gets the same QUIET_MS quiet drain as run(), and every
+// frame that arrives in it is kept: returning at 'Z' alone would hide an extra or duplicate
+// reply that the original quiet probe would have seen, weakening those assertions.
+// Each readMessage keeps the connection's 5000ms read timeout; the 5s deadline is
+// only checked between frames, so this is not a strict wall for the whole cycle:
+// an in-flight frame can overshoot it. The quiet drain adds its own 300ms, plus
+// another quiet interval after each extra frame it reads.
+static std::string run_until_ready(PgConnection& c, const std::function<void()>& send) {
+	try {
+		send();
+		Msgs msgs;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		for (;;) {
+			if (std::chrono::steady_clock::now() >= deadline)
+				throw PgException("ReadyForQuery deadline exceeded");
+			char type = 0;
+			std::vector<uint8_t> payload;
+			c.readMessage(type, payload);
+			msgs.emplace_back(type, std::move(payload));
+			if (type == 'Z') {
+				const auto tail = c.readUntilQuiet(QUIET_MS);
+				msgs.insert(msgs.end(), tail.begin(), tail.end());
+				return tokens(msgs);
+			}
+		}
 	} catch (const PgException& e) {
 		return std::string("CLOSED:") + e.what();
 	}
@@ -873,7 +906,7 @@ static void case_release_other_hostgroup(Mode mode, bool) {
 	{
 		auto a = client(m);
 		auto b = client(m);
-		check(run(*a, [&] { a->sendQuery("CREATE TEMP TABLE flush_tmp (x int)"); }), "C(CREATE TABLE) Z(I)",
+		check(run_until_ready(*a, [&] { a->sendQuery("CREATE TEMP TABLE flush_tmp (x int)"); }), "C(CREATE TABLE) Z(I)",
 			"release other hostgroup: A CREATE TEMP TABLE", m, false);
 		check(run(*a, [&] { a->prepareStatement("", uniq() + "SELECT 'flush_other_hg'", false); a->describeStatement("", false);
 				a->sendFlush(); }), "1 t T", "release other hostgroup: A P D(S) H", m, false);
@@ -1129,7 +1162,7 @@ static void case_row15_cache(Mode mode, bool) {
 				c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendQuery("SELECT 1"); c->endBuffering(); });
 			want = "1 2 C(INSERT 0 1) " + want;
 		} else if (s == 3) {
-			q = run(*c, [&] { c->sendQuery("SET DateStyle = 'ISO'"); });
+			q = run_until_ready(*c, [&] { c->sendQuery("SET DateStyle = 'ISO'"); });
 			want = "C(SET) Z(I)";
 		} else {
 			q = run(*c, [&] { c->sendQuery("SELECT 1"); });
@@ -1160,7 +1193,7 @@ static void case_row11(Mode m, bool txn) {
 		check(run(*c, [&] { c->prepareStatement("flush_s1", uniq() + "SELECT 42 AS v", false); c->bindStatement("flush_s1", "p1", {}, {}, false);
 				c->sendFlush(); }), "1 2", "row 11: P(s1) B(p1) H", m, txn);
 	}
-	check(run(*c, [&] { c->sendQuery("SELECT 42"); }), std::string("T D C(SELECT 1) Z(") + txn_z(txn) + ")", "row 11: Q SELECT 42", m, txn);
+	check(run_until_ready(*c, [&] { c->sendQuery("SELECT 42"); }), std::string("T D C(SELECT 1) Z(") + txn_z(txn) + ")", "row 11: Q SELECT 42", m, txn);
 	ok(rows(tag) == (txn ? 0 : 1), "row 11 [%s%s]: the INSERT is %s (rows=%ld)", mode_name(m), txn ? ", in txn" : "",
 		txn ? "still in the open transaction" : "committed by the Query", rows(tag));
 	if (native) {
@@ -1243,7 +1276,7 @@ static void case_row11_var(Mode m, bool) {
 			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush(); });
 		ok(set.size() >= 6 && set.compare(set.size() - 6, 6, "C(SET)") == 0, "row 11 var [%s]: P B E(SET DateStyle) H (got '%s')",
 			mode_name(m), set.c_str());
-		check(run(*c, [&] { c->sendQuery(good ? "SELECT 1" : "SELECT 1/0"); }), good ? "T D C(SELECT 1) Z(I)" : "E(22012) Z(I)",
+		check(run_until_ready(*c, [&] { c->sendQuery(good ? "SELECT 1" : "SELECT 1/0"); }), good ? "T D C(SELECT 1) Z(I)" : "E(22012) Z(I)",
 			good ? "row 11 var: Q SELECT 1" : "row 11 var: Q SELECT 1/0", m, false);
 		ok(rows(tag) == good, "row 11 var [%s]: the INSERT is %s (rows=%ld)", mode_name(m), good ? "committed" : "rolled back", rows(tag));
 	}
@@ -1443,7 +1476,7 @@ static void case_group_lock_route(Mode m, bool) {
 	auto c = client(m);
 	const std::string tag = tag_for("lockroute", m, false);
 	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group lock route: P B E(INSERT) H", m, false);
-	check(run(*c, [&] { c->sendQuery("SET application_name = 'flush_lock_route'; SELECT 64"); }),
+	check(run_until_ready(*c, [&] { c->sendQuery("SET application_name = 'flush_lock_route'; SELECT 64"); }),
 		"C(SET) T D C(SELECT 1) Z(I)", "group lock route: Q SET ...; SELECT 64", m, false);
 	ok(rows(tag) == 1, "group lock route [%s]: the INSERT is committed with the Query (rows=%ld)", mode_name(m), rows(tag));
 	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9164");
