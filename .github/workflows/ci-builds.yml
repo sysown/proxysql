@@ -403,7 +403,7 @@ jobs:
             aws_iam_helper=test/deps/aws_iam_mysql_server/aws_iam_mysql_server-t
             aws_iam_staged=test/tap/tap/bin/aws_iam_mysql_server-t
             if [ ! -x "${aws_iam_helper}" ]; then
-              echo "ERROR: ${aws_iam_unit} was built but required helper ${aws_iam_helper} is missing or not executable"
+              echo "ERROR: ${aws_iam_unit} was built but required helper ${aws_iam_helper} is missing or not executable" >&2
               exit 1
             fi
             mkdir -p test/tap/tap/bin
@@ -415,7 +415,7 @@ jobs:
             echo ">>> AWS IAM helper source sha256: ${aws_iam_source_sha256}"
             echo ">>> AWS IAM helper staged sha256: ${aws_iam_staged_sha256}"
             if [ "${aws_iam_source_sha256}" != "${aws_iam_staged_sha256}" ]; then
-              echo "ERROR: staged AWS IAM helper bytes differ from the built helper"
+              echo "ERROR: staged AWS IAM helper bytes differ from the built helper" >&2
               exit 1
             fi
           else

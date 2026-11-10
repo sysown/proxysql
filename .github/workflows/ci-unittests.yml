@@ -104,7 +104,7 @@ jobs:
           exit 0
         fi
         if [ ! -x "${aws_iam_staged}" ]; then
-          echo "ERROR: ${aws_iam_unit} requires ${aws_iam_staged}, but the staged helper is missing or not executable"
+          echo "ERROR: ${aws_iam_unit} requires ${aws_iam_staged}, but the staged helper is missing or not executable" >&2
           exit 1
         fi
         aws_iam_before_sha256=$(sha256sum "${aws_iam_staged}" | awk '{print $1}')
@@ -116,7 +116,7 @@ jobs:
         echo ">>> staged sha256:   ${aws_iam_before_sha256}"
         echo ">>> restored sha256: ${aws_iam_after_sha256}"
         if [ "${aws_iam_before_sha256}" != "${aws_iam_after_sha256}" ]; then
-          echo "ERROR: restored AWS IAM helper bytes differ from the staged helper"
+          echo "ERROR: restored AWS IAM helper bytes differ from the staged helper" >&2
           exit 1
         fi
 
