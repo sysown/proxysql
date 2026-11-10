@@ -138,6 +138,45 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_mysql(
  */
 std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(const std::string& query);
 
+/** What a query does with PostgreSQL's set_config(), as far as the query text shows. */
+enum class PgSetConfigVerdict : uint8_t {
+	NOT_SET_CONFIG, ///< changes no setting
+	TRACK,          ///< the bare call with literal arguments, session-level: follow it
+	LOCAL_ERROR,    ///< PostgreSQL refuses it before it runs: answer with `message`
+	LOCK,           ///< changes, or may change, a setting in a way that cannot be followed
+};
+/** The error of a LOCAL_ERROR verdict; the caller maps it to a SQLSTATE. */
+enum class PgSetConfigError : uint8_t {
+	NONE,
+	UNDEFINED_FUNCTION, ///< 42883: an argument of the wrong type, function lookup fails
+	INVALID_BOOLEAN,    ///< 22P02: is_local is a string that is no boolean
+	NULL_NAME,          ///< 22004: the setting name is NULL
+	EMPTY_NAME,         ///< 42704: the setting name is ''
+};
+struct PgSetConfigCall {
+	PgSetConfigVerdict verdict = PgSetConfigVerdict::NOT_SET_CONFIG;
+	PgSetConfigError error = PgSetConfigError::NONE;
+	std::string message;     ///< LOCAL_ERROR: PostgreSQL's text, verbatim
+	std::string name;        ///< TRACK: setting name, decoded, case as written
+	bool value_null = false; ///< TRACK: the value is NULL (reset to the default)
+	std::string value;       ///< TRACK: value, decoded
+	std::string column;      ///< TRACK: name of the result column
+};
+
+/**
+ * @brief Classifies a PostgreSQL query for set_config() tracking.
+ *
+ * Pure: no session state and no ProxySQL globals, so it can move to the ParserSQL repository
+ * with its tests. Call it only for a query whose digest scan found set_config, pg_settings or
+ * DO: anything ParserSQL does not parse in full is LOCK. Tracked-name lookup, ignored names and
+ * value validation are the caller's.
+ *
+ * @param standard_conforming_strings The client's setting: when off, PostgreSQL reads '\' in
+ *        plain strings as an escape and ParserSQL does not, so every call is LOCK.
+ */
+PgSetConfigCall parsersql_classify_set_config_pgsql(const char* query, size_t len,
+	bool standard_conforming_strings);
+
 UserVariableQueryDecision mysql_user_variable_query_disposition(
 	const char* query, size_t query_length,
 	bool must_classify_and_sync, bool plain_text_com_query,
