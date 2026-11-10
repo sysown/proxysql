@@ -36,6 +36,7 @@
 #include <mutex>
 #include <pthread.h>
 #include <spawn.h>
+#include <string>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -110,9 +111,7 @@ void child_block_tls() {
 	std::unique_lock<std::mutex> lock(g_child_gate_mutex);
 	g_child_tls_entered = true;
 	g_child_gate_cv.notify_all();
-	for (;;) {
-		g_child_gate_cv.wait(lock);
-	}
+	g_child_gate_cv.wait(lock, [] { return false; });
 }
 
 void child_wait_tls_entered() {
@@ -520,9 +519,11 @@ ChildRun run_child_mode(const char *mode, double guard_seconds) {
 		posix_spawn_file_actions_addclose(&actions, fds[0]);
 	}
 
+	char child_program_name[] = "version_check_thread_owner_unit-t";
+	std::string child_mode_arg(mode);
 	char *child_argv[] = {
-		const_cast<char *>("version_check_thread_owner_unit-t"),
-		const_cast<char *>(mode),
+		child_program_name,
+		child_mode_arg.data(),
 		nullptr
 	};
 	pid_t pid = -1;
