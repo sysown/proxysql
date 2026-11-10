@@ -511,6 +511,7 @@
   "reg_test_6421_parsersql_kill-t" : [ "legacy-g1","mysql84-g1" ],
   "reg_test_6428_parsersql_in_values-t" : [ "legacy-g1","mysql84-g1" ],
   "reg_test_6469_set_transaction_characteristics-t" : [ "legacy-g1","mysql84-g1" ],
+  "reg_test_6611_6612_transaction_errors-t" : [ "legacy-g1","mysql84-g1" ],
   "reg_test__ssl_client_busy_wait-t" : [ "legacy-g2","mysql-auto_increment_delay_multiplex=0-g2","mysql-multiplexing=false-g2","mysql-query_digests=0-g2","mysql-query_digests_keep_comment=1-g2","mysql84-g2","mysql90-g2","mysql95-g2" ],
   "reg_test_add_row2_16mb_boundary-t" : [ "mysql84-g8","mysql90-g3","mysql95-g3" ],
   "reg_test_com_change_user_malformed_packet-t" : [ "mysql84-g6","mysql95-g1" ],
