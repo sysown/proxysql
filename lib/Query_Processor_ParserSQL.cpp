@@ -1733,7 +1733,8 @@ int sc_parse_bool(const std::string& raw) {
     const size_t len = e - b;
     if (len == 0) return -1;
     auto prefix_of = [&](const char* w) { return len <= strlen(w) && strncasecmp(s, w, len) == 0; };
-    switch (s[0] | 0x20) {
+    // Lowercase letters only: '|0x20' alone would read the control bytes \x10 and \x11 as '0' and '1'.
+    switch ((s[0] >= 'A' && s[0] <= 'Z') ? (s[0] | 0x20) : s[0]) {
         case 't': return prefix_of("true") ? 1 : -1;
         case 'f': return prefix_of("false") ? 0 : -1;
         case 'y': return prefix_of("yes") ? 1 : -1;

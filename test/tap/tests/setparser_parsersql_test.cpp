@@ -1008,6 +1008,9 @@ static const SetConfigCase set_config_cases[] = {
 	SC_22P02("SELECT set_config('TimeZone','UTC',' maybe ')", " maybe "),
 	SC_22P02("SELECT set_config('TimeZone','UTC','truex')", "truex"),
 	SC_22P02("SELECT set_config('TimeZone','UTC','onx')", "onx"),
+	// Control bytes that '|0x20' would turn into '0' and '1'.
+	SC_22P02("SELECT set_config('TimeZone','UTC',E'\\x10')", "\x10"),
+	SC_22P02("SELECT set_config('TimeZone','UTC',E'\\x11')", "\x11"),
 	SC_ERR("SELECT set_config(NULL,'UTC',false)", E::NULL_NAME, "SET requires parameter name"),
 	SC_ERR("SELECT set_config(NULL,NULL,NULL)", E::NULL_NAME, "SET requires parameter name"),
 	SC_ERR("SELECT set_config('', 'UTC', false)", E::EMPTY_NAME, "unrecognized configuration parameter \"\""),
