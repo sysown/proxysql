@@ -90,6 +90,9 @@ differs for some settings (`parameter "enable_sort" requires a Boolean value`,
 `set_config()` calls ProxySQL cannot see in the query text are not tracked: calls made
 inside functions, triggers or dynamic SQL in PL/pgSQL.
 
+An unqualified `set_config()` is taken to be PostgreSQL's own. A function of the same name and
+argument types, in a schema that `search_path` lists before `pg_catalog`, is not run.
+
 Over the extended protocol a NULL value is recorded as the client's connect-time value, but
 the call is forwarded and the backend resets to its own default: the server default for the
 settings a backend connection is not opened with, otherwise the value of the client that

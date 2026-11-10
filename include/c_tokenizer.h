@@ -101,6 +101,7 @@ enum : uint32_t {
 // begins with it, by the rule of pgsql_stmt_first_keyword_is() (a Simple Query can carry several
 // statements, and checking only the first lets `SELECT 1; LISTEN ch` through, issue #6438); a
 // word target when it stands as a whole word outside kept comments, or as a quoted identifier.
+// A U&"..." identifier cannot be compared, so it counts as every word target: it can over-match.
 // From the point the scan is lost at -- the opening of an unterminated comment or quote -- any
 // whole-word occurrence of any target counts, so a damaged digest errs toward a match. That
 // includes the text of a kept comment cut at FIRST_COMMENT_MAX_LENGTH.
@@ -108,6 +109,7 @@ uint32_t pgsql_digest_scan(const char* digest);
 
 // Every target standing as a whole word anywhere in `text`, statement keywords included, by the
 // boundary rule of pgsql_text_has_word(). Raw text: words inside literals and comments count.
+// A U&"..." identifier counts as every word target, as in pgsql_digest_scan().
 // Reads at most `len` bytes and stops at a NUL, so a query buffer is read in place.
 uint32_t pgsql_text_find_words(const char* text, size_t len = SIZE_MAX);
 
