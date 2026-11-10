@@ -33,11 +33,11 @@ jobs:
     # in write-all) for the callee's declaration to take effect. The
     # callee at ci-<group>.yml@GH-Actions also declares write-all.
     permissions: write-all
-    uses: sysown/proxysql/.github/workflows/ci-legacy-g4.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-legacy-g4.yml@1c086f96148681c882f5a0f33ebe52611130b4e3
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
       consumer_id: run
-      control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
+      control_ref: 1c086f96148681c882f5a0f33ebe52611130b4e3
       producer_run_id: ${{ inputs.producer_run_id || '' }}
       producer_attempt: ${{ inputs.producer_attempt || '' }}
