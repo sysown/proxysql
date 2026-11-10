@@ -22,7 +22,8 @@ jobs:
   run:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') && (!github.event.pull_request || (!github.event.pull_request.head.repo.fork && github.event.pull_request.head.repo.full_name == github.repository)) && (!github.event.workflow_run || (!startsWith(github.event.workflow_run.display_title, '[ci:skip] ') && github.event.workflow_run.head_repository.full_name == github.repository)) }}
     permissions: write-all
-    uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@2e0e2f786492e7f067309a68e80d600730d989a3
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
+      control_ref: 2e0e2f786492e7f067309a68e80d600730d989a3
