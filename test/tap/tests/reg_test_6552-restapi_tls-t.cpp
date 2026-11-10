@@ -1033,18 +1033,20 @@ int main() {
 	// a rejection assertion pass spuriously.
 	long mtls_trusted_code = 0;
 	long mtls_missing_code = 0;
-	ok(wait_for_mtls_ready(
+	const bool mtls_ready_global_ca = wait_for_mtls_ready(
 			https_url, ca_pem, trusted.cert, trusted.key,
-			mtls_trusted_code, mtls_missing_code),
+			mtls_trusted_code, mtls_missing_code);
+	ok(mtls_ready_global_ca,
 		"mTLS listener accepts trusted clients and rejects missing certs "
 		"through ProxySQL's global CA fallback (trusted=%ld missing=%ld)",
 		mtls_trusted_code, mtls_missing_code);
 
 	admin_query(admin, "SET admin-restapi_ssl_ca='proxysql-ca.pem'");
 	admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-	ok(wait_for_mtls_ready(
+	const bool mtls_ready_explicit_ca = wait_for_mtls_ready(
 			https_url, ca_pem, trusted.cert, trusted.key,
-			mtls_trusted_code, mtls_missing_code),
+			mtls_trusted_code, mtls_missing_code);
+	ok(mtls_ready_explicit_ca,
 		"mTLS listener accepts trusted clients and rejects missing certs "
 		"through the explicit custom CA path (trusted=%ld missing=%ld)",
 		mtls_trusted_code, mtls_missing_code);
@@ -1116,9 +1118,10 @@ int main() {
 		ok(install_pem(ca_pem, retry_ca, 0644),
 			"installed a valid CA at the previously missing path");
 		admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-		ok(wait_for_mtls_ready(
+		const bool mtls_ready_recovery = wait_for_mtls_ready(
 				https_url, ca_pem, trusted.cert, trusted.key,
-				mtls_trusted_code, mtls_missing_code),
+				mtls_trusted_code, mtls_missing_code);
+		ok(mtls_ready_recovery,
 			"identical LOAD retries and recovers the listener after the CA appears "
 			"(trusted=%ld missing=%ld)", mtls_trusted_code, mtls_missing_code);
 	}
