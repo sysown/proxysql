@@ -392,6 +392,36 @@ jobs:
             echo ">>> WARNING: no mysqlbinlog found under test/deps/mysql-connector-c-8.4.0/ — binlog TAP tests will fail" >&2
           fi
 
+          # Preserve the AWS IAM controlled-server helper before the
+          # test/deps prune. The AWS auth unit binary embeds the absolute
+          # build path test/deps/aws_iam_mysql_server/aws_iam_mysql_server-t,
+          # so those exact bytes must survive in the staged runtime bin area.
+          # Tiers/source layouts that do not build the AWS auth unit need no
+          # helper and keep their previous behavior.
+          aws_iam_unit=test/tap/tests/unit/test_aws_iam_backend_auth-t
+          if [ -x "${aws_iam_unit}" ]; then
+            aws_iam_helper=test/deps/aws_iam_mysql_server/aws_iam_mysql_server-t
+            aws_iam_staged=test/tap/tap/bin/aws_iam_mysql_server-t
+            if [ ! -x "${aws_iam_helper}" ]; then
+              echo "ERROR: ${aws_iam_unit} was built but required helper ${aws_iam_helper} is missing or not executable"
+              exit 1
+            fi
+            mkdir -p test/tap/tap/bin
+            sudo cp -f "${aws_iam_helper}" "${aws_iam_staged}"
+            sudo chmod 0755 "${aws_iam_staged}"
+            aws_iam_source_sha256=$(sudo sha256sum "${aws_iam_helper}" | awk '{print $1}')
+            aws_iam_staged_sha256=$(sudo sha256sum "${aws_iam_staged}" | awk '{print $1}')
+            echo ">>> Staged AWS IAM helper from ${aws_iam_helper} -> ${aws_iam_staged}"
+            echo ">>> AWS IAM helper source sha256: ${aws_iam_source_sha256}"
+            echo ">>> AWS IAM helper staged sha256: ${aws_iam_staged_sha256}"
+            if [ "${aws_iam_source_sha256}" != "${aws_iam_staged_sha256}" ]; then
+              echo "ERROR: staged AWS IAM helper bytes differ from the built helper"
+              exit 1
+            fi
+          else
+            echo ">>> AWS IAM auth unit not built; skipping helper preservation"
+          fi
+
           # sudo required: test/deps contents are owned by root (created
           # inside the docker build container). See comment above on the
           # unit test delete.

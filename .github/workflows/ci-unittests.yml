@@ -77,6 +77,9 @@ jobs:
           test/infra/control
           test/tap/groups
           test/scripts
+          docker-compose.yml
+          docker/images/proxysql/deb-compliant/ctl
+          docker/images/proxysql/deb-compliant/entrypoint
 
     - name: Restore selected product handoff
       env:
@@ -89,13 +92,50 @@ jobs:
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
 
+    - name: Restore AWS IAM auth test helper
+      run: |
+        set -euo pipefail
+        cd proxysql
+        aws_iam_unit=test/tap/tests/unit/test_aws_iam_backend_auth-t
+        aws_iam_staged=test/tap/tap/bin/aws_iam_mysql_server-t
+        aws_iam_helper=test/deps/aws_iam_mysql_server/aws_iam_mysql_server-t
+        if [ ! -x "${aws_iam_unit}" ]; then
+          echo ">>> AWS IAM auth unit not present; no helper restore required"
+          exit 0
+        fi
+        if [ ! -x "${aws_iam_staged}" ]; then
+          echo "ERROR: ${aws_iam_unit} requires ${aws_iam_staged}, but the staged helper is missing or not executable"
+          exit 1
+        fi
+        aws_iam_before_sha256=$(sha256sum "${aws_iam_staged}" | awk '{print $1}')
+        mkdir -p "$(dirname "${aws_iam_helper}")"
+        cp -f "${aws_iam_staged}" "${aws_iam_helper}"
+        chmod 0755 "${aws_iam_helper}"
+        aws_iam_after_sha256=$(sha256sum "${aws_iam_helper}" | awk '{print $1}')
+        echo ">>> Restored AWS IAM helper ${aws_iam_staged} -> ${aws_iam_helper}"
+        echo ">>> staged sha256:   ${aws_iam_before_sha256}"
+        echo ">>> restored sha256: ${aws_iam_after_sha256}"
+        if [ "${aws_iam_before_sha256}" != "${aws_iam_after_sha256}" ]; then
+          echo "ERROR: restored AWS IAM helper bytes differ from the staged helper"
+          exit 1
+        fi
+
     - name: Run unit-tests-g1
       timeout-minutes: 90
       run: |
         cd proxysql
         export INFRA_ID="ci-unittests-${{ matrix.tier }}-${{ github.run_id }}"
         export TAP_GROUP="unit-tests-g1"
-        test/infra/control/run-tests-isolated.bash
+        docker compose run --rm \
+          -e INFRA_ID="${INFRA_ID}" \
+          -e TAP_GROUP="${TAP_GROUP}" \
+          -e COVERAGE="${COVERAGE}" \
+          -e ASAN_OPTIONS="${ASAN_OPTIONS:-}" \
+          -e UNIT_TEST_TIMEOUT_SECONDS \
+          -e TSAN_OPTIONS \
+          --entrypoint bash \
+          ubuntu24_dbg_build \
+          -lc 'apt-get update -qq && apt-get install -y --no-install-recommends python3-packaging libprotobuf-dev && cd /opt/proxysql && test/infra/control/run-tests-isolated.bash'
 
     - name: Fix artifact permissions
       if: ${{ failure() && !cancelled() }}
