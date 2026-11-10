@@ -430,6 +430,10 @@ private:
 	// ParameterStatus that is owed, appended to `param_status`. SET and set_config() both use it.
 	PgSQL_Apply_Result apply_tracked_variable(int idx, std::string value,
 		std::vector<std::pair<std::string, std::string>>& param_status);
+	// set_config(): records the calls ProxySQL can follow (answered locally in the simple
+	// protocol), locks the hostgroup for any other one, answers PostgreSQL's predictable errors.
+	// Reads the PGSQL_SCAN_* bits of the query, or at Execute of the statement being executed.
+	PgSQL_Local_Reply handle_set_config(const char* dig, bool* lock_hostgroup);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DISCARD_command(const char* dig);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig);

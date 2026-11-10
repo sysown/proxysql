@@ -216,7 +216,7 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(61);
+	plan(63);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
@@ -486,6 +486,41 @@ int main(int, char**) {
 			ok(command == "Execute batch" && out == "1 2 D= C 1 2 D=1 C Z(I)",
 				"%s: the unit runs as one batch [%s, %s]", label[k], command.c_str(), out.c_str());
 		}
+	}
+
+	// --- A statement naming set_config() is kept out of the batch only while set_config()
+	// tracking is on (pgsql-set_parser_algorithm=3): with it off nothing records the call.
+	{
+		setNativeMode(admin.get(), true);
+		const std::string saved = execScalar(admin.get(),
+			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
+		const char* algo[2] = { "2", "3" };
+		for (int k = 0; k < 2; k++) {
+			exec(admin.get(), std::string("SET pgsql-set_parser_algorithm=") + algo[k]);
+			exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+			const std::string mark = "scbatch_" + tag + "_" + algo[k];
+			std::string command;
+			run([&]() {
+				auto c = client();
+				pbe(*c, "", "SELECT pg_sleep(1.5) AS " + mark + ", set_config('extq_batch.flag', 'x', false)");
+				pbe(*c, "", "SELECT 1 AS " + mark + "_b");
+				c->sendSync();
+				usleep(600000);
+				const std::string pid = execScalar(be.get(), "SELECT pid FROM pg_stat_activity WHERE query LIKE '%" + mark
+					+ "%' AND pid <> pg_backend_pid()");
+				command = pid.empty() ? "no backend found" :
+					execScalar(admin.get(), "SELECT command FROM stats_pgsql_processlist WHERE backend_pid=" + pid);
+				return replies(*c);
+			});
+			if (k == 0) {
+				ok(command == "Execute batch", "set_config tracking off: a set_config() statement is batched [%s]", command.c_str());
+			} else {
+				ok(command != "Execute batch" && command != "no backend found",
+					"set_config tracking on: a set_config() statement runs on its own [%s]", command.c_str());
+			}
+		}
+		exec(admin.get(), "SET pgsql-set_parser_algorithm=" + saved);
+		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 	}
 
 	// --- A multiplex=0 rule pins the connection to the session after a batched unit.
