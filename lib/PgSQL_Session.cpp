@@ -5126,6 +5126,68 @@ bool PgSQL_Session::is_multi_statement_command(const char* cmd) {
 	return false;
 }
 
+PgSQL_Apply_Result PgSQL_Session::apply_tracked_variable(int idx, std::string value,
+	std::vector<std::pair<std::string, std::string>>& param_status) {
+	const char* name = pgsql_tracked_variables[idx].set_variable_name;
+	// An INTERVAL time zone cannot be applied again on another backend connection, so the statement
+	// goes to the backend as written and the client keeps that connection.
+	if (idx == PGSQL_TIMEZONE && strncasecmp(value.c_str(), "INTERVAL", 8) == 0) {
+		return PgSQL_Apply_Result::LOCK;
+	}
+
+	char* transformed_value = nullptr;
+	if (pgsql_tracked_variables[idx].validator && pgsql_tracked_variables[idx].validator->validate &&
+		(
+			*pgsql_tracked_variables[idx].validator->validate)(
+				value.c_str(), &pgsql_tracked_variables[idx].validator->params, this, &transformed_value) == false
+		) {
+		char* m = NULL;
+		char* errmsg = NULL;
+		proxy_error("invalid value for parameter \"%s\": \"%s\"\n", name, value.c_str());
+		m = (char*)"invalid value for parameter \"%s\": \"%s\"";
+		errmsg = (char*)malloc(value.length() + strlen(name) + strlen(m));
+		snprintf(errmsg, value.length() + strlen(name) + strlen(m), m, name, value.c_str());
+
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+
+		const char txn_state = txn_state_for_local_error();
+		const bool send_ready_packet = extq_flush_segment == false;
+		client_myds->myprot.generate_error_packet(true, send_ready_packet, errmsg,
+			PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, false, true, NULL, txn_state);
+		free(errmsg);
+		return PgSQL_Apply_Result::ERROR_SENT;
+	}
+
+	if (transformed_value) {
+		value = transformed_value;
+		free(transformed_value);
+	}
+
+	// PostgreSQL keeps the DateStyle it has. Recorded, '' would leave no current style, and the
+	// next DateStyle SET fails the validator's assert.
+	if (idx == PGSQL_DATESTYLE && value.empty()) {
+		return PgSQL_Apply_Result::UNCHANGED;
+	}
+
+	uint32_t var_hash_int = SpookyHash::Hash32(value.c_str(), value.length(), 10);
+	if (pgsql_variables.client_get_hash(this, idx) != var_hash_int) {
+		proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection %s to %s\n", name, value.c_str());
+		if (!pgsql_variables.client_set_value(this, idx, value.c_str(), true)) {
+			return PgSQL_Apply_Result::FAILED;
+		}
+		if (idx == PGSQL_DATESTYLE) {
+			// always set current_datestyle
+			current_datestyle = PgSQL_DateStyle_Util::parse_datestyle(value);
+		}
+		// Only for the settings PostgreSQL reports, and with the stored value: a DateStyle such
+		// as 'DMY' is stored completed ('ISO, DMY'), as PostgreSQL reports it.
+		if (IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(pgsql_tracked_variables[idx])) {
+			param_status.emplace_back(name, value);
+		}
+	}
+	return PgSQL_Apply_Result::APPLIED;
+}
+
 PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(const char* dig, bool* lock_hostgroup) {
 	// this code is executed only if locked_on_hostgroup is not set yet
 	// if locked_on_hostgroup is set, we do not try to parse the SET statement
@@ -5176,10 +5238,6 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		bool unknown_var = false;
 		for (auto it = std::begin(set); it != std::end(set); ++it) {
 			std::string var = it->first;
-			// Declared per iteration on purpose. PostgreSQL announces only some of these
-			// settings, so a statement carrying two would otherwise let the first one's
-			// answer decide the second and announce a setting that is never reported.
-			bool send_param_status = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
 			if (it->second.size() < 1) {
 				// error not enough arguments
@@ -5239,12 +5297,6 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 						PgSQL_Set_Stmt_Parser::unquote_if_quoted(value1);
 					}
 
-					// The string form, SET TimeZone = 'INTERVAL ''+02:30''', is forwarded the same way.
-					if (idx == PGSQL_TIMEZONE && strncasecmp(value1.c_str(), "INTERVAL", 8) == 0) {
-						unable_to_parse_set_statement(lock_hostgroup, true);
-						return PgSQL_Local_Reply::NONE;
-					}
-
 					// SET TIME ZONE LOCAL means SET TIME ZONE DEFAULT. Sent to the backend it would reset to the
 					// default of whichever client opened that pooled connection. Any other LOCAL value is
 					// refused by the TimeZone check, as PostgreSQL does.
@@ -5271,39 +5323,18 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 						value1 = value;
 					}
 
-					char* transformed_value = nullptr;
-					if (pgsql_tracked_variables[idx].validator && pgsql_tracked_variables[idx].validator->validate &&
-						(
-							*pgsql_tracked_variables[idx].validator->validate)(
-								value1.c_str(), &pgsql_tracked_variables[idx].validator->params, this, &transformed_value) == false
-						) {
-						char* m = NULL;
-						char* errmsg = NULL;
-						proxy_error("invalid value for parameter \"%s\": \"%s\"\n", pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
-						m = (char*)"invalid value for parameter \"%s\": \"%s\"";
-						errmsg = (char*)malloc(value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m));
-						snprintf(errmsg, value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m), m, pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
-
-						client_myds->DSS = STATE_QUERY_SENT_NET;
-
-						// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
-						// the backend still holding this statement, and a transaction open on it with it.
-						const char txn_state = txn_state_for_local_error();
-						const bool send_ready_packet = extq_flush_segment == false;
-						client_myds->myprot.generate_error_packet(true, send_ready_packet, errmsg,
-							PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, false, true, NULL, txn_state);
-						free(errmsg);
-						RequestEnd(NULL, true);
-						return PgSQL_Local_Reply::SENT_ERROR;
-					}
-
-					if (transformed_value) {
-						value1 = transformed_value;
-						free(transformed_value);
-					}
-
-					if (idx == PGSQL_DATESTYLE) {
-						if (value1.empty()) {
+					switch (apply_tracked_variable(idx, value1, param_status)) {
+						case PgSQL_Apply_Result::LOCK:
+							unable_to_parse_set_statement(lock_hostgroup, true);
+							return PgSQL_Local_Reply::NONE;
+						case PgSQL_Apply_Result::ERROR_SENT:
+							// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
+							// the backend still holding this statement, and a transaction open on it with it.
+							RequestEnd(NULL, true);
+							return PgSQL_Local_Reply::SENT_ERROR;
+						case PgSQL_Apply_Result::FAILED:
+							return PgSQL_Local_Reply::NONE;
+						case PgSQL_Apply_Result::UNCHANGED:
 							// In pipeline mode, don't short-circuit - fall through to backend execution
 							if (extended_query_phase == EXTQ_PHASE_IDLE) {
 								client_myds->DSS = STATE_QUERY_SENT_NET;
@@ -5313,29 +5344,9 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 								RequestEnd(NULL, false);
 								return PgSQL_Local_Reply::SENT;
 							}
-							// PostgreSQL keeps the DateStyle it has. Recorded, '' would leave no current
-							// style, and the next DateStyle SET fails the validator's assert.
-							continue;
-						}
-					}
-
-					uint32_t var_hash_int = SpookyHash::Hash32(value1.c_str(), value1.length(), 10);
-					if (current_hash != var_hash_int) {
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
-						if (!pgsql_variables.client_set_value(this, idx, value1.c_str(), true)) {
-							return PgSQL_Local_Reply::NONE;
-						}
-						if (idx == PGSQL_DATESTYLE) {
-							// always set current_datestyle
-							current_datestyle = PgSQL_DateStyle_Util::parse_datestyle(value1);
-							// No need to set send_param_status to true, as the original DateStyle value may have been modified.  
-							// When send_param_status is true, it always sends the original value provided by the user in the SET statement.  
-							if (IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(pgsql_tracked_variables[idx])) {
-								param_status.emplace_back(var, value1);
-							}
-						} else {
-							send_param_status = IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(pgsql_tracked_variables[idx]);
-						}
+							break;
+						case PgSQL_Apply_Result::APPLIED:
+							break;
 					}
 				}
 			} else if (std::find(pgsql_variables.ignore_vars.begin(), pgsql_variables.ignore_vars.end(), var) != pgsql_variables.ignore_vars.end()) {
@@ -5351,8 +5362,6 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 				unknown_var = true;
 			}
 
-			if (send_param_status)
-				param_status.emplace_back(var, value1);
 		}
 
 		if (unknown_var) {

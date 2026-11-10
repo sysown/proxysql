@@ -160,6 +160,11 @@ enum ExtendedQueryPhase : uint8_t {
 // sent a reply, or sent an error. An error ends an extended-query unit, so the caller has to know.
 enum class PgSQL_Local_Reply : uint8_t { NONE, SENT, SENT_ERROR };
 
+// What PgSQL_Session::apply_tracked_variable() did with a value. UNCHANGED: DateStyle '' (PostgreSQL
+// keeps the current one). LOCK: a TimeZone value starting with INTERVAL. ERROR_SENT: the validator
+// refused the value and the 22023 packet is queued. FAILED: client_set_value() failed.
+enum class PgSQL_Apply_Result : uint8_t { APPLIED, UNCHANGED, LOCK, ERROR_SENT, FAILED };
+
 #define EXTQ_PHASE_PROCESSING_MASK \
     (EXTQ_PHASE_PROCESSING_PARSE | EXTQ_PHASE_PROCESSING_DESCRIBE | \
      EXTQ_PHASE_PROCESSING_CLOSE | EXTQ_PHASE_PROCESSING_BIND | \
@@ -418,6 +423,11 @@ private:
 
 	bool is_multi_statement_command(const char* cmd);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(const char* dig, bool* lock_hostgroup);
+	// Records `value` (already unquoted or decoded) as the client's tracked variable `idx`, the way
+	// SET does: validator and transform, then the stored value when it changed, plus any
+	// ParameterStatus that is owed, appended to `param_status`. SET and set_config() both use it.
+	PgSQL_Apply_Result apply_tracked_variable(int idx, std::string value,
+		std::vector<std::pair<std::string, std::string>>& param_status);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DISCARD_command(const char* dig);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig);
