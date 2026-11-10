@@ -4984,6 +4984,9 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt) {
 
 		CurrentQuery.query_parser_free();
 		CurrentQuery.begin(reinterpret_cast<unsigned char*>(pkt->ptr), pkt->size, true);
+		// begin() clears the scan: without it a rewritten set_config() goes untracked.
+		CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(),
+			reinterpret_cast<const char*>(CurrentQuery.QueryPointer), simple_query_scan_targets());
 
 		delete qpo->new_query;
 		stop_timer(begint);
@@ -5031,6 +5034,8 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt) {
 		CurrentQuery.query_parser_free();
 		CurrentQuery.begin((unsigned char*)new_data.query_string,
 			strlen(new_data.query_string) + 1, false);
+		// As for a Simple Query: the statement keeps the scan of its rewritten text.
+		CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(), new_data.query_string);
 		CurrentQuery.extended_query_info.stmt_client_name = new_data.stmt_name;
 
 		if (new_data.num_param_types > 0) {

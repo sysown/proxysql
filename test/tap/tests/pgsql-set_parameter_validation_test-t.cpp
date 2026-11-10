@@ -1561,11 +1561,135 @@ static void test_set_phases_in_every_mode() {
     ok(restored, "SET phases: pgsql-use_native_backend_protocol restored to '%s'", saved_native.c_str());
 }
 
+// Query rules that rewrite a statement into, out of, or within a set_config() call. The rewritten
+// text is what runs, so it is what ProxySQL must follow. The rewrite cleared the query's scan, and
+// a rewritten call went untracked.
+struct ScRwRule { int id; const char* match; const char* replace; };
+static const ScRwRule sc_rw_rules[] = {
+    { 9071, "Asia/Kolkata", "Asia/Tokyo" },
+    { 9072, "'zz_rw_into'", "set_config('TimeZone','Asia/Tokyo',false)" },
+    { 9073, "set_config\\W+TimeZone\\W+Asia/Seoul\\W+false\\W", "'zz_rw_out'" },
+    { 9074, " AS zz_rw_lock", ", 1 AS zz_rw_lock" },
+};
+// `stored` is what is recorded while tracking is on; nullptr: the session locks instead.
+struct ScRwCase { const char* label; const char* sql; const char* row; const char* stored; };
+static const ScRwCase sc_rw_cases[] = {
+    { "the value rewritten", "SELECT set_config('TimeZone','Asia/Kolkata',false)", "Asia/Tokyo", "Asia/Tokyo" },
+    { "a query rewritten into a call", "SELECT 'zz_rw_into'", "Asia/Tokyo", "Asia/Tokyo" },
+    { "a call rewritten into a query", "SELECT set_config('TimeZone','Asia/Seoul',false)", "zz_rw_out", "UTC" },
+    { "a call rewritten into a form that locks", "SELECT set_config('TimeZone','Asia/Dubai',false) AS zz_rw_lock",
+        "Asia/Dubai", nullptr },
+};
+// Tracking by pgsql-set_parser_algorithm=3, by pgsql-query_processor_parser=1, and off.
+struct ScRwConfig { const char* name; const char* algo; const char* qpp; bool tracks; };
+static const ScRwConfig sc_rw_configs[] = {
+    { "set_parser_algorithm=3", "3", "0", true },
+    { "query_processor_parser=1", "2", "1", true },
+    { "tracking off", "2", "0", false },
+};
+static const int SC_RW_TESTS = 1 /* setup */ + (int)std::size(sc_rw_configs) * SET_MODES * (int)std::size(sc_rw_cases) +
+    2 * 2 /* statement reuse, native and libpq */ + 1 /* restore */;
+
+static int sc_rw_seq = 0;
+// The same statement with a text no earlier statement had: a cached statement brings its own scan.
+static std::string sc_rw_unique(const char* sql) {
+    return "SELECT /* rw " + std::to_string(getpid()) + "-" + std::to_string(++sc_rw_seq) + " */ " + std::string(sql + 7);
+}
+
+static void sc_rw_case(const ScRwConfig& cfg, const ScRwCase& k) {
+    PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c TimeZone=UTC");
+    std::string row = "<no connection>", st = "<no connection>", shown = "<no connection>";
+    int locked = -2;
+    if (c) {
+        PGresult* r = execMode(c.get(), sc_rw_unique(k.sql));
+        row = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : PQerrorMessage(c.get());
+        PQclear(r);
+        st = stored(c.get(), "TimeZone");
+        locked = lockedOnHostgroup(c.get());
+        shown = oneValue(c.get(), "SHOW TimeZone");
+    }
+    bool good = row == k.row;
+    if (!cfg.tracks) good = good && st == "UTC" && locked == -1;  // forwarded untracked, as documented
+    else if (k.stored == nullptr) good = good && locked >= 0;
+    else good = good && st == k.stored && locked == -1 && shown == k.stored;
+    ok(good, "[%s] set_config rewrite, %s: %s (row '%s', stored '%s', locked %d, SHOW '%s')", g_mode.c_str(), cfg.name,
+        k.label, row.c_str(), st.c_str(), locked, shown.c_str());
+}
+
+// One statement executed twice, the second time after a SET put TimeZone back: the second Execute
+// must be recorded as well. By an unnamed statement parsed again (a cache hit) and a named one.
+static void sc_rw_reuse_case(bool named) {
+    PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c TimeZone=UTC");
+    std::string st1 = "<no connection>", st2 = "<no connection>";
+    if (c) {
+        const std::string q = sc_rw_unique("SELECT set_config('TimeZone','Asia/Kolkata',false)");
+        if (named) PQclear(PQprepare(c.get(), "zz_rw_named", q.c_str(), 0, nullptr));
+        for (int i = 0; i < 2; i++) {
+            PQclear(named ? PQexecPrepared(c.get(), "zz_rw_named", 0, nullptr, nullptr, nullptr, 0) :
+                PQexecParams(c.get(), q.c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0));
+            (i == 0 ? st1 : st2) = stored(c.get(), "TimeZone");
+            if (i == 0) PQclear(PQexec(c.get(), "SET TimeZone TO 'UTC'"));
+        }
+    }
+    ok(st1 == "Asia/Tokyo" && st2 == "Asia/Tokyo", "[%s] set_config rewrite: %s executed twice is recorded both times "
+        "(stored '%s', then '%s')", g_mode.c_str(), named ? "a named statement" : "an unnamed statement parsed again",
+        st1.c_str(), st2.c_str());
+}
+
+static void test_set_config_rewritten() {
+    PGConnPtr admin = createNewConnection(ConnType::ADMIN);
+    const int hg = rootDefaultHostgroup(admin.get());
+    const std::vector<std::string> servers = (hg >= 0) ? snapshotServers(admin.get(), hg) : std::vector<std::string>{};
+    const std::string saved_algo = adminGet(admin.get(), "pgsql-set_parser_algorithm");
+    const std::string saved_qpp = adminGet(admin.get(), "pgsql-query_processor_parser");
+    const std::string saved_native = adminGet(admin.get(), "pgsql-use_native_backend_protocol");
+    bool rules = admin && !saved_algo.empty() && !saved_qpp.empty();
+    for (const auto& r : sc_rw_rules) {
+        rules = rules && execAdmin(admin.get(), "INSERT INTO pgsql_query_rules (rule_id,active,match_pattern,replace_pattern,apply) "
+            "VALUES (" + std::to_string(r.id) + ",1," + sqlQuote(r.match) + "," + sqlQuote(r.replace) + ",1)");
+    }
+    rules = rules && execAdmin(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME");
+    ok(rules, "set_config rewrite: %zu query rules loaded", std::size(sc_rw_rules));
+    const char* proto_name[3] = { "simple", "extended", "pipeline" };
+    for (const auto& cfg : sc_rw_configs) {
+        adminSet(admin.get(), "pgsql-set_parser_algorithm", cfg.algo);
+        adminSet(admin.get(), "pgsql-query_processor_parser", cfg.qpp);
+        for (const bool native : { true, false }) {
+            adminSet(admin.get(), "pgsql-use_native_backend_protocol", native ? "true" : "false");
+            if (!servers.empty()) reloadServers(admin.get(), hg, servers, false);
+            for (int p = 0; p < 3; p++) {
+                g_proto = (Proto)p;
+                g_mode = std::string(native ? "native " : "libpq ") + proto_name[p];
+                for (const auto& k : sc_rw_cases) sc_rw_case(cfg, k);
+            }
+            g_proto = Proto::SIMPLE;
+            if (cfg.tracks && std::string(cfg.algo) == "3") {
+                g_mode = std::string(native ? "native" : "libpq") + " extended";
+                sc_rw_reuse_case(false);
+                sc_rw_reuse_case(true);
+            }
+        }
+    }
+    g_proto = Proto::SIMPLE;
+    bool restored = true;
+    for (const auto& r : sc_rw_rules) {
+        restored = execAdmin(admin.get(), "DELETE FROM pgsql_query_rules WHERE rule_id=" + std::to_string(r.id)) && restored;
+    }
+    // With tracking off the rewritten calls changed backends ProxySQL does not know about: drop them.
+    restored = execAdmin(admin.get(), "LOAD PGSQL QUERY RULES TO RUNTIME") &&
+        adminSet(admin.get(), "pgsql-use_native_backend_protocol", saved_native) &&
+        adminSet(admin.get(), "pgsql-query_processor_parser", saved_qpp) &&
+        adminSet(admin.get(), "pgsql-set_parser_algorithm", saved_algo) &&
+        (servers.empty() || reloadServers(admin.get(), hg, servers, false)) && restored;
+    ok(restored, "set_config rewrite: rules removed, variables and servers restored");
+}
+
 int main(int argc, char** argv) {
     int total_tests = 2 + untracked_set_cases.size() * UNTRACKED_SET_TESTS_PER_CASE + 1; // + servers restored
     total_tests += SC_TESTS;
     total_tests += SC_EXT_TESTS;
     total_tests += SC_PIPE_TESTS;
+    total_tests += SC_RW_TESTS;
     total_tests += SET_MODES * (stored_form_cases.size() + 1 + all_default_cases().size() +
         EXTENDED_EMPTY_DATESTYLE_TESTS + EMPTY_SEARCH_PATH_TESTS) + 1;
 
@@ -1697,6 +1821,7 @@ int main(int argc, char** argv) {
     test_set_config_extended();
     usleep(500000);
     test_set_config_pipeline();
+    test_set_config_rewritten();
 
     if (pct_admin && !saved_free_pct.empty()) adminSet(pct_admin.get(), "pgsql-free_connections_pct", saved_free_pct);
     return exit_status();
