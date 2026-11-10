@@ -28,11 +28,11 @@ jobs:
   run:
     if: ${{ (!github.event.workflow_run || !startsWith(github.event.workflow_run.display_title, '[ci:skip] ')) && (github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run) && (!github.event.workflow_run || github.event.workflow_run.event != 'workflow_run') && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
     permissions: write-all
-    uses: sysown/proxysql/.github/workflows/ci-unit-tests-tsan.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-unit-tests-tsan.yml@1c086f96148681c882f5a0f33ebe52611130b4e3
     secrets: inherit
     with:
       trigger: ${{ toJson(github) }}
       consumer_id: run
-      control_ref: ${{ inputs.control_ref || 'GH-Actions' }}
+      control_ref: 1c086f96148681c882f5a0f33ebe52611130b4e3
       producer_run_id: ${{ inputs.producer_run_id || '' }}
       producer_attempt: ${{ inputs.producer_attempt || '' }}
