@@ -236,8 +236,6 @@ class MySQL_Connection {
 	bool processing_multi_statement;
 	bool multiplex_delayed;
 	bool unknown_transaction_status;
-	// A forwarded SET TRANSACTION must stay on this backend until consumed.
-	bool next_transaction_pending { false };
 	void compute_unknown_transaction_status();
 	char gtid_uuid[128];
 

@@ -1130,7 +1130,6 @@ MySQL_Session::MySQL_Session() {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
 	committing_tracked_set=false;
-	forwarding_next_transaction=false;
 	pending_tracked_set.reset();
 	autocommit_on_hostgroup=-1;
 	killed=false;
@@ -1227,7 +1226,6 @@ void MySQL_Session::reset() {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
 	committing_tracked_set=false;
-	forwarding_next_transaction=false;
 	pending_tracked_set.reset();
 	autocommit_on_hostgroup=-1;
 	warning_in_hg = -1;
@@ -1434,12 +1432,6 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	// able to find. If more transactions are simultaneously open for the session, more 'COMMIT|ROLLBACK'
 	// commands are required to be issued by the client to continue ending transactions.
 	int hg = FindOneActiveTransaction(true);
-	if (hg == -1 && transaction_persistent_hostgroup >= 0) {
-		MySQL_Backend* backend = find_backend(transaction_persistent_hostgroup);
-		if (backend && backend->server_myds && backend->server_myds->myconn &&
-			backend->server_myds->myconn->next_transaction_pending)
-			hg = transaction_persistent_hostgroup;
-	}
 	if (hg != -1) {
 		// there is an active transaction, we must forward the request
 		current_hostgroup = hg;
@@ -3973,19 +3965,6 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 						}
 						break;
 */
-					case ER_CANT_CHANGE_TX_CHARACTERISTICS:
-						if (status == SETTING_NEXT_ISOLATION_LEVEL || status == SETTING_NEXT_TRANSACTION_READ) {
-							mysql_variables.client_reset_value(this, SQL_NEXT_ISOLATION_LEVEL);
-							mysql_variables.client_reset_value(this, SQL_NEXT_TRANSACTION_READ);
-							mysql_variables.server_reset_value(this, SQL_NEXT_ISOLATION_LEVEL);
-							mysql_variables.server_reset_value(this, SQL_NEXT_TRANSACTION_READ);
-							RequestEnd(myds, myerr);
-							update_transaction_persistence(myconn);
-							myds->DSS = STATE_MARIADB_GENERIC;
-							return true;
-						}
-						// Other synchronization failures retain their existing handling.
-						[[fallthrough]];
 					default:
 						myds->destroy_MySQL_Connection_From_Pool(true);
 						break;
@@ -6883,8 +6862,10 @@ void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds,
 // this function was inline
 void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 	if (myds->myconn) {
-		update_transaction_persistence(myconn);
 		myds->myconn->reduce_auto_increment_delay_token();
+		// Failed statements can leave a transaction open without setting IN_TRANS (#6611).
+		if (transaction_persistent && transaction_persistent_hostgroup == -1 && myconn->IsActiveTransaction())
+			transaction_persistent_hostgroup = current_hostgroup;
 		if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 			myds->DSS=STATE_NOT_INITIALIZED;
 			if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
@@ -7498,34 +7479,6 @@ handler_again:
 							qpo ? qpo->multiplex : -1)) {
 						myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 						user_variable_backend_authoritative = true;
-					}
-
-					if (forwarding_next_transaction) {
-						myconn->next_transaction_pending = true;
-					} else if (myconn->next_transaction_pending && status != PROCESSING_STMT_PREPARE) {
-						// DO, SET, SHOW and constant SELECT do not consume one-shot
-						// characteristics. Release only after a confirmed transaction
-						// start, successful DML, or explicit transaction completion.
-						bool consumed = myconn->mysql->server_status & SERVER_STATUS_IN_TRANS;
-						switch (CurrentQuery.MyComQueryCmd) {
-							case MYSQL_COM_QUERY_BEGIN:
-							case MYSQL_COM_QUERY_START_TRANSACTION:
-							case MYSQL_COM_QUERY_COMMIT:
-							case MYSQL_COM_QUERY_ROLLBACK:
-							case MYSQL_COM_QUERY_INSERT:
-							case MYSQL_COM_QUERY_UPDATE:
-							case MYSQL_COM_QUERY_DELETE:
-							case MYSQL_COM_QUERY_REPLACE:
-								consumed = true;
-								break;
-							default:
-								break;
-						}
-						if (consumed) {
-							myconn->next_transaction_pending = false;
-							if (!transaction_persistent && transaction_persistent_hostgroup == current_hostgroup)
-								transaction_persistent_hostgroup = -1;
-						}
 					}
 
 					if (active_transactions != 0) {  // run this only if currently we think there is a transaction
@@ -9624,31 +9577,16 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					return false;
 				}
 
-				// An unscoped SET configures the next transaction and is illegal in
-				// an existing one. Validate before touching either SQL_NEXT value.
-				const bool next_transaction = set.begin()->first[0] == ':';
-				if (next_transaction && command_type == _MYSQL_COM_QUERY &&
+				// Reject locally before changing either next-transaction characteristic (#6612).
+				if (set.begin()->first[0] == ':' && nTrx != 0 && command_type == _MYSQL_COM_QUERY &&
 					prepare_stmt_type == ps_type_not_set) {
-					const int hg = FindOneActiveTransaction();
-					if (hg != -1) {
-						MySQL_Backend* backend = find_backend(hg);
-						MySQL_Connection* conn = backend->server_myds->myconn;
-						if (!conn->unknown_transaction_status &&
-							(conn->mysql->server_status & SERVER_STATUS_IN_TRANS)) {
-							client_myds->DSS = STATE_QUERY_SENT_NET;
-							client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr, 1,
-								ER_CANT_CHANGE_TX_CHARACTERISTICS, (char*)"25001",
-								(char*)"Transaction characteristics can't be changed while a transaction is in progress");
-							RequestEnd(nullptr, ER_CANT_CHANGE_TX_CHARACTERISTICS);
-							l_free(pkt->size, pkt->ptr);
-							return true;
-						}
-						// IsActiveTransaction also includes uncertainty and the optional
-						// autocommit=0 heuristic. Let MySQL validate these cases.
-						current_hostgroup = hg;
-						forwarding_next_transaction = true;
-						return false;
-					}
+					client_myds->DSS = STATE_QUERY_SENT_NET;
+					client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr, 1,
+						ER_CANT_CHANGE_TX_CHARACTERISTICS, "25001",
+						"Transaction characteristics can't be changed while a transaction is in progress");
+					RequestEnd(nullptr, ER_CANT_CHANGE_TX_CHARACTERISTICS);
+					l_free(pkt->size, pkt->ptr);
+					return true;
 				}
 
 				for(auto it = std::begin(set); it != std::end(set); ++it) {
@@ -11021,7 +10959,6 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds, const unsigned int myerrno
 }
 
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds,const unsigned int myerrno, const char * errmsg) {
-	forwarding_next_transaction = false;
 #ifndef PROXYSQL31
 	pending_user_variable_set.reset();
 #endif
@@ -11333,21 +11270,7 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	CurrentQuery.QueryPointer = (unsigned char *)_pkt->ptr + 5;
 }
 
-void MySQL_Session::update_transaction_persistence(MySQL_Connection* myconn) {
-	if (myconn->next_transaction_pending) {
-		transaction_persistent_hostgroup = current_hostgroup;
-	} else if (transaction_persistent) {
-		if (myconn->IsActiveTransaction()) {
-			if (transaction_persistent_hostgroup == -1)
-				transaction_persistent_hostgroup = current_hostgroup;
-		} else if (transaction_persistent_hostgroup == current_hostgroup) {
-			transaction_persistent_hostgroup = -1;
-		}
-	}
-}
-
 void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
-					update_transaction_persistence(myconn);
 					myds->myconn->reduce_auto_increment_delay_token();
 					if (locked_on_hostgroup >= 0) {
 						if (qpo->multiplex == -1) {
@@ -11399,10 +11322,25 @@ void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *mycon
 								myds->return_MySQL_Connection_To_Pool();
 							}
 						}
+						if (transaction_persistent==true) {
+							transaction_persistent_hostgroup=-1;
+						}
 					} else {
 						myconn->multiplex_delayed=false;
+						myconn->compute_unknown_transaction_status();
 						myconn->async_state_machine=ASYNC_IDLE;
 						myds->DSS=STATE_MARIADB_GENERIC;
+						if (transaction_persistent==true) {
+							if (transaction_persistent_hostgroup==-1) { // change only if not set already, do not allow to change it again
+								if (myds->myconn->IsActiveTransaction()==true) { // only active transaction is important here. Ignore other criterias
+									transaction_persistent_hostgroup=current_hostgroup;
+								}
+							} else {
+								if (myds->myconn->IsActiveTransaction()==false) { // a transaction just completed
+									transaction_persistent_hostgroup=-1;
+								}
+							}
+						}
 					}
 }
 

@@ -466,8 +466,6 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool current_query_user_variable_safe { false };
 	// CHANGING_AUTOCOMMIT completes a locally tracked mixed SET after its implicit commit.
 	bool committing_tracked_set { false };
-	// The original unscoped SET is being validated on an uncertain backend.
-	bool forwarding_next_transaction { false };
 	struct PendingTrackedSet {
 		MySQL_Session_Set_Plan session_variables;
 		MySQL_User_Variable_State user_variables;
@@ -813,11 +811,6 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 *   params.
 	 */
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
-	/**
-	 * @brief Update routing from the latched transaction state before backend release.
-	 * @param myconn Backend connection whose statement has completed.
-	 */
-	void update_transaction_persistence(MySQL_Connection* myconn);
 	void generate_proxysql_internal_session_json(nlohmann::json &) override;
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
