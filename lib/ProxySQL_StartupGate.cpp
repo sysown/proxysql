@@ -54,6 +54,26 @@ bool proxysql_startup_gate_wait_for_admin(const std::function<bool()>& stop) {
 	}, stop);
 }
 
+bool proxysql_startup_gate_lock_for_admin(const std::function<void()>& lock,
+	const std::function<void()>& unlock, const std::function<bool()>& stop) {
+	for (;;) {
+		const bool allowed = proxysql_startup_gate_wait_for_admin(stop);
+		lock();
+		if (!allowed) return false;
+		// Only PROXYSQL START closes the gate after Admin is up, and it does so
+		// while holding this same lock. Checked under the lock, the state can
+		// therefore no longer move to closed until the caller releases it. If
+		// it was closed while this caller queued on the lock, step aside so the
+		// plugin lifecycle can take the lock, and wait for the gate to reopen.
+		// This holds only while the lock is held: a statement that later opens
+		// a manual release window (proxysql_admin_global_sql_release_scope)
+		// can resume after the gate was closed, so such a window must not be
+		// followed by anything that waits on the plugin manager.
+		if (proxysql_startup_gate_state() != ProxySQL_StartupGateState::closed) return true;
+		unlock();
+	}
+}
+
 bool proxysql_startup_gate_wait_for_runtime(const std::function<bool()>& stop) {
 	return wait_until([](ProxySQL_StartupGateState state) {
 		return state == ProxySQL_StartupGateState::open;
