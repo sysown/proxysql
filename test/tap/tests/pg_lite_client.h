@@ -102,6 +102,45 @@ private:
 };
 
 
+// Optional, test-only diagnostic callback. Off by default: a connection without a callback runs
+// exactly the original I/O path. Events are integers only; no payload or query text is carried.
+struct PgDiagEvent {
+    int event = 0;
+    int stage = 0;
+    int logical_mode = 0;
+    int effective_mode = 0;
+    int clock_id = 0;
+    long long t0_us = 0;
+    long long t_us = 0;
+    int local_port = 0;
+    long long ret = 0;
+    int err = 0;
+    int revents = 0;
+    int poll_ms = 0;
+    long long bytes = 0;
+    int msg_type = 0;
+};
+
+using PgDiagCallback = std::function<void(const PgDiagEvent&)>;
+
+class PgConnection;
+
+// Scoped per-connection callback/stage activation. The previous callback and stage are restored
+// on normal return, on exception and on destruction; restoration never throws.
+class PgDiagScope {
+public:
+    PgDiagScope(PgConnection& c, int stage, int logical_mode, int effective_mode, PgDiagCallback cb) noexcept;
+    ~PgDiagScope() noexcept;
+    PgDiagScope(const PgDiagScope&) = delete;
+    PgDiagScope& operator=(const PgDiagScope&) = delete;
+private:
+    PgConnection* conn_ = nullptr;
+    PgDiagCallback prev_cb_;
+    int prev_stage_ = 0;
+    int prev_logical_mode_ = 0;
+    int prev_effective_mode_ = 0;
+};
+
 class PgConnection {
 public:
     // Protocol constants
@@ -145,6 +184,12 @@ public:
     void setOptions(const std::string& options) { options_ = options; }
     inline int getSocket() const { return sock_; }
     inline int getLastAuthType() const { return last_auth_type_; }
+    // Diagnostic-only helpers. They preserve errno and are inert unless a callback is active.
+    bool diagActive() const { return static_cast<bool>(diag_cb_); }
+    bool diagInvalid() const { return diag_invalid_; }
+    int diagClockId() noexcept;
+    long long diagClockNowUs() noexcept;
+    int localPort() const noexcept;
 
     // ---- Stepwise SCRAM for mid-handshake tests (#5865 review ask 2) ----
     // Unlike connect(), which drives the whole SASL exchange atomically, these split it so a
@@ -235,6 +280,16 @@ public:
 private:
     int sock_ = -1;
 	int timeout_ms_ = 0;
+    // Diagnostic-only state. diag_cb_ is empty by default, so the original path is untouched.
+    PgDiagCallback diag_cb_;
+    int diag_stage_ = 0;
+    int diag_logical_mode_ = 0;
+    int diag_effective_mode_ = 0;
+    bool diag_invalid_ = false;
+    int diag_clock_id_ = 0;
+    void emitDiag(int event, long long t0_us, long long t_us, long long ret, int err,
+        int revents, int poll_ms, long long bytes, int msg_type) noexcept;
+    friend class PgDiagScope;
     std::string user_;
     std::string dbname_;
     std::string options_;

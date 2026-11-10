@@ -7,6 +7,8 @@
 #include <poll.h>
 #include <netdb.h>
 #include <fcntl.h>
+#include <cerrno>
+#include <ctime>
 #include <sstream>
 #include <iomanip>
 #include <stdexcept>
@@ -41,6 +43,118 @@ static void writeStringToBuffer(std::vector<uint8_t>& buffer, const std::string&
 
 static std::string extractErrorMessage(const std::vector<uint8_t>& buffer);
 
+// ===== Diagnostic-only hooks (inert without a callback) =====
+
+PgDiagScope::PgDiagScope(PgConnection& c, int stage, int logical_mode, int effective_mode, PgDiagCallback cb) noexcept
+    : conn_(&c) {
+    // Diagnostic setup failure disables the callback and invalidates the measurement; it must not
+    // throw or alter the application I/O path. errno is preserved through construction.
+    const int saved_errno = errno;
+    try {
+        PgDiagCallback incoming(std::move(cb));
+        PgDiagCallback previous(c.diag_cb_);
+        c.diag_cb_.swap(incoming);
+        prev_cb_.swap(previous);
+        prev_stage_ = c.diag_stage_;
+        prev_logical_mode_ = c.diag_logical_mode_;
+        prev_effective_mode_ = c.diag_effective_mode_;
+        c.diag_stage_ = stage;
+        c.diag_logical_mode_ = logical_mode;
+        c.diag_effective_mode_ = effective_mode;
+    } catch (...) {
+        conn_ = nullptr;
+        c.diag_invalid_ = true;
+    }
+    errno = saved_errno;
+}
+
+PgDiagScope::~PgDiagScope() noexcept {
+    // All operations are noexcept swaps; the callback lifetime reset must never throw.
+    if (conn_ == nullptr) return;
+    const int saved_errno = errno;
+    PgDiagCallback current;
+    current.swap(conn_->diag_cb_);
+    conn_->diag_cb_.swap(prev_cb_);
+    prev_cb_.swap(current);
+    conn_->diag_stage_ = prev_stage_;
+    conn_->diag_logical_mode_ = prev_logical_mode_;
+    conn_->diag_effective_mode_ = prev_effective_mode_;
+    errno = saved_errno;
+}
+
+int PgConnection::diagClockId() noexcept {
+    int saved = errno;
+    if (diag_clock_id_ == 0) {
+#ifdef CLOCK_MONOTONIC_RAW
+        struct timespec ts;
+        diag_clock_id_ = (clock_gettime(CLOCK_MONOTONIC_RAW, &ts) == 0)
+            ? static_cast<int>(CLOCK_MONOTONIC_RAW) : static_cast<int>(CLOCK_MONOTONIC);
+#else
+        diag_clock_id_ = static_cast<int>(CLOCK_MONOTONIC);
+#endif
+    }
+    errno = saved;
+    return diag_clock_id_;
+}
+
+long long PgConnection::diagClockNowUs() noexcept {
+    int saved = errno;
+    const int clock_id = diagClockId();
+    struct timespec ts;
+    long long us = 0;
+    if (clock_id == 0 || clock_gettime(clock_id, &ts) != 0) {
+        diag_invalid_ = true;
+        us = 0;
+    } else {
+        us = static_cast<long long>(ts.tv_sec) * 1000000LL + ts.tv_nsec / 1000LL;
+        if (us <= 0) diag_invalid_ = true;
+    }
+    errno = saved;
+    return us;
+}
+
+int PgConnection::localPort() const noexcept {
+    int saved = errno;
+    int port = 0;
+    if (sock_ >= 0) {
+        struct sockaddr_in addr;
+        socklen_t len = sizeof(addr);
+        if (getsockname(sock_, reinterpret_cast<struct sockaddr*>(&addr), &len) == 0)
+            port = static_cast<int>(ntohs(addr.sin_port));
+    }
+    errno = saved;
+    return port;
+}
+
+void PgConnection::emitDiag(int event, long long t0_us, long long t_us, long long ret, int err,
+        int revents, int poll_ms, long long bytes, int msg_type) noexcept {
+    if (!diag_cb_) return;
+    const int saved = errno;
+    try {
+        PgDiagEvent ev;
+        ev.event = event;
+        ev.stage = diag_stage_;
+        ev.logical_mode = diag_logical_mode_;
+        ev.effective_mode = diag_effective_mode_;
+        ev.clock_id = diagClockId();
+        ev.t0_us = t0_us;
+        ev.t_us = t_us;
+        ev.local_port = localPort();
+        ev.ret = ret;
+        ev.err = err;
+        ev.revents = revents;
+        ev.poll_ms = poll_ms;
+        ev.bytes = bytes;
+        ev.msg_type = msg_type;
+        diag_cb_(ev);
+    } catch (...) {
+        // A diagnostic failure invalidates the measurement, never the application I/O path.
+        diag_invalid_ = true;
+        try { diag_cb_ = nullptr; } catch (...) {}
+    }
+    errno = saved;
+}
+
 // ===== Connection Implementation =====
 
 // Message helpers
@@ -49,7 +163,14 @@ void PgConnection::writeBytes(const uint8_t* data, size_t count) {
     
     ssize_t sent = 0;
     while (sent < static_cast<ssize_t>(count)) {
+        const bool diag = static_cast<bool>(diag_cb_);
+        long long t0_us = 0;
+        if (diag) t0_us = diagClockNowUs();
         ssize_t n = send(sock_, data + sent, count - sent, 0);
+        const int after_errno = errno;  // immediately after the original syscall
+        if (diag) emitDiag(1, t0_us, diagClockNowUs(), n, n < 0 ? after_errno : 0,
+            0, 0, static_cast<long long>(count - sent), 0);
+        errno = after_errno;
         if (n <= 0) throw PgException("Write failed");
         sent += n;
     }
@@ -184,10 +305,17 @@ void PgConnection::endBuffering() {
 }
 
 void PgConnection::readMessage(char& type, std::vector<uint8_t>& buffer) {
+    const bool diag = static_cast<bool>(diag_cb_);
+    long long t0_us = 0;
+    if (diag) t0_us = diagClockNowUs();
     type = readBytes(1)[0];
     int32_t len = readInt32() - 4;  // Exclude length itself
     if (len < 0) throw PgException("Invalid message length");
     buffer = readBytes(len);
+    const int after_errno = errno;  // immediately after the final original read
+    if (diag) emitDiag(3, t0_us, diagClockNowUs(), 0, 0, 0, 0,
+        static_cast<long long>(1 + 4 + len), static_cast<unsigned char>(type));
+    errno = after_errno;
 }
 
 // Connection management
@@ -865,7 +993,14 @@ std::vector<std::pair<char, std::vector<uint8_t>>> PgConnection::readUntilQuiet(
     if (sock_ < 0) throw PgException("Not connected");
     for (;;) {
         struct pollfd p = { sock_, POLLIN, 0 };
+        const bool diag = static_cast<bool>(diag_cb_);
+        long long t0_us = 0;
+        if (diag) t0_us = diagClockNowUs();
         const int r = poll(&p, 1, quiet_ms);
+        const int after_errno = errno;  // immediately after the original poll
+        if (diag) emitDiag(2, t0_us, diagClockNowUs(), r, r < 0 ? after_errno : 0,
+            p.revents, quiet_ms, 0, 0);
+        errno = after_errno;
         if (r == 0) return msgs;
         if (r < 0) throw PgException("poll() failed while reading");
         // Readable, hung up or failed: readMessage() throws on a closed socket.

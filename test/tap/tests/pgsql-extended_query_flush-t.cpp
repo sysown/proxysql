@@ -21,11 +21,18 @@
  * Replies are read until the socket stays quiet; a closed socket fails the case.
  * Configuration is only loaded to runtime, never saved to disk.
  */
+#include <cerrno>
 #include <chrono>
+#include <array>
+#include <cstdio>
+#include <cstring>
+#include <ctime>
 #include <functional>
 #include <memory>
+#include <poll.h>
 #include <sstream>
 #include <string>
+#include <sys/socket.h>
 #include <vector>
 #include <unistd.h>
 #include "libpq-fe.h"
@@ -196,6 +203,600 @@ static std::string uniq() {
 static void check(const std::string& got, const std::string& want, const char* what, Mode m, bool txn) {
 	ok(got == want, "%s [%s%s]: got '%s', expected '%s'", what, mode_name(m), txn ? ", in txn" : "",
 		got.c_str(), want.c_str());
+}
+
+// ===== Bounded client diagnostic markers (opt-in, FLUSH_DIAG_PASSIVE exactly "1"). =====
+// The marker is a TAP comment with one strict fixed-key JSON object. It carries integers and a
+// bounded TYPE list only: no SQL, payload, values, addresses, credentials or pointers.
+static const char* const DIAG_PREFIX = "# PGFLUSH_DIAG ";
+static const int DIAG_MAX_RECORDS = 4096;
+static const int DIAG_MAX_RECORD_BYTES = 512;
+static const int DIAG_MAX_TYPES = 64;
+static const size_t DIAG_MAX_EVENTS = 256;
+
+static std::string diag_json(int seq, int stage, int event, int logical_mode, int effective_mode,
+		int clock_id, long long t0_us, long long t_us, int local_port, long long ret, int err,
+		int revents, int poll_ms, long long bytes, long long msgs, const std::vector<int>& types,
+		int types_total, int types_trunc, int invalid, int phase,
+		long long c0, long long c1, long long c2, long long c3);
+static bool diag_write_line(const std::string& line) noexcept;
+
+enum {
+	DIAG_EV_START = 1,
+	DIAG_EV_STAGE = 2,
+	DIAG_EV_CACHE = 3,
+	DIAG_EV_PORTAL = 4,
+	DIAG_EV_ASSERT = 5,
+	DIAG_EV_PEEK = 6,
+	DIAG_EV_CAP = 7,
+	DIAG_EV_IO_SEND = 10,
+	DIAG_EV_IO_POLL = 11,
+	DIAG_EV_IO_FRAME = 12,
+	DIAG_EV_FINAL = 13
+};
+
+enum {
+	DIAG_ST_START = 0,
+	DIAG_ST_RELEASE_CREATE = 1,
+	DIAG_ST_ROW11_VAR_GOOD = 2,
+	DIAG_ST_GROUP_LOCK_ROUTE = 3,
+	DIAG_ST_ROW11_SELECT42 = 4,
+	DIAG_ST_ROW15_LOCAL_SET = 5,
+	DIAG_ST_ROW15_CACHE_BES = 6,
+	DIAG_ST_ROW11_NATIVE_PORTAL = 7,
+	DIAG_ST_ROW15_ASSERT = 8
+};
+
+enum {
+	DIAG_PH_NONE = 0,
+	DIAG_PH_PEEK_POSITIVE = 1,
+	DIAG_PH_DEADLINE = 2,
+	DIAG_PH_POLL_ERROR = 3,
+	DIAG_PH_SOCKET_INVALID = 4,
+	DIAG_PH_SOCKET_ERROR = 5,
+	DIAG_PH_CLOSED = 6,
+	DIAG_PH_RECV_ERROR = 7,
+	DIAG_PH_UNEXPECTED = 8,
+	DIAG_PH_PEEK_AFTER_DEADLINE = 9,
+	DIAG_PH_NO_SEND_TIMESTAMP = 10
+};
+
+static bool diag_enabled() noexcept {
+	static const bool enabled = [] {
+		const int saved_errno = errno;
+		const char* v = getenv("FLUSH_DIAG_PASSIVE");
+		const bool result = v != nullptr && v[0] == '1' && v[1] == '\0';
+		errno = saved_errno;
+		return result;
+	}();
+	return enabled;
+}
+
+static int diag_pick_clock() noexcept {
+	static const int clock_id = [] {
+		const int saved_errno = errno;
+		int result = static_cast<int>(CLOCK_MONOTONIC);
+#ifdef CLOCK_MONOTONIC_RAW
+		struct timespec ts;
+		if (clock_gettime(CLOCK_MONOTONIC_RAW, &ts) == 0)
+			result = static_cast<int>(CLOCK_MONOTONIC_RAW);
+#endif
+		errno = saved_errno;
+		return result;
+	}();
+	return clock_id;
+}
+
+static int diag_seq = 0;
+static bool diag_invalid = false;
+static bool diag_capped = false;
+static bool diag_terminal_emitted = false;
+static bool diag_final_emitted = false;
+static bool diag_output_failed = false;
+
+// Fixed valid numeric-only fallback statuses (no allocation, no recursion). The prefix and
+// schema are identical to the normal records; parent validation applies unchanged.
+static const char DIAG_FALLBACK_STATUS[] =
+	"# PGFLUSH_DIAG {\"v\":1,\"q\":4096,\"s\":0,\"e\":7,\"l\":0,\"m\":0,\"c\":1,"
+	"\"a\":0,\"t\":0,\"p\":0,\"r\":0,\"x\":0,\"R\":0,\"P\":0,\"b\":0,\"n\":0,"
+	"\"u\":4096,\"k\":512,\"y\":[],\"T\":0,\"N\":0,\"I\":1,\"h\":0,"
+	"\"C0\":0,\"C1\":0,\"C2\":0,\"C3\":0}";
+static const char DIAG_FALLBACK_FINAL[] =
+	"# PGFLUSH_DIAG {\"v\":1,\"q\":4096,\"s\":0,\"e\":13,\"l\":0,\"m\":0,\"c\":1,"
+	"\"a\":0,\"t\":0,\"p\":0,\"r\":0,\"x\":0,\"R\":0,\"P\":0,\"b\":0,\"n\":0,"
+	"\"u\":4096,\"k\":512,\"y\":[],\"T\":0,\"N\":0,\"I\":1,\"h\":0,"
+	"\"C0\":1,\"C1\":1,\"C2\":1,\"C3\":0}";
+
+static bool diag_write_raw(const char* text) noexcept {
+	const int saved_errno = errno;
+	if (text == nullptr || strlen(text) > static_cast<size_t>(DIAG_MAX_RECORD_BYTES)) {
+		diag_output_failed = true;
+		errno = saved_errno;
+		return false;
+	}
+	const bool ok = fputs(text, stdout) >= 0 && fputc('\n', stdout) != EOF && fflush(stdout) == 0;
+	if (!ok) diag_output_failed = true;
+	errno = saved_errno;
+	return ok;
+}
+
+static void diag_fallback_status() noexcept {
+	if (diag_terminal_emitted) return;
+	diag_capped = true;
+	diag_invalid = true;
+	if (diag_write_raw(DIAG_FALLBACK_STATUS)) diag_terminal_emitted = true;
+}
+
+static void diag_emit_final() noexcept {
+	if (!diag_enabled() || diag_final_emitted) return;
+	diag_final_emitted = true;
+	const int saved_errno = errno;
+	try {
+		const int seq = diag_seq < DIAG_MAX_RECORDS ? diag_seq + 1 : DIAG_MAX_RECORDS;
+		const int inv = (diag_invalid || diag_capped || diag_output_failed) ? 1 : 0;
+		std::string line = DIAG_PREFIX + diag_json(seq, DIAG_ST_START, DIAG_EV_FINAL, 0, 0,
+			diag_pick_clock(), 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, 0, 0, inv, DIAG_PH_NONE,
+			1, inv, 1, 0);
+		if (diag_write_line(line)) {
+			diag_seq = seq;
+			errno = saved_errno;
+			return;
+		}
+	} catch (...) {
+		diag_invalid = true;
+	}
+	if (!diag_write_raw(DIAG_FALLBACK_FINAL)) diag_output_failed = true;
+	errno = saved_errno;
+}
+
+static std::string diag_json(int seq, int stage, int event, int logical_mode, int effective_mode,
+		int clock_id, long long t0_us, long long t_us, int local_port, long long ret, int err,
+		int revents, int poll_ms, long long bytes, long long msgs, const std::vector<int>& types,
+		int types_total, int types_trunc, int invalid, int phase,
+		long long c0 = 0, long long c1 = 0, long long c2 = 0, long long c3 = 0) {
+	std::string s;
+	s.reserve(512);
+	s += "{\"v\":1,\"q\":"; s += std::to_string(seq);
+	s += ",\"s\":"; s += std::to_string(stage);
+	s += ",\"e\":"; s += std::to_string(event);
+	s += ",\"l\":"; s += std::to_string(logical_mode);
+	s += ",\"m\":"; s += std::to_string(effective_mode);
+	s += ",\"c\":"; s += std::to_string(clock_id);
+	s += ",\"a\":"; s += std::to_string(t0_us);
+	s += ",\"t\":"; s += std::to_string(t_us);
+	s += ",\"p\":"; s += std::to_string(local_port);
+	s += ",\"r\":"; s += std::to_string(ret);
+	s += ",\"x\":"; s += std::to_string(err);
+	s += ",\"R\":"; s += std::to_string(revents);
+	s += ",\"P\":"; s += std::to_string(poll_ms);
+	s += ",\"b\":"; s += std::to_string(bytes);
+	s += ",\"n\":"; s += std::to_string(msgs);
+	s += ",\"u\":"; s += std::to_string(DIAG_MAX_RECORDS);
+	s += ",\"k\":"; s += std::to_string(DIAG_MAX_RECORD_BYTES);
+	s += ",\"y\":[";
+	for (size_t i = 0; i < types.size(); i++) {
+		if (i) s += ',';
+		s += std::to_string(types[i]);
+	}
+	s += "],\"T\":"; s += std::to_string(types_total);
+	s += ",\"N\":"; s += std::to_string(types_trunc);
+	s += ",\"I\":"; s += std::to_string(invalid);
+	s += ",\"h\":"; s += std::to_string(phase);
+	s += ",\"C0\":"; s += std::to_string(c0);
+	s += ",\"C1\":"; s += std::to_string(c1);
+	s += ",\"C2\":"; s += std::to_string(c2);
+	s += ",\"C3\":"; s += std::to_string(c3);
+	s += '}';
+	return s;
+}
+
+static bool diag_write_line(const std::string& line) noexcept {
+	const int saved_errno = errno;
+	if (line.size() > static_cast<size_t>(DIAG_MAX_RECORD_BYTES)) {
+		diag_invalid = true;
+		errno = saved_errno;
+		return false;
+	}
+	const bool ok = fputs(line.c_str(), stdout) >= 0 && fputc('\n', stdout) != EOF && fflush(stdout) == 0;
+	if (!ok) {
+		diag_invalid = true;
+		diag_output_failed = true;
+	}
+	errno = saved_errno;
+	return ok;
+}
+
+static void diag_emit_cap() noexcept {
+	if (!diag_enabled() || diag_terminal_emitted) return;
+	const int saved_errno = errno;
+	try {
+		const int seq = diag_seq < DIAG_MAX_RECORDS ? diag_seq + 1 : DIAG_MAX_RECORDS;
+		std::string line = DIAG_PREFIX + diag_json(seq, DIAG_ST_START, DIAG_EV_CAP, 0, 0,
+			diag_pick_clock(), 0, 0, 0, 0, 0, 0, 0, 0, 0, {}, 0, 0, 1, DIAG_PH_NONE);
+		if (diag_write_line(line)) {
+			diag_seq = seq;
+			diag_capped = true;
+			diag_terminal_emitted = true;
+			errno = saved_errno;
+			return;
+		}
+	} catch (...) {
+		diag_invalid = true;
+	}
+	diag_fallback_status();
+	errno = saved_errno;
+}
+
+static void diag_emit(int stage, int event, int logical_mode, int effective_mode, int clock_id,
+		long long t0_us, long long t_us, int local_port, long long ret, int err, int revents,
+		int poll_ms, long long bytes, long long msgs, const std::vector<int>& types,
+		int types_total, int types_trunc, int invalid, int phase,
+		long long c0 = 0, long long c1 = 0, long long c2 = 0, long long c3 = 0) noexcept {
+	if (!diag_enabled() || diag_capped) return;
+	const int saved_errno = errno;
+	try {
+		if (diag_seq >= DIAG_MAX_RECORDS - 2) {
+			diag_invalid = true;
+			diag_emit_cap();
+			errno = saved_errno;
+			return;
+		}
+		const int seq = ++diag_seq;
+		std::vector<int> bounded_types = types;
+		int bounded_trunc = types_trunc;
+		int bounded_invalid = (invalid || types_trunc) ? 1 : 0;
+		std::string line;
+		for (;;) {
+			line = DIAG_PREFIX + diag_json(seq, stage, event, logical_mode, effective_mode,
+				clock_id, t0_us, t_us, local_port, ret, err, revents, poll_ms, bytes, msgs,
+				bounded_types, types_total, bounded_trunc, bounded_invalid, phase, c0, c1, c2, c3);
+			if (line.size() <= static_cast<size_t>(DIAG_MAX_RECORD_BYTES)) break;
+			if (bounded_types.empty()) {
+				diag_invalid = true;
+				diag_emit_cap();
+				errno = saved_errno;
+				return;
+			}
+			bounded_types.pop_back();
+			bounded_trunc = 1;
+			bounded_invalid = 1;
+		}
+		if (!diag_write_line(line)) {
+			diag_invalid = true;
+			diag_fallback_status();
+		}
+	} catch (...) {
+		// Diagnostic allocation/write failure invalidates the measurement, never the test flow.
+		diag_invalid = true;
+		diag_fallback_status();
+	}
+	errno = saved_errno;
+}
+
+static void diag_start() noexcept {
+	if (!diag_enabled()) return;
+	diag_emit(DIAG_ST_START, DIAG_EV_START, 0, 0, diag_pick_clock(), 0, 0, 0, 0, 0, 0, 0,
+		0, 0, {}, 0, 0, 0, DIAG_PH_NONE, 1);
+}
+
+static void diag_finalize() noexcept {
+	if (!diag_enabled()) return;
+	if ((diag_invalid || diag_capped || diag_output_failed) && !diag_terminal_emitted)
+		diag_emit_cap();
+	diag_emit_final();
+}
+
+struct DiagStageData {
+	Msgs msgs;
+	std::string got;
+	bool closed = false;
+	bool saw_send_event = false;
+	bool event_overflow = false;
+	std::array<PgDiagEvent, DIAG_MAX_EVENTS> events{};
+	size_t event_count = 0;
+	long long send_t0_us = 0;
+	long long send_end_us = 0;
+	int clock_id = 0;
+	long long send_bytes = 0;
+	long long send_ret = 0;
+	int send_err = 0;
+	int polls = 0;
+	long long last_poll_ret = 0;
+	int last_poll_err = 0;
+	int last_poll_revents = 0;
+	int last_poll_ms = 0;
+	int reads = 0;
+	long long read_bytes = 0;
+	int last_msg_type = 0;
+};
+
+static void diag_collect_types(const Msgs& msgs, std::vector<int>& types, int& total, int& trunc) {
+	total = static_cast<int>(msgs.size());
+	trunc = total > DIAG_MAX_TYPES ? 1 : 0;
+	const size_t n = msgs.size() < static_cast<size_t>(DIAG_MAX_TYPES)
+		? msgs.size() : static_cast<size_t>(DIAG_MAX_TYPES);
+	for (size_t i = 0; i < n; i++) types.push_back(static_cast<unsigned char>(msgs[i].first));
+}
+
+static DiagStageData read_stage(PgConnection& c, int stage, int logical_mode, int effective_mode,
+		const std::function<void()>& send, int quiet_ms = QUIET_MS) {
+	DiagStageData d;
+	auto run_original = [&](bool stamp_send_end) {
+		try {
+			send();
+			if (stamp_send_end && d.send_end_us <= 0) diag_invalid = true;
+			d.msgs = c.readUntilQuiet(quiet_ms);
+			d.got = tokens(d.msgs);
+		} catch (const PgException& e) {
+			d.closed = true;
+			d.got = std::string("CLOSED:") + e.what();
+		}
+	};
+	if (!diag_enabled()) {
+		run_original(false);
+		return d;
+	}
+	PgDiagCallback cb;
+	const int saved_errno = errno;
+	try {
+		cb = [&d](const PgDiagEvent& e) {
+			if (d.event_count < d.events.size()) d.events[d.event_count++] = e;
+			else d.event_overflow = true;
+			d.clock_id = e.clock_id;
+			if (e.event == 1) {
+				d.saw_send_event = true;
+				d.send_t0_us = e.t0_us;
+				d.send_end_us = e.t_us;  // last actual send boundary, never a post-lambda clock
+				d.send_bytes = e.bytes;
+				d.send_ret = e.ret;
+				d.send_err = e.err;
+			} else if (e.event == 2) {
+				d.polls++;
+				d.last_poll_ret = e.ret;
+				d.last_poll_err = e.err;
+				d.last_poll_revents = e.revents;
+				d.last_poll_ms = e.poll_ms;
+			} else if (e.event == 3) {
+				d.reads++;
+				d.read_bytes += e.bytes;
+				d.last_msg_type = e.msg_type;
+			}
+		};
+	} catch (...) {
+		// Diagnostic setup failure: run the exact original send/read path and mark invalid.
+		errno = saved_errno;
+		diag_invalid = true;
+		run_original(false);
+		return d;
+	}
+	errno = saved_errno;
+	{
+		PgDiagScope scope(c, stage, logical_mode, effective_mode, std::move(cb));
+		run_original(true);
+	}
+	if (c.diagInvalid()) diag_invalid = true;
+	return d;
+}
+
+static void diag_emit_stage(PgConnection& c, int stage, int event, int logical_mode,
+		int effective_mode, const DiagStageData& d, int phase, bool force_invalid = false,
+		long long c0 = 0, long long c1 = 0, long long c2 = 0, long long c3 = 0) noexcept {
+	if (!diag_enabled()) return;
+	const int saved_errno = errno;
+	try {
+		std::vector<int> types;
+		int total = 0, trunc = 0;
+		diag_collect_types(d.msgs, types, total, trunc);
+		const int clock_id = d.clock_id != 0 ? d.clock_id : c.diagClockId();
+		const int invalid = (force_invalid || d.closed || d.event_overflow || trunc ||
+			c.diagInvalid() || diag_invalid) ? 1 : 0;
+		diag_emit(stage, event, logical_mode, effective_mode, clock_id, d.send_t0_us, d.send_end_us,
+			c.localPort(), d.send_ret, d.send_err, d.last_poll_revents, d.last_poll_ms,
+			d.read_bytes, static_cast<long long>(d.msgs.size()), types, total, trunc, invalid, phase,
+			c0, c1, c2, c3);
+	} catch (...) {
+		diag_invalid = true;
+		diag_fallback_status();
+	}
+	errno = saved_errno;
+}
+
+// Emit each captured send/poll/frame boundary as its own I/O record. Called only after the
+// original assertion has run; never from inside the send/poll callback.
+static void diag_emit_io_events(PgConnection& c, int stage, int logical_mode, int effective_mode,
+		const DiagStageData& d, bool force_invalid = false) noexcept {
+	if (!diag_enabled()) return;
+	const int saved_errno = errno;
+	try {
+		const int invalid = (force_invalid || d.closed || d.event_overflow ||
+			c.diagInvalid() || diag_invalid) ? 1 : 0;
+		for (size_t i = 0; i < d.event_count; i++) {
+			const PgDiagEvent& e = d.events[i];
+			int event = 0;
+			if (e.event == 1) event = DIAG_EV_IO_SEND;
+			else if (e.event == 2) event = DIAG_EV_IO_POLL;
+			else if (e.event == 3) event = DIAG_EV_IO_FRAME;
+			if (event == 0) continue;
+			std::vector<int> types;
+			int total = 0, trunc = 0;
+			if (event == DIAG_EV_IO_FRAME) {
+				types.push_back(static_cast<unsigned char>(e.msg_type));
+				total = 1;
+			}
+			diag_emit(stage, event, logical_mode, effective_mode, e.clock_id, e.t0_us, e.t_us,
+				e.local_port, e.ret, e.err, e.revents, e.poll_ms, e.bytes,
+				event == DIAG_EV_IO_FRAME ? 1 : 0, types, total, trunc, invalid, DIAG_PH_NONE);
+		}
+	} catch (...) {
+		diag_invalid = true;
+		diag_fallback_status();
+	}
+	errno = saved_errno;
+}
+
+static void diag_emit_peek(PgConnection& c, int stage, int logical_mode, int effective_mode,
+		long long t0_us, long long t_us, long long ret, int err, int revents, int poll_ms,
+		long long bytes, int phase) noexcept {
+	diag_emit(stage, DIAG_EV_PEEK, logical_mode, effective_mode, c.diagClockId(), t0_us, t_us,
+		c.localPort(), ret, err, revents, poll_ms, bytes, 0, {}, 0, 0,
+		(phase == DIAG_PH_RECV_ERROR || phase == DIAG_PH_NO_SEND_TIMESTAMP) ? 1 : 0, phase);
+}
+
+// Non-consuming observation after an actual failed expected-positive assertion whose filtered got
+// is exactly empty. Deadline is the original send end + 2 s; no write, no consume, no restart.
+static void diag_passive_peek(PgConnection& c, int stage, int logical_mode, int effective_mode,
+		long long send_end_us) noexcept {
+	struct EntryErrnoGuard {
+		int saved;
+		~EntryErrnoGuard() { errno = saved; }
+	} entry_errno{errno};
+	const int fd = c.getSocket();
+	if (fd < 0) {
+		diag_emit_peek(c, stage, logical_mode, effective_mode, 0, 0, 0, 0, 0, 0, 0,
+			DIAG_PH_SOCKET_INVALID);
+		return;
+	}
+	if (c.diagInvalid()) {
+		diag_invalid = true;
+		diag_emit_peek(c, stage, logical_mode, effective_mode, 0, 0, 0, 0, 0, 0, 0,
+			DIAG_PH_NO_SEND_TIMESTAMP);
+		return;
+	}
+	if (send_end_us <= 0) {
+		// No valid original send timestamp: mark invalid and skip the observation entirely.
+		diag_invalid = true;
+		diag_emit_peek(c, stage, logical_mode, effective_mode, 0, 0, 0, 0, 0, 0, 0,
+			DIAG_PH_NO_SEND_TIMESTAMP);
+		return;
+	}
+	const long long deadline = send_end_us + 2000000LL;
+	for (;;) {
+		const long long now = c.diagClockNowUs();
+		if (now <= 0) {
+			diag_invalid = true;
+			diag_emit_peek(c, stage, logical_mode, effective_mode, 0, 0, 0, 0, 0, 0, 0,
+				DIAG_PH_NO_SEND_TIMESTAMP);
+			return;
+		}
+		if (now >= deadline) {
+			diag_emit_peek(c, stage, logical_mode, effective_mode, now, now, 0, 0, 0, 0, 0,
+				DIAG_PH_DEADLINE);
+			return;
+		}
+		long long remain_us = deadline - now;
+		int remain_ms = static_cast<int>((remain_us + 999) / 1000);
+		if (remain_ms < 1) remain_ms = 1;
+		struct pollfd p = { fd, POLLIN | POLLHUP | POLLERR, 0 };
+		const long long t0_us = c.diagClockNowUs();
+		const int r = poll(&p, 1, remain_ms);
+		const int after_errno = errno;  // immediately after the original poll
+		const long long t_us = c.diagClockNowUs();
+		errno = after_errno;
+		if (t_us <= 0) {
+			diag_invalid = true;
+			diag_emit_peek(c, stage, logical_mode, effective_mode, t0_us, 0, 0, 0, 0, 0, 0,
+				DIAG_PH_NO_SEND_TIMESTAMP);
+			return;
+		}
+		if (r < 0) {
+			diag_emit_peek(c, stage, logical_mode, effective_mode, t0_us, t_us, r,
+				after_errno, p.revents, remain_ms, 0, DIAG_PH_POLL_ERROR);
+			if (after_errno == EINTR) continue;  // absolute deadline is rechecked at the top
+			return;
+		}
+		if (r == 0) continue;  // rounded-down timeout; deadline rechecked at the top
+		if (p.revents & POLLNVAL) {
+			diag_emit_peek(c, stage, logical_mode, effective_mode, t0_us, t_us, r, 0,
+				p.revents, remain_ms, 0, DIAG_PH_SOCKET_INVALID);
+			return;
+		}
+		if (p.revents & POLLERR) {
+			diag_emit_peek(c, stage, logical_mode, effective_mode, t0_us, t_us, r, 0,
+				p.revents, remain_ms, 0, DIAG_PH_SOCKET_ERROR);
+			return;
+		}
+		if (p.revents & POLLIN) {
+			const long long pre_recv_now = c.diagClockNowUs();
+			if (pre_recv_now <= 0) {
+				diag_invalid = true;
+				diag_emit_peek(c, stage, logical_mode, effective_mode, t0_us, t_us, r, 0,
+					p.revents, remain_ms, 0, DIAG_PH_NO_SEND_TIMESTAMP);
+				return;
+			}
+			if (pre_recv_now >= deadline) {
+				diag_emit_peek(c, stage, logical_mode, effective_mode, t0_us, t_us, r, 0,
+					p.revents, remain_ms, 0, DIAG_PH_DEADLINE);
+				return;
+			}
+			uint8_t one = 0;
+			const long long rt0_us = c.diagClockNowUs();
+			const ssize_t n = recv(fd, &one, 1, MSG_PEEK | MSG_DONTWAIT);
+			const int after_recv_errno = errno;  // immediately after recv
+			const int recv_errno = (n < 0) ? after_recv_errno : 0;
+			const long long rt_us = c.diagClockNowUs();
+			errno = after_recv_errno;
+			if (rt_us <= 0) {
+				diag_invalid = true;
+				diag_emit_peek(c, stage, logical_mode, effective_mode, rt0_us, 0, 0, 0, 0, 0, 0,
+					DIAG_PH_NO_SEND_TIMESTAMP);
+				return;
+			}
+			int phase = DIAG_PH_UNEXPECTED;
+			if (n == 1) phase = (rt_us >= deadline) ? DIAG_PH_PEEK_AFTER_DEADLINE : DIAG_PH_PEEK_POSITIVE;
+			else if (n == 0) phase = DIAG_PH_CLOSED;
+			else if (recv_errno == EINTR) phase = DIAG_PH_POLL_ERROR;
+			else if (recv_errno == EAGAIN || recv_errno == EWOULDBLOCK) phase = DIAG_PH_DEADLINE;
+			else phase = DIAG_PH_RECV_ERROR;
+			diag_emit_peek(c, stage, logical_mode, effective_mode, rt0_us, rt_us, n,
+				recv_errno, p.revents, remain_ms, n == 1 ? 1 : 0, phase);
+			if (n == 1) return;
+			if (recv_errno == EINTR) continue;
+			if (recv_errno == EAGAIN || recv_errno == EWOULDBLOCK) {
+				const int saved = errno;
+				poll(nullptr, 0, 1);  // bounded 1 ms pause; deadline is rechecked at the top
+				errno = saved;
+				continue;
+			}
+			return;
+		}
+		if (p.revents & POLLHUP) {
+			diag_emit_peek(c, stage, logical_mode, effective_mode, t0_us, t_us, r, 0,
+				p.revents, remain_ms, 0, DIAG_PH_CLOSED);
+			return;
+		}
+		diag_emit_peek(c, stage, logical_mode, effective_mode, t0_us, t_us, r, 0,
+			p.revents, remain_ms, 0, DIAG_PH_UNEXPECTED);
+		return;
+	}
+}
+
+// Original assertion FIRST, then the stage marker, then (only for an actual empty failure) the
+// non-consuming passive observation. With diagnostics off this is exactly check(run(...)).
+static void check_initial(PgConnection& c, int stage, int logical_mode, int effective_mode,
+		const std::function<void()>& send, const std::string& want, const char* what, Mode m, bool txn) {
+	if (!diag_enabled()) {
+		check(run(c, send), want, what, m, txn);
+		return;
+	}
+	const DiagStageData d = read_stage(c, stage, logical_mode, effective_mode, send);
+	check(d.got, want, what, m, txn);  // unchanged exact assertion
+	diag_emit_stage(c, stage, DIAG_EV_STAGE, logical_mode, effective_mode, d, DIAG_PH_NONE, d.closed);
+	diag_emit_io_events(c, stage, logical_mode, effective_mode, d, d.closed);
+	if (d.closed || !d.got.empty() || d.got == want) return;
+	diag_passive_peek(c, stage, logical_mode, effective_mode, d.send_end_us);
+}
+
+// Logging-only assertion wrapper: original assertion FIRST, no passive wait.
+static void check_logged(PgConnection& c, int stage, int event, int logical_mode, int effective_mode,
+		const std::function<void()>& send, const std::string& want, const char* what, Mode m, bool txn) {
+	if (!diag_enabled()) {
+		check(run(c, send), want, what, m, txn);
+		return;
+	}
+	const DiagStageData d = read_stage(c, stage, logical_mode, effective_mode, send);
+	check(d.got, want, what, m, txn);
+	diag_emit_stage(c, stage, event, logical_mode, effective_mode, d, DIAG_PH_NONE, d.closed);
+	diag_emit_io_events(c, stage, logical_mode, effective_mode, d, d.closed);
 }
 
 // BEGIN as a simple Query, when the case runs inside an explicit transaction.
@@ -873,8 +1474,9 @@ static void case_release_other_hostgroup(Mode mode, bool) {
 	{
 		auto a = client(m);
 		auto b = client(m);
-		check(run(*a, [&] { a->sendQuery("CREATE TEMP TABLE flush_tmp (x int)"); }), "C(CREATE TABLE) Z(I)",
-			"release other hostgroup: A CREATE TEMP TABLE", m, false);
+		check_initial(*a, DIAG_ST_RELEASE_CREATE, static_cast<int>(mode), static_cast<int>(m),
+			[&] { a->sendQuery("CREATE TEMP TABLE flush_tmp (x int)"); },
+			"C(CREATE TABLE) Z(I)", "release other hostgroup: A CREATE TEMP TABLE", m, false);
 		check(run(*a, [&] { a->prepareStatement("", uniq() + "SELECT 'flush_other_hg'", false); a->describeStatement("", false);
 				a->sendFlush(); }), "1 t T", "release other hostgroup: A P D(S) H", m, false);
 		check(run(*b, [&] { b->sendQuery("BEGIN; SELECT 'flush_other_hg'"); }), "C(BEGIN) T D C(SELECT 1) Z(T)",
@@ -1124,22 +1726,54 @@ static void case_row15_cache(Mode mode, bool) {
 		} else if (s != 2) {
 			run(*c, [&] { insert_flush(*c, tag); });
 		}
+		const bool logged = (s == 3 && diag_enabled());
+		DiagStageData local_set;
 		if (s == 2) {
 			q = run(*c, [&] { c->beginBuffering(); c->prepareStatement("", uniq() + "INSERT INTO flush_t VALUES ('" + tag + "', 1)", false);
 				c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendQuery("SELECT 1"); c->endBuffering(); });
 			want = "1 2 C(INSERT 0 1) " + want;
 		} else if (s == 3) {
-			q = run(*c, [&] { c->sendQuery("SET DateStyle = 'ISO'"); });
+			if (logged) {
+				local_set = read_stage(*c, DIAG_ST_ROW15_LOCAL_SET, static_cast<int>(mode), static_cast<int>(m),
+					[&] { c->sendQuery("SET DateStyle = 'ISO'"); });
+				q = local_set.got;
+			} else {
+				q = run(*c, [&] { c->sendQuery("SET DateStyle = 'ISO'"); });
+			}
 			want = "C(SET) Z(I)";
 		} else {
 			q = run(*c, [&] { c->sendQuery("SELECT 1"); });
 		}
 		const long long get3 = global_stat("Query_Cache_count_GET"), hit3 = global_stat("Query_Cache_count_GET_OK");
-		run(*c, [&] { c->bindStatement("flush_cs", "", { { std::string("v"), 0 } }, {}, false); c->executePortal("", 0, false); c->sendSync(); });
+		DiagStageData cache_bes;
+		if (logged) {
+			cache_bes = read_stage(*c, DIAG_ST_ROW15_CACHE_BES, static_cast<int>(mode), static_cast<int>(m),
+				[&] { c->bindStatement("flush_cs", "", { { std::string("v"), 0 } }, {}, false); c->executePortal("", 0, false); c->sendSync(); });
+		} else {
+			run(*c, [&] { c->bindStatement("flush_cs", "", { { std::string("v"), 0 } }, {}, false); c->executePortal("", 0, false); c->sendSync(); });
+		}
 		const long long get4 = global_stat("Query_Cache_count_GET"), hit4 = global_stat("Query_Cache_count_GET_OK");
-		ok(q == want && get4 == get3 + 1 && (s == 3 || hit4 == hit3 + 1),
+		const bool passed = q == want && get4 == get3 + 1 && (s == 3 || hit4 == hit3 + 1);
+		ok(passed,
 			"row 15 [%s]: %s, then B E S %s (Q '%s', GET %lld->%lld, GET_OK %lld->%lld)", mode_name(m), SHAPES[s],
 			s == 3 ? "looks in the cache" : "is answered from the cache", q.c_str(), get3, get4, hit3, hit4);
+		if (logged) {
+			diag_emit_stage(*c, DIAG_ST_ROW15_LOCAL_SET, DIAG_EV_STAGE,
+				static_cast<int>(mode), static_cast<int>(m), local_set, DIAG_PH_NONE, local_set.closed);
+			diag_emit_io_events(*c, DIAG_ST_ROW15_LOCAL_SET,
+				static_cast<int>(mode), static_cast<int>(m), local_set, local_set.closed);
+			diag_emit_stage(*c, DIAG_ST_ROW15_CACHE_BES, DIAG_EV_CACHE,
+				static_cast<int>(mode), static_cast<int>(m), cache_bes, DIAG_PH_NONE, cache_bes.closed);
+			diag_emit_io_events(*c, DIAG_ST_ROW15_CACHE_BES,
+				static_cast<int>(mode), static_cast<int>(m), cache_bes, cache_bes.closed);
+			const int phase = DIAG_PH_NONE;
+			diag_emit_stage(*c, DIAG_ST_ROW15_ASSERT, DIAG_EV_ASSERT,
+				static_cast<int>(mode), static_cast<int>(m), cache_bes, phase, cache_bes.closed,
+				get3, get4, hit3, hit4);
+			if (!passed && q.empty())
+				diag_passive_peek(*c, DIAG_ST_ROW15_ASSERT, static_cast<int>(mode), static_cast<int>(m),
+					local_set.send_end_us);
+		}
 	}
 	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9115");
 	exec(g_admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
@@ -1160,12 +1794,16 @@ static void case_row11(Mode m, bool txn) {
 		check(run(*c, [&] { c->prepareStatement("flush_s1", uniq() + "SELECT 42 AS v", false); c->bindStatement("flush_s1", "p1", {}, {}, false);
 				c->sendFlush(); }), "1 2", "row 11: P(s1) B(p1) H", m, txn);
 	}
-	check(run(*c, [&] { c->sendQuery("SELECT 42"); }), std::string("T D C(SELECT 1) Z(") + txn_z(txn) + ")", "row 11: Q SELECT 42", m, txn);
+	check_initial(*c, DIAG_ST_ROW11_SELECT42, static_cast<int>(m), static_cast<int>(m),
+		[&] { c->sendQuery("SELECT 42"); },
+		std::string("T D C(SELECT 1) Z(") + txn_z(txn) + ")", "row 11: Q SELECT 42", m, txn);
 	ok(rows(tag) == (txn ? 0 : 1), "row 11 [%s%s]: the INSERT is %s (rows=%ld)", mode_name(m), txn ? ", in txn" : "",
 		txn ? "still in the open transaction" : "committed by the Query", rows(tag));
 	if (native) {
-		check(run(*c, [&] { c->executePortal("p1", 0, false); c->sendSync(); }), txn ? "D C(SELECT 1) Z(T)" : "E(34000) Z(I)",
-			"row 11: E(p1) S", m, txn);
+		check_logged(*c, DIAG_ST_ROW11_NATIVE_PORTAL, DIAG_EV_PORTAL,
+			static_cast<int>(m), static_cast<int>(m),
+			[&] { c->executePortal("p1", 0, false); c->sendSync(); },
+			txn ? "D C(SELECT 1) Z(T)" : "E(34000) Z(I)", "row 11: E(p1) S", m, txn);
 	}
 	if (txn) run(*c, [&] { c->sendQuery("ROLLBACK"); });
 }
@@ -1243,8 +1881,14 @@ static void case_row11_var(Mode m, bool) {
 			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush(); });
 		ok(set.size() >= 6 && set.compare(set.size() - 6, 6, "C(SET)") == 0, "row 11 var [%s]: P B E(SET DateStyle) H (got '%s')",
 			mode_name(m), set.c_str());
-		check(run(*c, [&] { c->sendQuery(good ? "SELECT 1" : "SELECT 1/0"); }), good ? "T D C(SELECT 1) Z(I)" : "E(22012) Z(I)",
-			good ? "row 11 var: Q SELECT 1" : "row 11 var: Q SELECT 1/0", m, false);
+		if (good) {
+			check_initial(*c, DIAG_ST_ROW11_VAR_GOOD, static_cast<int>(m), static_cast<int>(m),
+				[&] { c->sendQuery("SELECT 1"); }, "T D C(SELECT 1) Z(I)",
+				"row 11 var: Q SELECT 1", m, false);
+		} else {
+			check(run(*c, [&] { c->sendQuery("SELECT 1/0"); }), "E(22012) Z(I)",
+				"row 11 var: Q SELECT 1/0", m, false);
+		}
 		ok(rows(tag) == good, "row 11 var [%s]: the INSERT is %s (rows=%ld)", mode_name(m), good ? "committed" : "rolled back", rows(tag));
 	}
 }
@@ -1443,7 +2087,8 @@ static void case_group_lock_route(Mode m, bool) {
 	auto c = client(m);
 	const std::string tag = tag_for("lockroute", m, false);
 	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group lock route: P B E(INSERT) H", m, false);
-	check(run(*c, [&] { c->sendQuery("SET application_name = 'flush_lock_route'; SELECT 64"); }),
+	check_initial(*c, DIAG_ST_GROUP_LOCK_ROUTE, static_cast<int>(m), static_cast<int>(m),
+		[&] { c->sendQuery("SET application_name = 'flush_lock_route'; SELECT 64"); },
 		"C(SET) T D C(SELECT 1) Z(I)", "group lock route: Q SET ...; SELECT 64", m, false);
 	ok(rows(tag) == 1, "group lock route [%s]: the INSERT is committed with the Query (rows=%ld)", mode_name(m), rows(tag));
 	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9164");
@@ -1585,6 +2230,9 @@ int main(int, char**) {
 	}
 	plan(total);
 
+	// Enabled only for an actual FLUSH_DIAG_PASSIVE=1 child; the start record carries the real budget.
+	diag_start();
+
 	auto admin = open_conn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
 	if (!admin || PQstatus(admin.get()) != CONNECTION_OK) BAIL_OUT("no admin connection");
 	const std::string native_before = scalar(admin.get(), "SELECT variable_value FROM runtime_global_variables "
@@ -1625,5 +2273,6 @@ int main(int, char**) {
 	exec(g_be, "DROP TABLE IF EXISTS flush_t");
 	exec(admin.get(), "SET pgsql-use_native_backend_protocol='" + (native_before.empty() ? std::string("false") : native_before) + "'");
 	exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+	diag_finalize();
 	return exit_status();
 }

@@ -105,6 +105,193 @@ internal_tap_tests_versions = [
 #  set to '0'.
 zero_sec_level_tap_tests = ["test_mysql-tls_version-t"]
 
+# ===== Bounded FLUSH_DIAG PASS-console retention (pure, offline-testable) =====
+# Only validated integer-only markers from the exact flush test with an actual child
+# FLUSH_DIAG_PASSIVE=1 are INFO-forwarded. Everything else stays on the original DEBUG path.
+FLUSH_DIAG_PREFIX = '# PGFLUSH_DIAG '
+FLUSH_DIAG_TEST_BASENAME = 'pgsql-extended_query_flush-t'
+FLUSH_DIAG_MAX_RECORDS = 4096
+FLUSH_DIAG_MAX_LINE_BYTES = 512
+FLUSH_DIAG_MAX_TYPES = 64
+FLUSH_DIAG_KEYS = frozenset({
+    'v', 'q', 's', 'e', 'l', 'm', 'c', 'a', 't', 'p', 'r', 'x', 'R', 'P',
+    'b', 'n', 'u', 'k', 'y', 'T', 'N', 'I', 'h', 'C0', 'C1', 'C2', 'C3',
+})
+FLUSH_DIAG_EVENTS = frozenset({1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13})
+
+
+def _flush_diag_pairs(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError('duplicate key')
+        obj[key] = value
+    return obj
+
+
+def _flush_diag_reject_constant(_value):
+    raise ValueError('non-finite number')
+
+
+def parse_flush_diag_marker(line):
+    """Validate one marker line. Returns (True, record) or (False, None)."""
+    if not isinstance(line, str):
+        return False, None
+    if not line.startswith(FLUSH_DIAG_PREFIX):
+        return False, None
+    try:
+        if len(line.encode('utf-8')) > FLUSH_DIAG_MAX_LINE_BYTES:
+            return False, None
+        payload = line[len(FLUSH_DIAG_PREFIX):]
+        record = json.loads(
+            payload,
+            object_pairs_hook=_flush_diag_pairs,
+            parse_constant=_flush_diag_reject_constant,
+        )
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return False, None
+    if type(record) is not dict:
+        return False, None
+    if set(record.keys()) != FLUSH_DIAG_KEYS:
+        return False, None
+    types = record.get('y')
+    if type(types) is not list or len(types) > FLUSH_DIAG_MAX_TYPES:
+        return False, None
+    for value in types:
+        if type(value) is not int or value < 0 or value > 255:
+            return False, None
+    ranges = {
+        'v': (1, 1), 'q': (0, 4096), 's': (0, 15), 'e': (1, 13),
+        'l': (0, 2), 'm': (0, 2), 'c': (1, 4), 'a': (0, 10**18),
+        't': (0, 10**18), 'p': (0, 65535), 'r': (-2**31, 2**31 - 1),
+        'x': (0, 4095), 'R': (0, 65535), 'P': (0, 60000),
+        'b': (0, 2**63 - 1), 'n': (0, 4096), 'u': (1, 4096), 'k': (1, 512),
+        'T': (0, 2**31 - 1), 'N': (0, 1), 'I': (0, 1), 'h': (0, 10),
+        'C0': (0, 2**63 - 1), 'C1': (0, 2**63 - 1),
+        'C2': (0, 2**63 - 1), 'C3': (0, 2**63 - 1),
+    }
+    for key, (low, high) in ranges.items():
+        value = record[key]
+        if type(value) is not int or value < low or value > high:
+            return False, None
+    if record['e'] not in FLUSH_DIAG_EVENTS:
+        return False, None
+    if record['e'] == 13:
+        if record['C0'] != 1 or record['C2'] != 1:
+            return False, None
+        if record['I'] == 0 and record['C1'] != 0:
+            return False, None
+        if record['I'] == 1 and record['C1'] != 1:
+            return False, None
+    if record['T'] < len(types):
+        return False, None
+    return True, record
+
+
+class FlushDiagInfoForwarder:
+    """Per-child-process gate and independent accepted-record cap."""
+
+    def __init__(self, test_basename, passive_env, max_records=FLUSH_DIAG_MAX_RECORDS):
+        self.active = (
+            test_basename == FLUSH_DIAG_TEST_BASENAME and passive_env == '1'
+        )
+        self.max_records = max_records
+        self.accepted = 0
+        self.rejected = 0
+        self.measurement_invalid = False
+        self.capped = False
+        self.saw_final = False
+        self.final_invalid = False
+        self.finished = False
+        self.last_was_malformed = False
+        self.invalid_status_emitted = False
+
+    def consume(self, line):
+        """Return the line to INFO-forward, or None to leave it on the DEBUG path."""
+        if not self.active:
+            return None
+        # Ordinary TAP lines are not diagnostics at all; do not count them as malformed markers.
+        if not isinstance(line, str) or not line.startswith(FLUSH_DIAG_PREFIX):
+            return None
+        # Parent budget amendment: max_records is the CHILD accepted-record cap. The parent may
+        # additionally retain at most ONE invalid status, ONE cap status and ONE parent final
+        # (total <= max_records + 3, each <= 512 bytes). Synthetic statuses are counted separately.
+        if self.capped:
+            self.measurement_invalid = True
+            self.last_was_malformed = True
+            if not self.invalid_status_emitted:
+                self.invalid_status_emitted = True
+                return self._invalid_line()
+            return None
+        valid, record = parse_flush_diag_marker(line)
+        if not valid:
+            self.rejected += 1
+            self.measurement_invalid = True
+            self.last_was_malformed = True
+            if not self.invalid_status_emitted:
+                self.invalid_status_emitted = True
+                return self._invalid_line()
+            return None
+        # Once a final was accepted, no later tagged diagnostic (including a duplicate final)
+        # is valid data. Invalidate and retain at most one safe invalid status.
+        if self.saw_final:
+            self.measurement_invalid = True
+            self.last_was_malformed = True
+            if not self.invalid_status_emitted:
+                self.invalid_status_emitted = True
+                return self._invalid_line()
+            return None
+        self.last_was_malformed = False
+        if record['I'] == 1 or record['N'] == 1:
+            self.measurement_invalid = True
+        if self.accepted >= self.max_records:
+            self.capped = True
+            self.measurement_invalid = True
+            return self._cap_line()
+        self.accepted += 1
+        if record['e'] == 13:
+            self.saw_final = True
+            self.final_invalid = self.measurement_invalid
+            if self.measurement_invalid or self.capped:
+                return self._final_line(0)
+        return line
+
+    def finish(self, child_rc):
+        """Emit one parent final if the child final is missing or later invalidated."""
+        if not self.active or self.finished:
+            return None
+        self.finished = True
+        if self.saw_final and self.final_invalid == self.measurement_invalid:
+            return None
+        return self._final_line(child_rc)
+
+    def _invalid_line(self):
+        record = {key: 0 for key in FLUSH_DIAG_KEYS}
+        record.update({
+            'v': 1, 'q': min(self.accepted + 1, self.max_records), 'e': 7, 'c': 1,
+            'u': self.max_records, 'k': FLUSH_DIAG_MAX_LINE_BYTES, 'I': 1, 'y': [],
+        })
+        return FLUSH_DIAG_PREFIX + json.dumps(record, separators=(',', ':'))
+
+    def _final_line(self, child_rc):
+        record = {key: 0 for key in FLUSH_DIAG_KEYS}
+        record.update({
+            'v': 1, 'q': min(self.accepted + 1, self.max_records), 'e': 13, 'c': 1,
+            'u': self.max_records, 'k': FLUSH_DIAG_MAX_LINE_BYTES, 'I': 1, 'y': [],
+            'C0': 1, 'C1': 1, 'C2': 1,
+            'C3': min(self.rejected, 2**63 - 1),
+        })
+        return FLUSH_DIAG_PREFIX + json.dumps(record, separators=(',', ':'))
+
+    def _cap_line(self):
+        record = {key: 0 for key in FLUSH_DIAG_KEYS}
+        record.update({
+            'v': 1, 'q': self.max_records, 'e': 7, 'c': 1,
+            'u': self.max_records, 'k': FLUSH_DIAG_MAX_LINE_BYTES, 'I': 1, 'y': [],
+        })
+        return FLUSH_DIAG_PREFIX + json.dumps(record, separators=(',', ':'))
+
+
 def timer(func):
     def wrapper(*args, **kwargs):
         t = time.process_time()
@@ -826,6 +1013,9 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                 if test_file:
                     test_file = str(test_file.strip())
 
+                flush_diag_forwarder = FlushDiagInfoForwarder(
+                    test_file, tap_env.get('FLUSH_DIAG_PASSIVE'))
+
                 if test_file in zero_sec_level_tap_tests:
                     tap_env["OPENSSL_CONF"] = (
                         os.environ.get("WORKSPACE", ".") + "/test-scripts/datadir/openssl_level_zero.cnf"
@@ -839,6 +1029,9 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     log.exception(e, exc_info=True)
                     rc = rc + 1
                     summary.append((fo_cmd, None))
+                    final_line = flush_diag_forwarder.finish(None)
+                    if final_line is not None:
+                        log.info(f"msg: {final_line}")
                     log.removeHandler(log.handlers[-1])
                     if rc and int(os.environ['TEST_PY_EXIT_ON_FAIL_TEST']):
                         sys.exit(1)
@@ -873,21 +1066,45 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                             buf += chunk
                             while b'\n' in buf:
                                 line, buf = buf.split(b'\n', 1)
-                                log.debug(f"msg: {line.decode('utf-8', 'replace').strip()}")
+                                text = line.decode('utf-8', 'replace').strip()
+                                forwarded = flush_diag_forwarder.consume(text)
+                                if flush_diag_forwarder.last_was_malformed:
+                                    log.debug(f"msg: {text}")
+                                if forwarded is not None:
+                                    log.info(f"msg: {forwarded}")
+                                elif not flush_diag_forwarder.last_was_malformed:
+                                    log.debug(f"msg: {text}")
                         elif fop.poll() is not None:
                             break
 
                     if buf:                               # trailing partial line
-                        log.debug(f"msg: {buf.decode('utf-8', 'replace').strip()}")
+                        text = buf.decode('utf-8', 'replace').strip()
+                        forwarded = flush_diag_forwarder.consume(text)
+                        if flush_diag_forwarder.last_was_malformed:
+                            log.debug(f"msg: {text}")
+                        if forwarded is not None:
+                            log.info(f"msg: {forwarded}")
+                        elif not flush_diag_forwarder.last_was_malformed:
+                            log.debug(f"msg: {text}")
 
                     fop.wait()
+                    final_line = flush_diag_forwarder.finish(fop.returncode)
+                    if final_line is not None:
+                        log.info(f"msg: {final_line}")
                 except subprocess.TimeoutExpired:
                     fop.kill()
                     log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' timed out after {tap_timeout} seconds")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' timed out after {tap_timeout} seconds'")
                     # Drain any remaining output
                     for line in fop.stdout:
-                        log.debug(f"msg: {line.decode('utf-8', 'replace').strip()}")
+                        text = line.decode('utf-8', 'replace').strip()
+                        forwarded = flush_diag_forwarder.consume(text)
+                        if flush_diag_forwarder.last_was_malformed:
+                            log.debug(f"msg: {text}")
+                        if forwarded is not None:
+                            log.info(f"msg: {forwarded}")
+                        elif not flush_diag_forwarder.last_was_malformed:
+                            log.debug(f"msg: {text}")
                     # Reap the child. kill() signals but does not wait, so
                     # returncode stays None until we do -- and the shared exit
                     # path below evaluates abs(int(fop.returncode)), which
@@ -896,6 +1113,9 @@ CREATE TABLE stats_history.mysql_server_read_only_log (
                     # test would abort the whole group instead of failing one
                     # test. wait() yields -SIGKILL, so the test scores non-zero.
                     fop.wait()
+                    final_line = flush_diag_forwarder.finish(fop.returncode)
+                    if final_line is not None:
+                        log.info(f"msg: {final_line}")
                 except Exception as e:
                     log.critical(f"TAP test {fo_num+1}/{len(tap_tests)} '{os.path.basename(fo_cmd)}' - test threw an exception !!!: {e}")
                     self.padmin_command(f"LOGENTRY '{TAP} test {fo_num+1}/{len(tap_tests)} \'{os.path.basename(fo_cmd)}\' - test threw an exception !!!'")
