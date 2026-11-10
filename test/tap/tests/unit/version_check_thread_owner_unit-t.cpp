@@ -66,7 +66,12 @@ int g_next_worker = 0;
 thread_local int tl_worker_index = -1;
 
 struct TlsCompletion {
-	void touch() {}
+	TlsCompletion() = default;
+	TlsCompletion(const TlsCompletion &) = delete;
+	TlsCompletion &operator=(const TlsCompletion &) = delete;
+	void touch() {
+		// Odr-use initializes this worker's thread-local destructor probe.
+	}
 	~TlsCompletion() {
 		const int index = tl_worker_index;
 		if (index < 0) {
@@ -164,7 +169,7 @@ extern "C" int __real_pthread_join(pthread_t, void **);
 extern "C" int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 	void *(*start_routine)(void *), void *arg) {
 	int worker_index = -1;
-	if (start_routine == test_worker && arg != nullptr) {
+	if (start_routine == &test_worker && arg != nullptr) {
 		worker_index = *static_cast<int *>(arg);
 	}
 
