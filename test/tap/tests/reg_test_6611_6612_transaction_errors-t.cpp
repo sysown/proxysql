@@ -248,10 +248,10 @@ static bool controls(const CommandLine& cl, Fixture& f, const std::string& tag) 
 			execute(db.get(), "COMMIT") == 0, "%s: SET %s TRANSACTION remains valid", tag.c_str(), scope);
 	}
 	Connection idle = connect(cl);
-	if (!idle) return false;
+	if (!idle || !checked(idle.get(), "SET autocommit=0")) return false;
 	const std::string before = writer_queries(f);
 	ok(execute(idle.get(), "SET TRANSACTION READ WRITE") == 0,
-		"%s: idle SET TRANSACTION keeps its existing local fast path", tag.c_str());
+		"%s: autocommit=0 without a transaction keeps the local SET fast path", tag.c_str());
 	ok(!before.empty() && writer_queries(f) == before,
 		"%s: idle SET TRANSACTION sends no statement to the backend", tag.c_str());
 	return true;
