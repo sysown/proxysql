@@ -994,26 +994,48 @@ static bool fd_read_frame(int fd, uint8_t* type, std::string* payload) {
 	return size == 1 || fd_read_exact(fd, reinterpret_cast<uint8_t*>(&(*payload)[0]), size - 1);
 }
 
-static bool ssl_read_exact(SSL* ssl, uint8_t* out, size_t len) {
+// Failure-only read diagnostics. Fields stay zero until a helper returns
+// false; zero values also expose a malformed length (size < 1).
+struct SslReadDiag {
+	int ret = 0;          // final nonpositive SSL_read return
+	int ssl_error = 0;    // existing SSL_get_error value
+	int saved_errno = 0;  // errno immediately after SSL_read
+	int stage = 0;        // 0 = header, 1 = body
+	size_t got = 0;       // bytes accumulated in the failing call
+	size_t want = 0;      // bytes requested by the failing call
+};
+
+static bool ssl_read_exact(SSL* ssl, uint8_t* out, size_t len,
+                           SslReadDiag* diag = nullptr, int stage = 0) {
 	size_t off = 0;
 	int stalls = 0;
 	while (off < len) {
 		int n = SSL_read(ssl, out + off, static_cast<int>(len - off));
 		if (n > 0) { off += static_cast<size_t>(n); stalls = 0; continue; }
+		const int read_errno = errno;
 		const int err = SSL_get_error(ssl, n);
 		if ((err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) &&
 		    ++stalls < 100) {
 			usleep(1000);
 			continue;
 		}
+		if (diag != nullptr) {
+			diag->ret = n;
+			diag->ssl_error = err;
+			diag->saved_errno = read_errno;
+			diag->stage = stage;
+			diag->got = off;
+			diag->want = len;
+		}
 		return false;
 	}
 	return true;
 }
 
-static bool ssl_read_frame(SSL* ssl, uint8_t* type, std::string* payload) {
+static bool ssl_read_frame(SSL* ssl, uint8_t* type, std::string* payload,
+                           SslReadDiag* diag = nullptr) {
 	uint8_t header[5];
-	if (!ssl_read_exact(ssl, header, sizeof(header))) return false;
+	if (!ssl_read_exact(ssl, header, sizeof(header), diag, 0)) return false;
 	const uint32_t size = static_cast<uint32_t>(header[0]) |
 		(static_cast<uint32_t>(header[1]) << 8) |
 		(static_cast<uint32_t>(header[2]) << 16) |
@@ -1021,7 +1043,7 @@ static bool ssl_read_frame(SSL* ssl, uint8_t* type, std::string* payload) {
 	if (size < 1) return false;
 	*type = header[4];
 	payload->assign(size - 1, '\0');
-	return size == 1 || ssl_read_exact(ssl, reinterpret_cast<uint8_t*>(&(*payload)[0]), size - 1);
+	return size == 1 || ssl_read_exact(ssl, reinterpret_cast<uint8_t*>(&(*payload)[0]), size - 1, diag, 1);
 }
 
 static bool ssl_write_frame(SSL* ssl, uint8_t type, const std::string& payload) {
@@ -1279,13 +1301,56 @@ static void test_worker_progress_without_frontend_wakeups() {
 	// The first query must complete without another frontend message
 	// driving backend connection, TLS, or authentication progress.
 	bool got_result = false;
+	uint8_t seen_types[8] = {};
+	size_t seen_count = 0;
+	unsigned nonterminal_total = 0;
+	uint32_t last_error_code = 0;
+	std::string last_error_state;
+	bool saw_error = false;
+	SslReadDiag read_diag {};
 	for (int i = 0; i < 2000 && !got_result; ++i) {
 		uint8_t type = 0;
 		std::string payload;
-		if (!ssl_read_frame(client_ssl, &type, &payload)) break;
-		if (type == Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK) got_result = true;
+		if (!ssl_read_frame(client_ssl, &type, &payload, &read_diag)) break;
+		if (type == Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK) {
+			got_result = true;
+			continue;
+		}
+		++nonterminal_total;
+		if (seen_count < 8) seen_types[seen_count++] = type;
+		if (type == Mysqlx::ServerMessages_Type_ERROR) {
+			Mysqlx::Error err;
+			if (err.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
+				last_error_code = err.code();
+				const std::string& st = err.sql_state();
+				bool valid = st.size() == 5;
+				for (char c : st) {
+					valid = valid && ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'));
+				}
+				last_error_state = valid ? st : std::string();
+				saw_error = true;
+			}
+		}
 	}
 	ok(got_result, "worker-progress: query result arrived without extra frontend events");
+	if (!got_result) {
+		std::string seen;
+		for (size_t k = 0; k < seen_count; ++k) {
+			if (!seen.empty()) seen += ',';
+			seen += std::to_string(static_cast<unsigned>(seen_types[k]));
+		}
+		diag("worker-progress: query read failure ret=%d ssl_error=%d errno=%d stage=%s got=%zu want=%zu nonterminal=%u types=%s",
+		     read_diag.ret, read_diag.ssl_error, read_diag.saved_errno,
+		     read_diag.stage == 1 ? "body" : "header",
+		     read_diag.got, read_diag.want, nonterminal_total,
+		     seen.empty() ? "-" : seen.c_str());
+	}
+	if (saw_error) {
+		diag("worker-progress: %s ERROR code=%u sqlstate=%s",
+		     got_result ? "unexpected" : "last",
+		     static_cast<unsigned>(last_error_code),
+		     last_error_state.empty() ? "-" : last_error_state.c_str());
+	}
 
 	backend_thread.join();
 	ok(probe.ok.load() && probe.saw_execute.load(),
