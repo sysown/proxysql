@@ -94,6 +94,7 @@ enum : uint32_t {
 	PGSQL_SCAN_DO          = 1u << 1, // a statement starts with DO
 	PGSQL_SCAN_SET_CONFIG  = 1u << 2, // the word set_config anywhere (also "set_config")
 	PGSQL_SCAN_PG_SETTINGS = 1u << 3, // the word pg_settings anywhere (also "pg_settings")
+	PGSQL_SCAN_ALL         = PGSQL_SCAN_LISTEN | PGSQL_SCAN_DO | PGSQL_SCAN_SET_CONFIG | PGSQL_SCAN_PG_SETTINGS,
 };
 
 // Every target found in `digest`, in one walk over it: a statement keyword when any statement
@@ -122,8 +123,8 @@ char* pgsql_query_full_digest(const char* query);
 // trailing statement. In those cases a present-but-empty digest is not trusted either: the
 // raw query is read instead, its first statement directly and then all of it digested in
 // full; only when it holds a target as a word at all, so other queries pay one scan of
-// their text.
-uint32_t pgsql_query_scan(const char* digest, const char* query);
+// their text. Only the bits in `targets` are looked for and reported.
+uint32_t pgsql_query_scan(const char* digest, const char* query, uint32_t targets = PGSQL_SCAN_ALL);
 
 // For TAP Test
 char* mysql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);

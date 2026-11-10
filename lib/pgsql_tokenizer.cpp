@@ -3734,18 +3734,18 @@ char* pgsql_query_full_digest(const char* query) {
 	return digest;
 }
 
-uint32_t pgsql_query_scan(const char* digest, const char* query) {
+uint32_t pgsql_query_scan(const char* digest, const char* query, uint32_t targets) {
 	if (digest != NULL && *digest != '\0') {
 		// The digest buffer is as long as the query up to query_digests_max_query_length, so
 		// only the digest of a longer query can have been cut short.
 		if (query == NULL || strnlen(query, (size_t)pgsql_thread___query_digests_max_query_length + 1) <=
 			(size_t)pgsql_thread___query_digests_max_query_length) {
-			return pgsql_digest_scan(digest);
+			return pgsql_digest_scan(digest) & targets;
 		}
 	}
 	// No digest, or one that may miss trailing statements. Only a query holding a target word
 	// at all is digested in full, so the common case costs one scan of the text.
-	const uint32_t words = pgsql_text_find_words(query);
+	const uint32_t words = pgsql_text_find_words(query) & targets;
 	if (words == 0) return 0;
 	// The first statement is also read from the text itself, by pgsql_stmt_skip_lead(), so the
 	// gate does not rest on the digest tokenizer alone for it. Before the tokenizer read
@@ -3756,5 +3756,5 @@ uint32_t pgsql_query_scan(const char* digest, const char* query) {
 	if (full == NULL) return words; // cannot be told apart: fail closed
 	found |= pgsql_digest_scan(full);
 	free(full);
-	return found;
+	return found & targets;
 }

@@ -61,6 +61,18 @@ static bool backend_stmt_is_stale(const PgSQL_Connection* conn, const PgSQL_Conn
 		client->var_hash[PGSQL_SEARCH_PATH]) == s->hash;
 }
 
+// set_config() is followed only with the ParserSQL SET walker; the legacy SET parsers do not.
+static inline bool set_config_tracking_on() {
+	return pgsql_thread___set_parser_algorithm == 3 || pgsql_thread___query_processor_parser == 1;
+}
+
+// What a Simple Query is scanned for. With tracking off only LISTEN is used: a query too long for
+// its digest is then digested in full only when it holds the word LISTEN, as before set_config.
+// A Parse scans for every target: the bits stay with the statement after tracking is turned on.
+static inline uint32_t simple_query_scan_targets() {
+	return set_config_tracking_on() ? PGSQL_SCAN_ALL : PGSQL_SCAN_LISTEN;
+}
+
 /*
 static inline char is_digit(char c) {
 	if (c >= '0' && c <= '9')
@@ -2534,7 +2546,8 @@ __implicit_flush:
 								// holding the word is digested in full for this check. Leading
 								// comments are skipped: the digest keeps them with
 								// query_digests_keep_comment.
-								CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(), query_ptr);
+								CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(), query_ptr,
+									simple_query_scan_targets());
 								listen_pending = (CurrentQuery.scan_found & PGSQL_SCAN_LISTEN) != 0;
 								if (listen_pending && listen_can_be_supported() == false) {
 									listen_pending = false;
@@ -5843,10 +5856,6 @@ bool PgSQL_Session::txn_failed_on_backend() {
 	return false;
 }
 
-// set_config() is followed only with the ParserSQL SET walker; the legacy SET parsers do not.
-static inline bool set_config_tracking_on() {
-	return pgsql_thread___set_parser_algorithm == 3 || pgsql_thread___query_processor_parser == 1;
-}
 
 PgSQL_Local_Reply PgSQL_Session::handle_set_config(const char* dig, bool* lock_hostgroup) {
 	if (!set_config_tracking_on()) return PgSQL_Local_Reply::NONE;

@@ -1035,6 +1035,13 @@ static void test_scan_query_fallback() {
 	ok(pgsql_query_scan("select ?, ?", q_none.c_str()) == 0, "query scan, cut digest: no call, nothing found");
 	ok(pgsql_query_scan(NULL, "SELECT 1; SELECT set_config('a','b',false)") == PGSQL_SCAN_SET_CONFIG,
 		"query scan, no digest: the raw query is read");
+	// Only the targets asked for: with set_config tracking off a Simple Query asks for LISTEN.
+	ok(pgsql_query_scan(NULL, "DO $$BEGIN PERFORM 1; END$$", PGSQL_SCAN_LISTEN) == 0,
+		"query scan, LISTEN only, no digest: a DO statement is not reported");
+	ok(pgsql_query_scan("DO ?", "DO $$BEGIN PERFORM 1; END$$", PGSQL_SCAN_LISTEN) == 0,
+		"query scan, LISTEN only, digest: a DO statement is not reported");
+	ok(pgsql_query_scan(NULL, "SELECT 'set_config'; LISTEN ch", PGSQL_SCAN_LISTEN) == PGSQL_SCAN_LISTEN,
+		"query scan, LISTEN only, no digest: a trailing LISTEN is found");
 	ok(pgsql_query_scan(NULL, "SELECT 'set_config(1)' /* pg_settings */") == 0,
 		"query scan, no digest: words only in a literal or comment are not found");
 	ok(pgsql_query_scan(NULL, "DO $$BEGIN PERFORM set_config('a','b',false); END$$") == PGSQL_SCAN_DO,
@@ -1181,7 +1188,7 @@ static void test_stage_helpers_keep_comment_no_char_lost() {
 // ============================================================================
 
 int main() {
-	plan(131 + 14 + 18 + 13 + 6 + 34);
+	plan(131 + 14 + 18 + 13 + 6 + 34 + 3);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
