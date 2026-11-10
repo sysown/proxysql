@@ -11,6 +11,13 @@
  * A worker-local TLS object records its destructor completion. That proves the
  * native thread-exit cleanup finished before drain() returned, not merely that
  * the worker callback body returned.
+ *
+ * The bounded-drain cases use fresh posix_spawn/self-exec children. Child-mode
+ * dispatch precedes each child's TAP plan. In the deadline case, the callback
+ * returns, its native thread_local destructor blocks, and main calls
+ * production drain(). Progress bytes prove callback/destructor/drain/join
+ * ordering; an atexit marker must remain absent because the fatal policy uses
+ * a direct process exit.
  */
 
 #include "tap.h"
@@ -21,10 +28,19 @@
 #if defined(__linux__)
 
 #include <cerrno>
+#include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <mutex>
 #include <pthread.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+extern char **environ;
 
 namespace {
 
@@ -65,6 +81,49 @@ bool g_live_handle_overwrite = false;
 int g_next_worker = 0;
 thread_local int tl_worker_index = -1;
 
+enum ChildMode {
+	kChildNone = 0,
+	kChildDeadline = 1,
+	kChildCreateFailure = 2,
+};
+
+ChildMode g_child_mode = kChildNone;
+
+// The parent places the progress pipe at this descriptor in the child.
+constexpr int kChildProgressFd = 9;
+
+void child_progress(char marker) {
+	if (g_child_mode == kChildNone) {
+		return;
+	}
+	const ssize_t written = write(kChildProgressFd, &marker, 1);
+	(void)written;
+}
+
+std::mutex g_child_gate_mutex;
+std::condition_variable g_child_gate_cv;
+bool g_child_tls_entered = false;
+
+// A genuine native thread_local destructor blocks here forever. The only way
+// the child can leave is the production drain() fatal deadline path.
+void child_block_tls() {
+	std::unique_lock<std::mutex> lock(g_child_gate_mutex);
+	g_child_tls_entered = true;
+	g_child_gate_cv.notify_all();
+	for (;;) {
+		g_child_gate_cv.wait(lock);
+	}
+}
+
+void child_wait_tls_entered() {
+	std::unique_lock<std::mutex> lock(g_child_gate_mutex);
+	g_child_gate_cv.wait(lock, [] { return g_child_tls_entered; });
+}
+
+void child_atexit_marker() {
+	child_progress('X');
+}
+
 struct TlsCompletion {
 	TlsCompletion() = default;
 	TlsCompletion(const TlsCompletion &) = delete;
@@ -75,6 +134,11 @@ struct TlsCompletion {
 	~TlsCompletion() {
 		const int index = tl_worker_index;
 		if (index < 0) {
+			return;
+		}
+		if (g_child_mode == kChildDeadline) {
+			child_progress('T');
+			child_block_tls();
 			return;
 		}
 		WorkerState& worker = g_workers[index];
@@ -109,6 +173,9 @@ void *test_worker(void *arg) {
 		std::lock_guard<std::mutex> lock(worker.mutex);
 		worker.callback_done = true;
 		worker.cv.notify_all();
+	}
+	if (g_child_mode != kChildNone) {
+		child_progress('C');
 	}
 	return nullptr;
 }
@@ -178,6 +245,9 @@ extern "C" int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *at
 		if (g_fail_next_create) {
 			g_fail_next_create = false;
 			g_create_attempts++;
+			if (g_child_mode == kChildCreateFailure) {
+				child_progress('F');
+			}
 			return g_create_error;
 		}
 		g_create_attempts++;
@@ -230,6 +300,9 @@ extern "C" int __wrap_pthread_join(pthread_t thread, void **retval) {
 	}
 
 	release_worker(worker_index);
+	if (g_child_mode != kChildNone) {
+		child_progress('J');
+	}
 	const int rc = __real_pthread_join(thread, retval);
 	if (rc == 0) {
 		std::lock_guard<std::mutex> lock(g_registry_mutex);
@@ -319,6 +392,260 @@ void arm_join_failure(int error) {
 	std::lock_guard<std::mutex> lock(g_registry_mutex);
 	g_fail_next_join = true;
 	g_join_error = error;
+}
+
+// ---------------------------------------------------------------------------
+// Fresh-child bounded-drain cases. These deliberately run before the parent
+// TAP plan when the executable is re-executed with a mode argument.
+// ---------------------------------------------------------------------------
+int run_deadline_child() {
+	g_child_mode = kChildDeadline;
+	std::atexit(child_atexit_marker);
+
+	ProxySQL_VersionCheckThread owner;
+	g_worker_args[0] = 0;
+	if (owner.start(test_worker, &g_worker_args[0]) != 0) {
+		return EXIT_FAILURE;
+	}
+	wait_entered(0);
+	release_worker(0);
+	child_wait_tls_entered();
+
+	child_progress('D');
+	(void)owner.drain();
+
+	// The bounded production drain must exit the process at its deadline.
+	child_progress('A');
+	return EXIT_SUCCESS;
+}
+
+int run_create_failure_child() {
+	g_child_mode = kChildCreateFailure;
+	std::atexit(child_atexit_marker);
+
+	ProxySQL_VersionCheckThread owner;
+	g_worker_args[0] = 0;
+	if (owner.start(test_worker, &g_worker_args[0]) != 0) {
+		return EXIT_FAILURE;
+	}
+	wait_entered(0);
+	child_progress('S');
+
+	// Let the real checker finish so an unbounded plain join would return
+	// promptly; then arm the very next create, which is the helper create.
+	release_worker(0);
+	wait_tls_done(0);
+	arm_create_failure(EAGAIN);
+
+	child_progress('D');
+	(void)owner.drain();
+
+	child_progress('A');
+	return EXIT_SUCCESS;
+}
+
+struct ChildRun {
+	bool spawned = false;
+	bool guard_killed = false;
+	bool reaped = false;
+	bool exited_normally = false;
+	int exit_code = -1;
+	int term_signal = 0;
+	double elapsed_seconds = 0.0;
+	bool callback_done = false;
+	bool tls_entered = false;
+	bool drain_entered = false;
+	bool native_join_reached = false;
+	bool after_drain = false;
+	bool atexit_ran = false;
+	bool checker_started = false;
+	bool create_failure_injected = false;
+};
+
+void record_child_marker(ChildRun& run, char marker) {
+	switch (marker) {
+		case 'C': run.callback_done = true; break;
+		case 'T': run.tls_entered = true; break;
+		case 'D': run.drain_entered = true; break;
+		case 'J': run.native_join_reached = true; break;
+		case 'A': run.after_drain = true; break;
+		case 'X': run.atexit_ran = true; break;
+		case 'S': run.checker_started = true; break;
+		case 'F': run.create_failure_injected = true; break;
+		default: break;
+	}
+}
+
+void drain_child_progress(int fd, ChildRun& run) {
+	char buffer[64];
+	for (;;) {
+		const ssize_t count = read(fd, buffer, sizeof(buffer));
+		if (count > 0) {
+			for (ssize_t i = 0; i < count; ++i) {
+				record_child_marker(run, buffer[i]);
+			}
+			continue;
+		}
+		if (count < 0 && errno == EINTR) {
+			continue;
+		}
+		break;
+	}
+}
+
+ChildRun run_child_mode(const char *mode, double guard_seconds) {
+	ChildRun run;
+	int fds[2] = { -1, -1 };
+	if (pipe(fds) != 0) {
+		return run;
+	}
+	const int read_flags = fcntl(fds[0], F_GETFL, 0);
+	if (read_flags < 0 || fcntl(fds[0], F_SETFL, read_flags | O_NONBLOCK) != 0) {
+		close(fds[0]);
+		close(fds[1]);
+		return run;
+	}
+
+	posix_spawn_file_actions_t actions;
+	if (posix_spawn_file_actions_init(&actions) != 0) {
+		close(fds[0]);
+		close(fds[1]);
+		return run;
+	}
+	posix_spawn_file_actions_adddup2(&actions, fds[1], kChildProgressFd);
+	if (fds[1] != kChildProgressFd) {
+		posix_spawn_file_actions_addclose(&actions, fds[1]);
+	}
+	if (fds[0] != kChildProgressFd) {
+		posix_spawn_file_actions_addclose(&actions, fds[0]);
+	}
+
+	char *child_argv[] = {
+		const_cast<char *>("version_check_thread_owner_unit-t"),
+		const_cast<char *>(mode),
+		nullptr
+	};
+	pid_t pid = -1;
+	const int spawn_rc = posix_spawn(&pid, "/proc/self/exe", &actions, nullptr,
+		child_argv, environ);
+	posix_spawn_file_actions_destroy(&actions);
+	close(fds[1]);
+	if (spawn_rc != 0) {
+		diag("posix_spawn failed for %s: %s", mode, strerror(spawn_rc));
+		close(fds[0]);
+		return run;
+	}
+	run.spawned = true;
+
+	const auto started = std::chrono::steady_clock::now();
+	int status = 0;
+	bool reaped = false;
+
+	for (;;) {
+		drain_child_progress(fds[0], run);
+
+		const pid_t waited = waitpid(pid, &status, WNOHANG);
+		if (waited == pid) {
+			reaped = true;
+			break;
+		}
+		if (waited < 0 && errno != EINTR) {
+			break;
+		}
+
+		const double elapsed =
+			std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+		if (elapsed >= guard_seconds) {
+			run.guard_killed = true;
+			kill(pid, SIGKILL);
+			for (;;) {
+				const pid_t killed = waitpid(pid, &status, 0);
+				if (killed == pid || (killed < 0 && errno != EINTR)) {
+					break;
+				}
+			}
+			reaped = true;
+			break;
+		}
+
+		struct timespec pause { 0, 2000000 };
+		nanosleep(&pause, nullptr);
+	}
+
+	drain_child_progress(fds[0], run);
+	close(fds[0]);
+
+	run.reaped = reaped;
+	run.elapsed_seconds =
+		std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+	if (reaped && !run.guard_killed) {
+		if (WIFEXITED(status)) {
+			run.exited_normally = true;
+			run.exit_code = WEXITSTATUS(status);
+		} else if (WIFSIGNALED(status)) {
+			run.term_signal = WTERMSIG(status);
+		}
+	} else if (reaped && WIFSIGNALED(status)) {
+		run.term_signal = WTERMSIG(status);
+	}
+	return run;
+}
+
+void test_deadline_child() {
+	const ChildRun run = run_child_mode("--deadline-child", 35.0);
+	const bool natural =
+		run.spawned && !run.guard_killed && run.reaped && run.exited_normally;
+
+	ok(run.spawned, "deadline child is spawned with posix_spawn/self-exec");
+	ok(natural, "deadline child terminates naturally without the 35-second guard kill");
+	ok(natural && run.exit_code == EXIT_FAILURE,
+		"deadline child exits directly with EXIT_FAILURE (code=%d signal=%d)",
+		run.exit_code, run.term_signal);
+	ok(run.elapsed_seconds >= 29.0 && run.elapsed_seconds < 35.0,
+		"deadline child honors the fixed 30-second budget (elapsed %.3f s)",
+		run.elapsed_seconds);
+	ok(run.callback_done, "deadline child observed the checker callback completion");
+	ok(run.tls_entered, "deadline child observed the blocked native TLS destructor entry");
+	ok(run.drain_entered, "deadline child observed production drain entry");
+	ok(run.native_join_reached, "deadline child reached the actual native checker join");
+	ok(!run.after_drain, "deadline child never resumed after drain");
+	ok(!run.atexit_ran, "deadline child never ran atexit/teardown handlers");
+	diag("deadline child: elapsed=%.3f spawned=%d killed=%d reaped=%d exited=%d "
+		"code=%d signal=%d C=%d T=%d D=%d J=%d A=%d X=%d",
+		run.elapsed_seconds, run.spawned, run.guard_killed, run.reaped,
+		run.exited_normally, run.exit_code, run.term_signal, run.callback_done,
+		run.tls_entered, run.drain_entered, run.native_join_reached,
+		run.after_drain, run.atexit_ran);
+}
+
+void test_helper_create_failure_child() {
+	const ChildRun run = run_child_mode("--create-fail-child", 20.0);
+	const bool natural =
+		run.spawned && !run.guard_killed && run.reaped && run.exited_normally;
+
+	ok(run.spawned, "helper-create-failure child is spawned with posix_spawn/self-exec");
+	ok(natural, "helper-create-failure child terminates naturally without the guard kill");
+	ok(natural && run.exit_code == EXIT_FAILURE,
+		"helper-create-failure child exits directly with EXIT_FAILURE (code=%d signal=%d)",
+		run.exit_code, run.term_signal);
+	ok(run.elapsed_seconds < 10.0,
+		"helper-create-failure child fails promptly (elapsed %.3f s)",
+		run.elapsed_seconds);
+	ok(run.checker_started,
+		"helper-create-failure child started the real checker before injection");
+	ok(run.drain_entered, "helper-create-failure child entered production drain");
+	ok(run.create_failure_injected,
+		"helper-create-failure child consumed the injected helper-create failure");
+	ok(!run.native_join_reached,
+		"helper-create-failure child performed no real checker join");
+	ok(!run.after_drain, "helper-create-failure child never resumed after drain");
+	ok(!run.atexit_ran, "helper-create-failure child never ran atexit/teardown handlers");
+	diag("helper-create-failure child: elapsed=%.3f spawned=%d killed=%d reaped=%d "
+		"exited=%d code=%d signal=%d S=%d D=%d F=%d J=%d A=%d X=%d",
+		run.elapsed_seconds, run.spawned, run.guard_killed, run.reaped,
+		run.exited_normally, run.exit_code, run.term_signal, run.checker_started,
+		run.drain_entered, run.create_failure_injected, run.native_join_reached,
+		run.after_drain, run.atexit_ran);
 }
 
 // ---------------------------------------------------------------------------
@@ -487,7 +814,16 @@ void test_failed_join() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+	if (argc > 1) {
+		if (strcmp(argv[1], "--deadline-child") == 0) {
+			return run_deadline_child();
+		}
+		if (strcmp(argv[1], "--create-fail-child") == 0) {
+			return run_create_failure_child();
+		}
+	}
+
 	plan(NO_PLAN);
 	test_init_minimal();
 	for (int i = 0; i < kMaxWorkers; ++i) {
@@ -498,6 +834,8 @@ int main() {
 	test_replacement_and_relaunch();
 	test_create_failure();
 	test_failed_join();
+	test_deadline_child();
+	test_helper_create_failure_child();
 
 	if (!cleanup_live_workers()) {
 		ok(false, "final fixture cleanup joins every tracked live worker");
