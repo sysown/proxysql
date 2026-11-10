@@ -2967,6 +2967,7 @@ bool MySQL_Connection::IsAutoCommit() {
 }
 
 bool MySQL_Connection::MultiplexDisabled(bool check_delay_token) {
+	if (next_transaction_pending) return true;
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
@@ -3519,6 +3520,7 @@ int MySQL_Connection::async_send_simple_command(
 }
 
 void MySQL_Connection::reset() {
+	next_transaction_pending = false;
 	bool old_no_multiplex_hg = get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 	bool old_compress = get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
 	status_flags=0;
