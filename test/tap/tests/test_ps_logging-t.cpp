@@ -890,6 +890,56 @@ int main(int argc, char** argv) {
 		}
 		mysql_free_result(res);
 	}
+	// Parameter logging checks must read the writer that accepted the inserts,
+	// rather than relying on asynchronous replicas to catch up after a sleep.
+	struct WriterRouteGuard {
+		MYSQL* admin;
+		string rule_id;
+		bool installed = false;
+
+		bool restore() {
+			if (!installed) return true;
+			installed = false;
+			const string remove_rule = "DELETE FROM mysql_query_rules WHERE rule_id=" + rule_id;
+			const int remove_err = mysql_query(admin, remove_rule.c_str());
+			const int load_err = mysql_query(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+			if (remove_err || load_err) {
+				diag("Failed to remove test-local writer routing rule: %s", mysql_error(admin));
+				return false;
+			}
+			return true;
+		}
+
+		~WriterRouteGuard() { restore(); }
+	} route_writer { admin, "" };
+
+	string escaped_user;
+	for (const char c : string(cl.username)) {
+		escaped_user += c;
+		if (c == '\'') escaped_user += '\'';
+	}
+	const string route_query =
+		"SELECT COALESCE((SELECT MIN(rule_id) FROM (SELECT rule_id FROM mysql_query_rules"
+		" UNION ALL SELECT rule_id FROM runtime_mysql_query_rules)),0)-1,default_hostgroup"
+		" FROM runtime_mysql_users WHERE username='" + escaped_user + "' AND frontend=1 AND active=1 LIMIT 1";
+	MYSQL_QUERY(admin, route_query.c_str());
+	MYSQL_RES* route_res = mysql_store_result(admin);
+	MYSQL_ROW route_row = route_res ? mysql_fetch_row(route_res) : nullptr;
+	if (!route_row || !route_row[0] || !route_row[1]) {
+		diag("Failed to determine the user's writer hostgroup and a free query-rule ID");
+		if (route_res) mysql_free_result(route_res);
+		return EXIT_FAILURE;
+	}
+	route_writer.rule_id = route_row[0];
+	const string writer_hostgroup = route_row[1];
+	mysql_free_result(route_res);
+	const string insert_route =
+		"INSERT INTO mysql_query_rules(rule_id,active,username,destination_hostgroup,apply) VALUES("
+		+ route_writer.rule_id + ",1,'" + escaped_user + "'," + writer_hostgroup + ",1)";
+	MYSQL_QUERY(admin, insert_route.c_str());
+	route_writer.installed = true;
+	MYSQL_QUERY(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+
 	// Run test in two logging formats: BINARY and JSON.
    
 	for (auto mode : logging_modes) {
@@ -929,7 +979,6 @@ int main(int argc, char** argv) {
 			ok(ins_ok, "Extended prepared INSERT executed");
 		}
 
-		sleep(2);
 		// For each non-key column, perform a prepared SELECT.
 		// We use the first inserted row's id (assumed to be 1) and the value from that column.
 		int sel_id = 1;
@@ -993,7 +1042,6 @@ int main(int argc, char** argv) {
 							  //"POINT(1 2)",		 // col_geometry in WKT
 							  &inserted_id);
 		ok(ins_ok, "Full prepared INSERT executed");
-		sleep(2);
 		vector<string> full_row;
 		bool sel_ok = do_prepared_select_full(proxy, inserted_id, full_row);
 		ok(sel_ok, "Full prepared SELECT executed");
@@ -1031,9 +1079,10 @@ int main(int argc, char** argv) {
 		diag("Inserted row id in test.prepared_log_test_full_types: %d", inserted_id_types);
 	}
 
+	const bool routing_restored = route_writer.restore();
 	mysql_close(proxy);
 	mysql_close(admin);
 
 
-	return exit_status();
+	return routing_restored ? exit_status() : EXIT_FAILURE;
 }
