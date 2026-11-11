@@ -393,6 +393,9 @@ class ProxySQL_Cluster_Nodes {
 	private:
 	pthread_mutex_t mutex;
 	std::unordered_map<uint64_t, ProxySQL_Node_Entry *> umap_proxy_nodes;
+	// Set by Reset_Global_Checksums(true) instead of taking 'mutex'; applied
+	// by Update_Global_Checksum() under 'mutex'. See Reset_Global_Checksums().
+	std::atomic<bool> global_checksums_reset_pending { false };
 	void set_all_inactive();
 	void remove_inactives();
 	uint64_t generate_hash(char *_hostname, uint16_t _port);
