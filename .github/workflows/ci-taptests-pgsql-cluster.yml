@@ -145,7 +145,7 @@ jobs:
       run: |
         cd proxysql
         export INFRA_ID="ci-taptests-pgsql-cluster-${{ matrix.tier }}-${{ github.run_id }}"
-        export TAP_GROUP="legacy-g3"
+        export TAP_GROUP="legacy-g5"
         export TEST_PY_TAP_INCL="test_cluster_sync_pgsql-t"
         export PROXYSQL_CLUSTER_NODES=2
         test/infra/control/ensure-infras.bash
@@ -155,7 +155,7 @@ jobs:
       run: |
         cd proxysql
         export INFRA_ID="ci-taptests-pgsql-cluster-${{ matrix.tier }}-${{ github.run_id }}"
-        export TAP_GROUP="legacy-g3"
+        export TAP_GROUP="legacy-g5"
         export TEST_PY_TAP_INCL="test_cluster_sync_pgsql-t"
         export PROXYSQL_CLUSTER_NODES=2
         export COVERAGE="${COVERAGE}"
@@ -182,7 +182,7 @@ jobs:
         fi
         cd proxysql
         export INFRA_ID="ci-taptests-pgsql-cluster-${{ matrix.tier }}-${{ github.run_id }}"
-        export TAP_GROUP="legacy-g3"
+        export TAP_GROUP="legacy-g5"
         docker logs proxysql.ci-taptests-pgsql-cluster-${{ matrix.tier }}-${{ github.run_id }} 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash || true
         test/infra/control/destroy-infras.bash || true
