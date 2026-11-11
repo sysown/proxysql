@@ -3396,20 +3396,10 @@ void MySQL_Connection::close_mysql() {
 	if (send_quit && ret_mysql && (myds == NULL || myds->encrypted == false)) {
 		proxy_mysql_send_com_quit(mysql);
 	}
-	// A connect attempt that is still suspended inside the non-blocking API
-	// ('mysql_real_connect_start' / 'mysql_real_connect_cont') owns a socket that is
-	// not yet reachable through 'mysql->net.pvio': the library only assigns it once
-	// the TCP connection is established. 'mysql_close_no_command' closes the socket
-	// only via 'mysql->net.pvio', so destroying such a connection leaks the fd. This
-	// is the same leak described in NOTE-3404 (MySQL_Session.cpp), but it can be
-	// reached from every path that destroys a connection while it is still
-	// connecting: retries after 'connect_timeout_server', a backend going OFFLINE
-	// while connecting, or the session being destroyed. The leaked socket keeps
-	// retransmitting its SYN, so it can still become an established connection on
-	// the backend after ProxySQL has forgotten about it.
-	// Resuming the attempt with a timeout makes the library fail the connect and
-	// close the socket itself. The library moves on to the next address when the
-	// host resolves to several, hence the bounded loop.
+	// A connect still suspended in the non-blocking API owns a socket that is not
+	// yet in 'mysql->net.pvio', so 'mysql_close_no_command' would leak it (see
+	// NOTE-3404). Resume it with a timeout so the library closes the socket; loop
+	// because the library retries on the next resolved address.
 	if (async_state_machine == ASYNC_CONNECT_CONT || async_state_machine == ASYNC_CONNECT_TIMEOUT) {
 		for (int i = 0; i < 16 && ret_mysql == NULL && async_exit_status != 0; i++) {
 			async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, MYSQL_WAIT_TIMEOUT);
