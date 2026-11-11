@@ -1021,6 +1021,7 @@ public:
 		int unshun_algorithm;
 		int query_retries_on_failure;
 		bool connection_warming;
+		bool writev_direct;  // plaintext frontend direct scatter/gather send path
 		int client_host_cache_size;
 		int client_host_error_counts;
 		int connect_retries_on_failure;
