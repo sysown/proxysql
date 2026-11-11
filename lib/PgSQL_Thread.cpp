@@ -403,6 +403,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"wait_timeout",
 	(char*)"throttle_max_bytes_per_second_to_client",
 	(char*)"throttle_ratio_server_to_client",
+	(char*)"writev_direct",
 	(char*)"max_connections",
 	(char*)"max_stmts_per_connection",
 	(char*)"max_stmts_cache",
@@ -1145,6 +1146,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.wait_timeout = 8 * 3600 * 1000;
 	variables.throttle_max_bytes_per_second_to_client = 0;
 	variables.throttle_ratio_server_to_client = 0;
+	variables.writev_direct = true; // direct plaintext frontend write path enabled
 	variables.connection_warming = false;
 	variables.max_connections = 10 * 1000;
 	variables.max_stmts_per_connection = 20;
@@ -2289,6 +2291,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["automatic_detect_sqli"] = make_tuple(&variables.automatic_detect_sqli, false);
 		VariablesPointers_bool["commands_stats"] = make_tuple(&variables.commands_stats, false);
 		VariablesPointers_bool["connection_warming"] = make_tuple(&variables.connection_warming, false);
+		VariablesPointers_bool["writev_direct"] = make_tuple(&variables.writev_direct, false);
 		VariablesPointers_bool["default_reconnect"] = make_tuple(&variables.default_reconnect, false);
 		VariablesPointers_bool["enforce_autocommit_on_reads"] = make_tuple(&variables.enforce_autocommit_on_reads, false);
 		VariablesPointers_bool["firewall_whitelist_enabled"] = make_tuple(&variables.firewall_whitelist_enabled, false);
@@ -4508,6 +4511,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___log_unhealthy_connections = (bool)GloPTH->get_variable_int((char*)"log_unhealthy_connections");
 	pgsql_thread___throttle_max_bytes_per_second_to_client = GloPTH->get_variable_int((char*)"throttle_max_bytes_per_second_to_client");
 	pgsql_thread___throttle_ratio_server_to_client = GloPTH->get_variable_int((char*)"throttle_ratio_server_to_client");
+	pgsql_thread___writev_direct = (bool)GloPTH->get_variable_int((char*)"writev_direct");
 	pgsql_thread___shun_on_failures = GloPTH->get_variable_int((char*)"shun_on_failures");
 	pgsql_thread___shun_recovery_time_sec = GloPTH->get_variable_int((char*)"shun_recovery_time_sec");
 #ifdef PROXYSQLFFTO

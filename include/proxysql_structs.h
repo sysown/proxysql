@@ -1192,6 +1192,7 @@ __thread int pgsql_thread___connect_timeout_server;
 __thread int pgsql_thread___connect_timeout_server_max;
 __thread bool pgsql_thread___connection_warming;
 __thread bool pgsql_thread___log_unhealthy_connections;
+__thread bool pgsql_thread___writev_direct; // enable plaintext PgSQL frontend direct scatter/gather sends
 __thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
 __thread int pgsql_thread___throttle_ratio_server_to_client;
 __thread int pgsql_thread___shun_on_failures;
@@ -1561,6 +1562,7 @@ extern __thread int pgsql_thread___connect_timeout_server;
 extern __thread int pgsql_thread___connect_timeout_server_max;
 extern __thread bool pgsql_thread___connection_warming;
 extern __thread bool pgsql_thread___log_unhealthy_connections;
+extern __thread bool pgsql_thread___writev_direct;
 extern __thread int pgsql_thread___throttle_max_bytes_per_second_to_client;
 extern __thread int pgsql_thread___throttle_ratio_server_to_client;
 extern __thread int pgsql_thread___shun_on_failures;
