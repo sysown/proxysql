@@ -450,6 +450,16 @@ private:
 	std::string schema_;
 	std::string auth_method_;
 	std::vector<uint8_t> auth_challenge_;
+	// Plaintext secret supplied by a successfully authenticated frontend
+	// PLAIN exchange. Kept only for the lifetime of this frontend session
+	// so a mapped backend connection can authenticate with PLAIN once the
+	// proxy->backend leg is actually encrypted. Never persisted, never
+	// written to logs, and wiped (OPENSSL_cleanse) on reset/destruction.
+	// Required because identity_->password may be a *stored* hash
+	// (caching_sha2_password `$A$...`) that cannot be replayed as a
+	// backend secret.
+	std::string frontend_plain_secret_;
+	bool frontend_plain_secret_present_ { false };
 	int target_hostgroup_;
 	std::string target_address_;
 	int target_port_;

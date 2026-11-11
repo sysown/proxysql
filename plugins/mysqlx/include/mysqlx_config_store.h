@@ -236,6 +236,13 @@ public:
 	void install_for_test(
 		std::unordered_map<std::string, MysqlxRoute> routes,
 		std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints);
+#ifdef MYSQLX_TEST_BUILD
+	// Test-only: populate the resolved identity map without bootstrapping
+	// the admin SQLite tables. Used by worker-level tests that need the
+	// thread's accept-time identity lookup to succeed.
+	void install_identities_for_test(
+		std::unordered_map<std::string, MysqlxResolvedIdentity> identities);
+#endif
 
 	uint64_t topology_generation() const;
 	void bump_topology_generation();
