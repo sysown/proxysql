@@ -770,8 +770,12 @@ static void test_distinct_admin_baselines(MYSQL* admin, cleanup_guard& original)
 	ok(restored, "returned to the original admin state after the mismatch probe");
 }
 
-static int configure_reload_route(MYSQL* admin, const string& fixture_runtime_dir, const CommandLine& cl) {
-	const string script = fixture_runtime_dir + "/reg_test_6552_reload.sh";
+static int configure_reload_route(
+	MYSQL* admin, const string& fixture_root, const string& fixture_runtime_dir, const CommandLine& cl
+) {
+	// Keep the executable outside the shared directory so another UID cannot
+	// pre-create its pathname before write_file() installs the admin credentials.
+	const string script = fixture_root + "/reg_test_6552_reload.sh";
 	char content[1024];
 	snprintf(
 		content, sizeof(content),
@@ -822,8 +826,10 @@ int main() {
 	const string fixture_root = fixture_tree.path();
 	const string cert_dir = fixture_root;
 	const string runtime_dir = fixture_root + "/runtime";
-	if ((mkdir(runtime_dir.c_str(), 0777) != 0 && errno != EEXIST) ||
-		chmod(runtime_dir.c_str(), 0777) != 0) {
+	// The runner and ProxySQL may use different UIDs. Keep the directory
+	// shared, but prevent other users from replacing its marker or sockets.
+	if ((mkdir(runtime_dir.c_str(), 01777) != 0 && errno != EEXIST) ||
+		chmod(runtime_dir.c_str(), 01777) != 0) {
 		diag("Cannot create runtime fixture directory %s: %s",
 			runtime_dir.c_str(), strerror(errno));
 		return EXIT_FAILURE;
@@ -952,7 +958,7 @@ int main() {
 	}
 
 	// ----------------------------------- /sync calls RELOAD TLS + new admin
-	ok(configure_reload_route(admin, runtime_dir, cl) == EXIT_SUCCESS,
+	ok(configure_reload_route(admin, fixture_root, runtime_dir, cl) == EXIT_SUCCESS,
 		"configured /sync route that reloads TLS and opens a second admin connection");
 	{
 		const string sync_marker = runtime_dir + "/reg_test_6552_sync_marker";

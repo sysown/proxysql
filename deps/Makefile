@@ -140,7 +140,7 @@ ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
-	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS="-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include -I$(ABSL_INSTALL)/include" ../configure --disable-shared --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
+	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS="-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include -I$(ABSL_INSTALL)/include $(shell pkg-config --cflags gnutls)" LIBS="$(shell pkg-config --libs gnutls)" ../configure --disable-shared --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
 
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a

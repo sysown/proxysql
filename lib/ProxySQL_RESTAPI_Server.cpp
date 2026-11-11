@@ -17,9 +17,11 @@ using json = nlohmann::json;
 #include <gnutls/x509.h>
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <strings.h>
 #include <unistd.h>
 
@@ -232,10 +234,11 @@ private:
 					script_errno
 				);
 			} else {
+				const int exit_code = WIFSIGNALED(script_err) ? 128 + WTERMSIG(script_err) : script_err;
 				json j_err_resp {
 					{ "type", "out" },
 					{ "error", "Terminated without exit code. Child exit status reported in 'error_code'" },
-					{ "error_code", std::to_string(script_err) }
+					{ "error_code", std::to_string(exit_code) }
 				};
 				str_response_err = j_err_resp.dump();
 				proxy_error("Error while executing script '%s'. Child exit status: '%d'.\n", script.c_str(), script_err);
@@ -593,41 +596,143 @@ bool ProxySQL_RESTAPI_parse_bind_address(
 	return false;
 }
 
-void ProxySQL_RESTAPI_Server::cleanup_unix_socket() {
-	if (unix_socket_path_owned && !unix_socket_path.empty()) {
-		struct stat st {};
-		if (lstat(unix_socket_path.c_str(), &st) == 0 &&
-			S_ISSOCK(st.st_mode) &&
-			st.st_dev == unix_socket_dev &&
-			st.st_ino == unix_socket_ino) {
-			unlink(unix_socket_path.c_str());
-		}
-	}
-	unix_socket_path_owned = false;
-}
-
-// Unix paths are never replaced. Rejecting any pre-existing path avoids
-// probing/unlinking a foreign or stale socket and lets MHD create the listener
-// from a sockaddr (with an exact MHD_OPTION_SOCK_ADDR_LEN) like any TCP bind.
-static bool ensure_unix_socket_path_available(const std::string& path, std::string& error) {
-	struct stat st {};
-	if (lstat(path.c_str(), &st) == 0) {
-		error = "Unix socket path '" + path + "' already exists; refusing to replace it";
+// Unix listeners are bound by MHD, which closes but cannot unlink the pathname
+// when startup fails after bind. Ownership is therefore proven by: a pinned,
+// trusted parent directory; the leaf being absent before startup; and a socket
+// inode belonging to this process afterwards. Cleanup never resolves the
+// absolute path again.
+static bool trusted_unix_parent(const struct stat& st, std::string& error) {
+	if (st.st_uid != 0 && st.st_uid != geteuid()) {
+		error = "Unix socket parent directory is not owned by root or the effective user";
 		return false;
 	}
-	if (errno != ENOENT) {
-		error = "Cannot inspect Unix socket path '" + path + "': " + strerror(errno);
+	if ((st.st_mode & (S_IWGRP | S_IWOTH)) && !(st.st_mode & S_ISVTX)) {
+		error = "Unix socket parent directory is group/world writable without the sticky bit";
 		return false;
 	}
 	return true;
 }
 
-// libmicrohttpd creates and binds its listen socket before it initializes TLS.
-// If the trust store or the certificate/key pair is rejected there, MHD closes
-// the socket fd but cannot unlink a Unix socket pathname, and ProxySQL cannot
-// claim that inode because it records ownership only after a successful start.
-// Parse exactly the PEM material MHD is about to parse, before any path is
-// bound, so invalid TLS settings cannot leave a Unix artifact behind.
+// Pin the immediate parent and validate who can modify its entries. Earlier
+// ancestors may be shared: cleanup uses this FD even if the directory moves.
+static int open_trusted_unix_parent(
+	const std::string& parent, std::string& canonical, std::string& error
+) {
+	char* resolved = realpath(parent.c_str(), nullptr);
+	if (resolved == nullptr) {
+		error = "Cannot resolve Unix socket parent '" + parent + "': " + strerror(errno);
+		return -1;
+	}
+	canonical.assign(resolved);
+	free(resolved);
+	int fd = open(canonical.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	if (fd < 0) {
+		error = "Cannot open Unix socket parent '" + canonical + "': " + strerror(errno);
+		return -1;
+	}
+	struct stat st {};
+	if (fstat(fd, &st) != 0 || !trusted_unix_parent(st, error)) {
+		if (error.empty()) error = "Cannot inspect Unix socket parent: " + std::string(strerror(errno));
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+void ProxySQL_RESTAPI_Server::prepare_unix_socket() {
+	const size_t slash = unix_socket_path.find_last_of('/');
+	if (slash == std::string::npos || slash + 1 >= unix_socket_path.size()) {
+		proxy_error("Unix socket path '%s' has no file name\n", unix_socket_path.c_str());
+		return;
+	}
+	const std::string parent = slash == 0 ? "/" : unix_socket_path.substr(0, slash);
+	unix_socket_leaf = unix_socket_path.substr(slash + 1);
+
+	std::string error;
+	std::string canonical_parent;
+	unix_socket_dir_fd = open_trusted_unix_parent(parent, canonical_parent, error);
+	if (unix_socket_dir_fd < 0) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': %s\n", error.c_str());
+		return;
+	}
+
+	struct stat st {};
+	if (fstatat(unix_socket_dir_fd, unix_socket_leaf.c_str(), &st,
+			AT_SYMLINK_NOFOLLOW) == 0) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': Unix socket path '%s' "
+			"already exists; refusing to replace it\n", unix_socket_path.c_str());
+		cleanup_unix_socket();
+		return;
+	}
+	if (errno != ENOENT) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': cannot inspect Unix socket "
+			"path '%s': %s\n", unix_socket_path.c_str(), strerror(errno));
+		cleanup_unix_socket();
+		return;
+	}
+
+	// Bind through the canonical parent path so MHD creates the leaf in the
+	// directory this object has pinned. Verify the result before serving: an
+	// unsafe earlier ancestor may still be renamed during startup.
+	const std::string canonical_path =
+		(canonical_parent == "/" ? canonical_parent : canonical_parent + "/") + unix_socket_leaf;
+	if (canonical_path.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': canonical Unix socket "
+			"path is too long: '%s'\n", canonical_path.c_str());
+		cleanup_unix_socket();
+		return;
+	}
+	unix_socket_path = canonical_path;
+
+	struct sockaddr_un un {};
+	un.sun_family = AF_UNIX;
+	memcpy(un.sun_path, canonical_path.c_str(), canonical_path.size() + 1);
+	memcpy(&bind_addr, &un, sizeof(un));
+	bind_addr_len = static_cast<socklen_t>(
+		offsetof(struct sockaddr_un, sun_path) + canonical_path.size() + 1);
+	has_bind_address = true;
+}
+
+bool ProxySQL_RESTAPI_Server::capture_unix_socket_ownership() {
+	if (unix_socket_dir_fd < 0 || unix_socket_leaf.empty()) return false;
+	struct stat st {};
+	if (fstatat(unix_socket_dir_fd, unix_socket_leaf.c_str(), &st,
+			AT_SYMLINK_NOFOLLOW) == 0 && S_ISSOCK(st.st_mode) &&
+		st.st_uid == geteuid()) {
+		unix_socket_dev = st.st_dev;
+		unix_socket_ino = st.st_ino;
+		unix_socket_path_owned = true;
+		return true;
+	} else {
+		proxy_error("Unable to verify Unix socket '%s' after listener start\n",
+			unix_socket_path.c_str());
+	}
+	return false;
+}
+
+void ProxySQL_RESTAPI_Server::cleanup_unix_socket() {
+	if (unix_socket_dir_fd >= 0) {
+		if (unix_socket_path_owned && !unix_socket_leaf.empty()) {
+			struct stat st {};
+			if (fstatat(unix_socket_dir_fd, unix_socket_leaf.c_str(), &st,
+					AT_SYMLINK_NOFOLLOW) == 0 && S_ISSOCK(st.st_mode) &&
+				st.st_uid == geteuid() &&
+				st.st_dev == unix_socket_dev && st.st_ino == unix_socket_ino) {
+				unlinkat(unix_socket_dir_fd, unix_socket_leaf.c_str(), 0);
+			}
+		}
+		close(unix_socket_dir_fd);
+		unix_socket_dir_fd = -1;
+	}
+	unix_socket_path_owned = false;
+}
+
+// PEM prevalidation rejects bad TLS material before bind, but it cannot prove
+// every later MHD start step succeeds (listen, nonblocking setup, epoll, TLS
+// initialization or thread creation). The pinned-parent ownership check above
+// is what makes post-bind failures clean up their Unix pathname.
 static bool validate_restapi_tls_material(
 	const ProxySQL_RESTAPI_Config& config,
 	std::string& error
@@ -752,9 +857,8 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	}
 
 	if (!unix_socket_path.empty()) {
-		std::string unix_error;
-		if (!ensure_unix_socket_path_available(unix_socket_path, unix_error)) {
-			proxy_error("Unable to start 'ProxySQL_RestAPI_Server': %s\n", unix_error.c_str());
+		prepare_unix_socket();
+		if (unix_socket_dir_fd < 0) {
 			return;
 		}
 	}
@@ -837,26 +941,24 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	} catch (const std::exception& e) {
 		proxy_error("Unable to start 'ProxySQL_RestAPI_Server' on port %d: %s\n", port, e.what());
 		ws.reset();
+		capture_unix_socket_ownership();
 		cleanup_unix_socket();
 		return;
 	}
 	if (!ws->is_running()) {
 		proxy_error("Unable to start 'ProxySQL_RestAPI_Server' on port %d\n", port);
 		ws.reset();
+		capture_unix_socket_ownership();
 		cleanup_unix_socket();
 		return;
 	}
-	if (!unix_socket_path.empty()) {
-		struct stat st {};
-		if (lstat(unix_socket_path.c_str(), &st) == 0 && S_ISSOCK(st.st_mode)) {
-			unix_socket_dev = st.st_dev;
-			unix_socket_ino = st.st_ino;
-			unix_socket_path_owned = true;
-		} else {
-			proxy_error(
-				"Unable to verify Unix socket '%s' after listener start: %s\n",
-				unix_socket_path.c_str(), strerror(errno));
-		}
+	if (!unix_socket_path.empty() && !capture_unix_socket_ownership()) {
+		// A renamed ancestor may have routed bind outside the pinned directory.
+		// Stop serving; never claim or unlink a path outside that directory.
+		ws->stop();
+		ws.reset();
+		cleanup_unix_socket();
+		return;
 	}
 	proxy_info(
 		"Started 'ProxySQL_RestAPI_Server' on %s (%s%s)\n",

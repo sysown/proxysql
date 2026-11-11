@@ -848,6 +848,7 @@ ifneq ($(UNAME_S),Darwin)
 endif
 
 ifeq ($(UNAME_S),Linux)
+restapi_tls_config_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=listen -Wl,--wrap=lstat -Wl,--wrap=fstatat
 ifneq ($(PROXYSQL31),1)
 parsersql_v30_flow_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_query_digest_and_first_comment -Wl,--wrap=pgsql_query_digest_and_first_comment -Wl,--wrap=_Z28parsersql_command_type_mysqlPKci -Wl,--wrap=_Z28parsersql_command_type_pgsqlPKci
 endif
@@ -1482,7 +1483,7 @@ STATIC_LIBPROXYSQL_TESTS := genai_thread_unit-t pgsql_result_flush_allocation_un
 	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
-STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t
+STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t restapi_tls_config_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive
 

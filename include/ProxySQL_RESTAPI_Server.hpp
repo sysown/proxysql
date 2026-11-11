@@ -24,7 +24,8 @@ struct ProxySQL_RESTAPI_Config {
 	/**
 	 * @brief Empty = bind all interfaces (historical behavior). Otherwise an
 	 * IPv4/IPv6 numeric address, or a Unix socket path (absolute, or prefixed
-	 * with "unix:").
+	 * with "unix:"). Unix socket parents must be owned by root or the
+	 * effective user and must restrict group/other writes unless sticky.
 	 */
 	std::string interface_name {};
 	bool use_ssl { false };
@@ -64,10 +65,22 @@ class ProxySQL_RESTAPI_Server {
 	struct sockaddr_storage bind_addr {};
 	socklen_t bind_addr_len { 0 };
 	bool has_bind_address { false };
+	/**
+	 * @brief Canonical Unix socket path and pinned parent directory.
+	 *
+	 * Unix listeners require the immediate parent to be owned by root or the
+	 * effective UID and non-writable by group/other unless sticky.
+	 * The parent FD is opened once, before startup, so validation and cleanup
+	 * cannot be redirected by renaming or replacing the parent path.
+	 */
 	std::string unix_socket_path {};
+	std::string unix_socket_leaf {};
+	int unix_socket_dir_fd { -1 };
 	bool unix_socket_path_owned { false };
 	dev_t unix_socket_dev { 0 };
 	ino_t unix_socket_ino { 0 };
+	void prepare_unix_socket();
+	bool capture_unix_socket_ownership();
 	std::unique_ptr<httpserver::http_resource> endpoint;
 	std::unique_ptr<httpserver::http_resource> tsdb_endpoint;
 	std::unique_ptr<httpserver::http_resource> tsdb_dashboard_endpoint;

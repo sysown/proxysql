@@ -14,6 +14,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include <cstdio>
@@ -104,6 +105,60 @@ static bool ipv6_http_get_ok(int port) {
 	if (received <= 0) return false;
 	return strstr(buffer, "200") != nullptr;
 }
+
+#if defined(__linux__)
+extern "C" int __real_listen(int, int);
+extern "C" int __real_lstat(const char*, struct stat*);
+extern "C" int __real_fstatat(int, const char*, struct stat*, int);
+
+static int listen_failures_remaining = 0;
+static bool redirect_parent_after_stat = false;
+static std::string redirect_source_parent;
+static std::string redirect_replacement_parent;
+static std::string redirect_leaf;
+
+static void redirect_unix_parent() {
+	if (!redirect_parent_after_stat) return;
+	redirect_parent_after_stat = false;
+	const std::string old_parent = redirect_source_parent + ".pinned";
+	if (rename(redirect_source_parent.c_str(), old_parent.c_str()) != 0 ||
+		mkdir(redirect_replacement_parent.c_str(), 0700) != 0) {
+		return;
+	}
+	int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0) return;
+	struct sockaddr_un foreign {};
+	foreign.sun_family = AF_UNIX;
+	const std::string foreign_path = redirect_replacement_parent + "/" + redirect_leaf;
+	if (foreign_path.size() + 1 <= sizeof(foreign.sun_path)) {
+		memcpy(foreign.sun_path, foreign_path.c_str(), foreign_path.size() + 1);
+		(void)bind(fd, reinterpret_cast<struct sockaddr*>(&foreign), sizeof(foreign));
+	}
+	close(fd);
+}
+
+extern "C" int __wrap_listen(int fd, int backlog) {
+	const int rc = __real_listen(fd, backlog);
+	if (listen_failures_remaining > 0 && rc == 0) {
+		--listen_failures_remaining;
+		errno = EIO;
+		return -1;
+	}
+	return rc;
+}
+
+extern "C" int __wrap_lstat(const char* path, struct stat* st) {
+	const int rc = __real_lstat(path, st);
+	if (rc == 0) redirect_unix_parent();
+	return rc;
+}
+
+extern "C" int __wrap_fstatat(int fd, const char* path, struct stat* st, int flags) {
+	const int rc = __real_fstatat(fd, path, st, flags);
+	if (rc == 0) redirect_unix_parent();
+	return rc;
+}
+#endif
 
 using restapi_endpoints = std::vector<std::pair<
 	std::string,
@@ -223,11 +278,9 @@ static int curl_unix_https_code(
 
 /**
  * A listener whose TLS material is rejected by GnuTLS must fail before MHD
- * binds its Unix path. MHD closes the bound fd on its own TLS-init failure but
- * does not unlink the pathname; ProxySQL cannot know it owned that inode
- * because ownership is recorded only after a successful start. The path must
- * therefore be reusable by a corrected configuration, and a pre-existing path
- * must never be removed.
+ * binds its Unix path. Other failures after binding use the pinned-parent
+ * ownership checks. A corrected configuration must be able to reuse the path,
+ * and a pre-existing path must never be removed.
  */
 static void test_unix_socket_tls_failure_cleanup() {
 	char directory_template[] = "/tmp/proxysql-restapi-6552-XXXXXX";
@@ -387,8 +440,122 @@ static void test_unix_socket_tls_failure_cleanup() {
 	std::filesystem::remove_all(dir);
 }
 
+// The fixture's shared datadir may be writable by another UID. Only the
+// immediate parent needs to protect entries; cleanup remains anchored to it.
+static void test_unix_immediate_parent_policy() {
+	char directory_template[] = "/tmp/proxysql-restapi-parent-XXXXXX";
+	char* directory = mkdtemp(directory_template);
+	if (directory == nullptr) {
+		ok(0, "created parent-policy fixture directory");
+		skip(4, "parent-policy fixture unavailable");
+		return;
+	}
+	const std::string dir(directory);
+	const std::string shared = dir + "/shared";
+	const std::string parent = shared + "/runtime";
+	if (mkdir(shared.c_str(), 0777) != 0 || chmod(shared.c_str(), 0777) != 0 ||
+		mkdir(parent.c_str(), 0700) != 0) {
+		ok(0, "created parent-policy fixture directories");
+		skip(4, "parent-policy fixture unavailable");
+		std::filesystem::remove_all(dir);
+		return;
+	}
+	ProxySQL_RESTAPI_Config config {};
+	config.interface_name = parent + "/restapi.sock";
+	{
+		ProxySQL_RESTAPI_Server server(config, ping_endpoints());
+		ok(server.is_running(), "protected immediate parent accepts a shared writable ancestor");
+	}
+	struct stat st {};
+	ok(lstat(config.interface_name.c_str(), &st) != 0 && errno == ENOENT,
+		"listener below a shared ancestor cleans its owned socket");
+	chmod(parent.c_str(), 0777);
+	{
+		ProxySQL_RESTAPI_Server server(config, ping_endpoints());
+		ok(!server.is_running(), "non-sticky writable immediate parent rejects the listener");
+	}
+	ok(lstat(config.interface_name.c_str(), &st) != 0 && errno == ENOENT,
+		"rejected immediate parent creates no socket");
+	chmod(parent.c_str(), 01777);
+	{
+		ProxySQL_RESTAPI_Server server(config, ping_endpoints());
+		ok(server.is_running(), "sticky writable immediate parent permits shared runtime writes");
+	}
+	std::filesystem::remove_all(dir);
+}
+
+// A failure after MHD has bound and listened must still remove the socket.
+// The cleanup also runs against the pinned parent FD: redirecting the parent
+// path between validation and cleanup must not delete a foreign socket.
+static void test_unix_postbind_failure_and_parent_pinning() {
+#if !defined(__linux__)
+	skip(8, "Linux linker-wrap injection is unavailable");
+#else
+	char directory_template[] = "/tmp/proxysql-restapi-6552-postbind-XXXXXX";
+	char* directory = mkdtemp(directory_template);
+	if (directory == nullptr) {
+		diag("Cannot create temporary directory: %s", strerror(errno));
+		skip(8, "post-bind fixture directory unavailable");
+		return;
+	}
+	const std::string dir(directory);
+	const std::string socket_path = dir + "/restapi.sock";
+	ProxySQL_RESTAPI_Config config {};
+	config.interface_name = socket_path;
+
+	listen_failures_remaining = 1;
+	{
+		ProxySQL_RESTAPI_Server server(config, ping_endpoints());
+		ok(!server.is_running(), "post-bind listen failure rejects the listener");
+	}
+	struct stat st {};
+	ok(lstat(socket_path.c_str(), &st) != 0 && errno == ENOENT,
+		"post-bind failure removes the Unix socket path");
+
+	{
+		ProxySQL_RESTAPI_Server retry(config, ping_endpoints());
+		ok(retry.is_running(), "the same Unix socket path is reusable after cleanup");
+		ok(lstat(socket_path.c_str(), &st) == 0 && S_ISSOCK(st.st_mode),
+			"retried listener owns the recreated socket path");
+	}
+	ok(lstat(socket_path.c_str(), &st) != 0 && errno == ENOENT,
+		"destroying the retried listener removes its socket");
+
+	char redirect_template[] = "/tmp/proxysql-restapi-6552-redirect-XXXXXX";
+	char* redirect_dir = mkdtemp(redirect_template);
+	if (redirect_dir == nullptr) {
+		diag("Cannot create redirect fixture directory: %s", strerror(errno));
+		skip(3, "parent-redirection fixture unavailable");
+		std::filesystem::remove_all(dir);
+		return;
+	}
+	const std::string redirect_parent(redirect_dir);
+	const std::string redirect_socket = redirect_parent + "/restapi.sock";
+	ProxySQL_RESTAPI_Config redirect_config {};
+	redirect_config.interface_name = redirect_socket;
+	const std::string pinned_parent = redirect_parent + ".pinned";
+	{
+		ProxySQL_RESTAPI_Server server(redirect_config, ping_endpoints());
+		ok(server.is_running(), "listener starts before parent redirection");
+		redirect_source_parent = redirect_parent;
+		redirect_replacement_parent = redirect_parent;
+		redirect_leaf = "restapi.sock";
+		redirect_parent_after_stat = true;
+	}
+	ok(lstat(redirect_socket.c_str(), &st) == 0 && S_ISSOCK(st.st_mode),
+		"cleanup preserves a foreign socket after parent redirection");
+	ok(lstat((pinned_parent + "/restapi.sock").c_str(), &st) != 0,
+		"cleanup removes its own socket through the pinned parent");
+	unlink(redirect_socket.c_str());
+	rmdir(redirect_parent.c_str());
+	unlink((pinned_parent + "/restapi.sock").c_str());
+	rmdir(pinned_parent.c_str());
+	std::filesystem::remove_all(dir);
+#endif
+}
+
 int main() {
-	plan(37);
+	plan(50);
 	if (test_init_minimal() != 0) {
 		ok(0, "test_init_minimal() succeeds");
 		return exit_status();
@@ -497,6 +664,8 @@ int main() {
 	}
 
 	test_unix_socket_tls_failure_cleanup();
+	test_unix_postbind_failure_and_parent_pinning();
+	test_unix_immediate_parent_policy();
 
 	test_cleanup_minimal();
 	return exit_status();

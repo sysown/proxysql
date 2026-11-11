@@ -99,6 +99,9 @@ and regular files); choose a path that does not exist. The socket this
 server creates is removed when the listener is reconfigured or ProxySQL
 shuts down.
 
+The socket's immediate parent directory must be owned by root or the ProxySQL
+user. If it permits group or other writes, it must have the sticky bit set.
+
 ## Fail-closed behavior
 
 - `admin-restapi_ssl_verify_client=true` with
