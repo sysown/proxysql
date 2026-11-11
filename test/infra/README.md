@@ -257,7 +257,7 @@ The `run-multi-group.bash` script enables running multiple TAP groups in paralle
 ### Basic Usage
 ```bash
 RUN_ID="test-$(date +%s)" \
-TAP_GROUPS="legacy-g1 legacy-g2 legacy-g3 mysql84-g1" \
+TAP_GROUPS="legacy-g1 legacy-g2 mysql84-g3 mysql84-g1" \
 ./test/infra/control/run-multi-group.bash
 ```
 
