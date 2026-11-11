@@ -271,6 +271,17 @@ int main() {
         return -1;
     }
 
+    // A backend error pins transaction routing (#6611). Start a fresh session
+    // for this independent hostgroup-error case without adding a logged query.
+    mysql_close(proxy);
+    proxy = mysql_init(nullptr);
+    if (!proxy || !mysql_real_connect(proxy, cl.host, cl.username, cl.password, nullptr, cl.port, nullptr, 0)) {
+        diag("Failed to reconnect to ProxySQL for hostgroup error test: %s", proxy ? mysql_error(proxy) : "mysql_init failed");
+        if (proxy) mysql_close(proxy);
+        mysql_close(admin_conn);
+        return -1;
+    }
+
     // Test hostgroup error
     if (mysql_query(proxy, "SELECT /* hostgroup=1234 */ 1")) {
         int error_code = static_cast<int>(mysql_errno(proxy));
