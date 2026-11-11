@@ -107,6 +107,7 @@
   "latency_awareness_selection_unit-t" : [ "unit-tests-g1" ],
   "listen_validator_unit-t" : [ "unit-tests-g1" ],
   "listener_conflicts_validation-t" : [ "no-infra-g1" ],
+  "listeners_manager_identity_unit-t" : [ "unit-tests-g1" ],
   "llm_bridge_accuracy-t" : [ "ai-g1","@proxysql_min_version:4.0" ],
   "log_filename_variables_unit-t" : [ "unit-tests-g1" ],
   "log_utils_unit-t" : [ "unit-tests-g1" ],

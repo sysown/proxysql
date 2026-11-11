@@ -670,6 +670,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	log_utils_unit-t \
 	log_filename_variables_unit-t \
 	listen_validator_unit-t \
+	listeners_manager_identity_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
 	pgsql_digest_bounds_unit-t \
