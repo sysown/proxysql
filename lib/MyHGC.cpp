@@ -418,25 +418,37 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 					// all servers have some latency.
 					// That is good. If any server have no latency, something is wrong
 					// and we will skip this algorithm
-					sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
 					unsigned int avg_latency_us = 0;
 					avg_latency_us = total_latency_us/num_candidates;
+					// The filter below keeps only the candidates at or below the average
+					// latency. Weight-0 servers are candidates too, so when they are the
+					// fastest ones the filter can keep only weight-0 servers: the total
+					// weight would then be 0 and the lottery below would divide by zero.
+					// Compute the weight the filter would keep first, and apply the filter
+					// only if that weight is not 0. Otherwise skip the algorithm, as done
+					// above when a server has no latency, and select among all candidates.
+					uint64_t filtered_sum = 0;
 					for (j=0; j<num_candidates; j++) {
 						mysrvc = mysrvcCandidates[j];
-						if (mysrvc->current_latency_us > avg_latency_us) {
-							// remove the candidate
-							if (j+1 < num_candidates) {
-								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-							}
-							j--;
-							num_candidates--;
+						if (mysrvc->current_latency_us <= avg_latency_us) {
+							filtered_sum+=mysrvc->weight;
 						}
 					}
-					// we scan again to adjust weight
-					New_sum = 0;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						New_sum+=mysrvc->weight;
+					if (filtered_sum) {
+						sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+						for (j=0; j<num_candidates; j++) {
+							mysrvc = mysrvcCandidates[j];
+							if (mysrvc->current_latency_us > avg_latency_us) {
+								// remove the candidate
+								if (j+1 < num_candidates) {
+									mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+								}
+								j--;
+								num_candidates--;
+							}
+						}
+						// the weight of the remaining candidates, never 0
+						New_sum = filtered_sum;
 					}
 				}
 			}

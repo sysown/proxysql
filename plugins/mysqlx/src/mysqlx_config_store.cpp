@@ -971,6 +971,15 @@ void MysqlxConfigStore::install_for_test(
 	hostgroup_endpoints_ = std::move(endpoints);
 }
 
+#ifdef MYSQLX_TEST_BUILD
+void MysqlxConfigStore::install_identities_for_test(
+	std::unordered_map<std::string, MysqlxResolvedIdentity> identities
+) {
+	std::unique_lock<std::shared_mutex> lock(mutex_);
+	identities_ = std::move(identities);
+}
+#endif
+
 uint64_t MysqlxConfigStore::topology_generation() const {
 	return topology_generation_.load();
 }
