@@ -69,11 +69,14 @@ typedef struct _query_digest_stats_pointers_t {
  * long as the lock is held. It does **not** serialise updates to an individual
  * entry.
  *
- * `update_query_digest()` only takes the lock for *reading* when the digest is
- * already present, so several threads can call `add_time()` on the same entry
+ * `update_query_digest()` takes the lock for *reading* when the digest is
+ * already present (or, on the PostgreSQL processor with worker-local batching
+ * enabled, does not take it at all while the query is accounted in the
+ * worker's batch), so several threads can call `add_time()` on the same entry
  * at the same time, and concurrently with any reader holding the read lock
- * (`get_query_digests()`, `get_query_digests_topk()`). The mutable counters are
- * therefore `std::atomic<>`: without that, those updates would be data races.
+ * (`get_query_digests()`, `get_query_digests_topk()` on the MySQL processor).
+ * The mutable counters are therefore `std::atomic<>`: without that, those
+ * updates would be data races.
  *
  * The atomics buy freedom from lost updates and torn reads on each field
  * individually. They do **not** make a group of fields consistent with one
@@ -653,6 +656,26 @@ private:
 
 	unsigned long long purge_query_digests_async(time_t last_seen = 0);
 	unsigned long long purge_query_digests_sync(bool parallel, time_t last_seen = 0);
+	/**
+	 * @brief Fold every PostgreSQL worker's pending local digest batch into
+	 *   the shared maps.
+	 *
+	 * The caller must hold `digest_rwlock` for writing: the worker batches
+	 * and the shared maps are then both stable for the merge. A no-op on the
+	 * MySQL instantiation and before any PostgreSQL thread has registered.
+	 */
+	void merge_worker_query_digests();
+	/**
+	 * @brief Merge this thread's pending local digest batch into the shared
+	 *   maps.
+	 *
+	 * Takes `digest_rwlock` for writing and then the batch mutex; a no-op
+	 * with an empty batch. Safe to call on any thread, but is meant for the
+	 * thread that owns the batch (the PostgreSQL worker itself, at its
+	 * batch limit and on its periodic stats update) so that a batch never
+	 * waits for an unrelated operation.
+	 */
+	void flush_thread_query_digests();
 
 	/**
 	 * @brief Searches for a matching rule in the supplied map, returning the destination hostgroup.

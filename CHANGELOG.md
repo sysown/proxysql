@@ -4,6 +4,17 @@
 
 ### Unreleased
 
+- PostgreSQL: collect query digest statistics in a local batch inside each
+  worker thread instead of taking the shared digest lock on every query. The
+  batch is merged into the shared digest maps when it reaches 256 entries, on
+  the worker's periodic stats update, on thread exit, and before every
+  operation that needs a global view (digest dumps, resets, purges, top-k,
+  size accounting), so `stats_pgsql_query_digest` reads stay exact and
+  complete. This removes the contention of PostgreSQL digest accounting on
+  `digest_rwlock` from the query path. New variable
+  `pgsql-query_digests_local_batch` (bool, default `true`) restores the
+  direct shared-map accounting per query.
+
 - Prevent replaying a MySQL multi-statement batch on another backend when its backend goes offline after an earlier result was returned to the client.
 
 #### Pass-Through Authentication (Phase 1 — opt-in, MySQL only)

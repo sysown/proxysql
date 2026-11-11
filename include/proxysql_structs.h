@@ -1244,6 +1244,7 @@ __thread bool pgsql_thread___query_digests_replace_null;
 __thread bool pgsql_thread___query_digests_normalize_digest_text;
 __thread bool pgsql_thread___query_digests_track_hostname;
 __thread bool pgsql_thread___query_digests_keep_comment;
+__thread bool pgsql_thread___query_digests_local_batch; // collect PgSQL query digests in worker-local batches
 __thread int  pgsql_thread___query_digests_max_digest_length;
 __thread int  pgsql_thread___query_digests_max_query_length;
 __thread int  pgsql_thread___query_digests_grouping_limit;
@@ -1605,6 +1606,7 @@ extern __thread bool pgsql_thread___query_digests_replace_null;
 extern __thread bool pgsql_thread___query_digests_normalize_digest_text;
 extern __thread bool pgsql_thread___query_digests_track_hostname;
 extern __thread bool pgsql_thread___query_digests_keep_comment;
+extern __thread bool pgsql_thread___query_digests_local_batch;
 extern __thread int  pgsql_thread___query_digests_max_digest_length;
 extern __thread int  pgsql_thread___query_digests_max_query_length;
 extern __thread int  pgsql_thread___query_digests_grouping_limit;

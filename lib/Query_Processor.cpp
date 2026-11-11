@@ -9,6 +9,7 @@ using json = nlohmann::json;
 #include <unordered_set>
 #include <cstring>
 #include <cctype>
+#include <mutex>
 #include <functional>
 #include <thread>
 #include <future>
@@ -339,6 +340,83 @@ __thread char* _thr___rules_fast_routing___keys_values;
 // not use the CIDR form.
 __thread bool _thr_SQP_have_cidr_client_addr;
 __thread bool _thr_SQP_have_cidr_proxy_addr;
+
+/**
+ * @brief Fold one pair of digest maps into another, entry by entry.
+ *
+ * Used to move already-accumulated statistics between maps without changing
+ * what they represent: every counter of a source entry is combined with the
+ * matching destination entry as an aggregate (see
+ * QP_query_digest_stats::merge()), and a source entry without a destination
+ * counterpart is moved wholesale. Digest texts follow the same rule through
+ * merge_digest_text_maps(), which keeps exactly one heap copy per digest.
+ * Both source maps are left empty.
+ *
+ * @param destination_stats Stats map that accumulates.
+ * @param destination_texts Digest-text map that accumulates.
+ * @param source_stats Stats map to fold in; cleared on return.
+ * @param source_texts Digest-text map to fold in; cleared on return.
+ */
+static void merge_query_digest_maps(
+	umap_query_digest& destination_stats,
+	umap_query_digest_text& destination_texts,
+	umap_query_digest& source_stats,
+	umap_query_digest_text& source_texts
+) {
+	for (const auto& entry : source_stats) {
+		auto it = destination_stats.find(entry.first);
+		auto* source = static_cast<QP_query_digest_stats*>(entry.second);
+		if (it == destination_stats.end()) {
+			destination_stats.insert(entry);
+		} else {
+			static_cast<QP_query_digest_stats*>(it->second)->merge(source);
+			delete source;
+		}
+	}
+	source_stats.clear();
+
+	merge_digest_text_maps(destination_texts, source_texts);
+}
+
+/**
+ * @brief How many distinct digests a worker accumulates in its local map
+ *   before they are merged into the shared maps.
+ *
+ * Bounds the memory held per PostgreSQL worker thread and the size of the
+ * merge performed under `digest_rwlock` when the batch is flushed.
+ */
+static constexpr size_t PGSQL_QUERY_DIGEST_LOCAL_MAX_ENTRIES = 256;
+
+/**
+ * @brief The digest batch a single PostgreSQL worker thread accumulates.
+ *
+ * Each PostgreSQL worker thread owns one of these (see
+ * `_thr_pgsql_query_digests`) and is the only thread that inserts into it,
+ * under `mutex`. The batch is merged into the shared maps of the owning
+ * `Query_Processor` by flush_thread_query_digests() (own thread) and
+ * merge_worker_query_digests() (any thread that needs a global view), which
+ * take `mutex` to stop the accumulating thread mid-insert.
+ */
+struct PgSQL_Thread_Query_Digests {
+	/// The Query_Processor the owning thread runs for; registry filter.
+	void* owner{nullptr};
+	/// Serialises this worker's local map accesses.
+	std::mutex mutex;
+	/// Digest statistics accumulated since the last flush.
+	umap_query_digest stats;
+	/// Digest texts recorded since the last flush.
+	umap_query_digest_text texts;
+};
+
+/// Protects `pgsql_query_digest_workers` only; never taken by an
+/// accumulating worker on its own.
+static std::mutex pgsql_query_digest_workers_mutex;
+/// Every live PostgreSQL worker batch, one entry per thread that called
+/// Query_Processor<PgSQL_Query_Processor>::init_thread().
+static std::vector<PgSQL_Thread_Query_Digests*> pgsql_query_digest_workers;
+/// This thread's batch, created by init_thread() and destroyed by
+/// end_thread(); null on threads that never registered one.
+__thread PgSQL_Thread_Query_Digests* _thr_pgsql_query_digests;
 
 // A compiled query rule regex, one per rule in each worker thread's private
 // rule copy, so the PCRE2 match data is never used by two threads at once.
@@ -1415,7 +1493,9 @@ Query_Processor<QP_DERIVED>::Query_Processor(int _query_rules_fast_routing_algor
 
 	pthread_rwlock_init(&rwlock, NULL);
 	/**
-	 * `update_query_digest()` takes this lock for reading on every query, so the
+	 * `update_query_digest()` takes this lock for reading on every query when
+	 * the digest is already present (the PostgreSQL processor with worker-local
+	 * batching enabled bypasses it entirely for batched accounting), so the
 	 * readers effectively never stop arriving. Under glibc's default
 	 * `PTHREAD_RWLOCK_PREFER_READER_NP` an arriving reader does not yield to a
 	 * waiting writer, which can starve the writers indefinitely -- and the
@@ -1515,11 +1595,40 @@ void Query_Processor<QP_DERIVED>::init_thread() {
 	// per-thread 'rules_fast_routing' structures are created on demand
 	_thr_SQP_rules_fast_routing = nullptr;
 	_thr___rules_fast_routing___keys_values = NULL;
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// A thread that processes PostgreSQL queries accumulates its digest
+		// statistics in a local batch before merging them into the shared
+		// maps, so that digest accounting never contends for digest_rwlock
+		// on the query path. Registered globally so that the dump, reset and
+		// purge operations can fold every worker's pending batch in first.
+		assert(_thr_pgsql_query_digests == nullptr);
+		_thr_pgsql_query_digests = new PgSQL_Thread_Query_Digests();
+		_thr_pgsql_query_digests->owner = this;
+		std::lock_guard<std::mutex> lock(pgsql_query_digest_workers_mutex);
+		pgsql_query_digest_workers.push_back(_thr_pgsql_query_digests);
+	}
 }
 
 template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::end_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Destroying Per-Thread Query Processor Table with version=%d\n", _thr_SQP_version);
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// Fold anything still pending into the shared maps before the batch,
+		// and its registry slot, go away: a digest recorded by this thread
+		// must survive the thread.
+		flush_thread_query_digests();
+		{
+			std::lock_guard<std::mutex> lock(pgsql_query_digest_workers_mutex);
+			const auto it = std::find(
+				pgsql_query_digest_workers.begin(),
+				pgsql_query_digest_workers.end(),
+				_thr_pgsql_query_digests);
+			assert(it != pgsql_query_digest_workers.end());
+			pgsql_query_digest_workers.erase(it);
+		}
+		delete _thr_pgsql_query_digests;
+		_thr_pgsql_query_digests = nullptr;
+	}
 	__reset_rules(_thr_SQP_rules);
 	delete _thr_SQP_rules;
 	if (_thr_SQP_rules_fast_routing) {
@@ -1950,6 +2059,10 @@ unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_async(time_t
 	umap_query_digest_text digest_text_umap_aux;
 
 	pthread_rwlock_wrlock(&digest_rwlock);
+	// Fold the workers' pending batches in first: entries still held in a
+	// batch would otherwise escape this operation and reappear in the maps
+	// when the batch is flushed.
+	merge_worker_query_digests();
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
@@ -2059,6 +2172,9 @@ unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_sync(bool pa
 	unsigned long long digest_deleted = 0;
 
 	pthread_rwlock_wrlock(&digest_rwlock);
+	// The purge walks the shared maps in place: fold the workers' pending
+	// batches in first so every entry is visible to the purge predicates.
+	merge_worker_query_digests();
 
 	size_t map_size = digest_umap.size();
 
@@ -2125,6 +2241,56 @@ unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_sync(bool pa
 	return digest_deleted;
 }
 
+/**
+ * @brief Memory held by one pair of digest maps.
+ *
+ * Same accounting as `get_query_digests_total_size()` performs for the shared
+ * maps: one QP_query_digest_stats per stats entry, the heap copies of the
+ * variable-length strings it references (including the digest texts), and the
+ * map node overhead. Used for the PostgreSQL workers' local batches, whose
+ * memory is part of the same digest footprint.
+ *
+ * The caller must hold every lock that keeps the maps still.
+ *
+ * @param stats Stats map to size.
+ * @param texts Digest-text map to size.
+ * @return Bytes held by the two maps.
+ */
+static unsigned long long get_query_digest_maps_size(
+	const umap_query_digest& stats,
+	const umap_query_digest_text& texts
+) {
+	unsigned long long ret = sizeof(QP_query_digest_stats) * stats.size();
+	for (const auto& entry : stats) {
+		const auto* qds = static_cast<const QP_query_digest_stats*>(entry.second);
+		if (qds->username && qds->username != qds->username_buf) {
+			ret += strlen(qds->username) + 1;
+		}
+		if (qds->schemaname && qds->schemaname != qds->schemaname_buf) {
+			ret += strlen(qds->schemaname) + 1;
+		}
+		if (qds->client_address && qds->client_address != qds->client_address_buf) {
+			ret += strlen(qds->client_address) + 1;
+		}
+		if (qds->digest_text) {
+			ret += strlen(qds->digest_text) + 1;
+		}
+	}
+	for (const auto& entry : texts) {
+		if (entry.second) {
+			ret += strlen(entry.second) + 1;
+		}
+	}
+#if !defined(__FreeBSD__) && !defined(__APPLE__)
+	ret += (sizeof(uint64_t) + sizeof(void*) + sizeof(std::_Rb_tree_node_base)) *
+		(stats.size() + texts.size());
+#else
+	ret += (sizeof(uint64_t) + sizeof(void*) + 32) *
+		(stats.size() + texts.size());
+#endif
+	return ret;
+}
+
 template <typename QP_DERIVED>
 unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size() {
 	unsigned long long ret=0;
@@ -2177,6 +2343,22 @@ unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size() {
 	ret += ((sizeof(uint64_t) + sizeof(void *) + 32) * digest_text_umap.size() );
 #endif
 
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// The workers' pending batches hold digest statistics that are not
+		// in the shared maps yet, but are still digest memory: account for
+		// them. The registry mutex is taken while digest_rwlock is held for
+		// reading, the same order merge_worker_query_digests() uses.
+		std::lock_guard<std::mutex> registry_lock(
+			pgsql_query_digest_workers_mutex);
+		for (auto* worker : pgsql_query_digest_workers) {
+			if (worker->owner != this) {
+				continue;
+			}
+			std::lock_guard<std::mutex> worker_lock(worker->mutex);
+			ret += get_query_digest_maps_size(worker->stats, worker->texts);
+		}
+	}
+
 	pthread_rwlock_unlock(&digest_rwlock);
 	return ret;
 }
@@ -2191,6 +2373,10 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 	umap_query_digest digest_umap_aux, digest_umap_aux_2;
 	umap_query_digest_text digest_text_umap_aux, digest_text_umap_aux_2;
 	pthread_rwlock_wrlock(&digest_rwlock);
+	// Fold the workers' pending batches in first: entries still held in a
+	// batch would otherwise escape this operation and reappear in the maps
+	// when the batch is flushed.
+	merge_worker_query_digests();
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
@@ -2366,7 +2552,15 @@ template <typename QP_DERIVED>
 SQLite3_result * Query_Processor<QP_DERIVED>::get_query_digests() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
 	SQLite3_result *result = NULL;
-	pthread_rwlock_rdlock(&digest_rwlock);
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// The result must include the digests still sitting in the workers'
+		// pending batches, so promote to the write lock and fold them in.
+		// MySQL keeps the read lock: it has no worker batches.
+		pthread_rwlock_wrlock(&digest_rwlock);
+		merge_worker_query_digests();
+	} else {
+		pthread_rwlock_rdlock(&digest_rwlock);
+	}
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	size_t map_size = digest_umap.size();
@@ -2515,7 +2709,15 @@ query_digest_topk_result_t Query_Processor<QP_DERIVED>::get_query_digests_topk(
 		std::function<bool(const query_digest_topk_candidate_t&, const query_digest_topk_candidate_t&)>
 	> heap(worse);
 
-	pthread_rwlock_rdlock(&digest_rwlock);
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// The ranking must see the digests still sitting in the workers'
+		// pending batches, so promote to the write lock and fold them in.
+		// MySQL keeps the read lock: it has no worker batches.
+		pthread_rwlock_wrlock(&digest_rwlock);
+		merge_worker_query_digests();
+	} else {
+		pthread_rwlock_rdlock(&digest_rwlock);
+	}
 
 	for (const auto& it : digest_umap) {
 		const QP_query_digest_stats* qds = static_cast<const QP_query_digest_stats*>(it.second);
@@ -2614,6 +2816,10 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
 	pthread_rwlock_wrlock(&digest_rwlock);
+	// Fold the workers' pending batches in first: entries still held in a
+	// batch would otherwise escape this operation and reappear in the maps
+	// when the batch is flushed.
+	merge_worker_query_digests();
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
@@ -2743,6 +2949,9 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt) {
 	pthread_rwlock_wrlock(&digest_rwlock);
+	// Fold the workers' pending batches in first, so a digest recorded
+	// while this reset was being issued is not carried over the reset.
+	merge_worker_query_digests();
 	digest_umap.swap(*uqd);
 	digest_text_umap.swap(*uqdt);
 	pthread_rwlock_unlock(&digest_rwlock);
@@ -2751,7 +2960,16 @@ void Query_Processor<QP_DERIVED>::get_query_digests_reset(umap_query_digest *uqd
 template <typename QP_DERIVED>
 SQLite3_result * Query_Processor<QP_DERIVED>::get_query_digests_reset() {
 	SQLite3_result *result = NULL;
-	pthread_rwlock_wrlock(&digest_rwlock);
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// A reset must return and discard every digest accounted so far:
+		// take the write lock and fold the workers' pending batches in
+		// before building the resultset. MySQL takes the same write lock
+		// as before: it has no worker batches to fold.
+		pthread_rwlock_wrlock(&digest_rwlock);
+		merge_worker_query_digests();
+	} else {
+		pthread_rwlock_wrlock(&digest_rwlock);
+	}
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	bool free_me = true;
@@ -3379,6 +3597,13 @@ void Query_Processor<QP_DERIVED>::update_query_processor_stats() {
 	// It acquires a read lock to ensure that the rules table doesn't change
 	// Yet, because it has to update vales, it uses atomic operations
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 8, "Updating query rules statistics\n");
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// Periodic housekeeping of this worker: fold the digest batch it
+		// accumulated since the last pass into the shared maps, so that a
+		// worker that stays under its batch limit still publishes its
+		// statistics regularly.
+		flush_thread_query_digests();
+	}
 	rdlock();
 	if (__sync_add_and_fetch(&version,0) == _thr_SQP_version) {
 		QP_rule_t *qr;
@@ -3511,12 +3736,21 @@ void Query_Processor<QP_DERIVED>::query_parser_update_counters(TypeSession* sess
  * @brief Record one query against its digest, creating the entry if needed.
  *
  * @par Locking
- * Two phases. The common case -- a digest that already exists -- only needs the
- * map to stay stable while the entry is located and updated, so it takes
- * `digest_rwlock` for *reading*. `QP_query_digest_stats::add_time()` is safe
- * under a shared lock because the counters it touches are atomic, so several
- * threads can account against the same digest at once instead of serialising on
- * an exclusive lock as this function used to.
+ * Three phases. A PostgreSQL worker with worker-local digest batching
+ * enabled (pgsql-query_digests_local_batch, the default) records the query
+ * in its own batch under the batch mutex only -- `digest_rwlock` is never
+ * taken on the query path -- and the batch is merged into the shared maps
+ * later, at the batch limit, on the worker's periodic stats update, on
+ * thread exit, or before any operation that needs a global view (dumps,
+ * resets, purges, top-k).
+ *
+ * Otherwise, two phases against the shared maps. The common case -- a digest
+ * that already exists -- only needs the map to stay stable while the entry is
+ * located and updated, so it takes `digest_rwlock` for *reading*.
+ * `QP_query_digest_stats::add_time()` is safe under a shared lock because the
+ * counters it touches are atomic, so several threads can account against the
+ * same digest at once instead of serialising on an exclusive lock as this
+ * function used to.
  *
  * Only a digest seen for the first time needs the write lock, to insert into
  * `digest_umap` (and `digest_text_umap` when digest text normalisation is on).
@@ -3524,9 +3758,9 @@ void Query_Processor<QP_DERIVED>::query_parser_update_counters(TypeSession* sess
  * before the write lock is taken and another thread may have inserted the same
  * digest in between.
  *
- * @note The read lock does not make a group of counters mutually consistent;
- *   see the concurrency contract on QP_query_digest_stats. Readers that need a
- *   coherent view must snapshot.
+ * @note Neither the read lock nor the batch mutex makes a group of counters
+ *   mutually consistent; see the concurrency contract on
+ *   QP_query_digest_stats. Readers that need a coherent view must snapshot.
  */
 template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uint64_t digest, char* digest_text, int hid, 
@@ -3534,6 +3768,58 @@ void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uin
 	unsigned long long rows_sent) {
 	QP_query_digest_stats* qds;
 	std::unordered_map<uint64_t, void*>::iterator it;
+
+	// Locate-or-create the entry for this query in the given maps. Used for
+	// the shared maps under digest_rwlock and for the worker-local batch
+	// under its mutex; both hold every concurrent accessor of the maps out,
+	// so the find/insert pair needs no other synchronisation.
+	auto add_to_maps = [&](umap_query_digest& stats, umap_query_digest_text& texts) {
+		auto entry_it = stats.find(digest_total);
+		if (entry_it != stats.end()) {
+			static_cast<QP_query_digest_stats*>(entry_it->second)->add_time(
+				t, n, rows_affected, rows_sent);
+			return;
+		}
+
+		char *dt = NULL;
+		if (GET_THREAD_VARIABLE(query_digests_normalize_digest_text)==false) {
+			dt = digest_text;
+		}
+		auto* new_qds = new QP_query_digest_stats(
+			ui->username, ui->schemaname, digest, dt, hid, client_addr,
+			GET_THREAD_VARIABLE(query_digests_max_digest_length));
+		new_qds->add_time(t,n, rows_affected,rows_sent);
+		stats.insert(std::make_pair(digest_total, static_cast<void*>(new_qds)));
+		if (GET_THREAD_VARIABLE(query_digests_normalize_digest_text)==true) {
+			const uint64_t dig = digest;
+			if (texts.find(dig) == texts.end()) {
+				texts.insert(std::make_pair(dig, strdup(digest_text)));
+			}
+		}
+	};
+
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// Accumulate in this worker's batch: one uncontended mutex instead
+		// of the shared digest_rwlock on every query. The batch is folded
+		// into the shared maps by the flush points, before anything that
+		// reads or reclaims them.
+		if (pgsql_thread___query_digests_local_batch && _thr_pgsql_query_digests) {
+			bool flush = false;
+			{
+				std::lock_guard<std::mutex> lock(
+					_thr_pgsql_query_digests->mutex);
+				add_to_maps(
+					_thr_pgsql_query_digests->stats,
+					_thr_pgsql_query_digests->texts);
+				flush = _thr_pgsql_query_digests->stats.size() >=
+					PGSQL_QUERY_DIGEST_LOCAL_MAX_ENTRIES;
+			}
+			if (flush) {
+				flush_thread_query_digests();
+			}
+			return;
+		}
+	}
 
 	pthread_rwlock_rdlock(&digest_rwlock);
 	it=digest_umap.find(digest_total);
@@ -3546,32 +3832,58 @@ void Query_Processor<QP_DERIVED>::update_query_digest(uint64_t digest_total, uin
 	pthread_rwlock_unlock(&digest_rwlock);
 
 	pthread_rwlock_wrlock(&digest_rwlock);
-	it=digest_umap.find(digest_total);
-	if (it != digest_umap.end()) {
-		qds=(QP_query_digest_stats *)it->second;
-		qds->add_time(t,n,rows_affected,rows_sent);
-	} else {
-		char *dt = NULL;
-		if (GET_THREAD_VARIABLE(query_digests_normalize_digest_text)==false) {
-			dt = digest_text;
-		}
-		qds=new QP_query_digest_stats(ui->username, ui->schemaname, digest, dt, hid, client_addr, GET_THREAD_VARIABLE(query_digests_max_digest_length));
-		qds->add_time(t,n, rows_affected,rows_sent);
-		digest_umap.insert(std::make_pair(digest_total,(void *)qds));
-		if (GET_THREAD_VARIABLE(query_digests_normalize_digest_text)==true) {
-			const uint64_t dig = digest;
-			std::unordered_map<uint64_t, char *>::iterator it2;
-			it2=digest_text_umap.find(dig);
-			if (it2 != digest_text_umap.end()) {
-				// found
-			} else {
-				dt = strdup(digest_text);
-				digest_text_umap.insert(std::make_pair(dig,dt));
-			}
+	add_to_maps(digest_umap, digest_text_umap);
+
+	pthread_rwlock_unlock(&digest_rwlock);
+}
+
+template <typename QP_DERIVED>
+void Query_Processor<QP_DERIVED>::flush_thread_query_digests() {
+	if constexpr (!std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		return;
+	}
+	if (!_thr_pgsql_query_digests) {
+		return;
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(_thr_pgsql_query_digests->mutex);
+		if (_thr_pgsql_query_digests->stats.empty()) {
+			return;
 		}
 	}
 
+	pthread_rwlock_wrlock(&digest_rwlock);
+	{
+		std::lock_guard<std::mutex> lock(_thr_pgsql_query_digests->mutex);
+		merge_query_digest_maps(
+			digest_umap,
+			digest_text_umap,
+			_thr_pgsql_query_digests->stats,
+			_thr_pgsql_query_digests->texts);
+	}
 	pthread_rwlock_unlock(&digest_rwlock);
+}
+
+template <typename QP_DERIVED>
+void Query_Processor<QP_DERIVED>::merge_worker_query_digests() {
+	if constexpr (std::is_same_v<QP_DERIVED, PgSQL_Query_Processor>) {
+		// digest_rwlock is held for writing by every caller: the shared maps
+		// cannot change under us, and each batch mutex stops its worker from
+		// inserting while the entry is being moved. The registry mutex is
+		// taken only here and in the worker registration paths, never while
+		// holding a batch mutex, so the nesting cannot deadlock.
+		std::lock_guard<std::mutex> registry_lock(
+			pgsql_query_digest_workers_mutex);
+		for (auto* worker : pgsql_query_digest_workers) {
+			if (worker->owner == this) {
+				std::lock_guard<std::mutex> worker_lock(worker->mutex);
+				merge_query_digest_maps(
+					digest_umap, digest_text_umap,
+					worker->stats, worker->texts);
+			}
+		}
+	}
 }
 
 template <typename QP_DERIVED>
