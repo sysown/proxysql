@@ -1081,31 +1081,6 @@
       "instance": "run"
     },
     {
-      "workflow": "CI-legacy-g3",
-      "file": "ci-legacy-g3.yml",
-      "job": "tests",
-      "automatic": true,
-      "tiers": [
-        "v40",
-        "v30",
-        "v31"
-      ],
-      "groups": [
-        "legacy-g3"
-      ],
-      "cells": [
-        {
-          "infradb": "mysql57"
-        }
-      ],
-      "axes": {
-        "infradb": [
-          "mysql57"
-        ]
-      },
-      "instance": "run"
-    },
-    {
       "workflow": "CI-legacy-g4",
       "file": "ci-legacy-g4.yml",
       "job": "tests",
@@ -1190,9 +1165,7 @@
         "v30",
         "v31"
       ],
-      "groups": [
-        "legacy-g7"
-      ],
+      "groups": [],
       "cells": [
         {
           "infradb": "mysql57"
@@ -1201,9 +1174,14 @@
       "axes": {
         "infradb": [
           "mysql57"
+        ],
+        "tap_group": [
+          "legacy-g7",
+          "mysql57-core-g2"
         ]
       },
-      "instance": "run"
+      "instance": "run",
+      "group_axis": "tap_group"
     },
     {
       "workflow": "CI-legacy-g8",
@@ -1215,9 +1193,7 @@
         "v30",
         "v31"
       ],
-      "groups": [
-        "legacy-g8"
-      ],
+      "groups": [],
       "cells": [
         {
           "infradb": "mysql57"
@@ -1226,9 +1202,14 @@
       "axes": {
         "infradb": [
           "mysql57"
+        ],
+        "tap_group": [
+          "legacy-g8",
+          "mysql57-core-g1"
         ]
       },
-      "instance": "run"
+      "instance": "run",
+      "group_axis": "tap_group"
     },
     {
       "workflow": "CI-legacy-g9",
@@ -2392,7 +2373,7 @@
         "v31"
       ],
       "groups": [
-        "legacy-g3"
+        "legacy-g5"
       ],
       "cells": [
         {

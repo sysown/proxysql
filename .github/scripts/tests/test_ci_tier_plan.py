@@ -36,6 +36,40 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(any(check['workflow']=='CI-legacy-g1' for check in plan['checks']))
                 self.assertFalse(any(check['workflow']=='CI-CodeQL' for check in plan['checks']))
 
+    def test_mysql57_core_transition_selects_only_the_product_group(self):
+        catalogue=json.loads((Path(__file__).resolve().parents[2]/'ci-tier-consumers.json').read_text())
+        tiers=['v40','v30','v31']
+        for workflow,old_group,new_group in [('CI-legacy-g8','legacy-g8','mysql57-core-g1'),
+                                             ('CI-legacy-g7','legacy-g7','mysql57-core-g2')]:
+            row=next(c for c in catalogue['consumers'] if c['workflow']==workflow)
+            for group in (old_group,new_group):
+                for mode in ('normal','asan'):
+                    with self.subTest(group=group,mode=mode):
+                        plan=make_plan(self.context(),dict(tiers=tiers,mode=mode,pr_number=42),{'consumers':[row]})
+                        for check in plan['checks']:
+                            if check['workflow']==workflow:
+                                check['applicable']=any(applicable_tests({'test-t':[group]},g,'4.0.12') for g in check['groups'])
+                        cells=consumer_matrix(plan,workflow,'tests')
+                        self.assertEqual({(cell['tier'],cell['tap_group']) for cell in cells},
+                                         {(tier,group) for tier in tiers})
+                        self.assertEqual(len(cells),len(tiers))
+
+    def test_legacy_g3_is_retired_while_mysql84_g3_remains_automatic(self):
+        catalogue=json.loads((Path(__file__).resolve().parents[2]/'ci-tier-consumers.json').read_text())
+        self.assertFalse(any(c['workflow']=='CI-legacy-g3' for c in catalogue['consumers']))
+        row=next(c for c in catalogue['consumers'] if c['workflow']=='CI-mysql84-g3')
+        self.assertTrue(row['automatic'])
+        self.assertEqual(set(row['tiers']),{'v30','v31','v40'})
+        self.assertEqual(row['groups'],['mysql84-g3'])
+
+    def test_pgsql_cluster_consumer_keeps_the_cluster_test_group(self):
+        catalogue=json.loads((Path(__file__).resolve().parents[2]/'ci-tier-consumers.json').read_text())
+        row=next(c for c in catalogue['consumers'] if c['file']=='ci-taptests-pgsql-cluster.yml')
+        self.assertEqual(row['groups'],['legacy-g5'])
+        workflow=(Path(__file__).resolve().parents[2]/'workflows/ci-taptests-pgsql-cluster.yml').read_text()
+        self.assertEqual(workflow.count('export TAP_GROUP="legacy-g5"'),3)
+        self.assertNotIn('legacy-g3',workflow)
+
     def test_exact_and_deduplicated(self):
         fetch=Mock(return_value={'labels':[{'name':n} for n in ['ci:v3.0-extra','ci:asan-extra','ci:v3.1','ci:v3.1']]})
         self.assertEqual(resolve_selection(self.context(),True,fetch)['tiers'],['v40','v31'])

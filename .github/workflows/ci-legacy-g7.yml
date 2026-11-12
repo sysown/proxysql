@@ -157,17 +157,23 @@ jobs:
       timeout-minutes: 20
       run: |
         cd proxysql
-        export INFRA_ID="ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}"
+        export INFRA_ID="ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}"
         export TAP_GROUP="legacy-g7"
+        if [ -n "${{ matrix.tap_group }}" ]; then
+          export TAP_GROUP="${{ matrix.tap_group }}"
+        fi
         export SKIP_CLUSTER_START=1
         test/infra/control/ensure-infras.bash
 
-    - name: Run legacy-g7 tests
+    - name: Run selected MySQL 5.7 group tests
       timeout-minutes: 90
       run: |
         cd proxysql
-        export INFRA_ID="ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}"
+        export INFRA_ID="ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}"
         export TAP_GROUP="legacy-g7"
+        if [ -n "${{ matrix.tap_group }}" ]; then
+          export TAP_GROUP="${{ matrix.tap_group }}"
+        fi
         export SKIP_CLUSTER_START=1
         export COVERAGE="${COVERAGE}"
         test/infra/control/run-tests-isolated.bash
@@ -180,7 +186,7 @@ jobs:
       with:
         phase: capture
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
-        infra-id: ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}
+        infra-id: ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}
 
     - name: Cleanup
       timeout-minutes: 2
@@ -192,9 +198,12 @@ jobs:
           exit 0
         fi
         cd proxysql
-        export INFRA_ID="ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}"
+        export INFRA_ID="ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}"
         export TAP_GROUP="legacy-g7"
-        docker logs proxysql.ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }} 2>&1 | tail -50 || true
+        if [ -n "${{ matrix.tap_group }}" ]; then
+          export TAP_GROUP="${{ matrix.tap_group }}"
+        fi
+        docker logs proxysql.ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }} 2>&1 | tail -50 || true
         test/infra/control/stop-proxysql-isolated.bash || true
         test/infra/control/destroy-infras.bash || true
 
@@ -233,7 +242,7 @@ jobs:
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-coverage-run#${{ github.run_number }}-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: |
-          proxysql/ci_infra_logs/ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/
+          proxysql/ci_infra_logs/ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/
         if-no-files-found: ignore
 
     - name: Report missing coverage file
@@ -246,9 +255,9 @@ jobs:
       if: ${{ matrix.coverage && (!cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '') && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
       # Send the LCOV .info file fastcov produces in run-tests-isolated.bash
-      # (under proxysql/ci_infra_logs/ci-legacy-g7/coverage-report/) to
+      # (under proxysql/ci_infra_logs/<INFRA_ID>/coverage-report/) to
       # Codecov. The proxysql binary was built WITHGCOV=1 (-tap-genai-gcov
-      # build cache) and was the live daemon answering the legacy-g7 TAP
+      # build cache) and was the live daemon answering the selected TAP
       # suite, so the report reflects production code paths exercised by
       # integration tests, not just the lib-only unit-test slice.
       #
@@ -266,9 +275,9 @@ jobs:
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ env.SHA }}
-        files: proxysql/ci_infra_logs/ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}.info
+        files: proxysql/ci_infra_logs/ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}.info
         flags: integration-tests
-        name: tap-legacy-g7-coverage
+        name: tap-${{ matrix.tap_group || 'legacy-g7' }}-coverage
         use_oidc: true
         # Upload ONLY the explicit LCOV .info file.
         # - disable_search + plugins:noop: default plugins include gcov,
@@ -305,9 +314,9 @@ jobs:
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ env.SHA }}
-        files: proxysql/ci_infra_logs/ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}.info
+        files: proxysql/ci_infra_logs/ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}.info
         flags: integration-tests
-        name: tap-legacy-g7-coverage
+        name: tap-${{ matrix.tap_group || 'legacy-g7' }}-coverage
         use_oidc: true
         disable_search: true
         plugins: noop
@@ -330,9 +339,9 @@ jobs:
       with:
         codecov_yml_path: ${{ github.workspace }}/proxysql/codecov.yml
         override_commit: ${{ env.SHA }}
-        files: proxysql/ci_infra_logs/ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-legacy-g7-${{ matrix.tier }}-${{ github.run_id }}.info
+        files: proxysql/ci_infra_logs/ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}/coverage-report/ci-${{ matrix.tap_group || 'legacy-g7' }}-${{ matrix.tier }}-${{ github.run_id }}.info
         flags: integration-tests
-        name: tap-legacy-g7-coverage
+        name: tap-${{ matrix.tap_group || 'legacy-g7' }}-coverage
         use_oidc: true
         disable_search: true
         plugins: noop
