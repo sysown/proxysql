@@ -3997,8 +3997,13 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 #endif
 			// only if we aren't using MariaDB Client Library
 			int rb = 0;
+			// TLS: read the socket once per poll pass, then only decrypt what is already buffered.
+			// Reading it on every turn of these loops let a peer that keeps sending hold the thread
+			// here; what is left in the socket is reported by the next poll().
+			bool allow_recv = true;
 			do {
-				rb = myds->read_from_net();
+				rb = myds->read_from_net(allow_recv);
+				allow_recv = false;
 				if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
 					status_variables.stvar[st_var_queries_frontends_bytes_recv] += rb;
 				}
@@ -4021,7 +4026,7 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 */
 							proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p , thread_session_id=%u -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, myds->sess->thread_session_id, rb);
 							while (rb > 0) {
-								rb = myds->read_from_net();
+								rb = myds->read_from_net(false); // decrypt every whole record already received
 								if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
 									status_variables.stvar[st_var_queries_frontends_bytes_recv] += rb;
 								}
