@@ -27,7 +27,7 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Availability-aware dispatch (PROTOTYPE -- CI-legacy-g3 only for now).
+  # Availability-aware dispatch (prototype).
   # `runs-on` locks its pool when the job is created and never falls back, so a
   # self-hosted-routed job queues behind the 6-VM pool even while GitHub-hosted
   # capacity sits idle. This leading job decides the pool up front: eligible
