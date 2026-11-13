@@ -6,8 +6,39 @@ Usage: python3 test/infra/control/test_module_startup.py [path/to/proxysql]
 from pathlib import Path
 import socket
 import time
+import unittest
+from unittest.mock import Mock
 
 from test_module_lifecycle import Daemon, IsolatedDaemonTest, run_probe_tests
+
+
+def thread_names(tasks):
+    names = []
+    for path in tasks.glob("*/comm"):
+        try:
+            names.append(path.read_text().strip())
+        except (FileNotFoundError, ProcessLookupError):
+            # Transient tasks can exit between enumeration and read.
+            continue
+    return names
+
+
+class ThreadNameReading(unittest.TestCase):
+    def test_exited_threads_do_not_hide_surviving_threads(self):
+        for error in (FileNotFoundError, ProcessLookupError):
+            with self.subTest(error=error):
+                exited, surviving, tasks = Mock(), Mock(), Mock()
+                exited.read_text.side_effect = error()
+                surviving.read_text.return_value = "MySQLWorker\n"
+                tasks.glob.return_value = [exited, surviving]
+                self.assertEqual(thread_names(tasks), ["MySQLWorker"])
+
+    def test_unrelated_read_errors_are_reported(self):
+        path, tasks = Mock(), Mock()
+        path.read_text.side_effect = PermissionError()
+        tasks.glob.return_value = [path]
+        with self.assertRaises(PermissionError):
+            thread_names(tasks)
 
 
 class ModuleStartup(IsolatedDaemonTest):
@@ -100,13 +131,7 @@ class ModuleStartup(IsolatedDaemonTest):
                     self.expect_started(daemon, mysql_workers, pgsql_workers, mysql_admin, pgsql_admin)
                     tasks = Path(f"/proc/{daemon.process.pid}/task")
                     if tasks.is_dir():
-                        names = []
-                        for path in tasks.glob("*/comm"):
-                            try:
-                                names.append(path.read_text().strip())
-                            except FileNotFoundError:
-                                # Transient tasks can exit between enumeration and open.
-                                continue
+                        names = thread_names(tasks)
                         for dialect, enabled in (("MySQL", mysql_workers), ("PgSQL", pgsql_workers)):
                             workers = [n for n in names if n.startswith((dialect + "Worker", dialect + "Idle"))]
                             self.assertEqual(bool(workers), enabled, names)
