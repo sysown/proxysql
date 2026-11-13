@@ -5,12 +5,27 @@ if ! [[ "${UNIT_TEST_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
     echo "UNIT_TEST_TIMEOUT_SECONDS must be a positive integer" >&2
     return 1
 fi
-if command -v timeout >/dev/null 2>&1; then
-    UNIT_TEST_TIMEOUT_COMMAND=timeout
-elif command -v gtimeout >/dev/null 2>&1; then
-    UNIT_TEST_TIMEOUT_COMMAND=gtimeout # Homebrew coreutils on macOS.
-else
-    echo "The unit runner requires GNU timeout (gtimeout on macOS)" >&2
+UNIT_TEST_TIMEOUT_COMMAND=
+# Process-group cleanup below relies on GNU timeout's --kill-after behavior.
+# Ubuntu 26 can put uutils timeout first on PATH; its GNU alternative is
+# gnutimeout. Homebrew installs GNU timeout as gtimeout on macOS. Prefer the
+# explicit GNU providers, then the standard name, and check the implementation
+# identity without an external grep (the runner is also tested with a PATH that
+# contains only the fake timeout commands).
+for unit_timeout_candidate in gnutimeout gtimeout timeout; do
+    if command -v "${unit_timeout_candidate}" >/dev/null 2>&1 &&
+       unit_timeout_version="$(LC_ALL=C "${unit_timeout_candidate}" --version 2>/dev/null)"; then
+        case "${unit_timeout_version}" in
+            "timeout (GNU coreutils)"*)
+                UNIT_TEST_TIMEOUT_COMMAND="${unit_timeout_candidate}"
+                break
+                ;;
+        esac
+    fi
+done
+unset unit_timeout_candidate unit_timeout_version
+if [ -z "${UNIT_TEST_TIMEOUT_COMMAND}" ]; then
+    echo "The unit runner requires GNU timeout (gnutimeout, gtimeout or timeout)" >&2
     return 1
 fi
 export TSAN_OPTIONS="${TSAN_OPTIONS:-halt_on_error=1:exitcode=66}"

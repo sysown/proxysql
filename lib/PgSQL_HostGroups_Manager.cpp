@@ -2533,25 +2533,37 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 					// all servers have some latency.
 					// That is good. If any server have no latency, something is wrong
 					// and we will skip this algorithm
-					sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
 					unsigned int avg_latency_us = 0;
 					avg_latency_us = total_latency_us/num_candidates;
+					// The filter below keeps only the candidates at or below the average
+					// latency. Weight-0 servers are candidates too, so when they are the
+					// fastest ones the filter can keep only weight-0 servers: the total
+					// weight would then be 0 and the lottery below would divide by zero.
+					// Compute the weight the filter would keep first, and apply the filter
+					// only if that weight is not 0. Otherwise skip the algorithm, as done
+					// above when a server has no latency, and select among all candidates.
+					uint64_t filtered_sum = 0;
 					for (j=0; j<num_candidates; j++) {
 						mysrvc = mysrvcCandidates[j];
-						if (mysrvc->current_latency_us > avg_latency_us) {
-							// remove the candidate
-							if (j+1 < num_candidates) {
-								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-							}
-							j--;
-							num_candidates--;
+						if (mysrvc->current_latency_us <= avg_latency_us) {
+							filtered_sum+=mysrvc->weight;
 						}
 					}
-					// we scan again to adjust weight
-					New_sum = 0;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						New_sum+=mysrvc->weight;
+					if (filtered_sum) {
+						sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+						for (j=0; j<num_candidates; j++) {
+							mysrvc = mysrvcCandidates[j];
+							if (mysrvc->current_latency_us > avg_latency_us) {
+								// remove the candidate
+								if (j+1 < num_candidates) {
+									mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+								}
+								j--;
+								num_candidates--;
+							}
+						}
+						// the weight of the remaining candidates, never 0
+						New_sum = filtered_sum;
 					}
 				}
 			}
@@ -4315,6 +4327,11 @@ void init_myhgc_servers_defaults(char* servers_defaults, PgSQL_HGC* myhgc) {
 	}
 }
 
+/**
+ * @brief Install incoming PostgreSQL hostgroup attributes and reset removed attributes to their defaults.
+ * @details Preserves existing groups' configured flags, creates missing groups, and consumes
+ *   incoming_hostgroup_attributes. An empty hostgroup list is valid.
+ */
 void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 	if (incoming_hostgroup_attributes==NULL) {
 		return;
@@ -4330,7 +4347,7 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 	ASSERT_SQLITE_OK(rc1, mydb);
 	sqlite3_stmt *statement = statement_unique.get();
 	proxy_info("New pgsql_hostgroup_attributes table\n");
-	bool current_configured[MyHostGroups->len];
+	bool current_configured[MyHostGroups->len + 1];
 	// set configured = false to all
 	// in this way later we can known which HG were updated
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {

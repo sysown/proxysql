@@ -123,7 +123,7 @@ jobs:
         uploaded=0
         for f in binaries/*[mb] binaries/*.id-hash; do
           FNAME=$(basename "$f")
-          EXISTING=$(gh api "repos/${{ github.repository }}/releases/${RELEASE_ID}/assets" \
+          EXISTING=$(gh api --paginate "repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?per_page=100" \
             --jq ".[] | select(.name==\"${FNAME}\") | .id" | head -1)
           if [ -n "$EXISTING" ]; then
             echo "Replacing existing asset ${FNAME} (id=${EXISTING})"

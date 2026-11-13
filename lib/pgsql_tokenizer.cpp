@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <assert.h>
 #include <limits.h>
+#include <stddef.h>
 #include "c_tokenizer.h"
 
 extern __thread int  pgsql_thread___query_digests_max_query_length;
@@ -1237,7 +1238,17 @@ enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_
 			return st_no_mark_found;
 		}
 	} else {
-		// Not enough bytes left to form a closing delimiter -> safe exit
+		// Not enough bytes left to form a closing delimiter: the string is unterminated
+		// and runs to the end of the input. Consume the rest of the input and forget the
+		// tag, so the string ends here, the same way an unterminated quoted literal does.
+		// Returning without consuming anything is not safe: the caller would call
+		// get_next_st() on the same '$', which can match '$$' or '$tag$' again and bring
+		// it straight back here with no progress, looping forever (e.g. "SELECT $ab$ x$$").
+		// It would also copy the unterminated string's tail into the digest.
+		shared_st->q += remaining;
+		shared_st->q_cur_pos = shared_st->q_len;
+		dq_st->tag_start = NULL;
+		dq_st->tag_len = 0;
 		return st_no_mark_found;
 	}
 
@@ -1912,24 +1923,23 @@ enum p_st process_quoted_identifier(shared_st* shared_st, quoted_identifier_st* 
  * @param shared_st Shared state used to continue the query processing.
  * @param stage_1_st The 'stage 1' state used to decide which will be the 'digest_end' position for the
  *   current stage.
+ * @return Last complete character, or nullptr when the compression range is empty.
  */
 static __attribute__((always_inline)) inline
 char* get_stage_digest_end(shared_st* shared_st, stage_1_st* stage_1_st) {
-	char* digest_end = NULL;
-
-	if (shared_st->st == st_literal_number && stage_1_st->literal_dig_st.start_pos != NULL) {
-		digest_end = stage_1_st->literal_dig_st.start_pos - 1;
-	} else {
-		digest_end = shared_st->res_cur_pos - 1;
+	char* end_pos = shared_st->res_cur_pos;
+	if (shared_st->st == st_literal_number && stage_1_st->literal_dig_st.start_pos != nullptr) {
+		end_pos = stage_1_st->literal_dig_st.start_pos;
 	}
 
-	return digest_end;
+	// No inclusive end exists when there are no complete characters to compress.
+	return end_pos > shared_st->res_init_pos ? end_pos - 1 : nullptr;
 }
 
 /**
  * @brief Sets the new starting position for the current stage being processed.
- * @details Sets the new starting position for the current stage to be the supplied 'next_start_pos', only
- *   if some boundary conditions hold, otherwise, it sets 'res_init_pos' as the new starting position.
+ * @details Computes the restart as an integer offset before forming a pointer. If the offset is
+ *   outside the completed digest, restarts at 'res_init_pos'.
  *
  *   Extra details:
  *   If the current stages processing iteration isn't the first one, the previous iteration of the
@@ -1938,21 +1948,22 @@ char* get_stage_digest_end(shared_st* shared_st, stage_1_st* stage_1_st) {
  *   already compressed by this stage.
  *
  * @param shared_st Shared state used to continue the query processing.
- * @param stage_1_st The 'stage 1' state used to decide which will be the 'digest_end' position for the
- *   current stage.
+ * @param digest_end Last complete character in the current compression range.
+ * @param previous_pos End position saved by this stage's previous iteration, or nullptr.
+ * @param lookback Number of characters to revisit before the adjusted previous position.
  */
 static __attribute__((always_inline)) inline
-void set_stage_next_start_pos(shared_st* shared_st, char* digest_end, char* next_start_pos) {
-	bool initial_it = shared_st->res_init_pos == shared_st->res_it_init_pos;
-	bool valid_next_start_pos = next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end;
-
-	if (initial_it == 0 && valid_next_start_pos) {
-		shared_st->res_cur_pos = next_start_pos;
-		shared_st->res_pre_pos = next_start_pos;
-	} else {
-		shared_st->res_cur_pos = shared_st->res_init_pos;
-		shared_st->res_pre_pos = shared_st->res_init_pos;
+void set_stage_next_start_pos(shared_st* shared_st, char* digest_end, char* previous_pos, ptrdiff_t lookback) {
+	char* next_start_pos = shared_st->res_init_pos;
+	if (shared_st->res_init_pos != shared_st->res_it_init_pos && previous_pos && digest_end) {
+		const ptrdiff_t next_offset = (previous_pos - shared_st->res_init_pos) - lookback;
+		const ptrdiff_t end_offset = digest_end - shared_st->res_init_pos;
+		if (next_offset >= 0 && next_offset < end_offset) {
+			next_start_pos += next_offset;
+		}
 	}
+	shared_st->res_cur_pos = next_start_pos;
+	shared_st->res_pre_pos = next_start_pos;
 }
 
 /**
@@ -1969,7 +1980,10 @@ void set_stage_next_start_pos(shared_st* shared_st, char* digest_end, char* next
  */
 static __attribute__((always_inline)) inline
 void end_compression_stage_it(shared_st* shared_st, char* digest_end, stage_1_st* stage_1_st, char** stage_pre_it_pos) {
-	if (digest_end == stage_1_st->literal_dig_st.start_pos - 1 && stage_1_st->new_end_pos) {
+	if (stage_1_st->literal_dig_st.start_pos &&
+		stage_1_st->literal_dig_st.start_pos > shared_st->res_init_pos &&
+		digest_end == stage_1_st->literal_dig_st.start_pos - 1 && stage_1_st->new_end_pos)
+	{
 		char* f_digits = stage_1_st->literal_dig_st.start_pos;
 		stage_1_st->literal_dig_st.start_pos = shared_st->res_pre_pos;
 		*stage_pre_it_pos = stage_1_st->literal_dig_st.start_pos;
@@ -2052,8 +2066,8 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 	//     still processed up to 'd_max_len' (see digest_len_limit()).
 	//  2. The final position of the received query has been reached.
 	for (;;) {
-		char* res_final_pos = shared_st->res_init_pos + digest_len_limit(shared_st, cmnt_type_1_st) - 1;
-		if (shared_st->res_cur_pos > res_final_pos || shared_st->q_cur_pos >= shared_st->q_len) {
+		if (shared_st->q_cur_pos >= shared_st->q_len ||
+			(shared_st->res_cur_pos - shared_st->res_init_pos) >= digest_len_limit(shared_st, cmnt_type_1_st)) {
 			break;
 		}
 		if (cur_st == st_no_mark_found) {
@@ -2242,6 +2256,12 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 static __attribute__((always_inline)) inline
 void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* stage_2_st, const options* opts) {
 	char* digest_end = get_stage_digest_end(shared_st, stage_1_st);
+	if (digest_end == nullptr) {
+		stage_2_st->c_offset = 0;
+		stage_2_st->pre_it_pos = stage_1_st->new_end_pos ?
+			stage_1_st->literal_dig_st.start_pos : shared_st->res_cur_pos;
+		return;
+	}
 
 	// Compute the starting point for the second stage. The offset chosen of (5 + 1) is derived from the
 	// pattern: `? + ddd` where 'd' stands for 'digit'. This pattern could take place in case the first
@@ -2262,8 +2282,8 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 	// ```
 	//
 	// Using an offset of at least `6` should prevent missing patterns in this current iteration.
-	char* next_start_pos = stage_2_st->pre_it_pos - (shared_st->gl_c_offset - stage_2_st->c_offset) - (5 + 1);
-	set_stage_next_start_pos(shared_st, digest_end, next_start_pos);
+	const ptrdiff_t lookback = ptrdiff_t(shared_st->gl_c_offset) - stage_2_st->c_offset + (5 + 1);
+	set_stage_next_start_pos(shared_st, digest_end, stage_2_st->pre_it_pos, lookback);
 
 	// second stage: Space and (+|-) replacement
 	while (shared_st->res_cur_pos <= digest_end) {
@@ -2363,6 +2383,12 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 
 	// compute the 'digest_end' for the stage 3
 	char* digest_end = get_stage_digest_end(shared_st, stage_1_st);
+	if (digest_end == nullptr) {
+		stage_3_st->c_offset = 0;
+		stage_3_st->pre_it_pos = stage_1_st->new_end_pos ?
+			stage_1_st->literal_dig_st.start_pos : shared_st->res_cur_pos;
+		return;
+	}
 
 	// Compute the starting point for the third stage. The 'min_group_size' value is obtained from
 	// the following pattern:
@@ -2380,10 +2406,8 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 	//   * 7: sizeof('...+ ') + sizeof('(') + 1.
 	//
 	int min_group_size = opts->grouping_limit*2 + 7;
-	char* next_start_pos =
-		stage_3_st->pre_it_pos - (shared_st->gl_c_offset - stage_3_st->c_offset) - (min_group_size + 1);
-
-	set_stage_next_start_pos(shared_st, digest_end, next_start_pos);
+	const ptrdiff_t lookback = ptrdiff_t(shared_st->gl_c_offset) - stage_3_st->c_offset + min_group_size + 1;
+	set_stage_next_start_pos(shared_st, digest_end, stage_3_st->pre_it_pos, lookback);
 
 	char group_candidate = 0;
 
@@ -2451,7 +2475,7 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 		}
 
 		char* cur_char = shared_st->res_cur_pos;
-		char pattern_fits = shared_st->res_cur_pos < digest_end - opts->grouping_limit*2;
+		char pattern_fits = (digest_end - shared_st->res_cur_pos) > opts->grouping_limit*2;
 		if (group_candidate == 1 && pattern_fits) {
 			// NOTE: Minimal viable pattern for replacement is the starting point: '?,?,'.
 			// This pattern also matches the size of a 32bit register, so probably will only
@@ -2528,7 +2552,7 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 		}
 	}
 
-	int c_3_offset = digest_end - (shared_st->res_pre_pos - 1);
+	int c_3_offset = digest_end - shared_st->res_pre_pos + 1;
 	stage_3_st->c_offset = c_3_offset > 0 ? c_3_offset : 0;
 
 	end_compression_stage_it(shared_st, digest_end, stage_1_st, &stage_3_st->pre_it_pos);
@@ -2616,6 +2640,12 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 	if (opts->groups_grouping_limit == 0 || opts->grouping_limit == 0) { return; }
 
 	char* digest_end = get_stage_digest_end(shared_st, stage_1_st);
+	if (digest_end == nullptr) {
+		stage_4_st->c_offset = 0;
+		stage_4_st->pre_it_pos = stage_1_st->new_end_pos ?
+			stage_1_st->literal_dig_st.start_pos : shared_st->res_cur_pos;
+		return;
+	}
 	//                       '( +       ?,?,n            + ... + ')  ,'
 	int group_pattern_size = (1 + opts->grouping_limit*2 +  3  + 1 + 1);
 	// Compute the starting point for the fourth stage. Since the previous iteration could have ended in a
@@ -2636,10 +2666,10 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 	// ```
 	// (group_pattern_size * (opts->groups_grouping_limit + 2))
 	// ```
-	char* next_start_pos = stage_4_st->pre_it_pos - (group_pattern_size * (opts->groups_grouping_limit + 2));
+	const ptrdiff_t lookback = ptrdiff_t(group_pattern_size) * (opts->groups_grouping_limit + 2);
 
 	// compute the starting point for the fourth stage
-	set_stage_next_start_pos(shared_st, digest_end, next_start_pos);
+	set_stage_next_start_pos(shared_st, digest_end, stage_4_st->pre_it_pos, lookback);
 
 	// it's a fixed pattern, we can perform a lookahead replacement
 	while (shared_st->res_cur_pos <= digest_end) {
@@ -2663,9 +2693,9 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 					cur_pattern_pos += 1;
 				}
 
-				while(cur_pattern_pos + (group_pattern_size - 2) <= digest_end) {
+				while((digest_end - cur_pattern_pos) >= (group_pattern_size - 2)) {
 					if (is_group_pattern(cur_pattern_pos, opts) == 1) {
-						if (cur_pattern_pos + (group_pattern_size - 1) == digest_end) {
+						if ((digest_end - cur_pattern_pos) == (group_pattern_size - 1)) {
 							cur_pattern_pos += group_pattern_size - 1;
 						} else {
 							cur_pattern_pos += group_pattern_size;
@@ -2689,10 +2719,9 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 		}
 
 		char pattern_fits =
-			shared_st->res_cur_pos <=
-			// NOTE: Final '+ 1' due to repeating comma in the pattern not in the final case, and the
-			// fact that digest_end is the final character, which is part of the pattern
-			(digest_end - (group_pattern_size * (opts->groups_grouping_limit + 1)) + 2);
+			// The last group has no trailing comma; compare lengths before forming lookahead pointers.
+			(digest_end - shared_st->res_cur_pos) >=
+			(ptrdiff_t(group_pattern_size) * (opts->groups_grouping_limit + 1) - 2);
 
 		// fast check for knowing that this can potentially be a group pattern
 		if (pattern_fits && *cur_char == '(' && *(cur_char+1) == '?' && *(cur_char+2) == ',') {
@@ -2700,7 +2729,7 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 			char* cur_pattern_pos = cur_char;
 			int found_group_patterns = 0;
 
-			while(cur_pattern_pos + (group_pattern_size - 2) <= digest_end) {
+			while((digest_end - cur_pattern_pos) >= (group_pattern_size - 2)) {
 				if (is_group_pattern(cur_pattern_pos, opts) == 1) {
 					cur_pattern_pos += group_pattern_size - 1;
 					if (*cur_pattern_pos == ',') {
@@ -2732,7 +2761,7 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 		}
 	}
 
-	int c_4_offset = digest_end - (shared_st->res_pre_pos - 1);
+	int c_4_offset = digest_end - shared_st->res_pre_pos + 1;
 	stage_4_st->c_offset = c_4_offset > 0 ? c_4_offset : 0;
 
 	end_compression_stage_it(shared_st, digest_end, stage_1_st, &stage_4_st->pre_it_pos);

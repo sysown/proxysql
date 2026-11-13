@@ -7189,6 +7189,11 @@ void init_myhgc_servers_defaults(char* servers_defaults, MyHGC* myhgc) {
 	}
 }
 
+/**
+ * @brief Install incoming MySQL hostgroup attributes and reset attributes removed from the configuration.
+ * @details Preserves the prior configured flags for existing groups, creates missing groups, and consumes
+ *   incoming_hostgroup_attributes. An empty hostgroup list is valid.
+ */
 void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	if (incoming_hostgroup_attributes==NULL) {
 		return;
@@ -7205,7 +7210,7 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	ASSERT_SQLITE_OK(rc1, mydb);
 	sqlite3_stmt *statement = statement_unique.get();
 	proxy_info("New mysql_hostgroup_attributes table\n");
-	bool current_configured[MyHostGroups->len];
+	bool current_configured[MyHostGroups->len + 1]; /* +1 so VLA is never zero-sized */
 	// set configured = false to all
 	// in this way later we can known which HG were updated
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {

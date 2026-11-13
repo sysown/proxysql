@@ -163,6 +163,7 @@ PgSQL_Listeners_Manager::~PgSQL_Listeners_Manager() {
 }
 
 int PgSQL_Listeners_Manager::add(const char* iface, unsigned int num_threads, int** perthrsocks) {
+	const std::string original_iface { iface };
 	for (unsigned int i = 0; i < ifaces->len; i++) {
 		iface_info* ifi = (iface_info*)ifaces->index(i);
 		if (strcmp(ifi->iface, iface) == 0) {
@@ -207,7 +208,7 @@ int PgSQL_Listeners_Manager::add(const char* iface, unsigned int num_threads, in
 			for (i = 0; i < num_threads; i++) {
 				s = listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, true);
 				ioctl_FIONBIO(s, 1);
-				iface_info* ifi = new iface_info((char*)iface, address, atoi(port), s);
+				iface_info* ifi = new iface_info((char*)original_iface.c_str(), address, atoi(port), s);
 				ifaces->add(ifi);
 				l_perthrsocks[i] = s;
 			}
@@ -228,7 +229,7 @@ int PgSQL_Listeners_Manager::add(const char* iface, unsigned int num_threads, in
 	}
 	if (s > 0) {
 		ioctl_FIONBIO(s, 1);
-		iface_info* ifi = new iface_info((char*)iface, address, atoi(port), s);
+		iface_info* ifi = new iface_info((char*)original_iface.c_str(), address, atoi(port), s);
 		ifaces->add(ifi);
 	}
 	if (is_ipv6 == false) {
@@ -1642,7 +1643,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		// if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name, "threads")) {
-		snprintf(intbuf, sizeof(intbuf), "%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
+		snprintf(intbuf, sizeof(intbuf), "%d", (configured_num_threads ? configured_num_threads : (num_threads ? num_threads : DEFAULT_NUM_THREADS)));
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name, "stacksize")) {
@@ -1717,6 +1718,12 @@ bool PgSQL_Threads_Handler::validate_variable(const char* name, const char* valu
 }
 #endif
 
+/**
+ * @brief Validate and update a PostgreSQL runtime variable through the admin interface.
+ * @param name Null-terminated variable name.
+ * @param value Null-terminated value; nullptr is rejected. Empty log filenames disable logging.
+ * @return True if the variable accepts the supplied value, false otherwise.
+ */
 bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// this is the public function, accessible from admin
 	// IN:
 	// name: variable name
@@ -2139,7 +2146,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	}
 
 	if (!strcasecmp(name, "auditlog_filename")) {
-		if (value[strlen(value) - 1] == '/') {
+		if (vallen > 0 && value[vallen - 1] == '/') {
 			proxy_error("%s is an invalid value for auditlog_filename, please specify a filename not just the path\n", value);
 			return false;
 		}
@@ -2166,7 +2173,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		}
 	}
 	if (!strcasecmp(name, "eventslog_filename")) {
-		if (value[strlen(value) - 1] == '/') {
+		if (vallen > 0 && value[vallen - 1] == '/') {
 			proxy_error("%s is an invalid value for eventslog_filename, please specify a filename not just the path\n", value);
 			return false;
 		}
@@ -2206,7 +2213,8 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	if (!strcasecmp(name, "threads")) {
 		unsigned int intv = atoi(value);
 		if ((num_threads == 0 || num_threads == intv || pgsql_threads == NULL) && intv > 0 && intv < 256) {
-			num_threads = intv;
+			configured_num_threads = intv;
+			num_threads = GloVars.pgsql_workers ? intv : 0;
 			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(intv);
 			return true;
 		}
@@ -2530,22 +2538,19 @@ void PgSQL_Threads_Handler::print_version() {
 }
 
 void PgSQL_Threads_Handler::init(unsigned int num, size_t stack) {
+	if (num) configured_num_threads = num;
+	if (!configured_num_threads) configured_num_threads = num_threads ? num_threads : DEFAULT_NUM_THREADS;
+	if (!GloVars.pgsql_workers) {
+		num_threads = 0;
+		return;
+	}
+
 	if (stack) {
 		stacksize = stack;
+	} else if (stacksize == 0) {
+		stacksize = DEFAULT_STACK_SIZE;
 	}
-	else {
-		if (stacksize == 0) stacksize = DEFAULT_STACK_SIZE;
-	}
-	if (num) {
-		num_threads = num;
-		//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(num);
-	}
-	else {
-		if (num_threads == 0) {
-			num_threads = DEFAULT_NUM_THREADS; //default
-			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(DEFAULT_NUM_THREADS);
-		}
-	}
+	num_threads = configured_num_threads;
 	int rc = pthread_attr_setstacksize(&attr, stacksize);
 	assert(rc == 0);
 	pgsql_threads = (proxysql_pgsql_thread_t*)calloc(num_threads, sizeof(proxysql_pgsql_thread_t));
@@ -2661,6 +2666,11 @@ void PgSQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
 }
 
 void PgSQL_Threads_Handler::start_listeners() {
+	if (!GloVars.pgsql_workers) {
+		bootstrapping_listeners = false;
+		return;
+	}
+
 	// we set bootstrapping_listeners to true
 	// In this way PgSQL_Thread will knows there are more listeners to add
 	// and it will continue looping until all listeners are added
@@ -3265,7 +3275,8 @@ void PgSQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 
 		sess->to_process = 1;
 		myds->wait_until = curtime + pgsql_thread___ping_timeout_server * 1000;	// max_timeout
-		mc->last_time_used = curtime;
+		// last_time_used is left alone so a failed ping logs how long the connection sat
+		// idle; a successful one re-stamps it when the connection goes back to the pool.
 		myds->myprot.init(&myds, myds->myconn->userinfo, NULL);
 		sess->status = PINGING_SERVER;
 		myds->DSS = STATE_MARIADB_PING;
@@ -6473,7 +6484,15 @@ bool PgSQL_Thread::Scan_Sessions_to_Kill___handle_query_cancellation(PgSQL_Sessi
 					should_kill = true;
 				}
 			}
-			if (should_kill && sess->mybe && sess->mybe->server_myds) {
+			// An idle session has nothing to cancel, and nothing there clears cancel_query:
+			// BeforePoll, which wakes at once while it is set, would spin the thread.
+			// The rollback-only reset is internal cleanup after the client's transaction
+			// has ended. It also has no client statement to cancel or flag consumer.
+			const bool internal_rollback = sess->status == RESETTING_CONNECTION_V2 &&
+				sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn &&
+				sess->mybe->server_myds->myconn->reset_session_rollback_only;
+			if (should_kill && sess->mybe && sess->mybe->server_myds &&
+				sess->status != WAITING_CLIENT_DATA && !internal_rollback) {
 				proxy_info("Query cancellation requested [Session ID=%u]\n", it->thread_id);
 				sess->mybe->server_myds->cancel_query = true;
 				sess->mybe->server_myds->kill_type = 1;

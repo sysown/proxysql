@@ -50,6 +50,28 @@ ProxySQL_StartupGateState proxysql_startup_gate_state();
 bool proxysql_startup_gate_wait_for_admin(const std::function<bool()>& stop);
 
 /**
+ * @brief Waits for the gate, then takes the caller's lock, and guarantees the
+ *   gate still allows Admin commands once the lock is held.
+ *
+ * PROXYSQL START closes the gate while holding Admin's global SQL mutex, so a
+ * session that passed proxysql_startup_gate_wait_for_admin() before that and
+ * then queued on the mutex would otherwise run its statement during the plugin
+ * lifecycle. Plugin init() may need that mutex (secret store, Admin DB) while
+ * holding the plugin manager exclusively, and the statement may wait on the
+ * plugin manager while holding the mutex: a deadlock. This helper re-checks
+ * the gate under the lock and, when it was closed in the meantime, releases
+ * the lock and waits again.
+ *
+ * @param lock Acquires the caller's lock (Admin: sql_query_global_mutex).
+ * @param unlock Releases what @p lock acquired.
+ * @param stop Polled periodically; returning true abandons the wait (shutdown).
+ * @return true when the lock is held and the gate allows Admin commands;
+ *   false when @p stop ended the wait. The lock is held on return in both cases.
+ */
+bool proxysql_startup_gate_lock_for_admin(const std::function<void()>& lock,
+	const std::function<void()>& unlock, const std::function<bool()>& stop);
+
+/**
  * @brief Blocks a runtime worker (Cluster peer thread) until the gate is open.
  * @param stop Polled periodically; returning true abandons the wait (shutdown).
  * @return true when the gate is open, false when @p stop ended the wait.
