@@ -28,6 +28,7 @@ using json = nlohmann::json;
 #include "ProxySQL_RESTAPI_Server.hpp"
 #include "ProxySQL_Statistics.hpp"
 #include "proxysql_utils.h"
+#include <atomic>
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -241,7 +242,7 @@ private:
 					{ "error_code", std::to_string(exit_code) }
 				};
 				str_response_err = j_err_resp.dump();
-				proxy_error("Error while executing script '%s'. Child exit status: '%d'.\n", script.c_str(), script_err);
+				proxy_error("Error while executing script '%s'. Child exit status: '%d'.\n", script.c_str(), exit_code);
 			}
 		}
 		// script returned and empty output, invalid output, no need to parse it.
@@ -506,6 +507,66 @@ public:
 	}
 };
 
+/*
+ * MHD begins accepting requests inside start(), before the constructor has
+ * verified that a Unix socket was created in the pinned parent. Resources are
+ * therefore registered through this wrapper: until the gate is released every
+ * method answers 503 without entering the wrapped handler. The wrapper keeps
+ * the wrapped resource's constructor behavior, including its allowed-method
+ * policy, by constructing the original resource as its base class.
+ */
+template <typename Resource>
+class dispatch_gated_resource : public Resource {
+public:
+	template <typename... Args>
+	explicit dispatch_gated_resource(std::shared_ptr<std::atomic<bool>> gate, Args&&... args)
+		: Resource(std::forward<Args>(args)...), dispatch_gate_(std::move(gate)) {}
+
+	const std::shared_ptr<http_response> render(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render(req); });
+	}
+	const std::shared_ptr<http_response> render_GET(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_GET(req); });
+	}
+	const std::shared_ptr<http_response> render_POST(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_POST(req); });
+	}
+	const std::shared_ptr<http_response> render_PUT(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_PUT(req); });
+	}
+	const std::shared_ptr<http_response> render_HEAD(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_HEAD(req); });
+	}
+	const std::shared_ptr<http_response> render_DELETE(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_DELETE(req); });
+	}
+	const std::shared_ptr<http_response> render_TRACE(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_TRACE(req); });
+	}
+	const std::shared_ptr<http_response> render_OPTIONS(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_OPTIONS(req); });
+	}
+	const std::shared_ptr<http_response> render_PATCH(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_PATCH(req); });
+	}
+	const std::shared_ptr<http_response> render_CONNECT(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_CONNECT(req); });
+	}
+
+private:
+	template <typename Handler>
+	const std::shared_ptr<http_response> dispatch_or_503(Handler handler) {
+		if (!dispatch_gate_->load(std::memory_order_acquire)) {
+			return std::shared_ptr<http_response>(new string_response(
+				"{\"error\": \"REST API listener is not ready\"}",
+				http::http_utils::http_service_unavailable));
+		}
+		return handler();
+	}
+
+	const std::shared_ptr<std::atomic<bool>> dispatch_gate_;
+};
+
 using std::vector;
 using std::pair;
 using std::function;
@@ -674,8 +735,9 @@ void ProxySQL_RESTAPI_Server::prepare_unix_socket() {
 	}
 
 	// Bind through the canonical parent path so MHD creates the leaf in the
-	// directory this object has pinned. Verify the result before serving: an
-	// unsafe earlier ancestor may still be renamed during startup.
+	// directory this object has pinned. Verify the result before dispatching
+	// any handler: while verification is pending the listener may accept
+	// connections but every resource answers 503.
 	const std::string canonical_path =
 		(canonical_parent == "/" ? canonical_parent : canonical_parent + "/") + unix_socket_leaf;
 	if (canonical_path.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
@@ -902,15 +964,17 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 		return;
 	}
 
-	auto sr = new sync_resource();
+	// Each resource owns the per-listener gate through shutdown.
+	auto dispatch_ready = std::make_shared<std::atomic<bool>>(false);
 
-	endpoint = std::unique_ptr<httpserver::http_resource>(sr);
+	endpoint = std::unique_ptr<httpserver::http_resource>(
+		new dispatch_gated_resource<sync_resource>(dispatch_ready));
 
 	ws->register_resource("/sync", endpoint.get(), true);
 
 #ifdef PROXYSQLTSDB
-	auto tsdb_res = new tsdb_resource();
-	tsdb_endpoint = std::unique_ptr<httpserver::http_resource>(tsdb_res);
+	tsdb_endpoint = std::unique_ptr<httpserver::http_resource>(
+		new dispatch_gated_resource<tsdb_resource>(dispatch_ready));
 	ws->register_resource("/api/tsdb/metrics", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/query", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/status", tsdb_endpoint.get(), true);
@@ -918,8 +982,10 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	/* Serve the dashboard HTML and its Chart.bundle.js asset on the
 	 * same port as the API, so the dashboard's relative fetch() calls
 	 * are same-origin. See issue #5684. */
-	tsdb_dashboard_endpoint = std::unique_ptr<httpserver::http_resource>(new tsdb_dashboard_resource());
-	tsdb_chart_js_endpoint = std::unique_ptr<httpserver::http_resource>(new tsdb_chart_js_resource());
+	tsdb_dashboard_endpoint = std::unique_ptr<httpserver::http_resource>(
+		new dispatch_gated_resource<tsdb_dashboard_resource>(dispatch_ready));
+	tsdb_chart_js_endpoint = std::unique_ptr<httpserver::http_resource>(
+		new dispatch_gated_resource<tsdb_chart_js_resource>(dispatch_ready));
 	ws->register_resource("/tsdb", tsdb_dashboard_endpoint.get(), true);
 	ws->register_resource("/Chart.bundle.js", tsdb_chart_js_endpoint.get(), true);
 #endif
@@ -927,7 +993,8 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 		const std::string& endpoint_route = id_endpoint.first;
 		auto endpoint_fn = id_endpoint.second;
 		std::unique_ptr<httpserver::http_resource> endpoint_res =
-			std::unique_ptr<httpserver::http_resource>(new gen_get_endpoint(endpoint_fn));
+			std::unique_ptr<httpserver::http_resource>(
+				new dispatch_gated_resource<gen_get_endpoint>(dispatch_ready, endpoint_fn));
 
 		ws->register_resource(endpoint_route, endpoint_res.get(), true);
 		_endpoints.push_back({endpoint_route, std::move(endpoint_res)});
@@ -935,7 +1002,9 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 
 	// Finish constructing and registering resources before requests can read them.
 	// Start non-blocking so bind/TLS/CA failures are reported here instead of
-	// escaping a thread and calling std::terminate.
+	// escaping a thread and calling std::terminate. MHD accepts connections as
+	// soon as start() returns, so handlers stay gated (503) until the post-bind
+	// Unix ownership verification below succeeds.
 	try {
 		ws->start(false);
 	} catch (const std::exception& e) {
@@ -960,6 +1029,7 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 		cleanup_unix_socket();
 		return;
 	}
+	dispatch_ready->store(true, std::memory_order_release);
 	proxy_info(
 		"Started 'ProxySQL_RestAPI_Server' on %s (%s%s)\n",
 		unix_socket_path.empty() ? std::to_string(port).c_str() : unix_socket_path.c_str(),
@@ -969,6 +1039,7 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 }
 
 ProxySQL_RESTAPI_Server::~ProxySQL_RESTAPI_Server() {
+	// Stop dispatching before resources and the gate are destroyed.
 	if (ws) {
 		ws->stop();
 	}

@@ -20,11 +20,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -116,6 +118,10 @@ static bool redirect_parent_after_stat = false;
 static std::string redirect_source_parent;
 static std::string redirect_replacement_parent;
 static std::string redirect_leaf;
+static std::atomic<bool> pause_in_capture { false };
+static std::atomic<bool> capture_reached { false };
+static std::atomic<bool> capture_resume { false };
+static std::string capture_pause_leaf;
 
 static void redirect_unix_parent() {
 	if (!redirect_parent_after_stat) return;
@@ -155,10 +161,24 @@ extern "C" int __wrap_lstat(const char* path, struct stat* st) {
 
 extern "C" int __wrap_fstatat(int fd, const char* path, struct stat* st, int flags) {
 	const int rc = __real_fstatat(fd, path, st, flags);
-	if (rc == 0) redirect_unix_parent();
+	if (rc == 0) {
+		redirect_unix_parent();
+		// Pause the post-start ownership capture after its fstatat succeeded,
+		// so a request can observe the dispatch gate before it is released.
+		if (pause_in_capture.load(std::memory_order_relaxed) && path != nullptr &&
+			capture_pause_leaf == path) {
+			pause_in_capture.store(false, std::memory_order_relaxed);
+			capture_reached.store(true, std::memory_order_release);
+			for (int i = 0; i < 2000 && !capture_resume.load(std::memory_order_acquire); ++i) {
+				usleep(1000);
+			}
+		}
+	}
 	return rc;
 }
 #endif
+
+static std::atomic<int> ping_hits { 0 };
 
 using restapi_endpoints = std::vector<std::pair<
 	std::string,
@@ -170,11 +190,48 @@ static restapi_endpoints ping_endpoints() {
 	endpoints.push_back({
 		"/ping",
 		[](const httpserver::http_request&) {
+			ping_hits.fetch_add(1, std::memory_order_relaxed);
 			return std::shared_ptr<httpserver::http_response>(
 				new httpserver::string_response("pong", httpserver::http::http_utils::http_ok));
 		}
 	});
 	return endpoints;
+}
+
+// Bounded plain-HTTP request over an AF_UNIX listener. Returns the numeric
+// status code, or -1 when the request could not complete.
+static int unix_http_status(const std::string& socket_path) {
+	int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0) return -1;
+	struct timeval timeout {};
+	timeout.tv_sec = 2;
+	timeout.tv_usec = 0;
+	setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+	setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
+	struct sockaddr_un addr {};
+	addr.sun_family = AF_UNIX;
+	if (socket_path.size() + 1 > sizeof(addr.sun_path)) {
+		close(fd);
+		return -1;
+	}
+	memcpy(addr.sun_path, socket_path.c_str(), socket_path.size() + 1);
+	if (connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+		close(fd);
+		return -1;
+	}
+	const char request[] = "GET /ping HTTP/1.0\r\nHost: localhost\r\n\r\n";
+	if (send(fd, request, sizeof(request) - 1, 0) != static_cast<ssize_t>(sizeof(request) - 1)) {
+		close(fd);
+		return -1;
+	}
+	char buffer[512] {};
+	const ssize_t received = recv(fd, buffer, sizeof(buffer) - 1, 0);
+	close(fd);
+	if (received <= 0) return -1;
+	int status = -1;
+	if (sscanf(buffer, "HTTP/%*s %d", &status) != 1) return -1;
+	return status;
 }
 
 static std::string read_text_file(const std::string& path) {
@@ -484,6 +541,60 @@ static void test_unix_immediate_parent_policy() {
 	std::filesystem::remove_all(dir);
 }
 
+// MHD serves before the constructor has verified that the Unix socket exists
+// in the pinned parent. A request that reaches the listener during that window
+// must get 503 without entering the handler; normal service must follow.
+static void test_dispatch_gate_until_ownership_verified() {
+#if !defined(__linux__)
+	skip(4, "Linux linker-wrap injection is unavailable");
+#else
+	char directory_template[] = "/tmp/proxysql-restapi-gate-XXXXXX";
+	char* directory = mkdtemp(directory_template);
+	if (directory == nullptr) {
+		ok(0, "created dispatch-gate fixture directory");
+		skip(3, "dispatch-gate fixture unavailable");
+		return;
+	}
+	const std::string dir(directory);
+	const std::string socket_path = dir + "/gated.sock";
+	ProxySQL_RESTAPI_Config config {};
+	config.interface_name = socket_path;
+
+	const int hits_before = ping_hits.load(std::memory_order_relaxed);
+	capture_pause_leaf = "gated.sock";
+	capture_reached.store(false, std::memory_order_relaxed);
+	capture_resume.store(false, std::memory_order_relaxed);
+	pause_in_capture.store(true, std::memory_order_relaxed);
+
+	std::atomic<int> paused_status { -1 };
+	std::thread client([&]() {
+		for (int i = 0; i < 2000 && !capture_reached.load(std::memory_order_acquire); ++i) {
+			usleep(1000);
+		}
+		if (capture_reached.load(std::memory_order_acquire)) {
+			paused_status.store(unix_http_status(socket_path), std::memory_order_relaxed);
+		}
+		capture_resume.store(true, std::memory_order_release);
+	});
+
+	int after_status = -1;
+	{
+		ProxySQL_RESTAPI_Server server(config, ping_endpoints());
+		client.join();
+		ok(paused_status.load(std::memory_order_relaxed) == 503,
+			"request during post-bind verification returns 503");
+		ok(ping_hits.load(std::memory_order_relaxed) == hits_before,
+			"handler is not invoked before ownership verification");
+		ok(server.is_running(), "listener keeps running after verified ownership");
+		after_status = unix_http_status(socket_path);
+	}
+	ok(after_status == 200 && ping_hits.load(std::memory_order_relaxed) == hits_before + 1,
+		"handler runs after the constructor releases the gate");
+
+	std::filesystem::remove_all(dir);
+#endif
+}
+
 // A failure after MHD has bound and listened must still remove the socket.
 // The cleanup also runs against the pinned parent FD: redirecting the parent
 // path between validation and cleanup must not delete a foreign socket.
@@ -555,7 +666,7 @@ static void test_unix_postbind_failure_and_parent_pinning() {
 }
 
 int main() {
-	plan(50);
+	plan(54);
 	if (test_init_minimal() != 0) {
 		ok(0, "test_init_minimal() succeeds");
 		return exit_status();
@@ -664,6 +775,7 @@ int main() {
 	}
 
 	test_unix_socket_tls_failure_cleanup();
+	test_dispatch_gate_until_ownership_verified();
 	test_unix_postbind_failure_and_parent_pinning();
 	test_unix_immediate_parent_policy();
 
