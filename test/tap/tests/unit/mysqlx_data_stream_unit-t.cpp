@@ -14,7 +14,8 @@ static void test_tls_data_before_shutdown(int version, size_t data_size) {
 	if (!peer_ctx || !client_ctx) BAIL_OUT("TLS context allocation failed");
 	SSL_CTX_set_min_proto_version(peer_ctx, version);
 	SSL_CTX_set_max_proto_version(peer_ctx, version);
-	SSL_CTX_set_verify(client_ctx, SSL_VERIFY_NONE, nullptr);
+	SSL_CTX_set_verify(client_ctx, SSL_VERIFY_PEER, nullptr);
+	X509_VERIFY_PARAM_set1_host(SSL_CTX_get0_param(client_ctx), "localhost", 0);
 	EVP_PKEY_CTX* key_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr);
 	EVP_PKEY* key = nullptr;
 	if (!key_ctx || EVP_PKEY_keygen_init(key_ctx) != 1 ||
@@ -35,6 +36,9 @@ static void test_tls_data_before_shutdown(int version, size_t data_size) {
 	if (X509_sign(cert, key, EVP_sha256()) <= 0 ||
 	    SSL_CTX_use_certificate(peer_ctx, cert) != 1 ||
 	    SSL_CTX_use_PrivateKey(peer_ctx, key) != 1) BAIL_OUT("TLS certificate setup failed");
+	if (X509_STORE_add_cert(SSL_CTX_get_cert_store(client_ctx), cert) != 1) {
+		BAIL_OUT("TLS test trust store setup failed");
+	}
 	X509_free(cert);
 	EVP_PKEY_free(key);
 
@@ -48,7 +52,7 @@ static void test_tls_data_before_shutdown(int version, size_t data_size) {
 	SSL_set_bio(peer, BIO_new(BIO_s_mem()), BIO_new(BIO_s_mem()));
 	SSL_set_accept_state(peer);
 	char bytes[16384];
-	auto flush_peer = [&]() {
+	auto flush_peer = [peer, &bytes, &fds]() {
 		int n;
 		while ((n = BIO_read(SSL_get_wbio(peer), bytes, sizeof(bytes))) > 0) {
 			if (send(fds[1], bytes, n, 0) != n) BAIL_OUT("TLS peer write failed");
@@ -79,6 +83,7 @@ static void test_tls_data_before_shutdown(int version, size_t data_size) {
 	if (data_size == sizeof(frames)) {
 		ok(received > 0, "application frames preceding close_notify are reported as data");
 		for (int i = 0; i < 2; ++i) {
+			ok(ds.read_from_net() > 0, "buffered frame %d remains readable after close_notify", i + 1);
 			ok(ds.has_complete_frame() && ds.front_frame() == MysqlxFrame(frames, frames + 5),
 			   "final application frame %d is preserved", i + 1);
 			ds.pop_frame();

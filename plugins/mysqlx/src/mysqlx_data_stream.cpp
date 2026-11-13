@@ -320,8 +320,9 @@ ssize_t MysqlxDataStream::read_from_net() {
 	}
 
 	if (encrypted_ && ssl_) {
-		// close_notify is EOF even if the peer keeps the TCP socket open.
-		if (SSL_get_shutdown(ssl_) & SSL_RECEIVED_SHUTDOWN) return 0;
+		// Drain frames already queued before close_notify before reporting EOF,
+		// including callers that read again between individual auth frames.
+		if (SSL_get_shutdown(ssl_) & SSL_RECEIVED_SHUTDOWN) return has_complete_frame() ? 1 : 0;
 		uint8_t net_buf[65536];
 		ssize_t r;
 		do {
