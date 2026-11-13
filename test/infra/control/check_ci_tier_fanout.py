@@ -8,6 +8,13 @@ import subprocess
 import yaml
 from ci_tier_conditions import condition_allows
 ROOT=Path(__file__).resolve().parents[3]
+# Preserve the historical coverage obligations when legacy shards split or
+# redundant runs are retired. Every replacement needs a lower-tier route.
+GROUP_REPLACEMENTS={
+    'legacy-g3': {'mysql84-g3'},
+    'legacy-g7': {'mysql57-core-g2','legacy-g6'},
+    'legacy-g8': {'mysql57-core-g1','legacy-g6'},
+}
 
 def version(value):
     match=re.search(r'(\d+)\.(\d+)\.(\d+)',value)
@@ -112,6 +119,8 @@ def matrix_source_allows(body, engines, row, inputs, tier, mode, allowed, runnab
 
 def validate_routes(rows,callers,engines,known_groups,migrated):
     """Validate all consumer structures and prove execution for local routes."""
+    migrated={destination for group in migrated
+              for destination in (GROUP_REPLACEMENTS.get(group,{group}) if group not in known_groups else {group})}
     errors=[];covered={'v30':set(),'v31':set()};identities=set()
     def allowed(condition,tier,mode,inputs,job,needs_results=None):
         try:return condition_allows(condition,tier,mode,inputs,job,needs_results)

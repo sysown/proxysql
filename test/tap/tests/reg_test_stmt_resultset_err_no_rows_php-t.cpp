@@ -43,4 +43,6 @@ int main(int argc, char** argv) {
 	diag("========================================================================");
 
 	ok(exec_res == EXIT_SUCCESS, "Test exited with code '%d'", exec_res);
+
+	return exit_status();
 }

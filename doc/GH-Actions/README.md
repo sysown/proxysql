@@ -235,7 +235,8 @@ git push / open PR
 
            CI-basictests         CI-selftests        CI-maketest
            CI-legacy-g1          CI-legacy-g2        CI-legacy-g2-genai
-           CI-legacy-g3          CI-legacy-g4        CI-legacy-g5
+           CI-legacy-g4          CI-legacy-g5        CI-legacy-g7
+           CI-legacy-g8
            CI-legacy-clickhouse-g1
            CI-mysql84-g1         CI-mysql84-g2       CI-mysql84-g3
            CI-mysql84-g4         CI-mysql84-g5
@@ -817,7 +818,7 @@ test/tap/groups/
 ```
 
 **Note:** the directory is named by the **base** group (`legacy`,
-`mysql84`, `unit-tests`). Subgroups like `legacy-g1`, `legacy-g3`,
+`mysql84`, `unit-tests`). Subgroups like `legacy-g1`, `legacy-g4`,
 `mysql84-g4`, `unit-tests-g1` do *not* have their own directories. They
 share their base group's infrastructure.
 
@@ -908,9 +909,10 @@ All chain off `workflow_run[completed]` on `CI-trigger`.
 | `CI-legacy-g1.yml` | `ci-legacy-g1.yml` | `legacy-g1` | mysql57, mariadb10, pgsql16 | `ubuntu22-tap_src` + `_test` | ✅ (new, PR #5597) |
 | `CI-legacy-g2.yml` | `ci-legacy-g2.yml` | `legacy-g2` | mysql57, mariadb10, pgsql16, clickhouse23 | `ubuntu22-tap_src` + `_test` | ✅ |
 | `CI-legacy-g2-genai.yml` | `ci-legacy-g2-genai.yml` | `legacy-g2` | mysql57, mariadb10, pgsql16, clickhouse23 | `ubuntu24-tap-genai-gcov_src` + `_test` | ✅ |
-| `CI-legacy-g3.yml` | `ci-legacy-g3.yml` | `legacy-g3` | mysql57, mariadb10, pgsql16 | `ubuntu22-tap_src` + `_test` | ✅ (new, PR #5597) |
 | `CI-legacy-g4.yml` | `ci-legacy-g4.yml` | `legacy-g4` | mysql57, mariadb10, pgsql16 | `ubuntu22-tap_src` + `_test` | ✅ |
 | `CI-legacy-g5.yml` | `ci-legacy-g5.yml` | `legacy-g5` | mysql57, mariadb10, pgsql16 | `ubuntu22-tap_src` + `_test` | ✅ (new, PR #5597) |
+| `CI-legacy-g7.yml` | `ci-legacy-g7.yml` | `mysql57-core-g2` | mysql57 (primary + two replicas) | Selected-tier handoff | ✅ |
+| `CI-legacy-g8.yml` | `ci-legacy-g8.yml` | `mysql57-core-g1` | mysql57 (primary + two replicas) | Selected-tier handoff | ✅ |
 | `CI-legacy-clickhouse-g1.yml` | `ci-legacy-clickhouse-g1.yml` | `legacy-clickhouse-g1` | mysql57, clickhouse23 | `ubuntu22-tap_src` + `_test` | ✅ |
 | `CI-mysql84-g1.yml` | `ci-mysql84-g1.yml` | `mysql84-g1` | mysql84 | `ubuntu22-tap_src` + `_test` | ✅ (new, PR #5597) |
 | `CI-mysql84-g2.yml` | `ci-mysql84-g2.yml` | `mysql84-g2` | mysql84 | `ubuntu22-tap_src` + `_test` | ✅ (new, PR #5597) |
@@ -2085,7 +2087,7 @@ until they do; if the last question stumped you, re-read
 | **reusable** | A `ci-*.yml` file on `GH-Actions` that declares `on: workflow_call` and contains the actual job body. |
 | **`workflow_run`** | A GitHub Actions trigger that fires when another workflow transitions state (`in_progress`, `completed`, etc.). The triggered file *must* live on the default branch to fire at all. |
 | **`workflow_call`** | A GitHub Actions trigger that lets a workflow be invoked by `uses: owner/repo/.github/workflows/x.yml@ref`. This is what makes a file a "reusable workflow". |
-| **BASE_GROUP** | The stem of a `TAP_GROUP` with its `-gN` suffix stripped (`legacy-g3` → `legacy`). Used to locate `test/tap/groups/<base>/{env.sh,infras.lst}`. |
+| **BASE_GROUP** | The stem of a `TAP_GROUP` with its `-gN` suffix stripped (`legacy-g4` → `legacy`). Used to locate `test/tap/groups/<base>/{env.sh,infras.lst}`. |
 | **build cache** | A set of four GitHub Actions cache entries (`_bin`, `_src`, `_test`, `_matrix`) produced by `CI-builds`, keyed by `{head_sha}_{matrix}`, consumed by downstream test workflows. |
 | **babysitter** | The `gh run watch` step in `ci-trigger.yml@GH-Actions` that blocks `CI-trigger`'s completion until `CI-builds` has finished. Ensures the build cache is populated before downstream test workflows fire. |
 | **Unified CI infra** | The `test/infra/control/*.bash` orchestration introduced in commit `ccf797a8c`. Everything new should route through this — the old `jenkins-build-scripts`-based workflows (CI-repltests, CI-shuntest, …) are legacy. |
