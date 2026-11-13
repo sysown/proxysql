@@ -708,7 +708,9 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	mcp_client_unit-t \
-	pgsql_waiter_list_unit-t
+	pgsql_waiter_list_unit-t \
+	dns_cache_unit-t \
+	aurora_monitor_decision_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
 UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t module_lifecycle_unit-t module_startup_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
