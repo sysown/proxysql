@@ -31,6 +31,7 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -1089,6 +1090,175 @@ static void test_eof_flushes_pending_batch_before_error() {
 	close(backend_fds[1]);
 }
 
+static void test_read_error_flushes_pending_batch_before_error() {
+	diag(">>> %s", __func__);
+	// A hard backend read error must not discard the frames already
+	// accumulated in the compression batch: they have to reach the
+	// client ahead of the plain ERROR 2013, in their original order.
+	int fds[2] = {-1, -1};
+	int backend_fds[2] = {-1, -1};
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0 ||
+	    socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds) != 0) {
+		for (int fd : {fds[0], fds[1], backend_fds[0], backend_fds[1]}) {
+			if (fd >= 0) close(fd);
+		}
+		BAIL_OUT("read-error regression: socketpair setup failed");
+	}
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	MysqlxSession sess;
+	sess.init(fds[0], &thr);
+	sess.to_process = true;
+
+	// Enable zstd with a high combine cap so the frames stay in the
+	// batch until the read error forces an explicit flush.
+	std::string capset = build_compression_capset("zstd_stream",
+	                                              /*with_combine_mixed=*/true,
+	                                              /*combine_mixed_value=*/true,
+	                                              /*with_max_combine=*/true,
+	                                              /*max_combine_value=*/100);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET,
+		reinterpret_cast<const uint8_t*>(capset.data()), capset.size());
+	sess.handler();
+	uint8_t cap_buf[4096];
+	try_read_x_frame_nonblocking(fds[1], cap_buf, sizeof(cap_buf)); // drain Ok
+	ok(sess.compression_combine_mixed_for_test() == true,
+	   "read-error regression: combine_mixed_messages negotiated");
+	ok(sess.compression_max_combine_for_test() == 100,
+	   "read-error regression: max_combine_messages = 100");
+
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_state(MysqlxConnection::IDLE);
+	conn->set_reusable(true);
+	sess.backend_conn() = conn;
+	sess.server_ds().init(XDS_BACKEND, backend_fds[0]);
+	sess.set_status(MysqlxSession::WAITING_SERVER_XMSG);
+	sess.set_response_state_for_test(RESP_WAITING_STMT_EXECUTE);
+	sess.to_process = true;
+
+	// Non-terminal ColumnMetaData followed by a legal Row. Both are
+	// compressible and must be batched rather than written immediately.
+	Mysqlx::Resultset::ColumnMetaData col;
+	col.set_type(Mysqlx::Resultset::ColumnMetaData::BYTES);
+	col.set_name(std::string(200, 'c'));
+	std::string col_ser;
+	col.SerializeToString(&col_ser);
+	Mysqlx::Resultset::Row row;
+	row.add_field(std::string(120, 'r'));
+	std::string row_ser;
+	row.SerializeToString(&row_ser);
+	ok(col_ser.size() >= 50 && row_ser.size() >= 50,
+	   "read-error regression: frames are compressible");
+	write_x_frame(backend_fds[1], Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA,
+		reinterpret_cast<const uint8_t*>(col_ser.data()), col_ser.size());
+	write_x_frame(backend_fds[1], Mysqlx::ServerMessages_Type_RESULTSET_ROW,
+		reinterpret_cast<const uint8_t*>(row_ser.data()), row_ser.size());
+
+	sess.handler();
+	ok(sess.compression_batch_count_for_test() == 2,
+	   "read-error regression: metadata+row are pending in the batch");
+
+	// An empty non-blocking tick (EAGAIN) must leave all session and
+	// batch state untouched.
+	sess.to_process = true;
+	sess.handler();
+	ok(sess.compression_batch_count_for_test() == 2,
+	   "read-error regression: EAGAIN preserves the pending batch");
+	uint8_t idle_buf[8192];
+	ssize_t idle_read = try_read_x_frame_nonblocking(fds[1], idle_buf, sizeof(idle_buf));
+	ok(idle_read < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) &&
+	   sess.client_write_buffer_for_test().empty(),
+	   "read-error regression: EAGAIN emits no client bytes");
+	ok(sess.backend_conn() == conn,
+	   "read-error regression: EAGAIN keeps the backend attached");
+	ok(sess.is_healthy(),
+	   "read-error regression: EAGAIN keeps the session healthy");
+
+	// Deterministically turn the backend descriptor into a write-only
+	// /dev/null so recv() returns ENOTSOCK, rather than EOF/EAGAIN.
+	int devnull = open("/dev/null", O_WRONLY);
+	ok(devnull >= 0, "read-error regression: opened write-only transport");
+	if (devnull < 0) {
+		BAIL_OUT("read-error regression: could not open /dev/null");
+	}
+	const int replaced = dup2(devnull, backend_fds[0]);
+	close(devnull);
+	ok(replaced == backend_fds[0],
+	   "read-error regression: backend descriptor replaced");
+	if (replaced != backend_fds[0]) {
+		BAIL_OUT("read-error regression: could not replace backend descriptor");
+	}
+	uint8_t probe;
+	const ssize_t probe_read = recv(backend_fds[0], &probe, 1, 0);
+	ok(probe_read < 0 && errno == ENOTSOCK,
+	   "read-error regression: backend recv fails with a hard socket error");
+
+	sess.to_process = true;
+	sess.handler();
+
+	ok(sess.compression_batch_count_for_test() == 0,
+	   "read-error regression: batch drained on hard read error");
+
+	uint8_t buf[8192];
+	ssize_t r1 = try_read_x_frame_nonblocking(fds[1], buf, sizeof(buf));
+	ok(r1 > 5 && buf[4] == Mysqlx::ServerMessages_Type_COMPRESSION,
+	   "read-error regression: buffered frames flushed as COMPRESSION before ERROR");
+	bool batch_flag_ok = false;
+	bool payload_ok = false;
+	if (r1 > 5 && buf[4] == Mysqlx::ServerMessages_Type_COMPRESSION) {
+		Mysqlx::Connection::Compression cmsg;
+		if (cmsg.ParseFromArray(buf + 5, static_cast<int>(r1 - 5))) {
+			batch_flag_ok = !cmsg.has_server_messages() && !cmsg.has_client_messages();
+			auto decoded = decompress_zstd(cmsg.payload());
+			auto framed = [](uint8_t type, const std::string& body) {
+				std::vector<uint8_t> out(5 + body.size());
+				uint32_t size = static_cast<uint32_t>(body.size()) + 1;
+				out[0] = size & 0xFF;
+				out[1] = (size >> 8) & 0xFF;
+				out[2] = (size >> 16) & 0xFF;
+				out[3] = (size >> 24) & 0xFF;
+				out[4] = type;
+				std::copy(body.begin(), body.end(), out.begin() + 5);
+				return out;
+			};
+			std::vector<uint8_t> expected =
+				framed(Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA, col_ser);
+			std::vector<uint8_t> row_frame =
+				framed(Mysqlx::ServerMessages_Type_RESULTSET_ROW, row_ser);
+			expected.insert(expected.end(), row_frame.begin(), row_frame.end());
+			payload_ok = decoded == expected;
+		}
+	}
+	ok(batch_flag_ok,
+	   "read-error regression: COMPRESSION holds a batched (unflagged) payload");
+	ok(payload_ok,
+	   "read-error regression: payload decompresses to metadata+row in order");
+
+	uint8_t err_buf[8192];
+	ssize_t r2 = try_read_x_frame_nonblocking(fds[1], err_buf, sizeof(err_buf));
+	ok(r2 > 5 && err_buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+	   "read-error regression: plain ERROR frame follows the batch");
+	bool code_ok = false;
+	if (r2 > 5 && err_buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
+		Mysqlx::Error err;
+		if (err.ParseFromArray(err_buf + 5, static_cast<int>(r2 - 5))) {
+			code_ok = (err.code() == 2013);
+		}
+	}
+	ok(code_ok, "read-error regression: terminal error is 2013");
+	ok(sess.backend_conn() == nullptr,
+	   "read-error regression: errored backend detached from session");
+	ok(thr.get_cached_connection_count() == 0,
+	   "read-error regression: errored backend was not cached");
+	ok(!sess.is_healthy(),
+	   "read-error regression: session marked unhealthy after read error");
+
+	close(fds[1]);
+	close(backend_fds[1]);
+}
+
 static void test_compress_passthrough_when_disabled() {
 	diag(">>> %s", __func__);
 	// Sanity: when compression hasn't been negotiated, the helper must
@@ -1121,7 +1291,7 @@ static void test_compress_passthrough_when_disabled() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(77);
+	plan(97);
 	diag("=== mysqlx_compression_unit-t starting ===");
 
 	test_capabilities_advertise_compression();
@@ -1141,6 +1311,7 @@ int main() {
 	test_compress_below_threshold_passthrough();
 	test_compress_combine_mixed_batches();
 	test_eof_flushes_pending_batch_before_error();
+	test_read_error_flushes_pending_batch_before_error();
 	test_compress_passthrough_when_disabled();
 
 	return exit_status();

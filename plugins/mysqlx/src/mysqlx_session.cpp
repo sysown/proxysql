@@ -1582,6 +1582,7 @@ void MysqlxSession::handler_waiting_server_msg() {
 	const bool backend_eof = (r == 0);
 	if (backend_eof && backend_conn_) backend_conn_->set_reusable(false);
 	if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+		flush_compression_batch();
 		send_error(2013, "Backend read error during query");
 		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
