@@ -483,7 +483,10 @@ void PgSQL_Data_Stream::shut_hard() {
 
 void PgSQL_Data_Stream::check_data_flow() {
 	// This does not apply to frontend data streams because response data is buffered during extended queries.
-	if ((myds_type != MYDS_FRONTEND) && (PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
+	// Nor to fast forward: during a COPY FROM the backend may send an error or a notice while client data
+	// is still queued for it, and the session relays that message to the client.
+	if ((myds_type != MYDS_FRONTEND) && !(sess && sess->session_fast_forward) &&
+		(PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
 		// there is data at both sides of the data stream: this is considered a fatal error
 		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a PgSQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len, queue_data(queueIN), PSarrayOUT->len, queue_data(queueOUT));
 		shut_soft();
