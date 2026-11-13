@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
+#include "Session_Scheduler.h"
 
 
 // Explicitly instantiate the required template class and member functions
@@ -506,6 +507,12 @@ void Base_Thread::tune_timeout_for_session_needs_pause(DS * myds) {
 template<typename T, typename DS>
 void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 	T* thr = static_cast<T*>(this);
+#ifdef PROXYSQL31
+	if (myds->myds_type == MYDS_FRONTEND && myds->sess && myds->sess->waiter_node.session) {
+		thr->mypolls.fds[n].events = waiter_client_poll_events();
+		return;
+	}
+#endif
 	if (myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
 		myds->set_pollout();
 	} else {

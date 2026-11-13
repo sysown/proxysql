@@ -4065,8 +4065,11 @@ void MySQL_Thread::enter_waiter(MySQL_Session *sess, unsigned hid) {
 	if (sess->waiter_node.session) return;
 	sess->waiter_node.session = sess;
 	sess->waiter_node.hid = hid;
-	if (sess->client_myds && sess->client_myds->poll_fds_idx >= 0)
-		drop_from_poll(sess->client_myds);
+	if (sess->client_myds && sess->client_myds->fd >= 0) {
+		const int idx = sess->client_myds->poll_fds_idx;
+		if (idx < 0) mypolls.add(waiter_client_poll_events(), sess->client_myds->fd, sess->client_myds, curtime);
+		else mypolls.fds[idx].events = waiter_client_poll_events();
+	}
 	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
 	waiter_lists.push_back(sess->waiter_node);
 }
@@ -4076,8 +4079,10 @@ void MySQL_Thread::leave_waiter(MySQL_Session *sess, bool restore_client) {
 	waiter_lists.unlink(sess->waiter_node);
 	if (waiter_lists.empty()) waiter_deadline_hint = 0;
 	sess->waiter_node = PgSQL_Waiter_Node{};
-	if (restore_client && sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0) {
-		mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
+	if (restore_client && sess->client_myds && sess->client_myds->fd >= 0) {
+		const int idx = sess->client_myds->poll_fds_idx;
+		if (idx < 0) mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
+		else mypolls.fds[idx].events = POLLIN | POLLOUT;
 	}
 }
 
@@ -4253,8 +4258,8 @@ int MySQL_Thread::run_ComputePollTimeout() {
 #ifdef PROXYSQL31
     if (tune_queued_work_poll_timeout(session_continuations, curtime, ttw)) return 0;
 	if (!waiter_lists.empty()) {
-		// Off-poll streams cannot republish their timeout after an unrelated
-		// wake. Preserve the configured retry interval and the client rearm.
+		// Waiters cannot republish their backend timeout on a client-only
+		// wake. Preserve the configured retry interval and input read rearm.
 		const auto elapsed = curtime >= last_b_rearm_us ? curtime - last_b_rearm_us : 0;
 		const int rearm_ms = elapsed < 50000 ? (50000 - elapsed + 999) / 1000 : 50;
 		ttw = std::min(ttw, std::min(std::max(1, mysql_thread___poll_timeout_on_failure), rearm_ms));
@@ -4388,13 +4393,16 @@ __run_skip_1:
 		if (b_rearm) {
 			last_b_rearm_us = curtime;
 			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
-				// Bound the scan by the real list size: a fixed cap would
-				// permanently skip the tail (never re-armed, never noticing a
-				// client disconnect) once a list grew past it.
+				// Periodically allow input reads for every waiter. Between
+				// these windows only terminal events should wake the worker.
 				for (auto *n = head; n; n = n->next) {
 					auto *sess = static_cast<MySQL_Session*>(n->session);
-					if (sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0)
-						mypolls.add(POLLIN, sess->client_myds->fd, sess->client_myds, curtime);
+					if (sess->client_myds && sess->client_myds->fd >= 0) {
+						const int idx = sess->client_myds->poll_fds_idx;
+						const short events = POLLIN | waiter_client_poll_events();
+						if (idx < 0) mypolls.add(events, sess->client_myds->fd, sess->client_myds, curtime);
+						else mypolls.fds[idx].events = events;
+					}
 				}
 				(void)waiter_count;
 			});
@@ -4518,12 +4526,11 @@ __run_skip_1:
 #ifdef PROXYSQL31
 			if (last_b_rearm_us == pre_poll_time) {
 				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
-					// Bound the scan by the real list size: a fixed cap would
-					// permanently skip the tail (never dropped from the poll
-					// set) once a list grew past it.
+					// End the read window without losing the disconnect watch.
 					for (auto *n = head; n; n = n->next) {
 						auto *sess = static_cast<MySQL_Session*>(n->session);
-						drop_from_poll(sess->client_myds);
+						if (sess->client_myds && sess->client_myds->poll_fds_idx >= 0)
+							mypolls.fds[sess->client_myds->poll_fds_idx].events = waiter_client_poll_events();
 					}
 					(void)waiter_count;
 				});
@@ -4784,6 +4791,14 @@ void MySQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 
 
 bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
+#ifdef PROXYSQL31
+	if (myds->myds_type == MYDS_FRONTEND && myds->sess && myds->sess->waiter_node.session &&
+		waiter_client_terminal(mypolls.fds[n].revents)) {
+		myds->shut_soft();
+		myds->sess->set_unhealthy();
+		return true;
+	}
+#endif
 				if (mypolls.fds[n].revents) {
 #ifdef IDLE_THREADS
 					if (myds->myds_type==MYDS_FRONTEND) {
