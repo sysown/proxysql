@@ -113,6 +113,11 @@ static const query_test single_statement_rejected[] = {
 // ---------------------------------------------------------------------------
 
 static const query_test still_allowed[] = {
+	// #6630: keyword substrings in identifiers and literals are not operations.
+	{ "Audit column aliases", "SELECT 1 AS date_created, 2 AS date_updated, 3 AS visit_start_date" },
+	{ "Quoted audit alias", "SELECT 1 AS `date_created`" },
+	{ "Keyword substrings", "SELECT 1 AS xcreate, 2 AS xstart, 3 AS restarted" },
+	{ "Keyword text literal", "SELECT 'CREATE UPDATE START' AS message" },
 	{ "Trailing semicolon: SELECT 1;",
 	  "SELECT 1;" },
 	{ "Trailing semicolon with whitespace",
