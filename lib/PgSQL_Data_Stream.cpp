@@ -680,6 +680,12 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 			}
 		}
 		else {
+			// Nothing to decrypt: n is recv()'s own result, so handle it as a plain read does.
+			// SSL_get_error() below would test errno, which recv() returning 0 leaves stale.
+			if (n == 0 || (n == -1 && errno != EINTR && errno != EAGAIN)) {
+				shut_soft();
+				return -1;
+			}
 			r = n;
 			//r += SSL_read (ssl, queue_w_ptr(queueIN), s);
 			//proxy_info("Read %d bytes from SSL\n", r);
