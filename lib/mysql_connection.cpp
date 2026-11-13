@@ -2841,7 +2841,15 @@ int MySQL_Connection::async_set_option(short event, bool mask) {
 
 void MySQL_Connection::async_free_result() {
 	PROXY_TRACE();
-	assert(mysql);
+	if (mysql == NULL) {
+		// A backend connect that timed out while the AWS IAM login was still suspended:
+		// clear_aws_iam_handshake_secret() closed the handle so the suspended
+		// mysql_real_connect_cont() frame cannot keep the token alive. RequestEnd() still
+		// reaches this function before the connection is destroyed; nothing was allocated
+		// for a connect, so there is nothing to free.
+		assert(async_state_machine == ASYNC_CONNECT_TIMEOUT);
+		return;
+	}
 	//assert(ret_mysql);
 	//assert(async_state_machine==ASYNC_QUERY_END);
 	// Compute the transaction status before freeing anything: 'mysql_stmt_free_result()' clears the
