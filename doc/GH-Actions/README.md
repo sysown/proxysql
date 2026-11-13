@@ -236,6 +236,7 @@ git push / open PR
            CI-basictests         CI-selftests        CI-maketest
            CI-legacy-g1          CI-legacy-g2        CI-legacy-g2-genai
            CI-legacy-g4          CI-legacy-g5        CI-legacy-g7
+           CI-legacy-g8
            CI-legacy-clickhouse-g1
            CI-mysql84-g1         CI-mysql84-g2       CI-mysql84-g3
            CI-mysql84-g4         CI-mysql84-g5
