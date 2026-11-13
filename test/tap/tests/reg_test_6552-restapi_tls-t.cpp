@@ -293,9 +293,16 @@ static string read_file(const string& path) {
 static bool write_file(const string& path, const string& data, mode_t mode) {
 	std::ofstream out(path, std::ios::out | std::ios::binary | std::ios::trunc);
 	if (!out.is_open()) return false;
+	// Restrict the mode before any bytes are written: the reload script embeds
+	// admin credentials and must never be observable under a wider mode.
+	if (chmod(path.c_str(), mode) != 0) {
+		const int saved_errno = errno;
+		out.close();
+		errno = saved_errno;
+		return false;
+	}
 	out.write(data.data(), static_cast<std::streamsize>(data.size()));
 	out.close();
-	chmod(path.c_str(), mode);
 	return out.good();
 }
 
@@ -394,10 +401,14 @@ public:
 		std::vector<char> template_path(template_value.begin(), template_value.end());
 		template_path.push_back('\0');
 		char* made = mkdtemp(template_path.data());
-		if (made != nullptr) {
-			path_ = made;
-			chmod(path_.c_str(), 0755);
+		if (made == nullptr) return;
+		if (chmod(made, 0755) != 0) {
+			const int saved_errno = errno;
+			rmdir(made);
+			errno = saved_errno;
+			return;
 		}
+		path_ = made;
 	}
 	~owned_fixture_tree() {
 		try {
@@ -788,7 +799,10 @@ static int configure_reload_route(
 		cl.admin_password, cl.admin_username, cl.admin_port,
 		cl.admin_username, cl.admin_port, fixture_runtime_dir.c_str()
 	);
-	if (content[0] == '\0' || !write_file(script, content, 0755)) {
+	// The script embeds admin credentials, so only its owner needs to execute it;
+	// write_file() applies 0700 before writing any bytes. The fixture tree owner
+	// shares its UID with the daemon (or the daemon runs as root).
+	if (content[0] == '\0' || !write_file(script, content, 0700)) {
 		diag("Cannot create /sync reload script %s", script.c_str());
 		return EXIT_FAILURE;
 	}
