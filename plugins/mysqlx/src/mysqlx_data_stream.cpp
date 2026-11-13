@@ -320,6 +320,8 @@ ssize_t MysqlxDataStream::read_from_net() {
 	}
 
 	if (encrypted_ && ssl_) {
+		// close_notify is EOF even if the peer keeps the TCP socket open.
+		if (SSL_get_shutdown(ssl_) & SSL_RECEIVED_SHUTDOWN) return 0;
 		uint8_t net_buf[65536];
 		ssize_t r;
 		do {
@@ -337,9 +339,9 @@ ssize_t MysqlxDataStream::read_from_net() {
 			feed_bytes(plain_buf, static_cast<size_t>(decrypted));
 		}
 		if (decrypted == 0) {
-			// SSL_read returning 0 is a clean TLS shutdown (close_notify).
-			// Surface it as a connection close, not as WANT_IO.
-			return 0;
+			// A final application frame can share this read with close_notify.
+			// Let the caller drain it before reporting EOF on the next read.
+			return has_complete_frame() ? r : 0;
 		}
 		if (decrypted < 0) {
 			mysqlx_ssl_status st = get_ssl_status(ssl_, decrypted);

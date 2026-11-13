@@ -79,6 +79,9 @@ bool MysqlxConnection::is_reusable() const {
 	// have forgotten to translate into set_reusable(false).
 	if (state_ == ERROR_STATE || state_ == CLOSED) return false;
 	if (auth_state_ == BACKEND_AUTH_ERROR) return false;
+	// A final response may be drained after close_notify; never pool that peer.
+	if (backend_ds_.get_ssl() &&
+	    (SSL_get_shutdown(backend_ds_.get_ssl()) & SSL_RECEIVED_SHUTDOWN)) return false;
 	// Caller-marked: in_transaction_ or has_prepared_stmt_ being true
 	// means the next session picking up this connection from the pool
 	// would inherit session-scoped state.

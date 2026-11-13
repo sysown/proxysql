@@ -480,6 +480,14 @@ handler_again:
 		default: break;
 	}
 
+	// Frames preceding close_notify may not finish the response. Consume the
+	// deferred EOF now; the peer can leave TCP open without another poll event.
+	if ((status_ == WAITING_SERVER_XMSG || status_ == X_SESSION_RESET_WAITING) &&
+	    server_ds().get_ssl() &&
+	    (SSL_get_shutdown(server_ds().get_ssl()) & SSL_RECEIVED_SHUTDOWN)) {
+		to_process = true;
+	}
+
 	if (to_process) {
 		to_process = false;
 		// Don't loop into the X-Protocol dispatch once we've entered

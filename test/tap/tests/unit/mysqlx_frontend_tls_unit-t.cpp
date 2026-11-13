@@ -30,12 +30,14 @@
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_session.pb.h"
 #include "mysqlx_datatypes.pb.h"
+#include "mysqlx_notice.pb.h"
 #include "mysqlx_sql.pb.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <future>
 #include <poll.h>
 #include <string>
 #include <thread>
@@ -968,6 +970,8 @@ struct BackendProbe {
 	std::atomic<bool> saw_execute { false };
 	std::string mechanism;
 	std::string auth_data;
+	bool terminal_response = true;
+	std::promise<void> release_socket;
 };
 
 static bool fd_read_exact(int fd, uint8_t* out, size_t len) {
@@ -1116,17 +1120,38 @@ static void backend_probe_thread(int listen_fd, SSL_CTX* server_ctx, BackendProb
 			ok = false;
 		}
 	}
+	// Buffer the final response and TLS shutdown together before writing to TCP.
+	BIO* final_output = BIO_new(BIO_s_mem());
+	SSL_set0_wbio(ssl, final_output);
 	if (ok) {
 		if (ssl_read_frame(ssl, &type, &payload) &&
 		    type == Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE) {
 			probe->saw_execute = true;
-			ok = ssl_write_frame(ssl, Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK, "");
+			if (probe->terminal_response) {
+				ok = ssl_write_frame(ssl, Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK, "");
+			} else {
+				Mysqlx::Notice::Frame notice;
+				notice.set_type(Mysqlx::Notice::Frame_Type_WARNING);
+				notice.SerializeToString(&payload);
+				ok = ssl_write_frame(ssl, Mysqlx::ServerMessages_Type_NOTICE, payload);
+			}
 		} else {
 			ok = false;
 		}
 	}
 	probe->ok = ok;
 	SSL_shutdown(ssl);
+	std::vector<uint8_t> final_bytes;
+	uint8_t buffer[16384];
+	int n;
+	while ((n = BIO_read(final_output, buffer, sizeof(buffer))) > 0) {
+		final_bytes.insert(final_bytes.end(), buffer, buffer + n);
+	}
+	probe->ok = ok && write_all(fd, final_bytes.data(), final_bytes.size());
+	// Receiving close_notify must suffice: the worker cannot rely on TCP EOF
+	// to finish an incomplete response. The client releases this socket after
+	// checking its result; the timeout only bounds a broken test fixture.
+	probe->release_socket.get_future().wait_for(std::chrono::seconds(30));
 	SSL_free(ssl);
 	close(fd);
 }
@@ -1169,8 +1194,8 @@ static int start_tcp_listener(int* port_out) {
 	return fd;
 }
 
-static void test_worker_progress_without_frontend_wakeups() {
-	diag(">>> %s", __func__);
+static void test_worker_progress_without_frontend_wakeups(bool terminal_response) {
+	diag(">>> %s, terminal response %d", __func__, terminal_response);
 	// The route endpoint is the numeric address 127.0.0.1. The peer leaf
 	// carries an IP SAN for it and is in the shared context's trust store,
 	// so this positive worker test also proves start_connect() carries the
@@ -1208,6 +1233,7 @@ static void test_worker_progress_without_frontend_wakeups() {
 	}
 
 	BackendProbe probe;
+	probe.terminal_response = terminal_response;
 	std::thread backend_thread(backend_probe_thread, backend_listener, peer_ctx, &probe);
 
 	MysqlxConfigStore store;
@@ -1308,7 +1334,7 @@ static void test_worker_progress_without_frontend_wakeups() {
 	std::string last_error_state;
 	bool saw_error = false;
 	SslReadDiag read_diag {};
-	for (int i = 0; i < 2000 && !got_result; ++i) {
+	for (int i = 0; i < 2000 && !got_result && !saw_error; ++i) {
 		uint8_t type = 0;
 		std::string payload;
 		if (!ssl_read_frame(client_ssl, &type, &payload, &read_diag)) break;
@@ -1332,8 +1358,15 @@ static void test_worker_progress_without_frontend_wakeups() {
 			}
 		}
 	}
-	ok(got_result, "worker-progress: query result arrived without extra frontend events");
-	if (!got_result) {
+	const bool expected_result = terminal_response ? got_result && !saw_error
+		: !got_result && saw_error && last_error_code == 2013;
+	ok(expected_result, "worker-progress: %s arrived without extra frontend events or TCP EOF",
+	   terminal_response ? "query result" : "incomplete-response error");
+	if (!terminal_response) {
+		ok(seen_count >= 2 && seen_types[0] == Mysqlx::ServerMessages_Type_NOTICE,
+		   "worker-progress: notice preceding shutdown was forwarded before the error");
+	}
+	if (!expected_result) {
 		std::string seen;
 		for (size_t k = 0; k < seen_count; ++k) {
 			if (!seen.empty()) seen += ',';
@@ -1352,6 +1385,7 @@ static void test_worker_progress_without_frontend_wakeups() {
 		     last_error_state.empty() ? "-" : last_error_state.c_str());
 	}
 
+	probe.release_socket.set_value();
 	backend_thread.join();
 	ok(probe.ok.load() && probe.saw_execute.load(),
 	   "worker-progress: backend completed connect/TLS/auth/query");
@@ -1381,7 +1415,8 @@ int main() {
 	test_plain_without_tls_rejected();
 	test_mapped_plain_secret_selection();
 	test_mapped_plain_empty_secret_selection();
-	test_worker_progress_without_frontend_wakeups();
+	test_worker_progress_without_frontend_wakeups(true);
+	test_worker_progress_without_frontend_wakeups(false);
 
 	test_cleanup_minimal();
 	return exit_status();
