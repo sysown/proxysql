@@ -29,6 +29,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <chrono>
@@ -54,6 +55,8 @@ static const std::string SEQ = TBL + "_rows";
 static const std::string FN = TBL + "_count";
 
 static const int STREAM_SECONDS = 8;
+// The writer blocks in libpq: past this, its connection is cut so the test fails instead of hanging.
+static const int WRITER_MAX_S = STREAM_SECONDS + 60;
 static const char ROW[] = "a\tb\tc\n";
 // A one-row CopyData message is 11 bytes: 680 of them make one 7480-byte TLS record per flush.
 static const int ROWS_PER_FLUSH = 680;
@@ -198,6 +201,7 @@ static void stream_case(const std::string& what, PGconn* setup) {
 	long long rows_sent = 0;
 	bool copy_ok = false;
 	long end_to_result_ms = -1;
+	const int streamer_fd = PQsocket(streamer.get());
 	std::thread writer([&]() {
 		PGconn* c = streamer.get();
 		const auto stop = Clock::now() + std::chrono::seconds(STREAM_SECONDS);
@@ -223,7 +227,14 @@ static void stream_case(const std::string& what, PGconn* setup) {
 
 	long max_probe_ms = 0;
 	int probe_queries = 0, probe_failures = 0;
+	const auto writer_deadline = Clock::now() + std::chrono::seconds(WRITER_MAX_S);
+	bool writer_cut = false;
 	while (streaming) {
+		if (!writer_cut && Clock::now() > writer_deadline) {
+			diag("%s: the writer is still blocked after %d s; cutting its connection", what.c_str(), WRITER_MAX_S);
+			shutdown(streamer_fd, SHUT_RDWR);
+			writer_cut = true;
+		}
 		for (auto& p : probes) {
 			const auto t0 = Clock::now();
 			if (queryOneValue(p.get(), "SELECT 1") != "1") probe_failures++;

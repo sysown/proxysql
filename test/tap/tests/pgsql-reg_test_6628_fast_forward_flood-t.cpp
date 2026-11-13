@@ -143,38 +143,40 @@ static bool setFastForward(PGconn* admin, bool on) {
 		&& execSQL(admin, "LOAD PGSQL USERS TO RUNTIME");
 }
 
-struct ServerRow { std::string hostname, port, max_connections, use_ssl, comment; };
+// A hostgroup no server is in, used to move the servers out of BACKEND_HG for a moment.
+static const int SPARE_HG = 9628;
+
+struct ServerRow { std::string hostname, port, use_ssl; };
 
 static std::vector<ServerRow> readServers(PGconn* admin) {
 	std::vector<ServerRow> rows;
 	PGresult* res = PQexec(admin,
-		("SELECT hostname, port, max_connections, use_ssl, COALESCE(comment,'') FROM pgsql_servers"
-		 " WHERE hostgroup_id=" + std::to_string(BACKEND_HG)).c_str());
+		("SELECT hostname, port, use_ssl FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(BACKEND_HG)).c_str());
 	if (PQresultStatus(res) == PGRES_TUPLES_OK) {
 		for (int i = 0; i < PQntuples(res); i++)
-			rows.push_back(ServerRow { PQgetvalue(res,i,0), PQgetvalue(res,i,1), PQgetvalue(res,i,2),
-			                           PQgetvalue(res,i,3), PQgetvalue(res,i,4) });
+			rows.push_back(ServerRow { PQgetvalue(res,i,0), PQgetvalue(res,i,1), PQgetvalue(res,i,2) });
 	}
 	PQclear(res);
 	return rows;
 }
 
-// Deleting the servers drops every pooled connection to them, so the next query opens a fresh one under
-// the use_ssl and backend protocol set now. use_ssl < 0 puts back each row's own value.
+// Taking the servers out of the hostgroup drops every pooled connection to them, so the next query opens a
+// fresh one under the use_ssl and backend protocol set now. use_ssl < 0 puts back each row's own value.
+// Moving the rows keeps every other column as it was.
 static bool reloadServers(PGconn* admin, const std::vector<ServerRow>& rows, int use_ssl) {
 	if (rows.empty()) return false;
-	if (!execSQL(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(BACKEND_HG))) return false;
-	if (!execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
-	for (const auto& r : rows) {
-		std::string ins = "INSERT INTO pgsql_servers (hostgroup_id,hostname,port,max_connections,use_ssl,comment)"
-			" VALUES (" + std::to_string(BACKEND_HG) + ",'" + r.hostname + "'," + r.port + ","
-			+ (r.max_connections.empty() ? std::string("1000") : r.max_connections) + ","
-			+ (use_ssl < 0 ? r.use_ssl : std::to_string(use_ssl)) + ",'" + r.comment + "')";
-		if (!execSQL(admin, ins)) return false;
-	}
-	if (!execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
+	const std::string hg = std::to_string(BACKEND_HG), spare = std::to_string(SPARE_HG);
+	bool good = true;
+	for (const auto& r : rows)
+		good = execSQL(admin, "UPDATE pgsql_servers SET use_ssl=" + (use_ssl < 0 ? r.use_ssl : std::to_string(use_ssl))
+			+ " WHERE hostgroup_id=" + hg + " AND hostname='" + r.hostname + "' AND port=" + r.port) && good;
+	good = execSQL(admin, "UPDATE pgsql_servers SET hostgroup_id=" + spare + " WHERE hostgroup_id=" + hg)
+		&& execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME") && good;
+	// Moved back even if a step above failed, so the hostgroup is not left empty.
+	good = execSQL(admin, "UPDATE pgsql_servers SET hostgroup_id=" + hg + " WHERE hostgroup_id=" + spare)
+		&& execSQL(admin, "LOAD PGSQL SERVERS TO RUNTIME") && good;
 	usleep(300000);
-	return true;
+	return good;
 }
 
 static void wait_socket(int fd, bool for_write, int ms) {
@@ -410,7 +412,9 @@ static void vanish_case(const std::string& what, const char* sslmode, PGconn* ho
 		c.reset();
 		query(holder, "COMMIT");
 	}
-	const bool gone = !pid.empty() && wait_for([&]() { return copy_pid(be) != pid; }, GONE_S);
+	// The backend itself must go: a COPY ended but its connection kept, or pooled, still has this pid.
+	const bool gone = !pid.empty() && wait_for([&]() {
+		return queryOneValue(be, "SELECT count(*) FROM pg_stat_activity WHERE pid=" + pid) == "0"; }, GONE_S);
 	ok(gone, "%s: once the backend catches up, its connection is closed (backend pid %s; watched for %d s)",
 		w.c_str(), pid.empty() ? "not found" : pid.c_str(), GONE_S);
 	PGConnPtr n = open_client_conn(sslmode);

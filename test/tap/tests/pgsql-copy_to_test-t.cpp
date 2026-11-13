@@ -686,34 +686,22 @@ static std::string startCopy(PGconn* admin, PGconn* be, const CopyKind& k, pid_t
 	return pid;
 }
 
-struct ServerStatus { std::string host, port, status; };
+// A hostgroup no server is in, used to move the servers out of HG for a moment.
+static const int SPARE_HG = 9628;
 
-static std::vector<ServerStatus> readStatuses(PGconn* admin) {
-	std::vector<ServerStatus> rows;
-	PGresult* r = PQexec(admin, ("SELECT hostname, port, status FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(HG)).c_str());
-	if (PQresultStatus(r) == PGRES_TUPLES_OK)
-		for (int i = 0; i < PQntuples(r); i++) rows.push_back({ PQgetvalue(r, i, 0), PQgetvalue(r, i, 1), PQgetvalue(r, i, 2) });
-	PQclear(r);
-	return rows;
-}
-
-static bool setStatuses(PGconn* admin, const std::vector<ServerStatus>& rows) {
-	for (const auto& s : rows)
-		if (!execOk(admin, "UPDATE pgsql_servers SET status='" + s.status + "' WHERE hostgroup_id=" + std::to_string(HG)
-			+ " AND hostname='" + s.host + "' AND port=" + s.port)) return false;
-	return execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME");
-}
-
-// Asks ProxySQL to drop the hostgroup's free connections, so the next ones are opened in the backend
-// mode now set, then puts the saved statuses back. OFFLINE_HARD only marks the server; its free
-// connections go on a later maintenance pass, so this is not a guaranteed flush. The mode check in
-// runMode() catches a run that tested the wrong mode.
-static bool flushPool(PGconn* admin, const std::vector<ServerStatus>& saved) {
-	std::vector<ServerStatus> off = saved;
-	for (auto& s : off) s.status = "OFFLINE_HARD";
-	const bool good = setStatuses(admin, off) && setStatuses(admin, saved);
+// Drops the hostgroup's free connections, so the next ones are opened in the backend mode now set.
+// A server taken out of the hostgroup has them dropped at once. OFFLINE_HARD would leave them to a
+// later maintenance pass, which skips the server once its status is back to ONLINE. Moving the rows
+// keeps every column as it was.
+static bool flushPool(PGconn* admin) {
+	const std::string hg = std::to_string(HG), spare = std::to_string(SPARE_HG);
+	const bool out = execOk(admin, "UPDATE pgsql_servers SET hostgroup_id=" + spare + " WHERE hostgroup_id=" + hg)
+		&& execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	// Moved back even if the step above failed, so the hostgroup is not left empty.
+	const bool back = execOk(admin, "UPDATE pgsql_servers SET hostgroup_id=" + hg + " WHERE hostgroup_id=" + spare)
+		&& execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME");
 	usleep(300000);
-	return good;
+	return out && back;
 }
 
 static void cleanupRole(PGconn* admin, PGconn* be) {
@@ -817,8 +805,8 @@ static void run(PGconn* admin, bool native_supported) {
 	const std::vector<std::string> modes = native_supported ? std::vector<std::string> { "libpq", "native" } : std::vector<std::string> { "libpq" };
 	const std::string saved_retries = runtimeVar(admin, "pgsql-query_retries_on_failure");
 	const std::string saved_native = runtimeVar(admin, "pgsql-use_native_backend_protocol");
-	const std::vector<ServerStatus> saved_status = readStatuses(admin);
-	if (saved_status.empty()) { BAIL_OUT("no pgsql_servers rows in hostgroup %d", HG); return; }
+	const std::string servers = scalar(admin, "SELECT count(*) FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(HG));
+	if (servers.empty() || servers == "0") { BAIL_OUT("no pgsql_servers rows in hostgroup %d", HG); return; }
 
 	cleanupLeftovers(admin, be.get());  // roles left by aborted runs
 	const bool role_ok = execOk(be.get(), std::string("CREATE ROLE ") + USER + " LOGIN PASSWORD '" + PASS + "'")
@@ -839,14 +827,14 @@ static void run(PGconn* admin, bool native_supported) {
 	if (role_ok) {
 		for (const auto& mode : modes) {
 			if (native_supported) setVar(admin, "pgsql-use_native_backend_protocol", mode == "native" ? "true" : "false");
-			flushPool(admin, saved_status);
+			flushPool(admin);
 			runMode(admin, be.get(), mode);
 		}
 	}
 
 	if (!saved_retries.empty()) setVar(admin, "pgsql-query_retries_on_failure", saved_retries);
 	if (native_supported && !saved_native.empty()) setVar(admin, "pgsql-use_native_backend_protocol", saved_native);
-	flushPool(admin, saved_status);  // nothing of this test's role stays pooled
+	flushPool(admin);  // nothing of this test's role stays pooled
 	cleanupRole(admin, be.get());
 	diag(">>>> Done <<<<");
 }
