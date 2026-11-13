@@ -550,11 +550,13 @@ void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 		// still reports POLLHUP and POLLERR.
 		if (myds->myds_type==MYDS_FRONTEND && myds->sess->status==FAST_FORWARD &&
 			myds->sess->mybe && myds->sess->mybe->server_myds) {
-			const PtrSizeArray* out = myds->sess->mybe->server_myds->PSarrayOUT;
+			const PgSQL_Data_Stream* be = myds->sess->mybe->server_myds;
+			const PtrSizeArray* out = be->PSarrayOUT;
 			const uint64_t limit = overflow_safe_multiply<4,unsigned int>(pgsql_thread___threshold_resultset_size);
+			// The message being copied into the send buffer has left PSarrayOUT, but is held whole until then.
+			uint64_t bytes = be->queueOUT.partial ? be->queueOUT.pkt.size : 0;
 			// The count bounds the per-message costs of tiny messages, the bytes the memory of big ones.
-			bool over = (uint64_t)out->len * PGSQL_RESULTSET_BUFLEN > limit;
-			uint64_t bytes = 0;
+			bool over = bytes > limit || (uint64_t)out->len * PGSQL_RESULTSET_BUFLEN > limit;
 			for (unsigned int i = 0; !over && i < out->len; i++) {
 				bytes += out->pdata[i].size;
 				over = bytes > limit;
