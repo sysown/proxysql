@@ -19,6 +19,7 @@
 #include "noise_utils.h"
 #include "tap.h"
 #include "utils.h"
+#include "pgsql_native_tier.h"
 
 CommandLine cl;
 
@@ -1252,6 +1253,518 @@ void testCopyOverTlsBackend() {
     diag(">>>> Done <<<<");
 }
 
+/**
+ * Regression #6628: a backend that answers during COPY FROM STDIN must reach the client and leave the
+ * connection usable.
+ *
+ * During a COPY FROM STDIN ProxySQL relays raw bytes, and the backend may answer while client data is
+ * still queued for it: a NOTICE, or an error that ends the COPY early (a bad row, a cancel). ProxySQL
+ * used to close the session then ("Data at both ends of a PgSQL data stream"). Once such answers were
+ * let through, an early end could leave a CopyData message half sent: going back to normal mode
+ * dropped the rest of it, and the backend read the client's next query as that rest. The query then
+ * hung, or the backend failed with "invalid frontend message type".
+ *
+ * The cases stream 256 KB CopyData messages, so that one is likely to be half sent when the backend
+ * answers, then:
+ *  - a row raises an error: the client must get it (P0001). Also with the error on the very first row,
+ *    and with 4 MB messages;
+ *  - the backend is held on its first row and the COPY is cancelled, or runs into statement_timeout:
+ *    the client must get 57014;
+ *  - the client gives up with a CopyFail while its data is still queued: it must get 57014;
+ *  - the backend is killed: the client must get an error at once, and a new session work;
+ *  - every message has a row that raises a NOTICE: each must reach the client, and the COPY complete.
+ * After an error the connection must keep working, for a simple query and for a pipeline of extended
+ * queries (which the native protocol sends as one batch), and a full COPY on it must deliver every row.
+ * Inside a transaction the next query must fail with 25P02, which only the same backend can answer, and
+ * work after ROLLBACK. Each case runs over plain and TLS client connections, with a plain and then a TLS
+ * backend connection, over the libpq and the native backend protocol (native only where the build has it).
+ * Where the build has the fast forward traffic observer (FFTO), an error, a cancel in a transaction and the
+ * NOTICEs run again with it on: it reads every message ProxySQL relays, including the reply held back
+ * until a half-sent message is finished.
+ */
+namespace early_end {
+
+static const std::string TBL = "copy_early_end_" + std::to_string(getpid());
+static const std::string SEQ = TBL + "_rows";
+static const std::string FN = TBL + "_trg";
+static const std::string LOCK_KEY = std::to_string(880000000LL + getpid());
+// Rows as small as a bulk load's keep the backend slower than the client, so client data stays queued.
+static const std::string ROW = "x\t" + std::string(61, 'y') + "\n";
+static const size_t MSG_BYTES = 256 * 1024;
+static const size_t BIG_MSG_BYTES = 4 << 20;
+static const int RESULT_TIMEOUT_S = 60;
+static const int QUERY_TIMEOUT_S = 10;
+// A client whose backend was killed gets the error within this.
+static const double ERROR_MAX_S = 5.0;
+// Per backend protocol: 2 backend modes x (2 + 2 client modes x 25 checks, see run()); with FFTO on, 9
+// checks per client mode.
+static const int TESTS_PER_PROTOCOL = 2 * (2 + 2 * 25);
+static const int FFTO_TESTS_PER_PROTOCOL = 2 * (2 + 2 * 9);
+
+using Clock = std::chrono::steady_clock;
+
+static std::string make_msg(const std::string& first_row, size_t bytes = MSG_BYTES) {
+    std::string m = first_row;
+    while (m.size() + ROW.size() <= bytes) m += ROW;
+    return m;
+}
+
+static void wait_socket(int fd, bool for_write, int ms) {
+    struct pollfd pfd = { fd, (short)(POLLIN | (for_write ? POLLOUT : 0)), 0 };
+    poll(&pfd, 1, ms);
+}
+
+// Sends what libpq holds, reading meanwhile: the server may be blocked sending to us.
+static bool flush_all(PGconn* c, Clock::time_point stop) {
+    int f;
+    while ((f = PQflush(c)) == 1) {
+        if (Clock::now() > stop || PQsocket(c) < 0) return false;
+        wait_socket(PQsocket(c), true, 50);
+        if (PQconsumeInput(c) == 0) return false;
+    }
+    return f == 0;
+}
+
+// Queues msg for 'seconds', a message at a time once libpq has sent the previous ones. Returns how many.
+static long stream_for(PGconn* c, const std::string& msg, int seconds) {
+    const auto stop = Clock::now() + std::chrono::seconds(seconds);
+    long n = 0;
+    while (Clock::now() < stop && flush_all(c, stop)) {
+        if (PQconsumeInput(c) == 0 || PQputCopyData(c, msg.data(), (int)msg.size()) != 1) break;
+        n++;
+    }
+    return n;
+}
+
+// Reads results until the command is done. Returns "" on success, "ERR <sqlstate>" on an error,
+// "COPY_IN" when a COPY FROM STDIN starts, or "timeout". *val gets the first value of a row result.
+static std::string collect(PGconn* c, int timeout_s, std::string* val = nullptr) {
+    const auto stop = Clock::now() + std::chrono::seconds(timeout_s);
+    std::string out;
+    for (;;) {
+        if (!flush_all(c, stop)) return Clock::now() > stop ? "timeout" : "ERR connection lost";
+        PQconsumeInput(c);
+        while (PQisBusy(c) == 0) {
+            PGresult* r = PQgetResult(c);
+            if (r == nullptr) return out;
+            const ExecStatusType st = PQresultStatus(r);
+            if (st == PGRES_COPY_IN) {
+                PQclear(r);
+                return "COPY_IN";
+            }
+            if (st == PGRES_FATAL_ERROR) {
+                const char* s = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+                out = std::string("ERR ") + (s ? s : "(no SQLSTATE)");
+            } else if (st == PGRES_TUPLES_OK && val && PQntuples(r) > 0) {
+                *val = PQgetvalue(r, 0, 0);
+            }
+            PQclear(r);
+        }
+        if (PQsocket(c) < 0 || PQstatus(c) == CONNECTION_BAD) return "ERR connection lost";
+        if (Clock::now() > stop) return "timeout";
+        wait_socket(PQsocket(c), false, 50);
+    }
+}
+
+// Every query in the cases goes through here, with a time limit: a broken build leaves a backend out of
+// step, and ProxySQL may hand it to the next session, where a blocking PQexec() would wait forever.
+static std::string query(PGconn* c, const std::string& q) {
+    PQsetnonblocking(c, 1);
+    if (PQsendQuery(c, q.c_str()) != 1) return std::string("ERR send: ") + PQerrorMessage(c);
+    std::string v;
+    const std::string st = collect(c, QUERY_TIMEOUT_S, &v);
+    return st.empty() ? v : st;
+}
+
+static bool start_copy(PGconn* c) {
+    const std::string st = query(c, "COPY " + TBL + " FROM STDIN");
+    if (st != "COPY_IN") diag("COPY did not start: %s", st.c_str());
+    return st == "COPY_IN";
+}
+
+// errormsg != nullptr sends a CopyFail instead of a CopyDone.
+static std::string end_copy(PGconn* c, const char* errormsg = nullptr) {
+    const auto stop = Clock::now() + std::chrono::seconds(RESULT_TIMEOUT_S);
+    int r;
+    while ((r = PQputCopyEnd(c, errormsg)) == 0) {
+        if (!flush_all(c, stop)) return Clock::now() > stop ? "timeout" : "ERR connection lost";
+    }
+    if (r < 0) return std::string("ERR copy end: ") + PQerrorMessage(c);
+    return collect(c, RESULT_TIMEOUT_S);
+}
+
+static void count_notice(void* arg, const char* message) {
+    if (strstr(message, "copy notice")) ++*static_cast<long*>(arg);
+}
+
+// Two pipelined extended queries and a Sync: the native protocol sends them as one batch. Returns their
+// values joined by ',', or what went wrong.
+static std::string pipeline_pair(PGconn* c) {
+    PQsetnonblocking(c, 1);
+    const char* one[1] = { "1" };
+    const char* two[1] = { "2" };
+    if (PQenterPipelineMode(c) != 1 || PQsendQueryParams(c, "SELECT $1::int", 1, nullptr, one, nullptr, nullptr, 0) != 1
+        || PQsendQueryParams(c, "SELECT $1::int", 1, nullptr, two, nullptr, nullptr, 0) != 1 || PQpipelineSync(c) != 1)
+        return std::string("ERR pipeline: ") + PQerrorMessage(c);
+    const auto stop = Clock::now() + std::chrono::seconds(QUERY_TIMEOUT_S);
+    std::string out;
+    for (;;) {
+        if (!flush_all(c, stop)) return Clock::now() > stop ? "timeout" : "ERR connection lost";
+        PQconsumeInput(c);
+        int nulls = 0;
+        while (PQisBusy(c) == 0 && nulls < 2) {
+            PGresult* r = PQgetResult(c);
+            if (r == nullptr) { nulls++; continue; }
+            nulls = 0;
+            const ExecStatusType st = PQresultStatus(r);
+            if (st == PGRES_PIPELINE_SYNC) {
+                PQclear(r);
+                if (PQexitPipelineMode(c) != 1) return std::string("ERR exit pipeline: ") + PQerrorMessage(c);
+                return out;
+            }
+            if (st == PGRES_TUPLES_OK && PQntuples(r) == 1) {
+                out += (out.empty() ? "" : ",") + std::string(PQgetvalue(r, 0, 0));
+            } else {
+                const char* e = PQresultErrorField(r, PG_DIAG_SQLSTATE);
+                out += (out.empty() ? "" : ",") + std::string("ERR ") + (e ? e : PQresStatus(st));
+            }
+            PQclear(r);
+        }
+        if (PQsocket(c) < 0 || PQstatus(c) == CONNECTION_BAD) return "ERR connection lost";
+        if (Clock::now() > stop) return "timeout";
+        wait_socket(PQsocket(c), false, 50);
+    }
+}
+
+// "1|1,2" when a simple query and a batch of extended queries both work on c.
+static std::string works(PGconn* c) {
+    const std::string v = query(c, "SELECT 1");
+    return v + "|" + pipeline_pair(c);
+}
+static const char* WORKS = "1|1,2";
+
+// The backend running this test's COPY ("" when none does).
+static std::string copy_pid(PGconn* be) {
+    return tlsQueryOneValue(be, "SELECT pid FROM pg_stat_activity WHERE query LIKE 'COPY " + TBL + "%' AND state='active' LIMIT 1");
+}
+
+static PGConnPtr open_direct_backend() {
+    std::stringstream ss;
+    ss << "host=" << cl.pgsql_server_host << " port=" << cl.pgsql_server_port << " user=" << cl.pgsql_server_username
+       << " password=" << cl.pgsql_server_password << " dbname=postgres sslmode=disable";
+    return PGConnPtr(PQconnectdb(ss.str().c_str()), &PQfinish);
+}
+
+// The rows the trigger has counted since the last reset.
+static std::string counted(PGconn* setup) {
+    return query(setup, "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM " + SEQ);
+}
+
+// How the backend ends the COPY early.
+enum class End { ERROR_ROW, ERROR_FIRST_ROW, CANCEL, STATEMENT_TIMEOUT, COPY_FAIL, BACKEND_KILLED };
+
+// The backend ends the COPY early. Checks: 1 for the error, then 1 that the connection works (a new one
+// after BACKEND_KILLED), or 2 in a transaction (25P02, then working after ROLLBACK); plus 1 for a full
+// COPY on the same connection when 'then_full_copy'.
+static void early_end_case(const std::string& phase, bool client_tls, End how, bool txn, PGconn* setup, PGconn* be,
+    size_t msg_bytes = MSG_BYTES, bool then_full_copy = false) {
+    static const char* names[] = { "error row", "error on the first row", "cancel", "statement_timeout",
+                                   "CopyFail from the client", "backend killed" };
+    const bool held = (how == End::CANCEL || how == End::STATEMENT_TIMEOUT);
+    const std::string what = phase + (client_tls ? ", client TLS, " : ", client plain, ") + names[(int)how]
+        + (msg_bytes != MSG_BYTES ? ", " + std::to_string(msg_bytes >> 20) + " MB messages" : "")
+        + (txn ? " in a transaction" : "");
+    const std::string expect = (how == End::ERROR_ROW || how == End::ERROR_FIRST_ROW) ? "ERR P0001" : "ERR 57014";
+    PGConnPtr c = createNewConnection(ConnType::BACKEND, client_tls);
+    PGConnPtr holder(nullptr, &PQfinish);
+    if (held) {
+        holder = createNewConnection(ConnType::BACKEND, false);
+        if (!query(holder.get(), "BEGIN").empty() || !query(holder.get(), "SELECT pg_advisory_xact_lock(" + LOCK_KEY + ")").empty())
+            diag("%s: could not hold the backend", what.c_str());
+    }
+    std::string got = "COPY did not start", pid;
+    double took = -1;
+    const bool begun = !txn || (query(c.get(), "BEGIN").empty()
+        && (how != End::STATEMENT_TIMEOUT || query(c.get(), "SET LOCAL statement_timeout = '1s'").empty()));
+    if (PQstatus(c.get()) == CONNECTION_OK && begun && start_copy(c.get())) {
+        const std::string msg = make_msg("", msg_bytes);
+        if (held) PQputCopyData(c.get(), "S\ts\n", 4);
+        if (how == End::ERROR_FIRST_ROW) PQputCopyData(c.get(), "E\te\n", 4);
+        const long before = how == End::ERROR_FIRST_ROW ? 0 : stream_for(c.get(), msg, held ? 3 : 1);
+        long after = 0;
+        const auto t0 = Clock::now();
+        switch (how) {
+        case End::ERROR_ROW:
+            PQputCopyData(c.get(), "E\te\n", 4);
+            break;
+        case End::CANCEL: {
+            char err[256] = "";
+            PGcancel* cn = PQgetCancel(c.get());
+            if (cn == nullptr || PQcancel(cn, err, sizeof(err)) == 0) diag("%s: PQcancel failed: %s", what.c_str(), err);
+            if (cn) PQfreeCancel(cn);
+            break;
+        }
+        case End::BACKEND_KILLED:
+            pid = copy_pid(be);
+            if (!pid.empty()) tlsQueryOneValue(be, "SELECT pg_terminate_backend(" + pid + ")");
+            break;
+        default:
+            break;
+        }
+        if (how != End::COPY_FAIL && how != End::BACKEND_KILLED) after = stream_for(c.get(), msg, 2);
+        if (holder) query(holder.get(), "COMMIT");
+        got = end_copy(c.get(), how == End::COPY_FAIL ? "client gave up" : nullptr);
+        took = std::chrono::duration<double>(Clock::now() - t0).count();
+        diag("%s: streamed %ld messages before the early end, %ld after", what.c_str(), before, after);
+    } else if (holder) {
+        query(holder.get(), "COMMIT");
+    }
+    if (how == End::BACKEND_KILLED) {
+        ok(!pid.empty() && got.rfind("ERR", 0) == 0 && took < ERROR_MAX_S, "%s: the client gets an error at once"
+            " (got '%s' in %.1f s, backend pid %s)", what.c_str(), got.c_str(), took, pid.empty() ? "not found" : pid.c_str());
+        PGConnPtr n = createNewConnection(ConnType::BACKEND, client_tls);
+        const std::string v = n ? works(n.get()) : "no connection";
+        ok(v == WORKS, "%s: a new session works (got '%s')", what.c_str(), v.c_str());
+        return;
+    }
+    ok(got == expect, "%s: the client gets the backend's error (expected %s, got %s)",
+        what.c_str(), expect.c_str(), got.c_str());
+    if (txn) {
+        const std::string next = query(c.get(), "SELECT 1");
+        ok(next == "ERR 25P02", "%s: the next query fails as the transaction is aborted on the same backend"
+            " (expected ERR 25P02, got %s)", what.c_str(), next.c_str());
+        const std::string rb = query(c.get(), "ROLLBACK");
+        const std::string v = works(c.get());
+        ok(rb.empty() && v == WORKS, "%s: after ROLLBACK the connection works (ROLLBACK '%s', got '%s')",
+            what.c_str(), rb.c_str(), v.c_str());
+    } else {
+        const std::string v = works(c.get());
+        ok(v == WORKS, "%s: the connection still works (got '%s')", what.c_str(), v.c_str());
+    }
+    if (then_full_copy) {
+        const std::string msg = make_msg("");
+        const long rows = 4 * (long)std::count(msg.begin(), msg.end(), '\n');
+        query(setup, "SELECT setval('" + SEQ + "', 1, false)");
+        std::string full = "COPY did not start";
+        if (start_copy(c.get())) {
+            for (int i = 0; i < 4; i++) PQputCopyData(c.get(), msg.data(), (int)msg.size());
+            full = end_copy(c.get());
+        }
+        const std::string n = counted(setup);
+        ok(full.empty() && n == std::to_string(rows), "%s: a full COPY on the same connection then delivers every row"
+            " (COPY '%s', sent %ld, counted %s)", what.c_str(), full.c_str(), rows, n.c_str());
+    }
+}
+
+// Every message has a row that raises a NOTICE while the client keeps streaming. 3 checks.
+static void notice_case(const std::string& phase, bool client_tls, PGconn* setup) {
+    const std::string what = phase + (client_tls ? ", client TLS" : ", client plain") + ", NOTICE in every message";
+    long notices = 0;
+    PGConnPtr c = createNewConnection(ConnType::BACKEND, client_tls);
+    PQsetNoticeProcessor(c.get(), count_notice, &notices);
+    query(setup, "SELECT setval('" + SEQ + "', 1, false)");
+    const std::string msg = make_msg("N\tn\n");
+    const long rows_per_msg = std::count(msg.begin(), msg.end(), '\n');
+    long sent = 0;
+    std::string got = "COPY did not start";
+    if (PQstatus(c.get()) == CONNECTION_OK && start_copy(c.get())) {
+        sent = stream_for(c.get(), msg, 3);
+        got = end_copy(c.get());
+    }
+    const std::string n = counted(setup);
+    ok(got.empty() && notices == sent, "%s: the COPY completes and each of its %ld NOTICEs reaches the client"
+        " (COPY '%s', NOTICEs %ld)", what.c_str(), sent, got.c_str(), notices);
+    ok(n == std::to_string(sent * rows_per_msg), "%s: the backend received every row: sent %ld, counted %s",
+        what.c_str(), sent * rows_per_msg, n.c_str());
+    const std::string v = works(c.get());
+    ok(v == WORKS, "%s: the connection still works (got '%s')", what.c_str(), v.c_str());
+}
+
+static void run(PGconn* admin, bool native_supported, bool ffto) {
+    diag(">>>> Running a backend answer during COPY FROM STDIN%s <<<<", ffto ? ", FFTO on" : "");
+    if (ffto && !executeQueries(admin, { "SET pgsql-ffto_enabled='true'", "LOAD PGSQL VARIABLES TO RUNTIME" })) return;
+    const std::vector<TlsSrvRow> saved = tlsReadServers(admin);
+    if (saved.empty()) { BAIL_OUT("no servers in hostgroup 0 to work with"); return; }
+    const std::string saved_native = tlsQueryOneValue(admin,
+        "SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-use_native_backend_protocol'");
+    PGConnPtr be = open_direct_backend();
+    if (PQstatus(be.get()) != CONNECTION_OK) { BAIL_OUT("direct backend connection failed: %s", PQerrorMessage(be.get())); return; }
+
+    // The sink keeps nothing: a trigger counts each row in a sequence and drops it. Row 'S' waits for the
+    // advisory lock, row 'E' raises an error, row 'N' a NOTICE.
+    if (!executeQueries(admin, { "UPDATE pgsql_users SET fast_forward=0", "LOAD PGSQL USERS TO RUNTIME" })) return;
+    PGConnPtr setup = createNewConnection(ConnType::BACKEND, false);
+    if (!setup || !executeQueries(setup.get(), {
+            "DROP TABLE IF EXISTS " + TBL,
+            "DROP SEQUENCE IF EXISTS " + SEQ,
+            "CREATE TABLE " + TBL + " (a text, b text)",
+            "CREATE SEQUENCE " + SEQ,
+            "CREATE OR REPLACE FUNCTION " + FN + "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN"
+                " IF NEW.a = 'S' THEN PERFORM pg_advisory_lock(" + LOCK_KEY + "); PERFORM pg_advisory_unlock(" + LOCK_KEY + "); END IF;"
+                " IF NEW.a = 'E' THEN RAISE EXCEPTION 'copy early end'; END IF;"
+                " IF NEW.a = 'N' THEN RAISE NOTICE 'copy notice'; END IF;"
+                " PERFORM nextval('" + SEQ + "'); RETURN NULL; END $$",
+            "CREATE TRIGGER " + FN + " BEFORE INSERT ON " + TBL + " FOR EACH ROW EXECUTE FUNCTION " + FN + "()" })) {
+        BAIL_OUT("could not create the COPY sink");
+        return;
+    }
+
+    const std::vector<std::string> protocols = native_supported
+        ? std::vector<std::string> { "libpq", "native" } : std::vector<std::string> { "libpq" };
+    for (const std::string& protocol : protocols) {
+        if (native_supported)
+            executeQueries(admin, { "SET pgsql-use_native_backend_protocol='" + std::string(protocol == "native" ? "true" : "false") + "'",
+                "LOAD PGSQL VARIABLES TO RUNTIME" });
+        for (int use_ssl : { 0, 1 }) {
+            const std::string phase = protocol + (use_ssl ? ", backend TLS" : ", backend plain") + (ffto ? ", FFTO on" : "");
+            diag("---- %s ----", phase.c_str());
+            ok(tlsReloadServers(admin, saved, use_ssl), "%s: servers set to use_ssl=%d and the pool flushed", phase.c_str(), use_ssl);
+            // pg_backend_pid() is answered by ProxySQL itself: find this backend by the text of the query.
+            PGConnPtr probe = createNewConnection(ConnType::BACKEND, false);
+            const std::string leg = probe ? tlsQueryOneValue(probe.get(),
+                "SELECT s.ssl FROM pg_stat_ssl s JOIN pg_stat_activity a ON s.pid = a.pid"
+                " WHERE a.state = 'active' AND a.query LIKE '%copy_early_end_leg_marker%' LIMIT 1") : "";
+            ok(leg == (use_ssl ? "t" : "f"), "%s: the backend connection is %s (pg_stat_ssl says '%s')",
+                phase.c_str(), use_ssl ? "encrypted" : "plain", leg.c_str());
+            if (ffto) {
+                // 9 checks per client mode.
+                for (bool client_tls : { false, true }) {
+                    early_end_case(phase, client_tls, End::ERROR_ROW, false, setup.get(), be.get(), MSG_BYTES, true);
+                    early_end_case(phase, client_tls, End::CANCEL, true, setup.get(), be.get());
+                    notice_case(phase, client_tls, setup.get());
+                }
+                continue;
+            }
+            // 25 checks per client mode.
+            for (bool client_tls : { false, true }) {
+                early_end_case(phase, client_tls, End::ERROR_ROW, false, setup.get(), be.get(), MSG_BYTES, true);
+                early_end_case(phase, client_tls, End::ERROR_ROW, true, setup.get(), be.get());
+                early_end_case(phase, client_tls, End::ERROR_FIRST_ROW, false, setup.get(), be.get());
+                early_end_case(phase, client_tls, End::ERROR_ROW, false, setup.get(), be.get(), BIG_MSG_BYTES);
+                early_end_case(phase, client_tls, End::CANCEL, false, setup.get(), be.get());
+                early_end_case(phase, client_tls, End::CANCEL, true, setup.get(), be.get());
+                early_end_case(phase, client_tls, End::STATEMENT_TIMEOUT, true, setup.get(), be.get());
+                early_end_case(phase, client_tls, End::COPY_FAIL, false, setup.get(), be.get());
+                early_end_case(phase, client_tls, End::BACKEND_KILLED, false, setup.get(), be.get());
+                notice_case(phase, client_tls, setup.get());
+            }
+        }
+    }
+
+    if (native_supported && !saved_native.empty())
+        executeQueries(admin, { "SET pgsql-use_native_backend_protocol='" + saved_native + "'", "LOAD PGSQL VARIABLES TO RUNTIME" });
+    if (ffto) executeQueries(admin, { "SET pgsql-ffto_enabled='false'", "LOAD PGSQL VARIABLES TO RUNTIME" });
+    // As in testCopyOverTlsBackend(): the harness reloads the config from disk before the next test.
+    if (!tlsReloadServers(admin, saved, 0))
+        diag("WARNING: could not restore the original pgsql_servers rows for hostgroup 0");
+    query(setup.get(), "DROP TABLE IF EXISTS " + TBL);
+    query(setup.get(), "DROP FUNCTION IF EXISTS " + FN + "()");
+    query(setup.get(), "DROP SEQUENCE IF EXISTS " + SEQ);
+    diag(">>>> Done <<<<");
+}
+
+} // namespace early_end
+
+/**
+ * More of COPY FROM STDIN, for each backend protocol:
+ *  - a WHERE clause: only the matching rows are stored, and the command tag says how many;
+ *  - the query digests count each COPY, the one with a WHERE clause under its own digest;
+ *  - 8 sessions, half of them over TLS, each COPY rows of their own at the same time: every row of each
+ *    must arrive, and every session keep working.
+ */
+namespace more {
+
+static const std::string TBL = "copy_more_from";
+static const int PAR_SESSIONS = 8;
+static const int PAR_ROWS = 20000;
+// Per backend protocol: 2 WHERE (plain and TLS client), 1 digest, 1 parallel.
+static const int TESTS_PER_PROTOCOL = 4;
+
+// Runs a COPY FROM STDIN of 'data'. Returns the command tag's row count, or "ERR ..." / "" on failure.
+static std::string copy_in(PGconn* c, const std::string& sql, const std::string& data) {
+    PGresult* r = PQexec(c, sql.c_str());
+    const bool started = PQresultStatus(r) == PGRES_COPY_IN;
+    PQclear(r);
+    if (!started) return std::string("ERR start: ") + PQerrorMessage(c);
+    if (PQputCopyData(c, data.data(), (int)data.size()) != 1 || PQputCopyEnd(c, nullptr) != 1)
+        return std::string("ERR send: ") + PQerrorMessage(c);
+    std::string out;
+    while ((r = PQgetResult(c)) != nullptr) {
+        if (out.empty()) out = PQresultStatus(r) == PGRES_COMMAND_OK ? PQcmdTuples(r) : std::string("ERR ") + PQerrorMessage(c);
+        PQclear(r);
+    }
+    return out;
+}
+
+static std::string numbers(int from, int to, const std::string& prefix = "") {
+    std::string d;
+    for (int i = from; i <= to; i++) d += prefix + std::to_string(i) + "\n";
+    return d;
+}
+
+static void run_protocol(PGconn* admin, const std::string& protocol) {
+    PGConnPtr c = createNewConnection(ConnType::BACKEND, false);
+    if (!c || !executeQueries(c.get(), { "DROP TABLE IF EXISTS " + TBL, "CREATE TABLE " + TBL + " (id int, a int)" })) {
+        BAIL_OUT("could not create %s", TBL.c_str());
+        return;
+    }
+
+    for (bool client_tls : { false, true }) {
+        PGConnPtr w = createNewConnection(ConnType::BACKEND, client_tls);
+        std::string tag = "no connection", n;
+        if (w && executeQueries(w.get(), { "TRUNCATE " + TBL })) {
+            tag = copy_in(w.get(), "COPY " + TBL + " (a) FROM STDIN WHERE a > 5", numbers(1, 10));
+            n = tlsQueryOneValue(w.get(), "SELECT count(*) FROM " + TBL + " WHERE a > 5");
+            n += "/" + tlsQueryOneValue(w.get(), "SELECT count(*) FROM " + TBL);
+        }
+        ok(tag == "5" && n == "5/5", "%s, client %s: COPY FROM STDIN WHERE stores only the matching rows"
+            " (tag 'COPY %s', matching/stored rows %s)", protocol.c_str(), client_tls ? "TLS" : "plain", tag.c_str(), n.c_str());
+    }
+
+    // The last pass of execute_tests() leaves the digests off.
+    executeQueries(admin, { "SET pgsql-query_digests='true'", "LOAD PGSQL VARIABLES TO RUNTIME",
+        "SELECT * FROM stats_pgsql_query_digest_reset" });
+    for (int i = 0; i < 3; i++) copy_in(c.get(), "COPY " + TBL + " (a) FROM STDIN", numbers(1, 10));
+    copy_in(c.get(), "COPY " + TBL + " (a) FROM STDIN WHERE a > 5", numbers(1, 10));
+    std::string plain, where;
+    for (int i = 0; i < 30 && !(plain == "3" && where == "1"); i++) {
+        plain = tlsQueryOneValue(admin, "SELECT COALESCE(SUM(count_star),0) FROM stats_pgsql_query_digest"
+            " WHERE digest_text LIKE 'COPY " + TBL + "%' AND digest_text NOT LIKE '%WHERE%'");
+        where = tlsQueryOneValue(admin, "SELECT COALESCE(SUM(count_star),0) FROM stats_pgsql_query_digest"
+            " WHERE digest_text LIKE 'COPY " + TBL + "%WHERE%'");
+        if (!(plain == "3" && where == "1")) usleep(100000);
+    }
+    ok(plain == "3" && where == "1", "%s: the query digests count each COPY FROM STDIN (plain %s of 3, with WHERE %s of 1)",
+        protocol.c_str(), plain.c_str(), where.c_str());
+
+    executeQueries(c.get(), { "TRUNCATE " + TBL });
+    std::vector<std::string> tags(PAR_SESSIONS), after(PAR_SESSIONS);
+    std::vector<std::thread> threads;
+    for (int t = 0; t < PAR_SESSIONS; t++) {
+        threads.emplace_back([&, t]() {
+            PGConnPtr p = createNewConnection(ConnType::BACKEND, t % 2 == 1);
+            if (!p) { tags[t] = "no connection"; return; }
+            tags[t] = copy_in(p.get(), "COPY " + TBL + " (id, a) FROM STDIN", numbers(1, PAR_ROWS, std::to_string(t) + "\t"));
+            after[t] = tlsQueryOneValue(p.get(), "SELECT 1");
+        });
+    }
+    for (auto& th : threads) th.join();
+    bool all = true;
+    std::string report;
+    for (int t = 0; t < PAR_SESSIONS; t++) {
+        const std::string n = tlsQueryOneValue(c.get(), "SELECT count(*) FROM " + TBL + " WHERE id = " + std::to_string(t));
+        const bool good = tags[t] == std::to_string(PAR_ROWS) && n == tags[t] && after[t] == "1";
+        all = all && good;
+        if (!good) report += " session " + std::to_string(t) + ": tag '" + tags[t] + "', stored " + n + ", then '" + after[t] + "';";
+    }
+    ok(all, "%s: %d sessions COPY FROM STDIN at once, each %d rows: every row arrives and every session works%s",
+        protocol.c_str(), PAR_SESSIONS, PAR_ROWS, report.c_str());
+
+    executeQueries(c.get(), { "DROP TABLE IF EXISTS " + TBL });
+}
+
+} // namespace more
+
 void execute_tests(bool with_ssl, bool diff_conn, bool query_digests = true) {
 
     PGConnPtr admin_conn_1 = createNewConnection(ConnType::ADMIN, with_ssl);
@@ -1329,21 +1842,51 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_prometheus_poller);
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
+	PGConnPtr admin = createNewConnection(ConnType::ADMIN, false);
+	if (!admin) { BAIL_OUT("Error: failed to connect to admin in file %s, line %d\n", __FILE__, __LINE__); return exit_status(); }
+	const bool native_supported = pgsql_native_supported(admin.get());
+	const std::vector<std::string> protocols = native_supported
+		? std::vector<std::string> { "libpq", "native" } : std::vector<std::string> { "libpq" };
+	const bool ffto_supported = tlsQueryOneValue(admin.get(),
+		"SELECT count(*) FROM global_variables WHERE variable_name='pgsql-ffto_enabled'") == "1";
+	const int per_protocol = 59 * 4 + TLS_BACKEND_TESTS + more::TESTS_PER_PROTOCOL;
+	const int early_end_tests = (int)protocols.size()
+		* (early_end::TESTS_PER_PROTOCOL + (ffto_supported ? early_end::FFTO_TESTS_PER_PROTOCOL : 0));
+
 	if (cl.use_noise) {
-		plan(59 * 4 + 3 + TLS_BACKEND_TESTS);
+		plan((int)protocols.size() * per_protocol + 3 + early_end_tests);
 	} else {
-		plan(59 * 4 + TLS_BACKEND_TESTS);
+		plan((int)protocols.size() * per_protocol + early_end_tests);
 	}
 
-    // query_digests ON: strncasecmp fast-reject path active
-    execute_tests(true, false, true);
-    execute_tests(false, false, true);
-    // query_digests OFF: falls back to full RE2 match
-    execute_tests(true, false, false);
-    execute_tests(false, false, false);
+	const std::string saved_native = tlsQueryOneValue(admin.get(),
+		"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-use_native_backend_protocol'");
+	const std::vector<TlsSrvRow> servers = tlsReadServers(admin.get());
+	for (const std::string& protocol : protocols) {
+		diag("==== backend protocol: %s ====", protocol.c_str());
+		// Reloading the servers drops the pooled connections, so the next ones use the protocol set here.
+		if (native_supported && !(executeQueries(admin.get(), { "SET pgsql-use_native_backend_protocol='"
+				+ std::string(protocol == "native" ? "true" : "false") + "'", "LOAD PGSQL VARIABLES TO RUNTIME" })
+				&& tlsReloadServers(admin.get(), servers, 0)))
+			BAIL_OUT("could not switch the backend protocol to %s", protocol.c_str());
 
-    // Runs once and last: it changes pgsql_servers.use_ssl and restores it.
-    testCopyOverTlsBackend();
+		// query_digests ON: strncasecmp fast-reject path active
+		execute_tests(true, false, true);
+		execute_tests(false, false, true);
+		// query_digests OFF: falls back to full RE2 match
+		execute_tests(true, false, false);
+		execute_tests(false, false, false);
+
+		// It changes pgsql_servers.use_ssl and restores it.
+		testCopyOverTlsBackend();
+		more::run_protocol(admin.get(), protocol);
+	}
+	if (native_supported && !saved_native.empty())
+		executeQueries(admin.get(), { "SET pgsql-use_native_backend_protocol='" + saved_native + "'", "LOAD PGSQL VARIABLES TO RUNTIME" });
+
+	// Runs last: it changes pgsql_servers.use_ssl and the backend protocol, and restores them.
+    early_end::run(admin.get(), native_supported, false);
+    if (ffto_supported) early_end::run(admin.get(), native_supported, true);
 
     return exit_status();
 }

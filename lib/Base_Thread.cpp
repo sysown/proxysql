@@ -543,6 +543,29 @@ void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 	if (myds->myds_type==MYDS_BACKEND) {
 		set_backend_to_be_skipped_if_frontend_is_slow<T>(myds, n);
 	}
+	if constexpr (std::is_same_v<T, PgSQL_Thread>) {
+		// Fast forward (COPY FROM STDIN) queues every client message for the backend. Stop reading
+		// the client while that queue is over the limit used for the other direction, so TCP pushes
+		// back on the client instead of ProxySQL buffering without bound. Without POLLIN, poll()
+		// still reports POLLHUP and POLLERR.
+		if (myds->myds_type==MYDS_FRONTEND && myds->sess->status==FAST_FORWARD &&
+			myds->sess->mybe && myds->sess->mybe->server_myds) {
+			const PgSQL_Data_Stream* be = myds->sess->mybe->server_myds;
+			const PtrSizeArray* out = be->PSarrayOUT;
+			const uint64_t limit = overflow_safe_multiply<4,unsigned int>(pgsql_thread___threshold_resultset_size);
+			// The message being copied into the send buffer has left PSarrayOUT, but is held whole until then.
+			uint64_t bytes = be->queueOUT.partial ? be->queueOUT.pkt.size : 0;
+			// The count bounds the per-message costs of tiny messages, the bytes the memory of big ones.
+			bool over = bytes > limit || (uint64_t)out->len * PGSQL_RESULTSET_BUFLEN > limit;
+			for (unsigned int i = 0; !over && i < out->len; i++) {
+				bytes += out->pdata[i].size;
+				over = bytes > limit;
+			}
+			if (over) {
+				thr->mypolls.fds[n].events &= ~POLLIN;
+			}
+		}
+	}
 }
 
 template<typename T, typename DS>

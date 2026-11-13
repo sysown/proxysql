@@ -208,7 +208,8 @@ public:
 		return tls13_handshake_complete || SSL_is_init_finished(ssl);
 	}
 #endif
-	int read_from_net();
+	// allow_recv=false (TLS only): do not read the socket, only decrypt what rbio_ssl already holds
+	int read_from_net(bool allow_recv = true);
 	int write_to_net();
 	int write_to_net_poll();
 	bool available_data_out();

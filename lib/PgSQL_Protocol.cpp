@@ -2854,8 +2854,7 @@ unsigned int PgSQL_Query_Result::add_copy_out_response_start(const PGresult* res
 
 unsigned int PgSQL_Query_Result::add_copy_out_row(const void* data, unsigned int len) {
 	const unsigned int res = proto->copy_out_row_to_PgSQL_Query_Result(false, this, (const unsigned char*)data, len);
-	result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT; 
-	num_rows += 1;
+	result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT;
 	return res;
 }
 
@@ -3077,7 +3076,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 	case 'H': // CopyOutResponse: bytes forwarded verbatim (stream-through)
 		result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT;
 		break;
-	case 'd': // CopyData: count as a row for stats parity with the libpq path (add_copy_out_row also increments num_rows)
+	case 'd': // CopyData: count as a row for stats parity with the libpq path (copy_out_row_to_PgSQL_Query_Result also increments num_rows)
 		num_rows++;
 		break;
 	case 'c': // CopyDone: no side effect; CommandComplete follows

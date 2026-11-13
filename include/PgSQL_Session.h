@@ -707,6 +707,9 @@ public:
 	} poisoned_extq;
 	// Backend administrative removal: drain the FATAL response before closing.
 	bool offline_fatal_pending = false;
+	// The backend ended a COPY while client data it had started to receive was still being sent: its
+	// reply waits in the FAST_FORWARD case until that is out.
+	bool copy_end_pending = false;
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
 	PgSQL_Pool_Acquire_Mode pool_acquire_mode = PgSQL_Pool_Acquire_Mode::Normal;

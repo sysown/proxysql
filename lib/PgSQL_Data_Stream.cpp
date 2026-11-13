@@ -483,7 +483,10 @@ void PgSQL_Data_Stream::shut_hard() {
 
 void PgSQL_Data_Stream::check_data_flow() {
 	// This does not apply to frontend data streams because response data is buffered during extended queries.
-	if ((myds_type != MYDS_FRONTEND) && (PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
+	// Nor to fast forward: during a COPY FROM the backend may send an error or a notice while client data
+	// is still queued for it, and the session relays that message to the client.
+	if ((myds_type != MYDS_FRONTEND) && !(sess && sess->session_fast_forward) &&
+		(PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
 		// there is data at both sides of the data stream: this is considered a fatal error
 		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a PgSQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len, queue_data(queueIN), PSarrayOUT->len, queue_data(queueOUT));
 		shut_soft();
@@ -506,7 +509,7 @@ void PgSQL_Data_Stream::check_data_flow() {
 	}
 }
 
-int PgSQL_Data_Stream::read_from_net() {
+int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 	if (encrypted) {
 		//proxy_info("Entering\n");
 	}
@@ -593,9 +596,14 @@ int PgSQL_Data_Stream::read_from_net() {
 		if (s < MY_SSL_BUFFER) {
 			return 0;	// no enough space for reads
 		}
-		char buf[MY_SSL_BUFFER];
+		// Nothing left to decrypt is not an EOF: return before the EOF handling below.
+		if (!allow_recv && !data_in_rbio()) {
+			return 0;
+		}
+		// One socket read takes as much as a plain read does (a whole queueIN).
+		char buf[QUEUE_T_DEFAULT_SIZE];
 		//ssize_t n = read(fd, buf, sizeof(buf));
-		int n = recv(fd, buf, sizeof(buf), 0);
+		int n = allow_recv ? recv(fd, buf, sizeof(buf), 0) : 0;
 		//proxy_info("SSL recv of %d bytes\n", n);
 		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %lu ,  num_read: %lu\n", sess, n, BIO_number_written(rbio_ssl), BIO_number_read(rbio_ssl));
 		if (n > 0 || BIO_number_written(rbio_ssl) > BIO_number_read(rbio_ssl)) {
@@ -675,6 +683,12 @@ int PgSQL_Data_Stream::read_from_net() {
 			}
 		}
 		else {
+			// Nothing to decrypt: n is recv()'s own result, so handle it as a plain read does.
+			// SSL_get_error() below would test errno, which recv() returning 0 leaves stale.
+			if (n == 0 || (n == -1 && errno != EINTR && errno != EAGAIN)) {
+				shut_soft();
+				return -1;
+			}
 			r = n;
 			//r += SSL_read (ssl, queue_w_ptr(queueIN), s);
 			//proxy_info("Read %d bytes from SSL\n", r);
@@ -1494,7 +1508,11 @@ bool PgSQL_Data_Stream::data_in_rbio() {
 void PgSQL_Data_Stream::reset_connection() {
 	if (myconn) {
 		// 'healthy' mirrors the same guard on the MySQL side (MySQL_Data_Stream::reset_connection)
+		// A session torn down while still in fast forward (a COPY in progress) relayed the backend's
+		// bytes without parsing them, so the connection's own state is still the one from before the
+		// relay. The backend may have closed, or may still be streaming COPY data: never pool it.
 		if (pgsql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) &&
+			sess && sess->session_fast_forward == SESSION_FORWARD_TYPE_NONE &&
 			myconn->healthy == true && myconn->reusable == true &&
 			myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE &&
 			myconn->is_pipeline_active() == false) {
