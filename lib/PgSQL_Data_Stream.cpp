@@ -1501,7 +1501,11 @@ bool PgSQL_Data_Stream::data_in_rbio() {
 void PgSQL_Data_Stream::reset_connection() {
 	if (myconn) {
 		// 'healthy' mirrors the same guard on the MySQL side (MySQL_Data_Stream::reset_connection)
+		// A session torn down while still in fast forward (a COPY in progress) relayed the backend's
+		// bytes without parsing them, so the connection's own state is still the one from before the
+		// relay. The backend may have closed, or may still be streaming COPY data: never pool it.
 		if (pgsql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) &&
+			sess && sess->session_fast_forward == SESSION_FORWARD_TYPE_NONE &&
 			myconn->healthy == true && myconn->reusable == true &&
 			myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE &&
 			myconn->is_pipeline_active() == false) {
