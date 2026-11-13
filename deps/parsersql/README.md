@@ -7,6 +7,13 @@ related dialect-aware parsing paths.
 
 [ParserSQL]: https://github.com/ProxySQL/ParserSQL
 
+## Runtime parser selection
+
+For runtime selection, see [MySQL SET parser selection](../../doc/mysql-set-parser-selection.md).
+Explicit SET algorithm 1/2 takes precedence over query-processor parser 1 for
+ordinary system SETs reaching the general handler. The separate UDV admission
+prerequisite must not be mistaken for an override of that precedence.
+
 ## Layout
 
 - `parsersql-<VERSION>.tar.gz` — vendored upstream release tarball,
