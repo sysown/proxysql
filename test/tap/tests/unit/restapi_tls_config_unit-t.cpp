@@ -17,6 +17,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -79,6 +80,51 @@ static int find_free_ipv6_port() {
 	return port;
 }
 
+// Read only a complete, bounded status line. A stream may split even the
+// three status digits across receives; the caller supplies socket timeouts.
+static int read_http_status(int fd) {
+	char line[512] {};
+	for (size_t used = 0; used + 1 < sizeof(line);) {
+		const ssize_t received = recv(fd, line + used, 1, 0);
+		if (received < 0 && errno == EINTR) continue;
+		if (received <= 0) return -1;
+		++used;
+		if (used >= 2 && line[used - 2] == '\r' && line[used - 1] == '\n') {
+			int status = -1;
+			char separator = 0;
+			if (sscanf(line, "HTTP/%*u.%*u %3d%c", &status, &separator) != 2 ||
+				separator != ' ' || status < 100 || status > 599) return -1;
+			return status;
+		}
+	}
+	return -1;
+}
+
+static void test_http_status_reader() {
+	const std::vector<std::pair<std::string, int>> cases {
+		{ "HTTP/1.1 503 Service Unavailable\r\n", 503 },
+		{ "HTTP/1.0 200 OK\r\n", 200 },
+		{ "HTTP/1.1 50", -1 },
+		{ "HTTP/1.1 50 Broken\r\n", -1 },
+		{ "HTTP/1.1 200 " + std::string(512, 'x') + "\r\n", -1 }
+	};
+	for (const auto& entry : cases) {
+		int fds[2] { -1, -1 };
+		bool success = socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0;
+		if (success) {
+			// The reader receives one byte at a time, deterministically
+			// splitting the status code even when sends are coalesced.
+			success = send(fds[0], entry.first.data(), entry.first.size(), 0) ==
+				static_cast<ssize_t>(entry.first.size());
+			shutdown(fds[0], SHUT_WR);
+			success = success && read_http_status(fds[1]) == entry.second;
+			close(fds[0]);
+			close(fds[1]);
+		}
+		ok(success, "HTTP status reader handles fragmented, incomplete and oversized lines (expected %d)", entry.second);
+	}
+}
+
 static bool ipv6_http_get_ok(int port) {
 	int fd = socket(AF_INET6, SOCK_STREAM, 0);
 	if (fd < 0) return false;
@@ -101,11 +147,9 @@ static bool ipv6_http_get_ok(int port) {
 		close(fd);
 		return false;
 	}
-	char buffer[512] {};
-	const ssize_t received = recv(fd, buffer, sizeof(buffer) - 1, 0);
+	const int status = read_http_status(fd);
 	close(fd);
-	if (received <= 0) return false;
-	return strstr(buffer, "200") != nullptr;
+	return status == 200;
 }
 
 #if defined(__linux__)
@@ -225,12 +269,8 @@ static int unix_http_status(const std::string& socket_path) {
 		close(fd);
 		return -1;
 	}
-	char buffer[512] {};
-	const ssize_t received = recv(fd, buffer, sizeof(buffer) - 1, 0);
+	const int status = read_http_status(fd);
 	close(fd);
-	if (received <= 0) return -1;
-	int status = -1;
-	if (sscanf(buffer, "HTTP/%*s %d", &status) != 1) return -1;
 	return status;
 }
 
@@ -666,12 +706,13 @@ static void test_unix_postbind_failure_and_parent_pinning() {
 }
 
 int main() {
-	plan(54);
+	plan(59);
 	if (test_init_minimal() != 0) {
 		ok(0, "test_init_minimal() succeeds");
 		return exit_status();
 	}
 	ok(1, "test_init_minimal() succeeds");
+	test_http_status_reader();
 
 	bool has_bind = true;
 	sockaddr_storage addr {};

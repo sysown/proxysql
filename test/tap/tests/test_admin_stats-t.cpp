@@ -3,9 +3,9 @@
  * @brief This tests the Statistics module and its lookup code and tables.
  * 
  * @details The following tests are performed :
- *  1. The lookup table has at least 50 rows generated after first metrics inserted
+ *  1. The current sampler has at least 50 lookup-backed variables
  *  2. There should be multiple distinct timestaps present in the history table
- *  3. The number of distinct variable_id's in the lookup and history tables should match
+ *  3. Every currently sampled variable_id should have a lookup entry
  *  4. Each variable_id has the same number of rows in history table
  *  5. The number of rows in the history table increases appropriately after insert interval changes
  *
@@ -41,7 +41,7 @@ struct history_cohort {
  *
  * The latest timestamp can be observed while its main and MyHGM stages are
  * still being inserted, so a cohort is only considered complete when it has
- * one row for every lookup variable.
+ * one lookup-backed row for every currently sampled variable.
  */
 int fetch_full_cohorts(MYSQL* proxysql_admin, uint64_t after_timestamp, int64_t full_row_count,
 	vector<history_cohort>& cohorts, string& error, bool closed_only = false) {
@@ -94,7 +94,7 @@ int fetch_full_cohorts(MYSQL* proxysql_admin, uint64_t after_timestamp, int64_t 
  * @brief Wait for at least two complete cohorts newer than 'anchor'.
  *
  * Polls once per second for up to 'timeout' seconds. Complete cohorts are
- * timestamp groups whose row count equals the current lookup size, so an
+ * timestamp groups whose row count equals the active sampler size, so an
  * incomplete latest timestamp cannot become a window boundary.
  */
 int wait_for_full_cohorts(MYSQL* proxysql_admin, uint64_t anchor, int64_t& full_row_count,
@@ -103,7 +103,12 @@ int wait_for_full_cohorts(MYSQL* proxysql_admin, uint64_t anchor, int64_t& full_
 
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout);
 	while (true) {
-		MYSQL_QUERY(proxysql_admin, "SELECT COUNT(*) FROM history_mysql_status_variables_lookup");
+		// Lookup IDs survive upgrades. Only new closed sampler output defines
+		// the expected set; the newest timestamp may still be in progress.
+		const string active_query =
+			"SELECT COUNT(DISTINCT variable_id) FROM history_mysql_status_variables WHERE timestamp > " +
+			to_string(anchor) + " AND timestamp < (SELECT MAX(timestamp) FROM history_mysql_status_variables)";
+		MYSQL_QUERY(proxysql_admin, active_query.c_str());
 		MYSQL_RES* lookup = mysql_store_result(proxysql_admin);
 		if (lookup == nullptr) {
 			return EXIT_FAILURE;
@@ -233,7 +238,7 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_random_stats_poller);
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
-    /** @brief Minimum number of distinct variable_name strings in the history_mysql_status_variables_lookup table */
+    /** @brief Minimum number of lookup-backed variables emitted by the current sampler */
     const int min_distinct_variable_names = 50;
 
 	if (cl.use_noise) {
@@ -285,7 +290,7 @@ int main(int argc, char** argv) {
 	const int window_res = wait_for_full_cohorts(proxysql_admin, window_anchor, lookup_row_count, 20, frozen_cohorts);
 	ok(
 		lookup_row_count >= min_distinct_variable_names,
-		"Lookup table 'history_mysql_status_variables_lookup' has at least 50 rows. %lu rows found.",
+		"Current sampler has at least 50 lookup-backed variables. %lu variables found.",
 		lookup_row_count
 	);
 	if (window_res != EXIT_SUCCESS) {
@@ -315,11 +320,15 @@ int main(int argc, char** argv) {
 		distinct_timestamp_count
 	);
 
-	// Test 3: Matching distinct variable_id counts in lookup and history window
+	// Test 3: Every distinct variable_id in the new window has a lookup entry
 	int64_t distinct_var_ids_in_history = -1;
 	int64_t distinct_var_ids_in_lookup = -1;
 	
-	MYSQL_QUERY(proxysql_admin, "SELECT COUNT(DISTINCT(variable_id)) from history_mysql_status_variables_lookup");
+	// Restrict the append-only lookup to IDs emitted in this new window.
+	// A missing lookup ID still makes this count differ from history below.
+	MYSQL_QUERY(proxysql_admin, ("SELECT COUNT(DISTINCT l.variable_id) FROM "
+		"history_mysql_status_variables_lookup l JOIN history_mysql_status_variables h USING(variable_id) WHERE h." +
+		window_filter).c_str());
 	result = mysql_store_result(proxysql_admin);
 	if (result == NULL) {
 		diag("NULL result received. Errno: '%d', Error: '%s'", mysql_errno(proxysql_admin), mysql_error(proxysql_admin));

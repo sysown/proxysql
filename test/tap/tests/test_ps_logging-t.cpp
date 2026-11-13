@@ -30,6 +30,7 @@
  *	   LOAD MYSQL VARIABLES TO RUNTIME.
 */
 
+#include <chrono>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -909,10 +910,13 @@ int main(int argc, char** argv) {
 	struct WriterRouteGuard {
 		MYSQL* admin;
 		string rule_id;
-		const char* const ORIGINAL_RULES = "temp._ps_logging_original_rules";
-		const char* const ORIGINAL_FAST_ROUTING = "temp._ps_logging_original_fast_routing";
-		const char* const RUNTIME_RULES = "temp._ps_logging_runtime_rules";
-		const char* const RUNTIME_FAST_ROUTING = "temp._ps_logging_runtime_fast_routing";
+		const string backup_suffix = "_" + std::to_string(getpid()) + "_" +
+			std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+		const string ORIGINAL_RULES = "temp._ps_logging_original_rules" + backup_suffix;
+		const string ORIGINAL_FAST_ROUTING = "temp._ps_logging_original_fast_routing" + backup_suffix;
+		const string RUNTIME_RULES = "temp._ps_logging_runtime_rules" + backup_suffix;
+		const string RUNTIME_FAST_ROUTING = "temp._ps_logging_runtime_fast_routing" + backup_suffix;
+		vector<string> owned_backups;
 		bool installed = false;
 		bool memory_dirty = false;
 		bool runtime_may_change = false;
@@ -926,28 +930,29 @@ int main(int argc, char** argv) {
 			return true;
 		}
 
-		bool snapshot(const char* temp_table, const char* table) {
-			return execute(string("CREATE TEMPORARY TABLE ") + temp_table + " AS SELECT * FROM " + table);
+		bool snapshot(const string& temp_table, const char* table) {
+			if (!execute("CREATE TEMPORARY TABLE " + temp_table + " AS SELECT * FROM " + table)) return false;
+			owned_backups.push_back(temp_table);
+			return true;
 		}
 
-		bool replace_from(const char* table, const char* temp_table) {
+		bool replace_from(const char* table, const string& temp_table) {
 			return execute(string("DELETE FROM ") + table) &&
 				execute(string("INSERT INTO ") + table + " SELECT * FROM " + temp_table);
 		}
 
 		bool drop_backups() {
-			bool removed = true;
-			for (const char* table : { ORIGINAL_RULES, ORIGINAL_FAST_ROUTING,
-				RUNTIME_RULES, RUNTIME_FAST_ROUTING }) {
-				removed = execute(string("DROP TABLE IF EXISTS ") + table) && removed;
+			vector<string> remaining;
+			for (const string& table : owned_backups) {
+				if (!execute("DROP TABLE IF EXISTS " + table)) remaining.push_back(table);
 			}
-			return removed;
+			owned_backups.swap(remaining);
+			return owned_backups.empty();
 		}
 
 		bool install(const string& escaped_user, const string& writer_hostgroup) {
-			// The admin SQLite handle can outlive this test process. Only these
-			// test-owned TEMP tables may be discarded before a new snapshot.
-			if (!drop_backups()) return false;
+			// The shared admin SQLite handle outlives this test process. Use
+			// new names so failed-run snapshots remain available for recovery.
 			if (!snapshot(ORIGINAL_RULES, "mysql_query_rules") ||
 				!snapshot(ORIGINAL_FAST_ROUTING, "mysql_query_rules_fast_routing")) {
 				return false;
