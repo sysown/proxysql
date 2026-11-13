@@ -16,6 +16,7 @@
 
 #include "mysqlx_session.h"
 #include "mysqlx_protocol.h"
+#include "mysqlx_thread.h"
 #include "tap.h"
 #include "test_globals.h"
 #include "test_init.h"
@@ -23,6 +24,7 @@
 #include "mysqlx.pb.h"
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_datatypes.pb.h"
+#include "mysqlx_resultset.pb.h"
 #include "mysqlx_session.pb.h"
 #include "mysqlx_sql.pb.h"
 
@@ -962,6 +964,131 @@ static void test_compress_combine_mixed_batches() {
 	close(fds[1]);
 }
 
+static void test_eof_flushes_pending_batch_before_error() {
+	diag(">>> %s", __func__);
+	// A response below the combine cap must reach the client before an
+	// EOF error, even when the backend never sends a terminal frame.
+	int fds[2] = {-1, -1};
+	int backend_fds[2] = {-1, -1};
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0 ||
+	    socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds) != 0) {
+		ok(false, "EOF regression: socketpair setup succeeded");
+		skip(12, "socketpair setup failed");
+		for (int fd : {fds[0], fds[1], backend_fds[0], backend_fds[1]}) {
+			if (fd >= 0) close(fd);
+		}
+		return;
+	}
+
+	Mysqlx_Thread thr;
+	thr.init(0);
+	MysqlxSession sess;
+	sess.init(fds[0], &thr);
+	sess.to_process = true;
+
+	// Negotiate zstd batching with a high cap so the frame stays buffered
+	// instead of flushing on the count threshold.
+	std::string capset = build_compression_capset("zstd_stream",
+	                                              /*with_combine_mixed=*/true,
+	                                              /*combine_mixed_value=*/true,
+	                                              /*with_max_combine=*/true,
+	                                              /*max_combine_value=*/100);
+	write_x_frame(fds[1], Mysqlx::ClientMessages_Type_CON_CAPABILITIES_SET,
+		reinterpret_cast<const uint8_t*>(capset.data()), capset.size());
+	sess.handler();
+	uint8_t cap_buf[4096];
+	try_read_x_frame_nonblocking(fds[1], cap_buf, sizeof(cap_buf)); // drain Ok
+	ok(sess.compression_combine_mixed_for_test() == true,
+	   "EOF regression: combine_mixed_messages negotiated");
+	ok(sess.compression_max_combine_for_test() == 100,
+	   "EOF regression: max_combine_messages = 100");
+
+	// Attach an idle, reusable backend so EOF must explicitly evict it.
+	MysqlxConnection* conn = new MysqlxConnection();
+	conn->set_fd(backend_fds[0]);
+	conn->set_state(MysqlxConnection::IDLE);
+	conn->set_reusable(true);
+	sess.backend_conn() = conn;
+	sess.server_ds().init(XDS_BACKEND, backend_fds[0]);
+	sess.set_status(MysqlxSession::WAITING_SERVER_XMSG);
+	sess.set_response_state_for_test(RESP_WAITING_STMT_EXECUTE);
+	sess.to_process = true;
+
+	// Legal non-terminal frame in STMT_EXECUTE, large enough to be
+	// compressed. No terminal frame follows it.
+	Mysqlx::Resultset::ColumnMetaData col;
+	col.set_type(Mysqlx::Resultset::ColumnMetaData::BYTES);
+	col.set_name(std::string(200, 'c'));
+	std::string col_ser;
+	col.SerializeToString(&col_ser);
+	const std::vector<uint8_t> col_body(col_ser.begin(), col_ser.end());
+	ok(col_body.size() >= 50, "EOF regression: frame body is compressible");
+	write_x_frame(backend_fds[1], Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA,
+		col_body.data(), col_body.size());
+
+	// First tick reads the frame and leaves it in the pending batch.
+	sess.handler();
+	ok(sess.compression_batch_count_for_test() == 1,
+	   "EOF regression: non-terminal frame is pending in the batch");
+
+	// Backend closes: peer-side write shutdown yields a clean read()==0.
+	shutdown(backend_fds[1], SHUT_WR);
+	sess.to_process = true;
+	sess.handler();
+
+	// The batch must be on the wire ahead of the plain ERROR 2013.
+	uint8_t buf[8192];
+	ssize_t r1 = try_read_x_frame_nonblocking(fds[1], buf, sizeof(buf));
+	ok(r1 > 5 && buf[4] == Mysqlx::ServerMessages_Type_COMPRESSION,
+	   "EOF regression: buffered frame flushed as COMPRESSION before ERROR");
+	bool batch_ok = false;
+	bool batch_size_ok = false;
+	if (r1 > 5 && buf[4] == Mysqlx::ServerMessages_Type_COMPRESSION) {
+		Mysqlx::Connection::Compression cmsg;
+		if (cmsg.ParseFromArray(buf + 5, static_cast<int>(r1 - 5))) {
+			batch_ok = !cmsg.has_server_messages() && !cmsg.has_client_messages();
+			auto decoded = decompress_zstd(cmsg.payload());
+			size_t off = 0;
+			batch_size_ok = !decoded.empty() &&
+				off + 5 <= decoded.size() &&
+				decoded[off + 4] == Mysqlx::ServerMessages_Type_RESULTSET_COLUMN_META_DATA;
+			if (batch_size_ok) {
+				uint32_t ps = decoded[off] | (decoded[off + 1] << 8) |
+				              (decoded[off + 2] << 16) | (decoded[off + 3] << 24);
+				batch_size_ok = ps >= 1 && off + 4 + ps == decoded.size() &&
+					std::vector<uint8_t>(decoded.begin() + off + 5, decoded.end()) == col_body;
+			}
+		}
+	}
+	ok(batch_ok, "EOF regression: COMPRESSION holds a batched (unflagged) payload");
+	ok(batch_size_ok, "EOF regression: batch carries the ColumnMetaData frame");
+
+	uint8_t err_buf[8192];
+	ssize_t r2 = try_read_x_frame_nonblocking(fds[1], err_buf, sizeof(err_buf));
+	ok(r2 > 5 && err_buf[4] == Mysqlx::ServerMessages_Type_ERROR,
+	   "EOF regression: plain ERROR frame follows the batch");
+	bool code_ok = false;
+	if (r2 > 5 && err_buf[4] == Mysqlx::ServerMessages_Type_ERROR) {
+		Mysqlx::Error err;
+		if (err.ParseFromArray(err_buf + 5, static_cast<int>(r2 - 5))) {
+			code_ok = (err.code() == 2013);
+		}
+	}
+	ok(code_ok, "EOF regression: terminal error is 2013");
+
+	ok(sess.compression_batch_count_for_test() == 0,
+	   "EOF regression: batch empty after EOF flush");
+	ok(sess.backend_conn() == nullptr,
+	   "EOF regression: dead backend detached from session");
+	ok(thr.get_cached_connection_count() == 0,
+	   "EOF regression: dead backend was not cached");
+	ok(!sess.is_healthy(),
+	   "EOF regression: session marked unhealthy after backend EOF");
+
+	close(fds[1]);
+	close(backend_fds[1]);
+}
+
 static void test_compress_passthrough_when_disabled() {
 	diag(">>> %s", __func__);
 	// Sanity: when compression hasn't been negotiated, the helper must
@@ -994,7 +1121,7 @@ static void test_compress_passthrough_when_disabled() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(64);
+	plan(77);
 	diag("=== mysqlx_compression_unit-t starting ===");
 
 	test_capabilities_advertise_compression();
@@ -1013,6 +1140,7 @@ int main() {
 	test_compress_lz4_single_message();
 	test_compress_below_threshold_passthrough();
 	test_compress_combine_mixed_batches();
+	test_eof_flushes_pending_batch_before_error();
 	test_compress_passthrough_when_disabled();
 
 	return exit_status();

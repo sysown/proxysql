@@ -1664,9 +1664,9 @@ void MysqlxSession::handler_waiting_server_msg() {
 	}
 
 	if (backend_eof && !got_terminal) {
-		// The backend closed before completing the response. The buffered
-		// non-terminal frames (if any) were forwarded above, but the
-		// response still needs a terminal ERROR for the client.
+		// Flush buffered non-terminal frames before the terminal ERROR so
+		// combined compression preserves the response order on EOF.
+		flush_compression_batch();
 		send_error(2013, "Lost connection to backend during query");
 		client_ds_.write_to_net();
 		// backend_eof already marked the connection non-reusable, so
