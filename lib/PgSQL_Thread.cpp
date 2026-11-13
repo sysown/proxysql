@@ -4036,23 +4036,9 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 							rb = 0; // exit loop
 						}
 						else { // we are in fast_forward mode and encrypted == false
-							struct pollfd _fds;
-							nfds_t _nfds = 1;
-#ifdef PROXYSQL31
-							_fds.fd = myds->fd;
-#else
-							_fds.fd = mypolls.fds[n].fd;
-#endif
-							_fds.events = POLLIN;
-							_fds.revents = 0;
-							int _rc = poll(&_fds, _nfds, 0);
-							if ((_rc > 0) && _fds.revents == POLLIN) {
-								// there is more data
-								myds->revents = _fds.revents;
-							}
-							else {
-								rb = 0; // exit loop
-							}
+							// Read the socket once per poll pass, as the TLS branch does. Reading it again while
+							// poll() reported more data held the thread for as long as the backend kept sending.
+							rb = 0; // exit loop
 						}
 					}
 					else {
