@@ -123,7 +123,7 @@ it locally is:
 # Bring infra up once, run the same test N times back-to-back against the
 # same running ProxySQL, capture each attempt's log under a separate subdir.
 export WORKSPACE=$(pwd)
-export TAP_GROUP="legacy-g3"
+export TAP_GROUP="mysql84-g3"
 export TEST_PY_TAP_INCL="test_flush_logs-t"     # regex of the test(s) to focus on
 export SKIP_CLUSTER_START=1
 source test/infra/common/env.sh
