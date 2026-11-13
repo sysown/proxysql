@@ -602,6 +602,7 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR) FORCE
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
+	backend_unplug_unit-t \
 	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
 	pgsql_stable_io_unit-t \
@@ -1531,6 +1532,15 @@ pgsql_result_flush_allocation_unit-t: pgsql_result_flush_allocation_unit-t.cpp \
 	$(CXX) $< $(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ) $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
+
+# Instrument the real call sites: remove_index_fast(-1) can otherwise hide a
+# null member call. Static linking leaves the archive's stream objects unused.
+backend_unplug_unit-t: backend_unplug_unit-t.cpp \
+	$(PROXYSQL_PATH)/lib/mysql_data_stream.cpp $(PROXYSQL_PATH)/lib/PgSQL_Data_Stream.cpp \
+	$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/lib/mysql_data_stream.cpp $(PROXYSQL_PATH)/lib/PgSQL_Data_Stream.cpp \
+		$(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) -fsanitize=null -fno-sanitize-recover=null \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against
