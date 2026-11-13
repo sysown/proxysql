@@ -1386,7 +1386,7 @@ void PgSQL_Data_Stream::unplug_backend() {
 	DSS = STATE_NOT_INITIALIZED;
 	myconn = NULL;
 	myds_type = MYDS_BACKEND_NOT_CONNECTED;
-	mypolls->remove_index_fast(poll_fds_idx);
+	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 	mypolls = NULL;
 	fd = 0;
 }
