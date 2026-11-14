@@ -24,6 +24,8 @@
  */
 
 #include <unistd.h>
+#include <errno.h>
+#include <string.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <pthread.h>
@@ -607,6 +609,25 @@ int setup_config_file(const CommandLine& cl, uint32_t r_port, const std::string&
 	return 0;
 }
 
+MYSQL* wait_for_replica(const conn_opts_t& opts) {
+	MYSQL* admin = mysql_init(nullptr);
+	for (uint32_t waited = 0; ; ++waited) {
+		if (mysql_real_connect(admin, opts.host.c_str(), opts.user.c_str(), opts.pass.c_str(),
+			nullptr, opts.port, nullptr, 0)) {
+			return admin;
+		}
+		if (waited >= CONNECT_TIMEOUT) {
+			diag("Replica readiness failed at %s:%d: %u - %s", opts.host.c_str(), opts.port,
+				mysql_errno(admin), mysql_error(admin));
+			mysql_close(admin);
+			return nullptr;
+		}
+		mysql_close(admin);
+		admin = mysql_init(nullptr);
+		sleep(1);
+	}
+}
+
 int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::string config_filename, bool monitor_enabled,
 	const std::atomic<bool>& save_proxy_stderr, std::atomic<pid_t>& child_pid) {
 
@@ -628,7 +649,8 @@ int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::s
 	}
 
 	const std::string& proxy_binary_path = workdir + "../../../src/proxysql";
-	const std::string& proxy_command = proxy_binary_path + " -f " + (monitor_enabled == false ? "-M" : "") + " -c " + fmt_config_file + " > " + replica_stderr + " 2>&1";
+	// Replace the shell so cleanup signals the replica itself.
+	const std::string& proxy_command = "exec " + proxy_binary_path + " -f " + (monitor_enabled == false ? "-M" : "") + " -c " + fmt_config_file + " > " + replica_stderr + " 2>&1";
 
 	diag("Launching replica ProxySQL [%s] via fork/exec with command: `%s`", config_filename.c_str(), proxy_command.c_str());
 
@@ -638,20 +660,35 @@ int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::s
 		_exit(127);
 	}
 
+	if (pid == -1) {
+		ok(false, "Unable to launch replica ProxySQL [%s]: %s", config_filename.c_str(), strerror(errno));
+		return EXIT_FAILURE;
+	}
 	child_pid.store(pid);
 
 	int status = 0;
-	waitpid(pid, &status, 0);
-	int exec_res = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+	pid_t wait_res;
+	do {
+		wait_res = waitpid(pid, &status, 0);
+	} while (wait_res == -1 && errno == EINTR);
+	child_pid.store(0);
+	int exec_res = wait_res == pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
 	ok(exec_res == 0, "proxysql cluster node [%s] should execute and shutdown nicely. Exit status was: %d", config_filename.c_str(), exec_res);
 
-	// In case of error place in log the reason
+	// Include child output in TAP diagnostics: CI does not collect these files.
 	if (exec_res || save_proxy_stderr.load()) {
-		if (exec_res) {
-			diag("LOG: Proxysql cluster node [%s] execution failed, logging stderr into 'test_cluster_sync_node_stderr_%s.txt", config_filename.c_str(), config_filename.c_str());
+		diag("Replica ProxySQL [%s] output from '%s':", config_filename.c_str(), replica_stderr.c_str());
+		FILE* output = fopen(replica_stderr.c_str(), "r");
+		if (output) {
+			char line[4096];
+			while (fgets(line, sizeof(line), output)) {
+				line[strcspn(line, "\r\n")] = '\0';
+				diag("[%s] %s", config_filename.c_str(), line);
+			}
+			fclose(output);
 		} else {
-			diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_node_stderr_%s.txt", config_filename.c_str());
+			diag("Unable to read replica output: %s", strerror(errno));
 		}
 	}
 
@@ -889,13 +926,12 @@ int main(int, char**) {
 		conn_opts_nomonitor.port = R_NOMONITOR_PORT;
 
 		// connect to proxsqyl replica [nomonitor]
-		r_proxysql_nomonitor_admin = wait_for_proxysql(conn_opts_nomonitor, CONNECT_TIMEOUT);
+		r_proxysql_nomonitor_admin = wait_for_replica(conn_opts_nomonitor);
 
 		// Once the thread is spanwed we should always go to cleanup to wait
 		ok(r_proxysql_nomonitor_admin != nullptr, "New instance of proxysql [nomonitor] with cluster config should be properly spawned.");
 
 		if (r_proxysql_nomonitor_admin == nullptr) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(r_proxysql_nomonitor_admin));
 			goto cleanup;
 		}
 
@@ -906,13 +942,12 @@ int main(int, char**) {
 		conn_opts_withmonitor.port = R_WITHMONITOR_PORT;
 
 		// connect to proxsqyl replica [nomonitor]
-		r_proxysql_withmonitor_admin = wait_for_proxysql(conn_opts_withmonitor, CONNECT_TIMEOUT);
+		r_proxysql_withmonitor_admin = wait_for_replica(conn_opts_withmonitor);
 
 		// Once the thread is spanwed we should always go to cleanup to wait
 		ok(r_proxysql_withmonitor_admin != nullptr, "New instance of proxysql [withmonitor] with cluster config should be properly spawned.");
 
 		if (r_proxysql_withmonitor_admin == nullptr) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(r_proxysql_withmonitor_admin));
 			goto cleanup;
 		}
 	
@@ -992,21 +1027,23 @@ cleanup:
 	// If PROXYSQL SHUTDOWN failed or admin connection was NULL, the process
 	// launched via fork() would block the thread forever.
 	{
-		pid_t pids[] = { nomonitor_pid.load(), withmonitor_pid.load() };
+		std::atomic<pid_t>* pids[] = { &nomonitor_pid, &withmonitor_pid };
 		const char* names[] = { "nomonitor", "withmonitor" };
 		for (int i = 0; i < 2; i++) {
-			if (pids[i] > 0) {
+			if (pids[i]->load() > 0) {
 				bool exited = false;
 				for (int w = 0; w < 5; w++) {
-					if (waitpid(pids[i], nullptr, WNOHANG) != 0) {
+					// The launcher thread owns waitpid; never reap its child here.
+					if (pids[i]->load() == 0) {
 						exited = true;
 						break;
 					}
 					sleep(1);
 				}
 				if (!exited) {
-					diag("Replica ProxySQL [%s] (pid=%d) did not exit after SHUTDOWN, sending SIGKILL", names[i], pids[i]);
-					kill(pids[i], SIGKILL);
+					diag("Replica ProxySQL [%s] (pid=%d) did not exit after SHUTDOWN, sending SIGKILL", names[i], pids[i]->load());
+					pid_t pid = pids[i]->load();
+					if (pid > 0) kill(pid, SIGKILL);
 				}
 			}
 		}
