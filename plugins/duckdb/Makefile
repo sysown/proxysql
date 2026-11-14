@@ -212,6 +212,9 @@ endif
 .PHONY: check-duckdb-archives
 check-duckdb-archives: $(DUCKDB_AR)
 	@sh $(DUCKDB_ARCHIVE_LISTER) $(DUCKDB_PATH)/build/release >/dev/null
+	@for loader in $(DUCKDB_STATIC_LOADER_SRCS); do \
+		test -s "$$loader" || { echo "ERROR: missing DuckDB static extension loader: $$loader; rebuild deps/duckdb" >&2; exit 1; }; \
+	done
 
 $(DUCKDB_STATIC_LOADER_SRCS): $(DUCKDB_AR)
 	@test -s $@ || { echo "ERROR: missing DuckDB static extension loader: $@; rebuild deps/duckdb" >&2; exit 1; }
