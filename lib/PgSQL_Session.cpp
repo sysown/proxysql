@@ -6857,6 +6857,16 @@ __cleanup:
 		}
 		myds->free_pgsql_real_query();
 	}
+
+	if (mybes) {
+		for (unsigned int i = 0; i < mybes->len; i++) {
+			PgSQL_Backend* be = (PgSQL_Backend*)mybes->index(i);
+			if (be->server_myds) {
+				be->server_myds->max_connect_time = 0;
+			}
+		}
+	}
+
 	if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 		// An implicit prepare still pending here failed: on its own Parse, or on the variable sync of
 		// a connection it was retried on. The statuses it saved are over with the request. Left on
