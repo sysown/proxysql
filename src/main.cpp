@@ -22,6 +22,7 @@ using json = nlohmann::json;
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
 #include "proxysql_listen_validator.h"
+#include "ProxySQL_PluginListenerReservations.h"
 
 #include "mysqld_error.h"
 
@@ -1797,6 +1798,26 @@ static void ProxySQL_Main_exit_on_listener_conflicts() {
 		{ "MySQL", GloVars.mysql_workers ? mysql_ifaces : "" },
 		{ "PostgreSQL", GloVars.pgsql_workers ? pgsql_ifaces : "" },
 	};
+#ifdef PROXYSQL40
+	// Copy the enabled modules' listener strings into the owned reservation
+	// snapshot before the borrowed variables below are freed.  A later call
+	// replaces the whole snapshot, so an internal reload never leaves stale
+	// reservations behind.  Plugin startup and Admin LOAD validate against
+	// this snapshot; core's own conflict diagnostics/exit below are unchanged.
+	std::vector<ProxySQL_PluginListenerReservations::ModuleReservation> reservations {};
+	reservations.reserve(modules.size());
+	for (const proxysql_listen_validator::module_listener_config& module : modules) {
+		if (module.listeners == nullptr || module.listeners[0] == '\0' ||
+			strcmp(module.listeners, "(null)") == 0) {
+			continue;
+		}
+		reservations.push_back({
+			module.module_name != nullptr ? module.module_name : "",
+			module.listeners,
+		});
+	}
+	ProxySQL_PluginListenerReservations::replace_reservations(reservations);
+#endif
 	std::string error {};
 	const bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
 
@@ -2068,6 +2089,12 @@ GloAdmin->shutdown_threads();
 	}
 	shutdown_global_aws_metadata_provider();
 	shutdown_global_aws_iam_token_source();
+	// Reset only after plugin metric samplers, Admin handlers and worker
+	// threads have stopped. Doing this inside STOP/RESTART can race with
+	// plugin metric registration and removal.
+	if ((glovars.reload == 1 || glovars.reload == 2) && GloVars.prometheus_registry) {
+		GloVars.prometheus_registry->ResetCounters();
+	}
 #endif
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte

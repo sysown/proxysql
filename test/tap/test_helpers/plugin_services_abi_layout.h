@@ -3,6 +3,7 @@
 
 #include "ProxySQL_Plugin.h"
 #include <cstddef>
+#include <type_traits>
 
 // Freeze the published upstream ABI-10 slot order independently of the current
 // services struct. Types follow the public declarations, but field placement
@@ -116,5 +117,72 @@ static_assert(offsetof(ProxySQL_PluginServices, post_server_desired_set) ==
 	offsetof(DiscoveryAbi14, post_server_desired_set), "ABI-14 post_server_desired_set slot moved");
 static_assert(offsetof(ProxySQL_PluginServices, lock_configuration) == sizeof(DiscoveryAbi14),
 	"managed-configuration ABI-15 must follow the complete ABI-14 prefix");
+
+// Complete frozen ABI-16 service prefix: the ABI-14 discovery tail plus the
+// six ABI-15 caller-held-mutex/managed-runtime callbacks.  ABI-17 appends its
+// listener-validation service strictly after this prefix.  Keeping the six
+// callbacks explicit here detects an earlier field being moved or resized;
+// comparing only the current struct's final-field end cannot.
+struct ManagedConfigurationAbi16 {
+	DiscoveryAbi14 discovery;
+	decltype(ProxySQL_PluginServices::lock_configuration) lock_configuration;
+	decltype(ProxySQL_PluginServices::unlock_configuration) unlock_configuration;
+	decltype(ProxySQL_PluginServices::configdb_locked) configdb_locked;
+	decltype(ProxySQL_PluginServices::prepare_managed_runtime_locked) prepare_managed_runtime_locked;
+	decltype(ProxySQL_PluginServices::activate_managed_runtime_locked) activate_managed_runtime_locked;
+	decltype(ProxySQL_PluginServices::destroy_managed_prepared_runtime) destroy_managed_prepared_runtime;
+};
+
+static_assert(sizeof(ManagedConfigurationAbi16::lock_configuration) == sizeof(void (*)()),
+	"ABI-16 lock_configuration slot must stay one function pointer");
+static_assert(offsetof(ProxySQL_PluginServices, lock_configuration) ==
+	offsetof(ManagedConfigurationAbi16, lock_configuration), "ABI-16 lock_configuration slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, unlock_configuration) ==
+	offsetof(ManagedConfigurationAbi16, unlock_configuration), "ABI-16 unlock_configuration slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, configdb_locked) ==
+	offsetof(ManagedConfigurationAbi16, configdb_locked), "ABI-16 configdb_locked slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, prepare_managed_runtime_locked) ==
+	offsetof(ManagedConfigurationAbi16, prepare_managed_runtime_locked),
+	"ABI-16 prepare_managed_runtime_locked slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, activate_managed_runtime_locked) ==
+	offsetof(ManagedConfigurationAbi16, activate_managed_runtime_locked),
+	"ABI-16 activate_managed_runtime_locked slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, destroy_managed_prepared_runtime) ==
+	offsetof(ManagedConfigurationAbi16, destroy_managed_prepared_runtime),
+	"ABI-16 destroy_managed_prepared_runtime slot moved");
+static_assert(offsetof(ProxySQL_PluginServices, validate_listener_interfaces) ==
+	sizeof(ManagedConfigurationAbi16),
+	"ABI-17 listener validation must follow the complete frozen ABI-16 prefix");
+
+// Complete frozen ABI-17 service prefix: the whole frozen ABI-16 prefix plus
+// the listener-validation callback.  ABI-18 appends its raw-backend getter
+// strictly after this object, so an earlier field resize/move is detected
+// without relying only on the current struct's final-member end.
+struct ListenerValidationAbi17 {
+	ManagedConfigurationAbi16 managed_configuration;
+	decltype(ProxySQL_PluginServices::validate_listener_interfaces) validate_listener_interfaces;
+};
+
+static_assert(sizeof(ListenerValidationAbi17::validate_listener_interfaces) ==
+	sizeof(bool (*)(const char*, const char*, std::string&)),
+	"ABI-17 listener validation slot must stay one function pointer");
+static_assert(offsetof(ProxySQL_PluginServices, validate_listener_interfaces) ==
+	offsetof(ListenerValidationAbi17, validate_listener_interfaces),
+	"ABI-17 listener validation slot moved inside the frozen prefix");
+static_assert(offsetof(ProxySQL_PluginServices, get_raw_backend_service) ==
+	sizeof(ListenerValidationAbi17),
+	"ABI-18 raw backend getter must follow the complete frozen ABI-17 prefix");
+static_assert(offsetof(ProxySQL_PluginServices, get_raw_backend_service) ==
+	offsetof(ProxySQL_PluginServices, validate_listener_interfaces) +
+		sizeof(ProxySQL_PluginServices::validate_listener_interfaces),
+	"ABI-18 raw backend getter must be the single pointer immediately after listener validation");
+static_assert(std::is_same<decltype(ProxySQL_RawBackendServiceV2::destroy),
+	bool (*)(ProxySQL_RawBackend*) noexcept>::value,
+	"V2 destroy must return the final HARD bool from its noexcept callback");
+static_assert(std::is_same<decltype(ProxySQL_RawBackendServiceV2::version), uint32_t>::value,
+	"V2 service version must remain a uint32_t");
+static_assert(std::is_same<decltype(ProxySQL_PluginServices::get_raw_backend_service),
+	const ProxySQL_RawBackendServiceV2* (*)()>::value,
+	"ABI-18 raw backend getter must return the frozen V2 service pointer");
 } // namespace plugin_services_abi_layout_test
 #endif

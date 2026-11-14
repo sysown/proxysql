@@ -94,8 +94,25 @@ static void test_loader_does_not_disturb_registry() {
 	   "registry pointer unchanged after plugin stop");
 }
 
+static void test_manager_retains_registry_after_global_owner_releases_it() {
+	// Model cross-translation-unit std::exit destruction: GloVars releases
+	// its owner before the plugin manager runs stop callbacks and dlclose.
+	auto original = std::move(GloVars.prometheus_registry);
+	GloVars.prometheus_registry = std::make_shared<prometheus::Registry>();
+	std::weak_ptr<prometheus::Registry> registry = GloVars.prometheus_registry;
+	{
+		ProxySQL_PluginManager manager;
+		GloVars.prometheus_registry.reset();
+		ok(!registry.expired(),
+		   "manager retains registry after the global owner releases it");
+	}
+	ok(registry.expired(),
+	   "manager releases its registry lease after destruction");
+	GloVars.prometheus_registry = std::move(original);
+}
+
 int main() {
-	plan(10);
+	plan(12);
 
 	// Bring up the minimum core state needed for GloVars.prometheus_registry
 	// to exist (test_helpers/test_init.cpp allocates the shared_ptr).
@@ -104,6 +121,7 @@ int main() {
 	test_glovars_registry_exists();
 	test_counter_round_trip_through_shared_registry();
 	test_loader_does_not_disturb_registry();
+	test_manager_retains_registry_after_global_owner_releases_it();
 
 	test_cleanup_minimal();
 	return exit_status();

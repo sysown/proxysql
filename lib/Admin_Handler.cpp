@@ -819,10 +819,12 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 	if (query_no_space_length==sizeof("PROXYSQL RESTART") - 1 && !strncasecmp("PROXYSQL RESTART",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL RESTART command\n");
+#ifndef PROXYSQL40
 		// This function was introduced into 'prometheus::Registry' for being
 		// able to do a complete reset of all the 'prometheus counters'. It
 		// shall only be used during ProxySQL shutdown phases.
 		GloVars.prometheus_registry->ResetCounters();
+#endif /* !PROXYSQL40 */
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		glovars.reload=1;
 		return false;
@@ -863,9 +865,11 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		// ----- Common shutdown actions -----
 		glovars.reload = 2;
 
-		// Reset Prometheus counters
+#ifndef PROXYSQL40
+		// v4 resets after plugin and worker shutdown in phase 4.
 		if (GloVars.prometheus_registry)
 			GloVars.prometheus_registry->ResetCounters();
+#endif /* !PROXYSQL40 */
 
 		// Teardown drains this Admin client before deleting SPA. Acknowledge
 		// the request and return so the session can flush its reply and exit;

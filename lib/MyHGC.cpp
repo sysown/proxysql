@@ -5,6 +5,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "MySQL_HostGroups_Manager.h"
+#include "ProxySQL_PluginRawBackend.h"
 
 #ifdef TEST_AURORA
 static unsigned long long array_mysrvc_total = 0;
@@ -154,7 +155,11 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				// stale backoff deadlines immediately, which is the desired behavior
 				// (rejected servers become eligible again as soon as the operator relaxes
 				// the mode).
-				if (mysql_thread___session_track_variables == session_track_variables::ENFORCED) {
+				// Raw TCP/stream selection passes a null sess: capability
+				// backoff is a SQL-session concept, so there is no deadline
+				// clock to compare and the raw server must remain eligible.
+				if (sess != nullptr &&
+					mysql_thread___session_track_variables == session_track_variables::ENFORCED) {
 					session_track_backoff_until = mysrvc->session_track_backoff_until.load(std::memory_order_relaxed);
 					if (session_track_backoff_until > sess->thread->curtime) {
 						continue;
@@ -401,9 +406,22 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
-		if (sess && sess->thread->variables.min_num_servers_lantency_awareness) {
-			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
+		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY.
+		// Raw TCP selection has no SQL session; use the operation-scoped native
+		// handler snapshot installed by the core raw service.
+		int latency_awareness_min_servers = 0;
+		if (sess != nullptr) {
+			latency_awareness_min_servers =
+				sess->thread->variables.min_num_servers_lantency_awareness;
+		}
+#ifdef PROXYSQL40
+		else {
+			latency_awareness_min_servers =
+				proxysql_raw_backend_latency_awareness_min_servers();
+		}
+#endif
+		if (latency_awareness_min_servers) {
+			if ((int) num_candidates >= latency_awareness_min_servers) {
 				unsigned int servers_with_latency = 0;
 				unsigned int total_latency_us = 0;
 				// scan and verify that all servers have some latency
@@ -435,7 +453,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 						}
 					}
 					if (filtered_sum) {
-						sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+						if (sess != nullptr) {
+							sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+						}
 						for (j=0; j<num_candidates; j++) {
 							mysrvc = mysrvcCandidates[j];
 							if (mysrvc->current_latency_us > avg_latency_us) {

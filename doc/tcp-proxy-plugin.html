@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TCP proxy configuration</title><style>body{font:16px/1.6 system-ui;max-width:72rem;margin:auto;padding:2rem}pre{overflow:auto;padding:1em;background:#eee}table{border-collapse:collapse}td,th{border:1px solid #aaa;padding:.4em}</style></head><body><h1>Native TCP proxy plugin (<code>tcp_proxy</code>)</h1>
+<p><code>tcp_proxy</code> is a ProxySQL 4.0 plugin that forwards opaque TCP connections
+through a <strong>mandatory mapping</strong> to an existing MySQL or PostgreSQL hostgroup.
+The relay itself is native and in-process: the production plugin and the
+standalone Engine tests use the same <code>tcp_proxy::Engine</code>. There is no HAProxy
+child process, no second relay and no TCP-specific backend pool.</p>
+<p>The plugin has exactly four editable/persistent configuration tables:</p>
+<ul>
+<li><code>tcp_settings</code></li>
+<li><code>tcp_hostgroups</code></li>
+<li><code>tcp_listeners</code></li>
+<li><code>tcp_routing_rules</code></li>
+</ul>
+<p><code>tcp_hostgroups</code> defines the mapping. Backend selection, weight, capacity,
+health, administrative status,
+counters and errors belong exclusively to the named native MySQL/PostgreSQL
+hostgroup manager (HGM).</p>
+<p>Mapped mode requires a matching rebuilt v4 core with plugin ABI 18 and raw
+backend service version 2. Build the core and plugin from this checkout
+together.</p>
+<h2>Scope and version boundaries</h2>
+<p>Supported:</p>
+<ul>
+<li>Numeric IPv4 and IPv6 listeners.</li>
+<li>Byte-transparent TLS passthrough. TLS is not terminated and no SNI/payload is
+inspected.</li>
+<li>One native HGM backend connection per accepted client connection, always
+freshly acquired and always destroyed on release.</li>
+<li>Mandatory <code>MYSQL</code> or <code>PGSQL</code> source hostgroup for every TCP hostgroup.</li>
+<li>Shared capacity when several TCP hostgroups name the same source hostgroup.</li>
+<li>Source-address CIDR routing rules with <code>ROUTE</code> and <code>REJECT</code>.</li>
+<li>Frontend/global admission limits, relay connect timeout and bounded retry,
+idle timeout, half-close, worker/buffer and shutdown controls.</li>
+<li>Runtime status plus listener/rule statistics and Prometheus relay/listener/
+rule families.</li>
+</ul>
+<p>Not supported in this version: UDP, TLS termination, SNI or SQL/application
+routing, PROXY protocol, transparent source spoofing, protocol authentication,
+application health scripts, backend connection pooling/free-socket reuse,
+queued excess connections, automatic Cluster replication, synchronous DNS
+resolution and local TCP backend definitions. Configure backend selection,
+health checks and server status in the native protocol HGM.</p>
+<p>Linux is the initial data-plane platform. The plugin build reports unsupported
+platforms explicitly rather than silently building another relay.</p>
+<h2>Build and load</h2>
+<p>Build with the same compiler, C++ standard library, feature tier and <code>DEBUG</code>
+setting as the ProxySQL core.</p>
+<pre><code class="language-sh"># Normal v4 build, including this plugin
+make -j4 PROXYSQL40=1
+
+# Or build only this DSO
+make -C plugins/tcp_proxy PROXYSQL40=1
+
+# Matching debug build
+make -j4 PROXYSQL40=1 debug
+# or: make -C plugins/tcp_proxy PROXYSQL40=1 OPTZ='-O0 -ggdb -DDEBUG'
+</code></pre>
+<p>The artifact is <code>plugins/tcp_proxy/proxysql_tcp_proxy.so</code>. Load it through the
+core plugin chassis, either from <code>proxysql.cnf</code>:</p>
+<pre><code class="language-ini">plugins=(
+    &quot;tcp_proxy&quot;
+)
+</code></pre>
+<p>or from the command line:</p>
+<pre><code class="language-sh">proxysql --load-plugin tcp_proxy --plugin-dir /path/to/plugins/tcp_proxy
+# or an absolute module path:
+proxysql --load-plugin /path/to/plugins/tcp_proxy/proxysql_tcp_proxy.so
+</code></pre>
+<p>An installed build places the DSO in <code>/usr/lib/proxysql/plugins</code> through the
+top-level <code>make install</code> target.</p>
+<h2>Tables and defaults</h2>
+<p>All IDs are nonnegative signed 32-bit integers; ports are 1..65535. Every table
+except <code>tcp_settings</code> has <code>comment TEXT NOT NULL DEFAULT ''</code>.</p>
+<h3><code>tcp_settings</code></h3>
+<p>Exactly one row with <code>id=1</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th style="text-align:right">Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td style="text-align:right">1</td>
+<td><code>PRIMARY KEY</code>, <code>CHECK(id=1)</code></td>
+</tr>
+<tr>
+<td><code>worker_threads</code></td>
+<td style="text-align:right">2</td>
+<td>1..64; startup-only after workers run</td>
+</tr>
+<tr>
+<td><code>max_connections</code></td>
+<td style="text-align:right">10000</td>
+<td>1..1000000 across all listeners, including pending connects</td>
+</tr>
+<tr>
+<td><code>buffer_size</code></td>
+<td style="text-align:right">16384</td>
+<td>1024..1048576 bytes per direction; startup-only</td>
+</tr>
+<tr>
+<td><code>shutdown_timeout_ms</code></td>
+<td style="text-align:right">5000</td>
+<td>0..60000 stop draining deadline</td>
+</tr>
+<tr>
+<td><code>half_close_timeout_ms</code></td>
+<td style="text-align:right">30000</td>
+<td>1..3600000 completion after first EOF</td>
+</tr>
+</tbody>
+</table>
+<h3><code>tcp_hostgroups</code> (mandatory mapping)</h3>
+<p>Authoritative DDL:</p>
+<pre><code class="language-sql">CREATE TABLE tcp_hostgroups ( hostgroup_id INTEGER PRIMARY KEY CHECK(hostgroup_id &gt;= 0), source_protocol TEXT NOT NULL CHECK(source_protocol IN ('MYSQL','PGSQL')), source_hostgroup INTEGER NOT NULL CHECK(source_hostgroup &gt;= 0), comment TEXT NOT NULL DEFAULT '')
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th style="text-align:right">Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hostgroup_id</code></td>
+<td style="text-align:right">required</td>
+<td>TCP hostgroup ID; independent of MySQL/PgSQL IDs</td>
+</tr>
+<tr>
+<td><code>source_protocol</code></td>
+<td style="text-align:right">required</td>
+<td><code>MYSQL</code> or <code>PGSQL</code>, exactly upper case</td>
+</tr>
+<tr>
+<td><code>source_hostgroup</code></td>
+<td style="text-align:right">required</td>
+<td>Existing HGM hostgroup in the selected protocol namespace</td>
+</tr>
+<tr>
+<td><code>comment</code></td>
+<td style="text-align:right"><code>''</code></td>
+<td>Free-form text, preserved byte-for-byte</td>
+</tr>
+</tbody>
+</table>
+<p>There are no balance, health, weight, capacity or fallback columns. Every TCP
+hostgroup must have exactly one mapping row. A listener default/ROUTE
+destination must reference a TCP hostgroup. The named source hostgroup may be
+empty or absent at configuration time; it can be populated later by monitor,
+Admin or Cluster without another TCP <code>LOAD</code>. For the same reason an empty core
+source rejects new admissions until its protocol manager has an eligible
+backend. <code>MYSQL</code> and <code>PGSQL</code> hostgroup IDs are separate namespaces: <code>10</code> in
+<code>MYSQL</code> is not <code>10</code> in <code>PGSQL</code>.</p>
+<p>Several TCP hostgroups may name the same <code>(source_protocol, source_hostgroup)</code>. They then share that HGM's per-backend connection limits,
+status, health, counters and error policy. This adds no single hostgroup-wide
+connection limit, second TCP reservation or local pool.</p>
+<p>Source server hostnames must already resolve through the source protocol
+monitor's DNS cache. The TCP path uses that existing cache and never performs
+a blocking DNS lookup; numeric source addresses need no DNS resolution.</p>
+<h3><code>tcp_listeners</code></h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th style="text-align:right">Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>listener_id</code></td>
+<td style="text-align:right">required</td>
+<td><code>PRIMARY KEY</code></td>
+</tr>
+<tr>
+<td><code>active</code></td>
+<td style="text-align:right">1</td>
+<td>0 or 1</td>
+</tr>
+<tr>
+<td><code>bind_address</code></td>
+<td style="text-align:right"><code>0.0.0.0</code></td>
+<td>Numeric IPv4/IPv6 address only</td>
+</tr>
+<tr>
+<td><code>bind_port</code></td>
+<td style="text-align:right">required</td>
+<td>1..65535</td>
+</tr>
+<tr>
+<td><code>default_hostgroup</code></td>
+<td style="text-align:right">required</td>
+<td>Existing <code>tcp_hostgroups.hostgroup_id</code></td>
+</tr>
+<tr>
+<td><code>max_connections</code></td>
+<td style="text-align:right">10000</td>
+<td>Per-listener FRONTEND admission limit, 1..1000000</td>
+</tr>
+<tr>
+<td><code>connect_timeout_ms</code></td>
+<td style="text-align:right">2000</td>
+<td>Total backend establish budget, 1..60000</td>
+</tr>
+<tr>
+<td><code>idle_timeout_ms</code></td>
+<td style="text-align:right">60000</td>
+<td>0 disables, otherwise 1..86400000</td>
+</tr>
+<tr>
+<td><code>max_connect_attempts</code></td>
+<td style="text-align:right">3</td>
+<td>1..16 failed connect attempts</td>
+</tr>
+<tr>
+<td><code>comment</code></td>
+<td style="text-align:right"><code>''</code></td>
+<td>Free-form text</td>
+</tr>
+</tbody>
+</table>
+<p>Every listener row, including <code>active=0</code>, must have a
+<code>default_hostgroup</code> that references an existing <code>tcp_hostgroups</code> mapping.
+Disabling a listener does not make its references optional; activating it later
+never needs a mapping edit.</p>
+<p><code>max_connections</code> here is a frontend admission limit. It does not create a
+backend reservation. <code>connect_timeout_ms</code>, <code>max_connect_attempts</code>,
+<code>idle_timeout_ms</code>, <code>worker_threads</code>, <code>buffer_size</code>, <code>shutdown_timeout_ms</code> and
+<code>half_close_timeout_ms</code> are active controls, not ignored knobs.</p>
+<h3><code>tcp_routing_rules</code></h3>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th style="text-align:right">Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rule_id</code></td>
+<td style="text-align:right">required</td>
+<td><code>PRIMARY KEY</code></td>
+</tr>
+<tr>
+<td><code>active</code></td>
+<td style="text-align:right">1</td>
+<td>0 or 1</td>
+</tr>
+<tr>
+<td><code>listener_id</code></td>
+<td style="text-align:right">NULL</td>
+<td>NULL matches every listener</td>
+</tr>
+<tr>
+<td><code>source_cidr</code></td>
+<td style="text-align:right">NULL</td>
+<td>NULL matches every actual peer; canonical CIDR</td>
+</tr>
+<tr>
+<td><code>action</code></td>
+<td style="text-align:right"><code>ROUTE</code></td>
+<td><code>ROUTE</code> or <code>REJECT</code></td>
+</tr>
+<tr>
+<td><code>destination_hostgroup</code></td>
+<td style="text-align:right">NULL</td>
+<td>Required for every ROUTE, including inactive rows; must reference <code>tcp_hostgroups</code></td>
+</tr>
+<tr>
+<td><code>comment</code></td>
+<td style="text-align:right"><code>''</code></td>
+<td>Free-form text</td>
+</tr>
+</tbody>
+</table>
+<p>Rules use actual-peer CIDR matching and first-match order. <code>REJECT</code> must not
+name a destination. A rule cannot override the mapping: <code>destination_hostgroup</code>
+is a TCP hostgroup whose source mapping is mandatory. Every ROUTE destination,
+including in an <code>active=0</code> row, must reference an existing mapped TCP hostgroup;
+inactive rules are not exempt from referential validation.</p>
+<h2>SQL quickstart</h2>
+<p>Create a MySQL source endpoint, map a TCP hostgroup to it, and expose a listener:</p>
+<pre><code class="language-sql">-- Normal native MySQL configuration. Its HGM owns selection/health/capacity.
+DELETE FROM mysql_servers WHERE hostgroup_id = 10;
+INSERT INTO mysql_servers
+  (hostgroup_id, hostname, port, status, weight, max_connections, comment)
+VALUES
+  (10, '127.0.0.1', 3306, 'ONLINE', 1, 200, 'tcp source');
+LOAD MYSQL SERVERS TO RUNTIME;
+
+-- Mandatory TCP mapping plus listener.
+DELETE FROM tcp_routing_rules;
+DELETE FROM tcp_listeners;
+DELETE FROM tcp_hostgroups;
+INSERT INTO tcp_hostgroups
+  (hostgroup_id, source_protocol, source_hostgroup, comment)
+VALUES (20, 'MYSQL', 10, 'mysql application TCP');
+INSERT INTO tcp_listeners
+  (listener_id, active, bind_address, bind_port, default_hostgroup,
+   max_connections, connect_timeout_ms, idle_timeout_ms, max_connect_attempts,
+   comment)
+VALUES (1, 1, '127.0.0.1', 16033, 20, 10000, 2000, 60000, 3, 'mysql listener');
+LOAD TCP CONFIG TO RUNTIME;
+</code></pre>
+<p>A PostgreSQL mapping is identical except the source uses the PgSQL namespace:</p>
+<pre><code class="language-sql">INSERT INTO pgsql_servers
+  (hostgroup_id, hostname, port, status, weight, max_connections, comment)
+VALUES (30, '127.0.0.1', 5432, 'ONLINE', 1, 100, 'tcp pg source');
+LOAD PGSQL SERVERS TO RUNTIME;
+
+INSERT INTO tcp_hostgroups
+  (hostgroup_id, source_protocol, source_hostgroup, comment)
+VALUES (40, 'PGSQL', 30, 'pg application TCP');
+LOAD TCP CONFIG TO RUNTIME;
+</code></pre>
+<p>Two TCP hostgroups sharing one source namespace and capacity:</p>
+<pre><code class="language-sql">INSERT INTO tcp_hostgroups (hostgroup_id, source_protocol, source_hostgroup)
+VALUES (20, 'MYSQL', 10), (21, 'MYSQL', 10);
+</code></pre>
+<p>Both use the same backends in <code>MYSQL</code> hostgroup <code>10</code> and share each backend's
+<code>max_connections</code> limit. A flow in group 20 consumes capacity on its selected
+backend that is also available to group 21.</p>
+<p>A source-address rule:</p>
+<pre><code class="language-sql">INSERT INTO tcp_routing_rules
+  (rule_id, active, listener_id, source_cidr, action,
+   destination_hostgroup, comment)
+VALUES
+  (1, 1, 1, '192.0.2.0/24', 'REJECT', NULL, 'management client'),
+  (2, 1, 1, NULL, 'ROUTE', 20, 'default');
+LOAD TCP CONFIG TO RUNTIME;
+</code></pre>
+<h2>Persistence and commands</h2>
+<p>The existing canonical commands and aliases remain:</p>
+<pre><code class="language-sql">LOAD TCP CONFIG TO RUNTIME;
+SAVE TCP CONFIG FROM RUNTIME;
+LOAD TCP CONFIG FROM DISK;
+SAVE TCP CONFIG TO DISK;
+</code></pre>
+<p>Aliases: <code>LOAD TCP CONFIG FROM MEMORY</code>, <code>SAVE TCP CONFIG TO MEMORY</code>,
+<code>LOAD TCP CONFIG TO MEMORY</code>, <code>SAVE TCP CONFIG FROM MEMORY</code>.</p>
+<p><code>LOAD ... TO RUNTIME</code> validates and activates all four editable tables as one
+runtime generation. <code>SAVE ... FROM RUNTIME</code> copies that generation back to
+editable Admin memory. <code>LOAD ... FROM DISK</code> copies disk configuration to editable
+Admin memory; <code>SAVE ... TO DISK</code> copies editable Admin memory to disk. Neither
+disk command changes the active runtime. Each copy is transactional. A failed
+LOAD TO RUNTIME leaves the previous runtime generation and working listeners
+intact. Disk copies preserve quotes, NUL-free text, tabs and every comment byte.
+The mapping is saved in <code>tcp_hostgroups</code> and projected in
+<code>runtime_tcp_hostgroups</code>; there is no TCP server or separate mapping projection.</p>
+<p>Source protocol configuration has its own, separate persistence commands:</p>
+<pre><code class="language-sql">LOAD MYSQL SERVERS TO RUNTIME;
+SAVE MYSQL SERVERS TO DISK;
+LOAD PGSQL SERVERS TO RUNTIME;
+SAVE PGSQL SERVERS TO DISK;
+</code></pre>
+<p>A native status/role/weight change is applied by its protocol command; it does
+not require another TCP LOAD. <code>OFFLINE_HARD</code> from the source HGM closes an
+established mapped stream and forbids retry of that accepted stream.
+<code>OFFLINE_SOFT</code> and SHUNNED preserve established flows; the HGM decides whether
+new admissions are eligible. Role changes follow the resulting native HGM
+status. In particular, monitor-driven loss of the writer role marks the old
+writer entry <code>OFFLINE_HARD</code>, which closes streams pinned to that entry. No TCP
+LOAD is needed and established streams are never rerouted.</p>
+<h2>Operational removal</h2>
+<h3>Soft removal (drain)</h3>
+<p>Set the source server's protocol status and load that protocol:</p>
+<pre><code class="language-sql">UPDATE mysql_servers SET status='OFFLINE_SOFT'
+ WHERE hostgroup_id=10 AND hostname='127.0.0.1' AND port=3306;
+LOAD MYSQL SERVERS TO RUNTIME;
+</code></pre>
+<p>Established flows continue. The source server receives no new admissions; other
+eligible backends in its source hostgroup may still accept new connections.
+To drain a whole mapped service, deactivate or remove its TCP listener and
+<code>LOAD TCP CONFIG TO RUNTIME</code>. Alternatively, install an active <code>REJECT</code> rule
+matching all peers on that listener, before any matching <code>ROUTE</code> rule, and load
+the TCP configuration. Existing admitted flows continue draining in either case.
+Disabling or removing a <code>ROUTE</code> rule alone does not stop new admissions: unmatched
+connections use the listener's <code>default_hostgroup</code>.</p>
+<h3>Hard removal (immediate disconnect)</h3>
+<pre><code class="language-sql">UPDATE mysql_servers SET status='OFFLINE_HARD'
+ WHERE hostgroup_id=10 AND hostname='127.0.0.1' AND port=3306;
+LOAD MYSQL SERVERS TO RUNTIME;
+</code></pre>
+<p>The native HGM's HARD fence is authoritative. It immediately closes attached
+and pending mapped streams, closes both sides and never reroutes or retries the
+accepted stream.</p>
+<h3>Endpoint replacement</h3>
+<p>Replace the endpoint in the protocol server table and load that protocol. An
+established mapped flow remains pinned to its already-acquired HGM handle until
+it closes or is fenced. New admissions use the replacement. Do not expect a TCP
+<code>LOAD</code> to perform core server removal or health policy.</p>
+<h2>Persistence, startup and <code>--no-start</code></h2>
+<p>On first start with <code>--initial</code>, the core creates the exact four-table schema
+and seeds <code>tcp_settings</code>. On later starts, saved four-table rows and their
+protocol source rows are restored from the datadir.</p>
+<p><code>--no-start</code> exposes the Admin schema (including the four TCP tables) without
+binding TCP listeners. <code>PROXYSQL START</code> starts them; <code>PROXYSQL STOP</code> stops the
+relay and leaves no listening TCP port until the next START. Both are tested on
+a saved mapped configuration.</p>
+<p>To set startup-only relay options before the first START, seed the settings
+row if it is absent, then edit it:</p>
+<pre><code class="language-sql">INSERT OR IGNORE INTO tcp_settings(id) VALUES(1);
+UPDATE tcp_settings SET worker_threads=4, buffer_size=32768 WHERE id=1;
+PROXYSQL START;
+</code></pre>
+<h2>Runtime, statistics and metrics</h2>
+<p>Runtime projections are <code>runtime_tcp_settings</code>, <code>runtime_tcp_hostgroups</code>,
+<code>runtime_tcp_listeners</code>, <code>runtime_tcp_routing_rules</code> and
+<code>runtime_tcp_status</code>. The mandatory mapping is part of
+<code>runtime_tcp_hostgroups</code>; there is no server or separate mapping projection.
+Statistics keep listener and rule rows/families only.</p>
+<p>Status/diagnostic queries:</p>
+<pre><code class="language-sql">SELECT * FROM runtime_tcp_status;
+SELECT * FROM runtime_tcp_settings;
+SELECT * FROM runtime_tcp_hostgroups;
+SELECT * FROM runtime_tcp_listeners;
+SELECT * FROM runtime_tcp_routing_rules;
+SELECT * FROM stats_tcp_listeners;
+SELECT * FROM stats_tcp_rules;
+SHOW PROMETHEUS METRICS;
+</code></pre>
+<p>Backend <code>ConnUsed</code>, <code>ConnFree</code>, <code>ConnOK</code>, <code>ConnERR</code>, <code>MaxConnUsed</code>,
+<code>Bytes_data_sent</code>, <code>Bytes_data_recv</code>, role and health are read from the source
+protocol HGM/stat tables, for example <code>stats_mysql_connection_pool</code> or
+<code>stats_pgsql_connection_pool</code>. There is no <code>stats_tcp_servers</code>,
+<code>proxysql_tcp_selected_total</code> or <code>proxysql_tcp_server_health</code> metric. TCP
+metrics retain relay, listener, rule, generation and running families, with
+actual application-byte accounting.</p>
+</body></html>

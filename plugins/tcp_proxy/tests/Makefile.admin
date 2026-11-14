@@ -1,0 +1,125 @@
+#!/bin/make -f
+#
+# Focused, dependency-light Admin unit test for plugins/tcp_proxy.
+#
+# Links the real SQLite3DB wrapper against an isolated in-memory database and a
+# deterministic Engine test double.  It deliberately does not replace the
+# production engine build (use plugins/tcp_proxy/Makefile for that).
+#
+# Typical invocation from the repository root:
+#   make -f plugins/tcp_proxy/tests/Makefile.admin \
+#        test
+
+HERE := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+PLUGIN_DIR := $(abspath $(HERE)/..)
+ROOT := $(abspath $(PLUGIN_DIR)/../..)
+
+DEPS_PATH ?= $(ROOT)/deps
+SQLITE3_IDIR := $(DEPS_PATH)/sqlite3/sqlite3
+PROMETHEUS_IDIRS := -I$(DEPS_PATH)/prometheus-cpp/prometheus-cpp/core/include \
+	-I$(DEPS_PATH)/prometheus-cpp/prometheus-cpp/pull/include
+PROMETHEUS_LDIR := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp/lib
+
+ODIR := $(PLUGIN_DIR)/tests/obj.admin
+BIN := $(PLUGIN_DIR)/tests/admin_unit-t
+
+CC ?= gcc
+CXX ?= g++
+
+CPPFLAGS := -DPROXYSQL40 -DTCP_PROXY_METRICS_TESTING \
+	-DTCP_PROXY_BACKEND_PROVIDER_TESTING \
+	-I$(ROOT)/include -I$(PLUGIN_DIR)/include \
+	-I$(SQLITE3_IDIR) $(PROMETHEUS_IDIRS) -I$(DEPS_PATH)/json \
+	-I$(DEPS_PATH)/libconfig/libconfig/lib -I$(DEPS_PATH)/libdaemon/libdaemon \
+	-I$(DEPS_PATH)/libev/libev -I$(DEPS_PATH)/libscram/include \
+	-I$(DEPS_PATH)/libusual/libusual \
+	-I$(DEPS_PATH)/postgresql/postgresql/src/include \
+	-I$(DEPS_PATH)/postgresql/postgresql/src/interfaces/libpq \
+	-I$(DEPS_PATH)/mariadb-client-library/mariadb_client/include \
+	-I$(DEPS_PATH)/libssl/openssl/include -I$(DEPS_PATH)/re2/re2 \
+	-I$(DEPS_PATH)/abseil/abseil-cpp-20260107.0/install/include \
+	-I$(DEPS_PATH)/libhttpserver/libhttpserver/src \
+	-I$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src/include \
+	-I$(DEPS_PATH)/curl/curl/include -I$(DEPS_PATH)/pcre/pcre \
+	-I$(DEPS_PATH)/pcre2/pcre2/src -I$(DEPS_PATH)/zstd/zstd/lib \
+	-I$(DEPS_PATH)/lz4/lz4/lib -I$(DEPS_PATH)/parsersql/parsersql/include \
+	-I$(DEPS_PATH)/jemalloc/jemalloc/include/jemalloc \
+	-I$(DEPS_PATH)/cityhash/cityhash/src
+
+DEPFLAGS := -MMD -MP
+
+CXXFLAGS := -std=c++17 -pthread -O0 -ggdb -fno-omit-frame-pointer -fPIC
+CFLAGS := -O2 -fPIC
+
+.PHONY: all
+all: $(BIN)
+
+$(ODIR):
+	mkdir -p $(ODIR)
+
+$(ODIR)/admin_unit.o: $(HERE)/admin_unit.cpp \
+		$(ROOT)/include/ProxySQL_Plugin.h \
+		$(PLUGIN_DIR)/include/tcp_proxy.h \
+		$(PLUGIN_DIR)/include/tcp_proxy_plugin.h | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(CPPFLAGS) -I$(ROOT)/test/tap/tap -c -o $@ $<
+
+$(ODIR)/admin.o: $(PLUGIN_DIR)/src/admin.cpp \
+		$(PLUGIN_DIR)/include/tcp_proxy_plugin.h \
+		$(PLUGIN_DIR)/include/tcp_proxy.h | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(ODIR)/plugin.o: $(PLUGIN_DIR)/src/plugin.cpp \
+		$(PLUGIN_DIR)/include/tcp_proxy_plugin.h \
+		$(PLUGIN_DIR)/include/tcp_proxy.h | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(ODIR)/backend_provider.o: $(PLUGIN_DIR)/src/backend_provider.cpp \
+		$(PLUGIN_DIR)/include/tcp_proxy_plugin.h \
+		$(PLUGIN_DIR)/include/tcp_proxy.h \
+		$(ROOT)/include/ProxySQL_PluginRawBackend.h | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(ODIR)/metrics.o: $(PLUGIN_DIR)/src/metrics.cpp \
+		$(PLUGIN_DIR)/include/tcp_proxy_plugin.h | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(ODIR)/sqlite3db.o: $(ROOT)/lib/sqlite3db.cpp \
+		$(ROOT)/include/sqlite3db.h | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+# sqlite-vec is not needed for these tests; compile the pointer table without
+# PROXYSQL40 so the optional vec hook is omitted.
+$(ODIR)/proxy_sqlite3_symbols.o: $(ROOT)/lib/proxy_sqlite3_symbols.cpp \
+		$(ROOT)/include/sqlite3db.h | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(filter-out -DPROXYSQL40,$(CPPFLAGS)) -c -o $@ $<
+
+$(ODIR)/SpookyV2.o: $(ROOT)/lib/SpookyV2.cpp | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -I$(ROOT)/include -c -o $@ $<
+
+$(ODIR)/sha256crypt.o: $(ROOT)/lib/sha256crypt.cpp | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -I$(ROOT)/include -c -o $@ $<
+
+$(ODIR)/sqlite3.o: $(SQLITE3_IDIR)/sqlite3.c | $(ODIR)
+	$(CC) $(CFLAGS) $(DEPFLAGS) -I$(SQLITE3_IDIR) -c -o $@ $<
+
+$(ODIR)/tap.o: $(ROOT)/test/tap/tap/tap.cpp | $(ODIR)
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -I$(ROOT)/test/tap/tap -c -o $@ $<
+
+$(BIN): $(ODIR)/admin_unit.o $(ODIR)/admin.o $(ODIR)/plugin.o \
+		$(ODIR)/backend_provider.o \
+		$(ODIR)/metrics.o $(ODIR)/sqlite3db.o \
+		$(ODIR)/proxy_sqlite3_symbols.o $(ODIR)/SpookyV2.o \
+		$(ODIR)/sha256crypt.o $(ODIR)/sqlite3.o $(ODIR)/tap.o
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(PROMETHEUS_LDIR)/libprometheus-cpp-core.a \
+		-lpthread -ldl -lm -lcrypto -lcrypt
+
+.PHONY: test
+test: $(BIN)
+	$(BIN)
+
+.PHONY: clean
+clean:
+	rm -rf $(ODIR) $(BIN)
+
+# Track transitive headers for every independently compiled test object.
+-include $(wildcard $(ODIR)/*.d)

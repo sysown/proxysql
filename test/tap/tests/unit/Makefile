@@ -750,6 +750,7 @@ UNIT_TESTS += \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
+	plugin_raw_backend_unit-t \
 	plugin_secrets_unit-t \
 	plugin_registry_unit-t \
 	plugin_query_hook_unit-t \
@@ -765,6 +766,7 @@ UNIT_TESTS += \
 	aws_locality_selection_unit-t \
 	aws_locality_stats_unit-t \
 	plugin_listener_gate_unit-t \
+	plugin_listener_reservations_unit-t \
 	plugin_mysql_config_unit-t \
 	plugin_router_chassis_contract_unit-t \
 	mysql_router_plugin_load_unit-t \
@@ -876,6 +878,11 @@ pgsql_waiter_list_unit-t: pgsql_waiter_list_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
+plugin_listener_reservations_unit-t: plugin_listener_reservations_unit-t.cpp $(PROXYSQL_PATH)/lib/ProxySQL_PluginListenerReservations.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/ProxySQL_PluginListenerReservations.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-DPROXYSQL40 -I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(TEST_HELPERS_DIR) \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
 mcp_client_unit-t: mcp_client_unit-t.cpp $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(TAP_PATH)/mcp_client.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		$(IDIRS) $(LDIRS) $(OPT) $(MCP_CLIENT_LIBS) -o $@
@@ -891,6 +898,11 @@ plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN
 		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_raw_backend_unit-t: plugin_raw_backend_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 managed_configuration_database_unit-t: managed_configuration_database_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \

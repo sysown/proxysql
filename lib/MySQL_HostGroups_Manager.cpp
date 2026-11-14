@@ -6815,6 +6815,10 @@ void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, i
 
 	std::unordered_map<uint64_t, void *>::iterator it;
 	pthread_mutex_lock(&mysql_errors_mutex);
+	struct ErrorsMutexUnlock {
+		pthread_mutex_t* mutex;
+		~ErrorsMutexUnlock() { pthread_mutex_unlock(mutex); }
+	} errors_mutex_unlock { &mysql_errors_mutex };
 
 	it=mysql_errors_umap.find(hash1);
 
@@ -6831,10 +6835,16 @@ void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, i
 		}
 */
 	} else {
-		mes = new MySQL_Errors_stats(hostgroup, hostname, port, username, address, schemaname, err_no, last_error, tn);
-		mysql_errors_umap.insert(std::make_pair(hash1,(void *)mes));
+		// Own the newly allocated node until the map insertion commits.  A
+		// bad_alloc from either allocation unwinds the scoped unlock above and
+		// cannot leave the errors mutex locked or an orphan stats node behind.
+		std::unique_ptr<MySQL_Errors_stats> new_mes(
+			new MySQL_Errors_stats(hostgroup, hostname, port, username, address,
+				schemaname, err_no, last_error, tn));
+		const auto inserted = mysql_errors_umap.insert(
+			std::make_pair(hash1, (void *)new_mes.get()));
+		if (inserted.second) new_mes.release();
 	}
-	pthread_mutex_unlock(&mysql_errors_mutex);
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
