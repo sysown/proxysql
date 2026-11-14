@@ -31,7 +31,7 @@ jobs:
 
   plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -39,7 +39,6 @@ jobs:
       control_sha: ${{ steps.plan.outputs.control_sha }}
     steps:
     - name: Checkout CI control
-      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -48,7 +47,6 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Resolve selected product configurations
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -59,7 +57,6 @@ jobs:
         python3 ci-control/.github/scripts/ci_tier_runtime.py plan
       id: plan
     - name: Publish execution plan
-      timeout-minutes: 5
       if: ${{ inputs.trusted && success() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -75,7 +72,7 @@ jobs:
     # Builds additionally require the proxysql-build label, carried only by the
     # dedicated build runners; tests keep using the shared proxysql-ci pool.
     runs-on: ${{ inputs.trusted && ((contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (inputs.trigger && contains(fromJson('["renecannao","rahim-kanji"]'), fromJson(inputs.trigger).event.workflow_run.actor.login))) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci","proxysql-build"]')) || 'ubuntu-24.04' }}
-    timeout-minutes: 240
+    timeout-minutes: 120
 #    needs: [ lock ]
 #    outputs:
 #      matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -142,7 +139,6 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Check immutable artifacts retained by a partial rerun
-      timeout-minutes: 30
       id: artifacts
       if: ${{ inputs.trusted && success() }}
       env:
@@ -151,7 +147,6 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py artifact-status
     - name: Start product build check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -509,7 +504,6 @@ jobs:
         ls -la "${runtime_dir}/"
 
     - name: Record built product metadata
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -630,7 +624,6 @@ jobs:
         if-no-files-found: warn
 
     - name: Complete product build check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -646,10 +639,8 @@ jobs:
     - builds
     if: ${{ inputs.trusted && always() && needs.plan.result == 'success' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
     steps:
     - name: Checkout CI control
-      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -658,7 +649,6 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Finalize build manifest
-      timeout-minutes: 30
       id: finalize
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -668,7 +658,6 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py finalize
     - name: Publish immutable manifest
-      timeout-minutes: 5
       if: ${{ inputs.trusted && steps.finalize.outputs.publish_manifest == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -676,7 +665,6 @@ jobs:
         path: manifest.json
         retention-days: 3
     - name: Publish accepted producer for native completion fanout
-      timeout-minutes: 5
       if: ${{ inputs.trusted && success() && github.event_name != 'workflow_run' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:

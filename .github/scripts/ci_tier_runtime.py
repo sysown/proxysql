@@ -13,11 +13,8 @@ from ci_tier_plan import resolve_selection, make_plan, consumer_matrix, applicab
 from ci_tier_artifacts import GitHubAPI, resolve_producer, load_manifest, select_artifact, restore_handoff, restore_artifact, verify_binding
 from ci_tier_checks import register, publish_result, reconcile, reporting_repository
 from ci_cancel_superseded import cancel_if_superseded
-from ci_github_transport import command_budget
 
 ROOT=Path(__file__).resolve().parents[1]
-# Plan (45m), build (240m), finalize (50m), and discovery/polling slack.
-PRODUCER_WAIT_SECONDS=345*60
 
 def emit(**values):
     with open(os.environ['GITHUB_OUTPUT'],'a') as out:
@@ -43,9 +40,8 @@ def read_plan():
     validate_manifest(plan);verify_binding(plan,binding)
     if plan['execution_id']!=binding['execution_id']:raise ValueError('plan attempt mismatch')
     return plan
-def api_for(plan,*,deadline=None):
+def api_for(plan):
     options={}
-    if deadline is not None:options['deadline']=deadline
     scope=[os.environ.get(key) for key in ('GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_JOB')]
     if os.environ.get('RUNNER_TEMP') and all(scope):
         # Reuse verified archive bytes across steps, scoped to this job attempt.
@@ -315,9 +311,7 @@ def producer_lookup():
     gh=json.loads(os.environ['GITHUB_JSON'])
     ctx=dict(repository=gh['repository'],sha=gh.get('event',{}).get('pull_request',{}).get('head',{}).get('sha') or gh['sha'],
              trigger_id=int(gh['run_id']),trigger_attempt=int(gh['run_attempt']))
-    deadline=time.monotonic()+PRODUCER_WAIT_SECONDS
-    api=api_for(ctx,deadline=deadline)
-    # The API client owns retries; do not restart an exhausted wait budget here.
+    api=api_for(ctx);deadline=time.monotonic()+14400;errors_since=None
     while time.monotonic()<deadline:
         try:
             producer=resolve_producer(ctx,api);break
@@ -329,26 +323,22 @@ def producer_lookup():
             candidates=[r for r in runs if r.get('display_title','').endswith(suffix)]
             if any(r['status']=='completed' and r['conclusion']!='success' for r in candidates):
                 raise RuntimeError('producer failed before publishing a build registration')
-            time.sleep(min(15,max(0,deadline-time.monotonic())))
+            errors_since=None
+            time.sleep(15)
+        except RuntimeError:
+            if errors_since is None:errors_since=time.monotonic()
+            if time.monotonic()-errors_since>300:raise
+            time.sleep(15)
     else:raise RuntimeError('timed out waiting for producer registration')
     while time.monotonic()<deadline:
         run=api.request(f"repos/{ctx['repository']}/actions/runs/{producer['build_id']}/attempts/{producer['build_attempt']}")
-        if time.monotonic()>=deadline:break
         if run['status']=='completed':
             if run['conclusion']!='success':raise RuntimeError('producer failed: '+str(run['conclusion']))
             Path('producer.json').write_text(json.dumps(producer))
             return
-        remaining=deadline-time.monotonic()
-        if remaining<=0:break
-        delay=min(random.uniform(120,240),remaining)
-        print(f'Producer build still running; checking again in {delay:.0f}s',flush=True)
-        time.sleep(delay)
+        time.sleep(min(random.uniform(120,240),max(0,deadline-time.monotonic())))
     raise RuntimeError('timed out waiting for producer completion')
 
-def run_command(command):
-    commands={'selection':standalone_selection,'artifact-status':artifact_status,'plan':plan_command,'stamp':stamp,'finalize':finalize,'consumer':consumer,'result':result,'restore':restore,'restore-unit':restore_unit,'summary':summary,'wait-build':producer_lookup}
-    timeout=PRODUCER_WAIT_SECONDS if command=='wait-build' else 55*60 if command in ('restore','restore-unit') else 25*60
-    with command_budget(timeout_seconds=timeout):commands[command]()
-
 if __name__=='__main__':
-    run_command(sys.argv[1])
+    commands={'selection':standalone_selection,'artifact-status':artifact_status,'plan':plan_command,'stamp':stamp,'finalize':finalize,'consumer':consumer,'result':result,'restore':restore,'restore-unit':restore_unit,'summary':summary,'wait-build':producer_lookup}
+    commands[sys.argv[1]]()

@@ -36,7 +36,7 @@ jobs:
     secrets: inherit
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 120
     permissions:
       actions: read
       checks: write
@@ -52,7 +52,6 @@ jobs:
     steps:
 
     - name: Checkout CI control
-      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -61,7 +60,6 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Start selected product test check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -70,7 +68,6 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
-      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         repository: ${{ github.repository }}
@@ -85,20 +82,17 @@ jobs:
           docker/images/proxysql/deb-compliant/entrypoint
 
     - name: Restore selected product handoff
-      timeout-minutes: 60
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Verify binary
-      timeout-minutes: 1
       run: |
         chmod +x proxysql/src/proxysql
         file proxysql/src/proxysql
 
     - name: Restore AWS IAM auth test helper
-      timeout-minutes: 1
       run: |
         set -euo pipefail
         cd proxysql
@@ -144,8 +138,6 @@ jobs:
           -lc 'apt-get update -qq && apt-get install -y --no-install-recommends python3-packaging libprotobuf-dev default-mysql-client postgresql-client && command -v mysql && command -v psql && cd /opt/proxysql && test/infra/control/run-tests-isolated.bash'
 
     - name: Fix artifact permissions
-      continue-on-error: true
-      timeout-minutes: 2
       if: ${{ failure() && !cancelled() }}
       run: |
         # actions/upload-artifact dies with EACCES when it scandirs into
@@ -158,7 +150,6 @@ jobs:
         sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
 
     - name: Archive artifacts logs
-      timeout-minutes: 5
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
@@ -167,7 +158,6 @@ jobs:
           proxysql/ci_*_logs/
 
     - name: Complete selected product test check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

@@ -41,10 +41,9 @@ jobs:
       checks: write
       contents: read
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
-    timeout-minutes: 263
+    timeout-minutes: 120
     steps:
     - name: Checkout repository
-      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: ${{ github.repository }}
@@ -54,7 +53,6 @@ jobs:
         submodules: 'false'
         path: proxysql
     - name: Checkout CI control
-      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -63,7 +61,6 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Start selected product test check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -73,10 +70,8 @@ jobs:
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
       working-directory: ${{ github.workspace }}
     - name: Relax ASLR for ThreadSanitizer
-      timeout-minutes: 1
       run: sudo sysctl -w vm.mmap_rnd_bits=28
     - name: Build selected product inside Docker
-      timeout-minutes: 90
       env:
         WITHTSAN: '1'
         PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
@@ -84,7 +79,6 @@ jobs:
       run: |
         make ubuntu24-tap
     - name: Run mysqlx-tsan-g1 + unit-tests-g1 TAP groups inside Docker
-      timeout-minutes: 90
       env:
         TAP_GROUP: mysqlx-tsan-g1
         INFRA_ID: ci-unit-tests-tsan
@@ -113,8 +107,6 @@ jobs:
                      SKIP_PROXYSQL=1 TSAN_OPTIONS="halt_on_error=0:abort_on_error=0:exitcode=0:second_deadlock_stack=1:history_size=7" TAP_GROUP=unit-tests-g1 TEST_PY_TAP_EXCL="${tsan_excl}" test/infra/control/run-tests-isolated.bash; unit_status=$?
                      test "${mysqlx_status}" -eq 0 && test "${unit_status}" -eq 0; }'
     - name: Fix artifact permissions
-      continue-on-error: true
-      timeout-minutes: 2
       if: ${{ failure() && !cancelled() }}
       run: |
         # actions/upload-artifact dies with EACCES when it scandirs
@@ -123,14 +115,12 @@ jobs:
         # readable by the runner user before upload.
         sudo chmod -R a+rX ci_*_logs/ 2>/dev/null || true
     - name: Archive logs
-      timeout-minutes: 5
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: proxysql/ci_*_logs/
     - name: Complete selected product test check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

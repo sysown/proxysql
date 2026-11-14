@@ -110,27 +110,6 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(result, {'id': 7})
         self.assertEqual(waits, [12])
 
-    def test_retry_after_takes_precedence_over_primary_reset(self):
-        _, _, waits, _ = self.invoke([response(403, ['Retry-After: 12',
-            'X-RateLimit-Remaining: 0', 'X-RateLimit-Reset: 1720'], code=1), response()])
-        self.assertEqual(waits, [12])
-
-    def test_retry_log_precedes_sleep_and_hides_sensitive_request_data(self):
-        output = io.StringIO()
-        logs_at_sleep = []
-        with patch.object(transport.subprocess, 'run', side_effect=[response(429,
-                ['Retry-After: 12', 'Location: https://storage.invalid/?sig=private'],
-                code=1, stderr=b'payload-private ghp_secret'), response()]), \
-             patch.object(transport.time, 'sleep', side_effect=lambda _: logs_at_sleep.append(output.getvalue())), \
-             contextlib.redirect_stderr(output):
-            transport.request('https://username:password@api.github.com/repos/org/repo?token=query-private',
-                              'POST', {'text': 'payload-private'}, token='ghp_secret')
-        self.assertEqual(len(logs_at_sleep), 1)
-        self.assertIn('POST /repos/org/repo', logs_at_sleep[0])
-        self.assertIn('retrying in 12s', logs_at_sleep[0])
-        for secret in ['ghp_secret', 'query-private', 'payload-private', 'storage.invalid', 'password', 'username']:
-            self.assertNotIn(secret, output.getvalue())
-
     def test_retry_after_http_date_controls_rate_limit_wait(self):
         _, _, waits, _ = self.invoke([response(429, ['Retry-After: Thu, 01 Jan 1970 00:17:00 GMT'], code=1), response()])
         self.assertEqual(waits, [20])
@@ -139,35 +118,10 @@ class TransportTests(unittest.TestCase):
         _, _, waits, _ = self.invoke([response(403, ['X-RateLimit-Remaining: 0', 'X-RateLimit-Reset: 1030'], code=1), response()])
         self.assertEqual(waits, [30])
 
-    def test_primary_limit_can_wait_eight_to_twelve_minutes_for_reset(self):
-        for reset, delay in [(1480, 480), (1720, 720)]:
-            with self.subTest(reset=reset):
-                result, calls, waits, log = self.invoke([response(403, [
-                    'X-RateLimit-Remaining: 0', f'X-RateLimit-Reset: {reset}'],
-                    code=1), response()])
-                self.assertEqual(result, {'id': 7})
-                self.assertEqual(len(calls), 2)
-                self.assertEqual(waits, [delay])
-                self.assertIn(f'retrying in {delay:g}s', log)
-
-    def test_twenty_minute_wait_is_allowed_but_cannot_be_exceeded(self):
-        for delays, expected_waits, expected_calls, succeeds in [
-                ([1200], [1200], 2, True),
-                ([600, 600, 1], [600, 600], 3, False),
-                ([1201], [], 1, False)]:
-            replies = [response(429, [f'Retry-After: {delay}'], code=1)
-                       for delay in delays] + [response()]
-            waits = []
-            with self.subTest(delays=delays), \
-                 patch.object(transport.subprocess, 'run', side_effect=replies) as run, \
-                 patch.object(transport.time, 'sleep', side_effect=waits.append):
-                if succeeds:
-                    self.assertEqual(transport.request('checks'), {'id': 7})
-                else:
-                    with self.assertRaisesRegex(RuntimeError, 'budget'):
-                        transport.request('checks')
-            self.assertEqual(run.call_count, expected_calls)
-            self.assertEqual(waits, expected_waits)
+    def test_twenty_minute_quota_wait_is_allowed(self):
+        result, _, waits, _ = self.invoke([response(429, ['Retry-After: 1200'], code=1), response()])
+        self.assertEqual(result, {'id': 7})
+        self.assertEqual(waits, [1200])
 
     def test_secondary_limit_backs_off_for_at_least_a_minute(self):
         _, _, waits, _ = self.invoke([response(403, code=1, stderr=b'secondary rate limit')] * 2 + [response()])

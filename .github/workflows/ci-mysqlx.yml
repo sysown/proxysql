@@ -56,7 +56,7 @@ jobs:
     # test-ci-mysqlx-dbdeployer-install.bash enforces this literal value.
     runs-on: ubuntu-24.04
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 328
+    timeout-minutes: 270
 
     permissions:
       actions: read
@@ -97,7 +97,7 @@ jobs:
         path: 'proxysql'
 
     - name: Restore selected product handoff
-      timeout-minutes: 60
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -352,7 +352,6 @@ jobs:
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Complete selected product test check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -378,7 +377,7 @@ jobs:
   soak-tests:
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 288
+    timeout-minutes: 230
 
     strategy:
       fail-fast: false
@@ -429,7 +428,7 @@ jobs:
 
 
     - name: Restore selected product handoff
-      timeout-minutes: 60
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -544,14 +543,11 @@ jobs:
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Fix artifact permissions
-      continue-on-error: true
-      timeout-minutes: 2
       if: ${{ failure() && !cancelled() }}
       run: |
         sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
 
     - name: Archive logs
-      timeout-minutes: 5
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
       with:
@@ -560,7 +556,6 @@ jobs:
           proxysql/ci_*_logs/
 
     - name: Complete selected product test check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

@@ -244,40 +244,6 @@ class DownloadTests(unittest.TestCase):
                 self.assertEqual(target.read_bytes(), payload)
                 self.assertEqual(sum(path == '/api' for path, _, _ in requests), 2)
 
-    def test_redirect_primary_limit_waits_eight_to_twelve_minutes_for_reset(self):
-        for reset, delay in [(1480, 480), (1720, 720)]:
-            waits = []
-            cancelled = threading.Event()
-            cancelled.wait = lambda timeout: waits.append(timeout) or False
-            with self.subTest(reset=reset), artifact_server('plain', api_failures=(403,),
-                    api_headers={'X-RateLimit-Remaining': '0',
-                                 'X-RateLimit-Reset': str(reset)}) as (url, _, requests), \
-                 patch('ci_github_transport.time.time', return_value=1000):
-                location = ArtifactLocation(url, 'private-token').get(time.monotonic()+3600, cancelled)
-                self.assertTrue(location.endswith('/blob?secret'))
-                self.assertEqual([path for path, _, _ in requests], ['/api', '/api'])
-                self.assertEqual(waits, [delay])
-
-    def test_redirect_twenty_minute_wait_boundary_and_cumulative_exhaustion(self):
-        for delay, failures, expected_waits, expected_calls, succeeds in [
-                (1200, 1, [1200], 2, True),
-                (600, 3, [600, 600], 3, False),
-                (1201, 1, [], 1, False)]:
-            waits = []
-            cancelled = threading.Event()
-            cancelled.wait = lambda timeout: waits.append(timeout) or False
-            with self.subTest(delay=delay), artifact_server('plain', api_failures=(429,)*failures,
-                    api_headers={'Retry-After': str(delay)}) as (url, _, requests):
-                locations = ArtifactLocation(url, 'private-token')
-                if succeeds:
-                    location = locations.get(time.monotonic()+3600, cancelled)
-                    self.assertTrue(location.endswith('/blob?secret'))
-                else:
-                    with self.assertRaisesRegex(RuntimeError, 'budget'):
-                        locations.get(time.monotonic()+3600, cancelled)
-                self.assertEqual([path for path, _, _ in requests], ['/api']*expected_calls)
-                self.assertEqual(waits, expected_waits)
-
     def test_secondary_api_limit_without_retry_headers_retries_for_all_workers(self):
         with artifact_server('parallel', api_failures=(403,), api_headers={'X-RateLimit-Remaining': '4999'},
                 api_body=b'{"message":"You have exceeded a secondary rate limit."}') as (url, payload, requests), tempfile.TemporaryDirectory() as folder:

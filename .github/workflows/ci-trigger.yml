@@ -11,12 +11,14 @@ on:
 jobs:
   trigger:
     runs-on: ubuntu-22.04
-    # Cover all producer phases, polling, and accepted-producer publication.
-    timeout-minutes: 360
+    # Must exceed the timeout of the job it watches (ci-builds, 120) -- this
+    # job blocks on explicit CI-builds status/conclusion polling until that
+    # build finishes, so an equal budget lets the poller expire first and the
+    # workflow_run[completed] fan-out never fires.
+    timeout-minutes: 240
 
     steps:
     - name: Checkout CI control
-      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -25,14 +27,12 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Wait for this trigger execution build
-      timeout-minutes: 345
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py wait-build
     - name: Publish accepted producer for this cascade
-      timeout-minutes: 5
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: ci-accepted-producer-a${{ github.run_attempt }}

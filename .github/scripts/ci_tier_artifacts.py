@@ -21,8 +21,7 @@ import urllib.error
 import urllib.request
 from ci_tier_plan import validate_manifest, version_tuple
 from ci_github_transport import request as github_request
-from ci_github_transport import is_rate_limited, retry_delay, record_response, MAX_ATTEMPTS
-from ci_github_transport import CommandBudget, current_budget, effective_deadline, clipped_timeout
+from ci_github_transport import is_rate_limited, retry_delay, record_response, MAX_ATTEMPTS, MAX_WAIT_SECONDS
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -56,7 +55,6 @@ def artifact_location(url,token,deadline,cancelled):
             raise
         response=error
     with response:
-        download_timeout(deadline,cancelled)
         record_response('GET',url,response.code,response.headers,token=token)
         if response.code!=302:raise ValueError('artifact endpoint did not redirect')
         return response.headers['Location']
@@ -70,11 +68,8 @@ class ArtifactLocation:
         self.location=None
         self.failure=None
         self.lock=Lock()
-        # Context variables do not propagate into the range worker threads.
-        self.budget=current_budget() or CommandBudget()
 
     def get(self,deadline,cancelled):
-        deadline=effective_deadline(deadline,self.budget)
         # Keep lock waiters responsive while another worker resolves the URL.
         while not self.lock.acquire(timeout=0.1):
             download_timeout(deadline,cancelled)
@@ -88,12 +83,12 @@ class ArtifactLocation:
                     # reuses the resolver with a fresh cancellation event.
                     if not cancelled.is_set():self.failure=str(error)
                     raise
-            download_timeout(deadline,cancelled)
             return self.location
         finally:
             self.lock.release()
 
     def resolve(self,deadline,cancelled):
+        waited=0
         for attempt in range(MAX_ATTEMPTS):
             try:
                 return artifact_location(self.url,self.token,deadline,cancelled)
@@ -119,10 +114,10 @@ class ArtifactLocation:
                 if not retryable or attempt==MAX_ATTEMPTS-1 or remaining<=0:
                     raise RuntimeError(diagnostic) from None
                 delay=retry_delay(headers,limited,attempt)
-                print(f'Artifact redirect interrupted ({reason}); retrying in {delay:.0f}s',flush=True)
-                try:self.budget.wait(delay,cancelled=cancelled,deadline=deadline)
-                except RuntimeError as failure:
-                    raise RuntimeError(diagnostic+': '+str(failure)) from None
+                if delay>MAX_WAIT_SECONDS-waited or delay>=remaining:
+                    raise RuntimeError(diagnostic+': retry wait budget exceeded') from None
+                if cancelled.wait(delay):raise RuntimeError('artifact download cancelled') from None
+                waited+=delay
 
     def invalidate(self,location):
         with self.lock:
@@ -161,7 +156,6 @@ def download_part(url,token,target,start,end,size,deadline,cancelled,parallel,lo
                             reported=out.tell()
                             print(f'Artifact range {start}-{end}: {reported-start}/{end-start+1} bytes',flush=True)
                 if out.tell()!=end+1:raise OSError('incomplete artifact download')
-                download_timeout(deadline,cancelled)
                 return
             except (OSError,http.client.HTTPException) as error:
                 # Never log exceptions containing signed URLs or credentials.
@@ -209,30 +203,26 @@ def download_parts(url,token,target,size,workers,deadline,locations=None):
 
 
 class GitHubAPI:
-    def __init__(self, repository, token=None, *, cache_dir=None, deadline=None):
+    def __init__(self, repository, token=None, *, cache_dir=None):
         self.repository=repository
         self.token=token
         self.cache_dir=Path(cache_dir) if cache_dir is not None else None
-        self.deadline=deadline
     def request(self,path,method='GET',payload=None,raw=False,*,retry_safe=False,before_retry=None):
         return github_request(path,method,payload,raw,token=self.token,
-            retry_safe=retry_safe,before_retry=before_retry,deadline=self.deadline)
+            retry_safe=retry_safe,before_retry=before_retry)
 
     def download(self,path,destination,size,digest=None,verify=True):
         """Download up to eight resumable ranges directly into one archive."""
         if size<=0:raise ValueError('invalid artifact size')
         if digest and not re.fullmatch(r'sha256:[0-9a-fA-F]{64}',digest):
             raise ValueError('unsupported artifact checksum')
-        deadline=effective_deadline(self.deadline)
-        deadline=min(time.monotonic()+3600,deadline if deadline is not None else float('inf'))
         token=self.token or os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
         if not token:
-            auth=subprocess.run(['gh','auth','token'],capture_output=True,text=True,
-                timeout=clipped_timeout(60,deadline))
-            download_timeout(deadline)
+            auth=subprocess.run(['gh','auth','token'],capture_output=True,text=True,timeout=60)
             if auth.returncode:raise RuntimeError('Cannot obtain artifact download credentials')
             token=auth.stdout.strip()
         url=path if path.startswith(('http://','https://')) else 'https://api.github.com/'+path
+        deadline=time.monotonic()+3600
         workers=min(8,max(1,size//MIN_DOWNLOAD_PART_BYTES))
         destination=Path(destination)
         # Scratch files live beside the target for atomic publication after verification.
@@ -247,7 +237,6 @@ class GitHubAPI:
                         checksum.update(chunk)
                 if 'sha256:'+checksum.hexdigest()!=digest.lower():
                     raise ValueError('artifact checksum mismatch')
-            download_timeout(deadline)
             assembled.replace(destination)
 
     def pages(self,path,key):

@@ -37,7 +37,7 @@ jobs:
   tests:
     runs-on: ubuntu-22.04
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 303
+    timeout-minutes: 230
     # `write-all` grants every default GITHUB_TOKEN scope plus the
     # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
     # token for `use_oidc: true`. Caller workflow on v3.0 must also
@@ -103,7 +103,7 @@ jobs:
           test/scripts
 
     - name: Restore selected product handoff
-      timeout-minutes: 60
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -202,8 +202,6 @@ jobs:
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Fix artifact permissions
-      continue-on-error: true
-      timeout-minutes: 2
       if: ${{ failure() && !cancelled() }}
       run: |
         # actions/upload-artifact dies with EACCES when it scandirs into
@@ -216,7 +214,6 @@ jobs:
         sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
 
     - name: Archive artifacts logs
-      timeout-minutes: 5
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
@@ -225,7 +222,6 @@ jobs:
           proxysql/ci_*_logs/
 
     - name: Archive coverage report
-      timeout-minutes: 5
       if: ${{ matrix.coverage && (!cancelled()) }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
@@ -235,13 +231,11 @@ jobs:
         if-no-files-found: ignore
 
     - name: Report missing coverage file
-      timeout-minutes: 1
       if: ${{ matrix.coverage && (!cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') == '') }}
       run: |
         echo "No coverage report was produced; skipping Codecov upload."
 
     - name: Upload coverage to Codecov
-      timeout-minutes: 5
       id: codecov_1
       if: ${{ matrix.coverage && (!cancelled() && hashFiles('proxysql/ci_infra_logs/**/coverage-report/*.info') != '') && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
@@ -292,14 +286,12 @@ jobs:
         verbose: true
 
     - name: Wait before Codecov retry 1
-      timeout-minutes: 1
       if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
       run: |-
         sleep 15
 
 
     - name: Upload coverage to Codecov (retry 1)
-      timeout-minutes: 5
       id: codecov_2
       if: ${{ matrix.coverage && (!cancelled() && steps.codecov_1.outcome == 'failure') && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
@@ -319,14 +311,12 @@ jobs:
         verbose: true
 
     - name: Wait before Codecov retry 2
-      timeout-minutes: 1
       if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
       run: |-
         sleep 45
 
 
     - name: Upload coverage to Codecov (retry 2)
-      timeout-minutes: 5
       id: codecov_3
       if: ${{ matrix.coverage && (!cancelled() && steps.codecov_2.outcome == 'failure') && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
@@ -346,12 +336,10 @@ jobs:
         verbose: true
 
     - name: Report Codecov upload failure
-      timeout-minutes: 1
       if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
       run: |-
         echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
     - name: Complete selected product test check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

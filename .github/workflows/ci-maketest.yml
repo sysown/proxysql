@@ -30,7 +30,7 @@ jobs:
     secrets: inherit
   builds:
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +46,6 @@ jobs:
       COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
     - name: Checkout CI control
-      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -55,7 +54,6 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Start selected product test check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -64,7 +62,6 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
-      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: ${{ github.repository }}
@@ -89,11 +86,9 @@ jobs:
         PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
         PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
     - name: Check build
-      timeout-minutes: 1
       run: |
         grep 'exited with code 0' build.log
     - name: Archive artifacts logs
-      timeout-minutes: 5
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -101,7 +96,6 @@ jobs:
         path: |
           ./build-*.log
     - name: Complete selected product test check
-      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
