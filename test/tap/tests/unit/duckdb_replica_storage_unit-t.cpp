@@ -40,8 +40,9 @@ struct Store {
 	DuckDBEngine engine;
 	duckdb_connection conn = nullptr;
 	explicit Store(const std::string& name) : catalog(name) {
-		char pattern[] = "/data/rene/proxysql/.worktrees/proxysql-replica-storage-XXXXXX";
-		char* created = mkdtemp(pattern);
+		const char* temp_dir = std::getenv("TMPDIR");
+		std::string pattern = std::string(temp_dir ? temp_dir : "/tmp") + "/proxysql-replica-storage-XXXXXX";
+		char* created = mkdtemp(pattern.data());
 		if (!created)
 			BAIL_OUT("mkdtemp failed");
 		dir = created;

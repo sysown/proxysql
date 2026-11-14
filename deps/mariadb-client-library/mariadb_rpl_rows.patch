@@ -43,3 +43,31 @@
 @@ -1854,0 +1866,2 @@
 +          rpl_event->event_type == UPDATE_ROWS_EVENT ||
 +          rpl_event->event_type == UPDATE_ROWS_COMPRESSED_EVENT ||
+--- libmariadb/mariadb_rpl.c
++++ libmariadb/mariadb_rpl.c
+@@ -548,3 +548,4 @@
+-          if ((tm->neg = t_val < 0))
+-            t_val= -t_val;
+-
++          uint8_t precision= *metadata;
++          uint8_t bytes= (precision + 1) / 2;
++          int64_t fraction= 0;
++          uint8_t j;
+@@ -551,0 +553,12 @@
++          for (j= 0; j < bytes; j++)
++            fraction= (fraction << 8) | *pos++;
++          /* Negative fractional TIME2 uses a borrowed integral unit and a
++             complemented fraction. Undo the borrow before taking magnitudes. */
++          if (t_val < 0 && fraction != 0)
++          {
++            t_val++;
++            fraction-= 1LL << (8 * bytes);
++          }
++          tm->neg= t_val < 0 || fraction < 0;
++          if (t_val < 0) t_val= -t_val;
++          if (fraction < 0) fraction= -fraction;
+@@ -555,2 +568,2 @@
+-
+-          pos+= ma_rpl_get_second_part(tm, pos, metadata);
++          tm->second_part= fraction * (bytes == 1 ? 10000 : bytes == 2 ? 100 : 1);
++

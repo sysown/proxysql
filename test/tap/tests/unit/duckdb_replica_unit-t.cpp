@@ -57,7 +57,7 @@ DuckDBReplicaStartRequest file_request() {
 } // namespace
 
 int main() {
-	plan(61);
+	plan(68);
 	const uint8_t full = 0xff, padded = 0x7f, partial = 0x3f;
 	ok(duckdb_replica_full_row_images(&full, &full, 7, true), "full UPDATE bitmaps are accepted");
 	ok(duckdb_replica_full_row_images(&padded, &full, 7, true), "unused bitmap padding bits are ignored");
@@ -116,6 +116,38 @@ int main() {
 		   "TIMESTAMP2(%u) decodes big-endian seconds, scaled microseconds and next column", precision);
 		mariadb_free_rpl_event(event);
 	}
+	for (unsigned precision = 0; precision <= 6; ++precision) {
+		MARIADB_RPL rpl {};
+		MARIADB_RPL_EVENT map {};
+		map.event_type = TABLE_MAP_EVENT;
+		map.event.table_map.table_id = 1;
+		map.event.table_map.column_count = 2;
+		char types[] = {static_cast<char>(MYSQL_TYPE_TIME2), MYSQL_TYPE_LONG};
+		char metadata[] = {static_cast<char>(precision)};
+		map.event.table_map.column_types = {types, sizeof(types)};
+		map.event.table_map.metadata = {metadata, sizeof(metadata)};
+		auto* event = static_cast<MARIADB_RPL_EVENT*>(std::calloc(1, sizeof(MARIADB_RPL_EVENT)));
+		event->event_type = WRITE_ROWS_EVENT;
+		event->event.rows.table_id = 1;
+		const unsigned n = (precision + 1) / 2;
+		const unsigned micros[] = {0,100000,120000,123000,123400,123450,123456};
+		const unsigned fraction = micros[precision] / (n == 1 ? 10000 : n == 2 ? 100 : 1);
+		const unsigned integral = 0x800000 - ((12 << 12) | (34 << 6) | 56) - (fraction ? 1 : 0);
+		unsigned char bytes[11] = {};
+		for (unsigned j = 0; j < 3; ++j) bytes[1+j] = integral >> (8*(2-j));
+		const unsigned encoded = fraction ? (1u << (8*n)) - fraction : 0;
+		for (unsigned j = 0; j < n; ++j) bytes[4+j] = encoded >> (8*(n-j-1));
+		bytes[4+n] = 42;
+		event->event.rows.row_data = bytes;
+		event->event.rows.row_data_size = 8+n;
+		MARIADB_RPL_ROW* row = mariadb_rpl_extract_rows(&rpl,&map,event);
+		ok(row && !row->next && row->columns[1].val.ull == 42 && row->columns[0].val.tm.neg &&
+		   row->columns[0].val.tm.hour == 12 && row->columns[0].val.tm.minute == 34 &&
+		   row->columns[0].val.tm.second == 56 && row->columns[0].val.tm.second_part == micros[precision],
+		   "negative TIME2(%u) preserves integral and fractional magnitude and next column", precision);
+		mariadb_free_rpl_event(event);
+	}
+
 	{
 		MARIADB_RPL rpl {};
 		MARIADB_RPL_EVENT map {};

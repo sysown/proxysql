@@ -133,8 +133,9 @@ struct Fixture {
 		return ntohs(addr.sin_port);
 	}
 	explicit Fixture(CommandLine& c) : cl(c) {
-		char pattern[] = "/tmp/proxysql-replica-recovery-XXXXXX";
-		char* created = mkdtemp(pattern);
+		const char* temp_dir = std::getenv("TMPDIR");
+		std::string pattern = std::string(temp_dir ? temp_dir : "/tmp") + "/proxysql-replica-recovery-XXXXXX";
+		char* created = mkdtemp(pattern.data());
 		if (!created)
 			BAIL_OUT("mkdtemp failed");
 		dir = created;

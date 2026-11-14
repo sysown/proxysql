@@ -205,7 +205,8 @@ bool run(Fixture& f) {
 		    !backup(f.admin, schema + ".duckdb_replica_tables", "source_id,schema_name,table_name,active", "", restore)) return false;
 	}
 	f.changed = true;
-	const std::string db = "/tmp/" + f.schema + ".duckdb";
+	const char* temp_dir = std::getenv("TMPDIR");
+	const std::string db = std::string(temp_dir ? temp_dir : "/tmp") + "/" + f.schema + ".duckdb";
 	if (!check(execute(f.admin, "UPDATE global_variables SET variable_value=" + quote(db) +
 	                         " WHERE variable_name='duckdb-database_path'") &&
 	        execute(f.admin, "SAVE DUCKDB VARIABLES TO DISK") && f.restart(),
@@ -237,16 +238,37 @@ bool run(Fixture& f) {
 	auto time_matches = [&] {
 		Rows expected;
 		if (!query(f.source, "SELECT TIME_FORMAT(k,'%H:%i:%s.%f'),v FROM " + f.schema + ".time_keys ORDER BY v", expected)) return false;
-		return wait_for([&] {
-			Rows actual;
+		Rows actual;
+		const bool matched = wait_for([&] {
 			return query(f.duck, "SELECT k,v FROM " + f.schema + "." + f.schema + ".time_keys ORDER BY v", actual) && actual == expected;
 		});
+		if (!matched) {
+			diag("TIME replay state=%s error=%s", cell(f.admin,"SELECT state FROM stats_duckdb_replica").c_str(), cell(f.admin,"SELECT last_error FROM stats_duckdb_replica").c_str());
+			for (const auto& row : actual) diag("target TIME=%s value=%s", row[0].c_str(),row[1].c_str());
+		}
+		return matched;
 	};
 	if (!check(time_matches(), "snapshot canonicalizes fractional, whole, negative and long-hour TIME primary keys")) return false;
 	if (!check(execute(f.source, "UPDATE " + f.schema + ".time_keys SET v=v+10") && time_matches(),
 	           "annotated row events update snapshot TIME primary keys without losing matches")) return false;
 	if (!check(execute(f.source, "DELETE FROM " + f.schema + ".time_keys") && time_matches(),
 	           "annotated DELETE events remove snapshot TIME primary keys")) return false;
+
+	// Reactivating a table omitted from an active source's durable checkpoint must
+	// be rejected rather than silently skipping its accumulated changes.
+	if (!check(execute(f.source, "UPDATE " + f.schema + ".events SET note='before active-set change' WHERE id=1") && f.matches(),
+	           "advance an active sibling table before changing the active set")) return false;
+	if (!check(execute(f.admin, "STOP DUCKDB REPLICA") &&
+	           execute(f.admin, "UPDATE duckdb_replica_tables SET active=0 WHERE source_id='e2e' AND table_name='time_keys'") &&
+	           execute(f.admin, "SAVE DUCKDB REPLICA TO DISK") &&
+	           execute(f.admin, "START DUCKDB REPLICA") && f.state("error") &&
+	           cell(f.admin, "SELECT last_error FROM stats_duckdb_replica").find("RESET") != std::string::npos,
+	           "deactivating a snapshotted table is refused before replay can skip it")) return false;
+	if (!check(execute(f.admin, "STOP DUCKDB REPLICA") &&
+	           execute(f.admin, "UPDATE duckdb_replica_tables SET active=1 WHERE source_id='e2e' AND table_name='time_keys'") &&
+	           execute(f.admin, "SAVE DUCKDB REPLICA TO DISK") &&
+	           execute(f.admin, "START DUCKDB REPLICA") && f.state("applying"),
+	           "restoring the original active set resumes replication")) return false;
 	if (!check(execute(f.source, "INSERT INTO " + f.schema + ".events VALUES"
 	                         "(-3,987.6543,'O''Reilly','2026-11-05 01:02:03.000004','2026-11-05 01:02:03.000005',X'0100FE',3000000000)") &&
 	        f.matches(), "INSERT decodes decimal, text, DATETIME2, TIMESTAMP2, blob and unsigned values")) return false;
