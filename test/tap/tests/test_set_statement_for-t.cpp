@@ -76,7 +76,18 @@ static bool test_schema_routing(const CommandLine& cl) {
 		username.insert(pos, 1, '\'');
 	const std::string source = scalar("SELECT default_hostgroup FROM runtime_mysql_users "
 		"WHERE username='" + username + "' AND frontend=1 LIMIT 1");
-	const std::string destination = scalar("SELECT MAX(hostgroup_id)+1 FROM runtime_mysql_servers");
+	// Topology mappings can reserve IDs with no runtime servers. Avoid their
+	// offline and backup groups when choosing the fixture destination.
+	const std::string destination = scalar(
+		"SELECT COALESCE(MAX(hostgroup_id),0)+1 FROM ("
+		"SELECT hostgroup_id FROM mysql_servers "
+		"UNION ALL SELECT hostgroup_id FROM runtime_mysql_servers "
+		"UNION ALL SELECT MAX(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup) FROM mysql_galera_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup) FROM runtime_mysql_galera_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup) FROM mysql_group_replication_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup) FROM runtime_mysql_group_replication_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup) FROM mysql_replication_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup) FROM runtime_mysql_replication_hostgroups)");
 	const std::string parser = scalar("SELECT variable_value FROM global_variables WHERE variable_name='mysql-query_processor_parser'");
 	const std::string algorithm = scalar("SELECT variable_value FROM global_variables WHERE variable_name='mysql-set_parser_algorithm'");
 	const std::string locking = scalar("SELECT variable_value FROM global_variables WHERE variable_name='mysql-set_query_lock_on_hostgroup'");
