@@ -1245,8 +1245,8 @@ enum pgsql_p_st process_dollar_quote_string(pgsql_shared_st* pgsql_shared_st, pg
 		// get_next_st() on the same '$', which can match '$$' or '$tag$' again and bring
 		// it straight back here with no progress, looping forever (e.g. "SELECT $ab$ x$$").
 		// It would also copy the unterminated string's tail into the digest.
-		shared_st->q += remaining;
-		shared_st->q_cur_pos = shared_st->q_len;
+		pgsql_shared_st->q += remaining;
+		pgsql_shared_st->q_cur_pos = pgsql_shared_st->q_len;
 		dq_st->tag_start = NULL;
 		dq_st->tag_len = 0;
 		return st_no_mark_found;
