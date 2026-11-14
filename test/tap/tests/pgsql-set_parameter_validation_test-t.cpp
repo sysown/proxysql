@@ -1008,8 +1008,8 @@ static const ScReplyCase sc_reply_cases[] = {
 struct ScErrorCase { const char* query; const char* sqlstate; const char* message; };
 
 static const ScErrorCase sc_error_cases[] = {
-    { "SELECT set_config('TimeZone',42,false)", "42883", "function set_config(unknown, integer, boolean) does not exist" },
-    { "SELECT set_config('TimeZone','UTC','maybe')", "22P02", "invalid input syntax for type boolean: \"maybe\"" },
+    { "SELECT pg_catalog.set_config('TimeZone',42,false)", "42883", "function pg_catalog.set_config(unknown, integer, boolean) does not exist" },
+    { "SELECT pg_catalog.set_config('TimeZone','UTC','maybe')", "22P02", "invalid input syntax for type boolean: \"maybe\"" },
     { "SELECT set_config(NULL,'UTC',false)", "22004", "SET requires parameter name" },
     { "SELECT set_config('','UTC',false)", "42704", "unrecognized configuration parameter \"\"" },
     { "SELECT set_config('search_path','a b',false)", "22023", "invalid value for parameter \"search_path\": \"a b\"" },
@@ -1064,7 +1064,7 @@ static const char* sc_injection_values[] = {
 };
 
 static const int SC_LEAK_TESTS = 6;
-static const int SC_OTHER_TESTS = 1 /* application_name */ + 4 /* scs via SET / set_config */ + 3 /* txn */ +
+static const int SC_OTHER_TESTS = 12 /* function resolution */ + 1 /* application_name */ + 4 /* scs via SET / set_config */ + 3 /* txn */ +
     1 /* already locked */ + 3 /* gates */;
 static const int SC_PHASE_TESTS = SC_LEAK_TESTS + (int)std::size(sc_reply_cases) + (int)std::size(sc_error_cases) +
     (int)std::size(sc_lock_cases) + 1 /* long query */ + SC_OTHER_TESTS + (int)std::size(sc_tracked_names);
@@ -1263,6 +1263,54 @@ static void sc_phase(PGconn* admin, int hg, const std::vector<std::string>& serv
             if (stored(c.get(), "TimeZone") != before) err += " stored '" + stored(c.get(), "TimeZone") + "'";
         }
         ok(err.empty(), "set_config %s: a locked session forwards it untracked %s", mode, err.c_str());
+    }
+
+    // Function lookup must agree with PostgreSQL, including overloads under the default path.
+    {
+        PGConnPtr setup = createNewConnection(ConnType::BACKEND);
+        static unsigned int schema_seq = 0;
+        const std::string schema = "zz_sc_resolution_" + std::to_string(getpid()) + "_" + std::to_string(++schema_seq);
+        const bool schema_created = setup && PQresultStatus(run(setup.get(), "CREATE SCHEMA " + schema).get()) == PGRES_COMMAND_OK;
+        const std::string definitions[] = {
+            "CREATE FUNCTION " + schema + ".set_config(text,text,boolean) RETURNS text LANGUAGE sql AS $$SELECT 'shadowed-text'::text$$",
+            "CREATE FUNCTION " + schema + ".set_config(text,integer,boolean) RETURNS text LANGUAGE sql AS $$SELECT 'shadowed-int'::text$$",
+            "CREATE FUNCTION " + schema + ".set_config(text,text,text) RETURNS text LANGUAGE sql AS $$SELECT 'shadowed-third'::text$$",
+        };
+        bool created = schema_created;
+        for (const auto& q : definitions) if (schema_created) created = PQresultStatus(run(setup.get(), q).get()) == PGRES_COMMAND_OK && created;
+        ok(created, "set_config %s: shadowing functions created", mode);
+        struct ResolutionCase { bool extended; const char* path; const char* query; const char* row; bool locks; };
+        const ResolutionCase cases[] = {
+            {false, ", pg_catalog", "SELECT set_config('maintenance_work_mem','1024MB',false)", "shadowed-text", true},
+            {false, ", pg_catalog", "SELECT set_config(NULL,'1024MB',false)", "shadowed-text", true},
+            {false, "", "SELECT set_config('maintenance_work_mem',42,false)", "shadowed-int", true},
+            {false, "", "SELECT set_config('maintenance_work_mem','1024MB','false')", "shadowed-third", true},
+            {false, ", pg_catalog", "SELECT pg_catalog.set_config('maintenance_work_mem','1024MB',false)", "1GB", false},
+            {true, ", pg_catalog", "SELECT set_config('maintenance_work_mem','1024MB',false)", "shadowed-text", true},
+            {true, ", pg_catalog", "SELECT set_config(NULL,'1024MB',false)", "shadowed-text", true},
+            {true, "", "SELECT set_config('maintenance_work_mem',42,false)", "shadowed-int", true},
+            {true, "", "SELECT set_config('maintenance_work_mem','1024MB','false')", "shadowed-third", true},
+            {true, "", "SELECT set_config('maintenance_work_mem','1024MB',false)", "1GB", false},
+        };
+        for (const auto& k : cases) {
+            PGConnPtr c = createNewConnection(ConnType::BACKEND);
+            bool good = created && bool(c);
+            std::string row;
+            int locked = -2;
+            if (c) {
+                run(c.get(), std::string("SET search_path = ") + schema + k.path);
+                PGResPtr r(k.extended ? PQexecParams(c.get(), k.query, 0, nullptr, nullptr, nullptr, nullptr, 0) : PQexec(c.get(), k.query), &PQclear);
+                if (PQresultStatus(r.get()) == PGRES_TUPLES_OK && PQntuples(r.get()) == 1) row = PQgetvalue(r.get(), 0, 0);
+                locked = lockedOnHostgroup(c.get());
+                good = good && row == k.row && (k.locks ? locked >= 0 : locked == -1);
+                if (!k.locks) good = good && stored(c.get(), "maintenance_work_mem") == "1GB";
+            }
+            ok(good, "set_config %s resolution, %s: %s (row '%s', locked %d)", mode,
+                k.extended ? "extended" : "simple", k.query, row.c_str(), locked);
+        }
+        const bool dropped = schema_created &&
+            PQresultStatus(run(setup.get(), "DROP SCHEMA " + schema + " CASCADE").get()) == PGRES_COMMAND_OK;
+        ok(dropped, "set_config %s: shadowing functions removed", mode);
     }
 
     // The gates. Only the ParserSQL paths track set_config; tracking no longer needs digests.

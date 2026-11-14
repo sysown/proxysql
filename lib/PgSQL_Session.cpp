@@ -67,6 +67,22 @@ static inline bool set_config_tracking_on() {
 	return pgsql_thread___set_parser_algorithm == 3 || pgsql_thread___query_processor_parser == 1;
 }
 
+// Retained with prepared statements so a later search_path change cannot hide Parse-time ambiguity.
+static constexpr uint32_t PGSQL_SCAN_SET_CONFIG_SHADOWABLE = 1u << 31;
+
+static bool set_config_search_path_ambiguous(PgSQL_Session* session) {
+	const char* path = pgsql_variables.client_get_value(session, PGSQL_SEARCH_PATH);
+	// A substring match is conservative for quoted identifiers and unusual schema names.
+	return path == nullptr || strcasestr(path, "pg_catalog") != nullptr;
+}
+
+static uint32_t session_query_scan(PgSQL_Session* session, const char* digest, const char* query,
+	uint32_t targets = PGSQL_SCAN_ALL) {
+	const uint32_t found = pgsql_query_scan(digest, query, targets);
+	return found | ((found & PGSQL_SCAN_SET_CONFIG) && set_config_search_path_ambiguous(session) ?
+		PGSQL_SCAN_SET_CONFIG_SHADOWABLE : 0);
+}
+
 // What a Simple Query is scanned for. With tracking off only LISTEN is used: a query too long for
 // its digest is then digested in full only when it holds the word LISTEN, as before set_config.
 // A Parse scans for every target: the bits stay with the statement after tracking is turned on.
@@ -2474,7 +2490,7 @@ __implicit_flush:
 								// holding the word is digested in full for this check. Leading
 								// comments are skipped: the digest keeps them with
 								// query_digests_keep_comment.
-								CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(), query_ptr,
+								CurrentQuery.scan_found = session_query_scan(this, CurrentQuery.get_digest_text(), query_ptr,
 									simple_query_scan_targets());
 								listen_pending = (CurrentQuery.scan_found & PGSQL_SCAN_LISTEN) != 0;
 								if (listen_pending && listen_can_be_supported() == false) {
@@ -4913,7 +4929,7 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt) {
 		CurrentQuery.query_parser_free();
 		CurrentQuery.begin(reinterpret_cast<unsigned char*>(pkt->ptr), pkt->size, true);
 		// begin() clears the scan: without it a rewritten set_config() goes untracked.
-		CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(),
+		CurrentQuery.scan_found = session_query_scan(this, CurrentQuery.get_digest_text(),
 			reinterpret_cast<const char*>(CurrentQuery.QueryPointer), simple_query_scan_targets());
 
 		delete qpo->new_query;
@@ -4963,7 +4979,7 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt) {
 		CurrentQuery.begin((unsigned char*)new_data.query_string,
 			strlen(new_data.query_string) + 1, false);
 		// As for a Simple Query: the statement keeps the scan of its rewritten text.
-		CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(), new_data.query_string);
+		CurrentQuery.scan_found = session_query_scan(this, CurrentQuery.get_digest_text(), new_data.query_string);
 		CurrentQuery.extended_query_info.stmt_client_name = new_data.stmt_name;
 
 		if (new_data.num_param_types > 0) {
@@ -5821,6 +5837,12 @@ PgSQL_Local_Reply PgSQL_Session::handle_set_config(const char* dig, bool* lock_h
 	}
 
 	const PgSetConfigCall call = parsersql_classify_set_config_pgsql(query, query_len, true);
+	if (!call.qualified &&
+		(call.verdict == PgSetConfigVerdict::TRACK || call.verdict == PgSetConfigVerdict::LOCAL_ERROR) &&
+		((scan_found & PGSQL_SCAN_SET_CONFIG_SHADOWABLE) || set_config_search_path_ambiguous(this))) {
+		unable_to_parse_set_statement(lock_hostgroup, true);
+		return PgSQL_Local_Reply::NONE;
+	}
 	switch (call.verdict) {
 		case PgSetConfigVerdict::NOT_SET_CONFIG:
 			return PgSQL_Local_Reply::NONE;
@@ -8081,7 +8103,7 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	// Recomputed per statement; see the simple-query path. PostgreSQL rejects a Parse holding
 	// more than one statement, but the digest still goes through the same scan: it skips the
 	// comments kept by query_digests_keep_comment, including one cut short of its terminator.
-	CurrentQuery.scan_found = pgsql_query_scan(CurrentQuery.get_digest_text(), parse_data.query_string);
+	CurrentQuery.scan_found = session_query_scan(this, CurrentQuery.get_digest_text(), parse_data.query_string);
 	listen_pending = (CurrentQuery.scan_found & PGSQL_SCAN_LISTEN) != 0;
 	if (listen_pending && listen_can_be_supported() == false) {
 		listen_pending = false;

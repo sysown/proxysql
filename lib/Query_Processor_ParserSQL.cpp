@@ -1755,10 +1755,11 @@ PgSetConfigCall sc_verdict(PgSetConfigVerdict v) {
     return c;
 }
 
-PgSetConfigCall sc_error(PgSetConfigError e, std::string message) {
+PgSetConfigCall sc_error(PgSetConfigError e, std::string message, bool qualified = false) {
     PgSetConfigCall c;
     c.verdict = PgSetConfigVerdict::LOCAL_ERROR;
     c.error = e;
+    c.qualified = qualified;
     c.message = std::move(message);
     return c;
 }
@@ -1795,12 +1796,16 @@ PgSetConfigCall sc_classify_tree(const AstNode* root, const char* q, size_t len)
     const ScArg& value = args[1];
     const ScArg& is_local = args[2];
 
+    // Other argument types can select a user overload even with pg_catalog implicitly first.
+    if (!w.qualified && (name.type != ScType::UNKNOWN || value.type != ScType::UNKNOWN ||
+        is_local.type != ScType::BOOLEAN)) return sc_verdict(PgSetConfigVerdict::LOCK);
+
     // PostgreSQL's order: function lookup, is_local input, then the name.
     if (name.type != ScType::UNKNOWN || value.type != ScType::UNKNOWN ||
         (is_local.type != ScType::UNKNOWN && is_local.type != ScType::BOOLEAN)) {
         return sc_error(PgSetConfigError::UNDEFINED_FUNCTION, std::string("function ") +
             (w.qualified ? "pg_catalog." : "") + "set_config(" + sc_type_name(name.type) + ", " +
-            sc_type_name(value.type) + ", " + sc_type_name(is_local.type) + ") does not exist");
+            sc_type_name(value.type) + ", " + sc_type_name(is_local.type) + ") does not exist", w.qualified);
     }
     bool local = false;
     if (is_local.type == ScType::BOOLEAN) {
@@ -1809,15 +1814,16 @@ PgSetConfigCall sc_classify_tree(const AstNode* root, const char* q, size_t len)
         const int b = sc_parse_bool(is_local.text);
         if (b < 0) {
             return sc_error(PgSetConfigError::INVALID_BOOLEAN,
-                "invalid input syntax for type boolean: \"" + is_local.text + "\"");
+                "invalid input syntax for type boolean: \"" + is_local.text + "\"", w.qualified);
         }
         local = (b == 1);
     }
-    if (name.is_null) return sc_error(PgSetConfigError::NULL_NAME, "SET requires parameter name");
-    if (name.text.empty()) return sc_error(PgSetConfigError::EMPTY_NAME, "unrecognized configuration parameter \"\"");
+    if (name.is_null) return sc_error(PgSetConfigError::NULL_NAME, "SET requires parameter name", w.qualified);
+    if (name.text.empty()) return sc_error(PgSetConfigError::EMPTY_NAME, "unrecognized configuration parameter \"\"", w.qualified);
     if (local) return sc_verdict(PgSetConfigVerdict::LOCK); // transaction-scoped, as SET LOCAL
 
     PgSetConfigCall c = sc_verdict(PgSetConfigVerdict::TRACK);
+    c.qualified = w.qualified;
     c.name = name.text;
     c.value_null = value.is_null;
     c.value = value.text;

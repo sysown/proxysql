@@ -30,7 +30,7 @@ The bare call, with literal arguments and a session-level `is_local`:
 ```sql
 SELECT set_config('DateStyle', 'ISO, DMY', false)
 SELECT pg_catalog.set_config('search_path', 'app, public', false) AS sp   -- schema prefix, alias
-SELECT set_config('search_path', 'app, public', 'off');         -- any spelling of false, or NULL
+SELECT pg_catalog.set_config('search_path', 'app, public', 'off'); -- quoted boolean
 ```
 
 - The name must be a setting ProxySQL tracks, spelled as PostgreSQL names it (any case).
@@ -100,8 +100,11 @@ differs for some settings (`parameter "enable_sort" requires a Boolean value`,
 `set_config()` calls ProxySQL cannot see in the query text are not tracked: calls made
 inside functions, triggers or dynamic SQL in PL/pgSQL.
 
-An unqualified `set_config()` is taken to be PostgreSQL's own. A function of the same name and
-argument types, in a schema that `search_path` lists before `pg_catalog`, is not run.
+Unqualified calls are forwarded and pinned when `search_path` explicitly mentions `pg_catalog`,
+or did when the statement was parsed. A conservative match can also pin schema names containing
+`pg_catalog`. Calls with argument types that could select a user overload, including a quoted
+`is_local`, are also forwarded and pinned. Default-path calls with string name/value arguments
+and a Boolean literal remain tracked; explicitly qualified `pg_catalog.set_config()` calls do too.
 
 Over the extended protocol a NULL value is not tracked and is refused with 0A000. Simple-protocol
 NULL still records the client's connect-time value. `SET ... TO DEFAULT` and `RESET` over

@@ -499,9 +499,69 @@ static bool set_config_portal_executed_later(PGconn* admin, std::string& got) {
 	return got == "SQL, DMY";
 }
 
+// A portal bound while tracking is disabled retains its resolved function after search_path changes.
+static bool set_config_portal_shadowed(PGconn* admin, std::string& got) {
+	const std::string saved_algo = adminScalar(admin, "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
+	const std::string saved_parser = adminScalar(admin, "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-query_processor_parser'");
+	static unsigned int schema_seq = 0;
+	const std::string schema = "zz_sc_portal_" + std::to_string(getpid()) + "_" + std::to_string(++schema_seq);
+	std::stringstream cs;
+	cs << "host=" << cl.pgsql_host << " port=" << cl.pgsql_port << " user=" << cl.pgsql_root_username
+	   << " password=" << cl.pgsql_root_password << " dbname=postgres sslmode=disable";
+	PGConnPtr setup(PQconnectdb(cs.str().c_str()), &PQfinish);
+	bool schema_created = false;
+	bool good = false;
+	try {
+		execAdmin(admin, "SET pgsql-set_parser_algorithm=2");
+		execAdmin(admin, "SET pgsql-query_processor_parser=0");
+		execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+		PGresult* create = PQexec(setup.get(), ("CREATE SCHEMA " + schema).c_str());
+		schema_created = PQresultStatus(create) == PGRES_COMMAND_OK;
+		PQclear(create);
+		if (!schema_created) throw std::runtime_error("cannot create owned shadowing schema");
+		PGresult* fn = PQexec(setup.get(), ("CREATE FUNCTION " + schema + ".set_config(text,text,boolean) RETURNS text LANGUAGE sql AS $$SELECT 'portal-shadow'::text$$").c_str());
+		const bool function_created = PQresultStatus(fn) == PGRES_COMMAND_OK;
+		PQclear(fn);
+		if (!function_created) throw std::runtime_error("cannot create shadowing function");
+		auto c = connectProxy();
+		c->execute("BEGIN"); collectUntilReady(*c);
+		c->execute("SET search_path = " + schema + ", pg_catalog"); collectUntilReady(*c);
+		c->execute("PROXYSQL INTERNAL SESSION");
+		auto initial = c->readResult();
+		const nlohmann::json before = nlohmann::json::parse(std::get<std::string>(initial->getValue(0, 0)));
+		const bool initially_unlocked = before.at("locked_on_hostgroup").get<int>() == -1;
+		c->prepareStatement("zz_shadow_s", "SELECT set_config('maintenance_work_mem','1024MB',false)", false);
+		c->bindStatement("zz_shadow_s", "zz_shadow_p", {}, {}, false);
+		c->sendSync(); collectUntilReady(*c);
+		c->execute("SET search_path = " + schema); collectUntilReady(*c);
+		execAdmin(admin, "SET pgsql-set_parser_algorithm=3");
+		execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+		c->describePortal("zz_shadow_p", false);
+		c->executePortal("zz_shadow_p", 0, false); c->sendSync();
+		auto r = c->readResult();
+		got = std::get<std::string>(r->getValue(0, 0));
+		c->execute("PROXYSQL INTERNAL SESSION");
+		auto state = c->readResult();
+		const nlohmann::json j = nlohmann::json::parse(std::get<std::string>(state->getValue(0, 0)));
+		const int locked = j.at("locked_on_hostgroup").get<int>();
+		good = initially_unlocked && got == "portal-shadow" && locked >= 0;
+		got += ", locked " + std::to_string(locked);
+		c->execute("ROLLBACK"); collectUntilReady(*c);
+	} catch (const std::exception& e) { got = e.what(); }
+	if (schema_created) {
+		PGresult* drop = PQexec(setup.get(), ("DROP SCHEMA " + schema + " CASCADE").c_str());
+		if (PQresultStatus(drop) != PGRES_COMMAND_OK) { got += " schema cleanup failed"; good = false; }
+		PQclear(drop);
+	}
+	execAdmin(admin, "SET pgsql-set_parser_algorithm=" + saved_algo);
+	execAdmin(admin, "SET pgsql-query_processor_parser=" + saved_parser);
+	execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	return good;
+}
+
 int main(int /*argc*/, char** /*argv*/) {
 	plan(1 /*smoke*/ + (int)NATIVE_TRANSPORT_COUNT *
-		(10 /*corpus records*/ + 1 /*coverage summary*/ + 1 /*multiplexing*/ + 1 /*set_config portal*/ +
+		(10 /*corpus records*/ + 1 /*coverage summary*/ + 1 /*multiplexing*/ + 2 /*set_config portals*/ +
 		 NATIVE_TRANSPORT_CHECKS));
 	if (cl.getEnv()) return exit_status();
 
@@ -591,6 +651,13 @@ int main(int /*argc*/, char** /*argv*/) {
 			ok(set_config_portal_executed_later(admin.get(), got),
 				"set_config() run by a named portal's first Execute in a later round trip, after another "
 				"Parse, is recorded (client DateStyle '%s', expected 'SQL, DMY')", got.c_str());
+		}
+
+		{
+			std::string got;
+			const bool tracked = set_config_portal_shadowed(admin.get(), got);
+			ok(tracked,
+				"set_config portal retains Parse-time search_path ambiguity after tracking/path change (%s)", got.c_str());
 		}
 
 		// ---- Case 10: statement closed while its portal lives (last-owner teardown

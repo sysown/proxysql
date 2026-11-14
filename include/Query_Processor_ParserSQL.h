@@ -154,6 +154,7 @@ enum class PgSetConfigError : uint8_t {
 	EMPTY_NAME,         ///< 42704: the setting name is ''
 };
 struct PgSetConfigCall {
+	bool qualified = false; ///< the call explicitly names pg_catalog
 	PgSetConfigVerdict verdict = PgSetConfigVerdict::NOT_SET_CONFIG;
 	PgSetConfigError error = PgSetConfigError::NONE;
 	std::string message;     ///< LOCAL_ERROR: PostgreSQL's text, verbatim
