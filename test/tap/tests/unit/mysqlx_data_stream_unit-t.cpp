@@ -88,6 +88,10 @@ static void test_tls_data_before_shutdown(int version, size_t data_size) {
 			   "final application frame %d is preserved", i + 1);
 			ds.pop_frame();
 		}
+	} else if (data_size) {
+		ok(received > 0, "partial backend application data reports progress before EOF");
+		ok(!ds.has_complete_frame(), "partial backend application data does not form a frame");
+		ok(ds.read_from_net() == 0, "the next read after partial backend progress reports EOF");
 	} else {
 		ok(received == 0, "shutdown without a complete frame reports EOF");
 	}

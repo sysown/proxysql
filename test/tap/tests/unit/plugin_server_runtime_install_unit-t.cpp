@@ -76,8 +76,10 @@ size_t occurrences(const std::string& value, const std::string& needle) {
 int main() {
 	plan(20);
 	test_init_minimal();
-	char path[] = "/tmp/proxysql_server_runtime_install.XXXXXX";
-	const int fd = mkstemp(path);
+	const char* temp_dir = getenv("TMPDIR");
+	std::string path = std::string(temp_dir && *temp_dir ? temp_dir : "/tmp") +
+		"/proxysql_server_runtime_install.XXXXXX";
+	const int fd = mkstemp(path.data());
 	if (fd < 0) BAIL_OUT("cannot create private server runtime install log");
 	close(fd);
 	g_log_path = path;

@@ -1317,11 +1317,11 @@ static void test_digest_unterminated_dollar_quote() {
 	// LISTEN gate with no digest (query_digests off or the query over the length limit):
 	// the query mentions the word, so it is digested in full.
 	finished = run_time_limited([]() {
-		return std::string(pgsql_query_has_stmt_keyword(NULL, "SELECT 1 AS listen, $a$ $$", "LISTEN") ? "1" : "0");
+		return std::string(gate_listen(NULL, "SELECT 1 AS listen, $a$ $$") ? "1" : "0");
 	}, d);
 	ok(finished && d == "0", "unterminated dollar quote: LISTEN gate finishes, no LISTEN statement (got '%s')", d.c_str());
 	finished = run_time_limited([]() {
-		return std::string(pgsql_query_has_stmt_keyword(NULL, "SELECT 1; LISTEN ch; SELECT $ab$ $$", "LISTEN") ? "1" : "0");
+		return std::string(gate_listen(NULL, "SELECT 1; LISTEN ch; SELECT $ab$ $$") ? "1" : "0");
 	}, d);
 	ok(finished && d == "1", "unterminated dollar quote: LISTEN gate finishes, LISTEN statement found (got '%s')", d.c_str());
 
