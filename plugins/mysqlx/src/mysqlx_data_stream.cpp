@@ -320,7 +320,8 @@ ssize_t MysqlxDataStream::read_from_net() {
 	}
 
 	if (encrypted_ && ssl_) {
-		if (SSL_get_shutdown(ssl_) & SSL_RECEIVED_SHUTDOWN) return 0;
+		if (SSL_get_shutdown(ssl_) & SSL_RECEIVED_SHUTDOWN)
+			return has_complete_frame() ? 1 : 0;
 		uint8_t net_buf[65536];
 		ssize_t r;
 		do {
