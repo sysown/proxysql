@@ -3147,6 +3147,7 @@ bool proxysql_retain_server_reload_rows(SQLite3DB& db, ProxySQL_ServerProtocol p
 	if (!proxysql_collect_server_reload_overrides(db, protocol, hostgroups, overrides, error)) {
 		proxy_error("Unable to list the %s %s servers ignored in managed discovery hostgroups %s: %s\n",
 			source, engine, scope.c_str(), error.c_str());
+		return false;
 	}
 	for (const auto& entry : overrides) {
 		proxy_warning("Server reload kept the live %s servers of hostgroup %u, owned by a managed"

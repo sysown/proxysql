@@ -5,6 +5,7 @@
 #include "MySQL_Thread.h"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Monitor.hpp"
+#include "MySQL_HostGroups_Manager.h"
 #include "PgSQL_HostGroups_Manager.h"
 #include "proxysql_admin.h"
 #include "proxysql_utils.h"
@@ -216,6 +217,42 @@ const void* server_object(bool mysql, uint32_t hg, const std::string& hostname, 
 		PgHGM->wrunlock();
 	}
 	return server;
+}
+
+// This fixture has no queries or metrics updates. A recreated HGM server
+// therefore starts with a zero query counter; a nonzero sentinel distinguishes
+// a surviving object even if the allocator reuses its address.
+static constexpr unsigned long long POOL_SURVIVAL_SENTINEL = 0x6562ULL;
+void mark_pool_survival_server(bool mysql, uint32_t hg, const std::string& hostname, uint16_t port) {
+	if (mysql) {
+		MyHGM->wrlock();
+		if (MySrvC* server = MyHGM->find_server_in_hg(hg, hostname, port))
+			server->queries_sent = POOL_SURVIVAL_SENTINEL;
+		MyHGM->wrunlock();
+	} else {
+		PgHGM->wrlock();
+		if (PgSQL_SrvC* server = PgHGM->find_server_in_hg(hg, hostname, port))
+			server->queries_sent = POOL_SURVIVAL_SENTINEL;
+		PgHGM->wrunlock();
+	}
+}
+bool surviving_server(bool mysql, uint32_t hg, const std::string& hostname, uint16_t port,
+		const void* expected) {
+	bool survived = false;
+	if (mysql) {
+		MyHGM->wrlock();
+		const MySrvC* server = MyHGM->find_server_in_hg(hg, hostname, port);
+		survived = server != nullptr && server == expected &&
+			server->queries_sent == POOL_SURVIVAL_SENTINEL;
+		MyHGM->wrunlock();
+	} else {
+		PgHGM->wrlock();
+		const PgSQL_SrvC* server = PgHGM->find_server_in_hg(hg, hostname, port);
+		survived = server != nullptr && server == expected &&
+			server->queries_sent == POOL_SURVIVAL_SENTINEL;
+		PgHGM->wrunlock();
+	}
+	return survived;
 }
 
 bool shun(bool mysql, const std::string& hostname, uint16_t port) {
@@ -705,17 +742,19 @@ int main() {
 			"%s: claim A holds a runtime-only writer and a SHUNNED reader", label);
 		const void* writer_object = server_object(mysql, 901, "writer.example", port);
 		const void* reader_object = server_object(mysql, 902, "reader.example", port);
+		mark_pool_survival_server(mysql, 901, "writer.example", port);
+		mark_pool_survival_server(mysql, 902, "reader.example", port);
 
 		// Admin LOAD with configuration rows inside the claimed hostgroup.
 		insert_config_row(admin_db, mysql, 901, "writer.example", port, 77);
 		insert_config_row(admin_db, mysql, 901, "configured.example", port, 1);
 		load_servers(mysql);
 		ok(writer_object != nullptr &&
-			server_object(mysql, 901, "writer.example", port) == writer_object &&
+			surviving_server(mysql, 901, "writer.example", port, writer_object) &&
 			row_status(mysql, 901, "writer.example", port) == "ONLINE",
 			"%s: LOAD keeps the claimed writer online with its server object and pool", label);
 		ok(reader_object != nullptr &&
-			server_object(mysql, 902, "reader.example", port) == reader_object &&
+			surviving_server(mysql, 902, "reader.example", port, reader_object) &&
 			row_status(mysql, 902, "reader.example", port) == "SHUNNED",
 			"%s: LOAD keeps the claimed reader and its monitor status", label);
 		ok(row_weight(mysql, 901, "writer.example", port) == 1 &&
@@ -727,7 +766,7 @@ int main() {
 			"DELETE FROM pgsql_servers WHERE hostgroup_id=99");
 		load_servers(mysql);
 		ok(row_status(mysql, 99, "plain.example", port).empty() &&
-			server_object(mysql, 901, "writer.example", port) == writer_object,
+			surviving_server(mysql, 901, "writer.example", port, writer_object),
 			"%s: LOAD still removes unclaimed rows missing from configuration", label);
 		ok(observed.snapshot.generation != 0 &&
 			observed.snapshot.servers.size() == 2,
@@ -735,7 +774,7 @@ int main() {
 
 		// The managed install path reloads too, once per configuration write.
 		ok(install_claims(protocol, 2, {claim_a}, generation) &&
-			server_object(mysql, 901, "writer.example", port) == writer_object &&
+			surviving_server(mysql, 901, "writer.example", port, writer_object) &&
 			row_status(mysql, 902, "reader.example", port) == "SHUNNED",
 			"%s: reinstalling the same claim keeps its rows, objects and status", label);
 
@@ -756,7 +795,7 @@ int main() {
 		if (mysql) GloAdmin->mysql_servers_wrlock(); else GloAdmin->pgsql_servers_wrlock();
 		proxysql_cluster_install_v1_runtime_post_fetch(protocol, peer_result, stage, commit);
 		if (mysql) GloAdmin->mysql_servers_wrunlock(); else GloAdmin->pgsql_servers_wrunlock();
-		ok(server_object(mysql, 901, "writer.example", port) == writer_object &&
+		ok(surviving_server(mysql, 901, "writer.example", port, writer_object) &&
 			row_weight(mysql, 901, "writer.example", port) == 1 &&
 			row_status(mysql, 902, "reader.example", port) == "SHUNNED",
 			"%s: a Cluster pull keeps the local claimed rows", label);
@@ -779,14 +818,15 @@ int main() {
 		claim_c.role_monitor.kind = ProxySQL_ServerRoleMonitor::none;
 		ok(install_claims(protocol, 3, {claim_a, claim_b, claim_c}, generation) &&
 			apply_rows(*manager, observed, protocol, {911, 912}, {b_writer}) &&
-			server_object(mysql, 901, "writer.example", port) == writer_object,
+			surviving_server(mysql, 901, "writer.example", port, writer_object),
 			"%s: adding claims B and C keeps claim A rows", label);
 		test_merge_ignores_offline_hard(protocol, port);
 		const void* b_object = server_object(mysql, 911, "b-writer.example", port);
+		mark_pool_survival_server(mysql, 911, "b-writer.example", port);
 		ok(install_claims(protocol, 4, {claim_b}, generation) &&
 			row_status(mysql, 901, "writer.example", port).empty() &&
 			row_status(mysql, 902, "reader.example", port).empty() &&
-			b_object != nullptr && server_object(mysql, 911, "b-writer.example", port) == b_object,
+			b_object != nullptr && surviving_server(mysql, 911, "b-writer.example", port, b_object),
 			"%s: a removed claim drops its rows while a surviving claim keeps them", label);
 		ok(row_status(mysql, 901, "configured.example", port) == "ONLINE",
 			"%s: a released hostgroup loads its configuration rows again", label);
