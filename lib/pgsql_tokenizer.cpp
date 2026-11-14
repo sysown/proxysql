@@ -3630,16 +3630,122 @@ bool pgsql_text_has_word(const char* text, const char* keyword) {
 	return false;
 }
 
-bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword) {
-	const char* lost = NULL;
-	for (const char* s = pgsql_stmt_skip_lead(digest, &lost); s != NULL; s = pgsql_digest_next_stmt(s, &lost)) {
-		if (pgsql_stmt_first_keyword_is(s, keyword)) return true;
+// isalnum() of the C locale, without the libc call: this runs at every '_' of every digest.
+static inline bool pgsql_ident_char(char c) {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
+}
+
+// What pgsql_digest_scan() looks for, in one walk over the digest. Adding a target is adding a
+// row. Keywords that begin a statement:
+static const struct { const char* word; uint32_t bit; } pgsql_scan_stmt_targets[] = {
+	{ "LISTEN", PGSQL_SCAN_LISTEN },
+	{ "DO", PGSQL_SCAN_DO },
+};
+// Whole words anywhere outside comments and literals (a quoted identifier equal to one counts).
+// `next` is the letter after the word's first '_': most '_' of a digest are let go on it.
+// ponytail: a word target must contain '_' -- the digest walk only stops at '_' to look for
+// words. A target without one needs another stop character in pgsql_digest_scan().
+static const struct { const char* word; size_t len; char next; uint32_t bit; } pgsql_scan_word_targets[] = {
+	{ "set_config", 10, 'c', PGSQL_SCAN_SET_CONFIG },
+	{ "pg_settings", 11, 's', PGSQL_SCAN_PG_SETTINGS },
+};
+
+// Word targets equal to the word [w, w + len), any case.
+static uint32_t pgsql_scan_word(const char* w, size_t len) {
+	uint32_t bits = 0;
+	for (const auto& t : pgsql_scan_word_targets) {
+		if (t.len == len && strncasecmp(w, t.word, len) == 0) bits |= t.bit;
 	}
-	// From an unterminated comment or quote on, the statements cannot be told apart, so the
-	// keyword counts wherever it stands as a word -- inside that comment's own kept text as
-	// well, since `lost` points at its opening "/*". Refusing or pinning a query that only
-	// mentions it is the safe side of being wrong.
-	return pgsql_text_has_word(lost, keyword);
+	return bits;
+}
+
+// Statement targets the statement at `s` begins with. The first letter is compared before the
+// whole keyword (`| 0x20` lowercases an ASCII letter).
+static uint32_t pgsql_scan_stmt_start(const char* s) {
+	if (s == NULL) return 0;
+	uint32_t bits = 0;
+	for (const auto& t : pgsql_scan_stmt_targets) {
+		if ((s[0] | 0x20) == (t.word[0] | 0x20) && pgsql_stmt_first_keyword_is(s, t.word)) bits |= t.bit;
+	}
+	return bits;
+}
+
+// U&"..." is a name written with escapes: U&"set\005fconfig" is set_config. Its letters cannot
+// be compared, so it stands for every word target. `q` points at the '"'.
+static uint32_t pgsql_scan_unicode_name(const char* text, const char* q) {
+	if (q - text < 2 || q[-1] != '&' || (q[-2] | 0x20) != 'u') return 0;
+	uint32_t bits = 0;
+	for (const auto& t : pgsql_scan_word_targets) bits |= t.bit;
+	return bits;
+}
+
+uint32_t pgsql_text_find_words(const char* text, size_t len) {
+	if (text == NULL) return 0;
+	uint32_t bits = 0;
+	// The offset is checked before the byte: nothing past `len` is read.
+	auto more = [&](const char* p) { return (size_t)(p - text) < len && *p != '\0'; };
+	for (const char* p = text; more(p);) {
+		if (*p == '"') bits |= pgsql_scan_unicode_name(text, p);
+		if (!pgsql_ident_char(*p)) { p++; continue; }
+		const char* w = p;
+		while (more(p) && pgsql_ident_char(*p)) p++;
+		bits |= pgsql_scan_word(w, p - w);
+		for (const auto& t : pgsql_scan_stmt_targets) {
+			if ((size_t)(p - w) == strlen(t.word) && strncasecmp(w, t.word, p - w) == 0) bits |= t.bit;
+		}
+	}
+	return bits;
+}
+
+uint32_t pgsql_digest_scan(const char* digest) {
+	if (digest == NULL) return 0;
+	const char* lost = NULL;
+	const char* p = pgsql_stmt_skip_lead(digest, &lost);
+	uint32_t found = pgsql_scan_stmt_start(p);
+	// The walk of pgsql_digest_next_stmt(), stopping at '_' as well to look at the word around it.
+	while (p != NULL && (p = strpbrk(p, ";\"'/_")) != NULL) {
+		const char c = *p;
+		if (c == ';') {
+			p = pgsql_stmt_skip_lead(p + 1, &lost);
+			found |= pgsql_scan_stmt_start(p);
+			continue;
+		}
+		if (c == '_') {
+			const char next = p[1] | 0x20;
+			bool maybe = false;
+			for (const auto& t : pgsql_scan_word_targets) maybe |= (next == t.next);
+			if (!maybe) { p++; continue; }
+			const char* w = p;
+			while (w > digest && pgsql_ident_char(w[-1])) w--;
+			p++;
+			while (pgsql_ident_char(*p)) p++;
+			found |= pgsql_scan_word(w, p - w);
+			continue;
+		}
+		const char* end = NULL;
+		if (c == '/') {
+			// Only a block comment hides a word or a ';', and only with query_digests_keep_comment.
+			if (p[1] != '*') { p++; continue; }
+			end = pgsql_skip_block_comment(p);
+		} else {
+			// A quoted identifier (kept by the digest) or a literal. A doubled quote inside closes
+			// it and opens another, which the next round skips the same way.
+			end = strchr(p + 1, c);
+			if (end != NULL) {
+				if (c == '"') found |= pgsql_scan_word(p + 1, end - p - 1) | pgsql_scan_unicode_name(digest, p);
+				end++;
+			}
+		}
+		if (end == NULL) {
+			lost = p;
+			break;
+		}
+		p = end;
+	}
+	// From an unterminated comment or quote on, the statements cannot be told apart, so every
+	// target counts wherever it stands as a word -- inside that comment's own kept text as
+	// well, since `lost` points at its opening "/*". A false match is the safe side of being wrong.
+	return found | pgsql_text_find_words(lost);
 }
 
 char* pgsql_query_full_digest(const char* query) {
@@ -3657,25 +3763,27 @@ char* pgsql_query_full_digest(const char* query) {
 	return digest;
 }
 
-bool pgsql_query_has_stmt_keyword(const char* digest, const char* query, const char* keyword) {
+uint32_t pgsql_query_scan(const char* digest, const char* query, uint32_t targets) {
 	if (digest != NULL && *digest != '\0') {
 		// The digest buffer is as long as the query up to query_digests_max_query_length, so
 		// only the digest of a longer query can have been cut short.
 		if (query == NULL || strnlen(query, (size_t)pgsql_thread___query_digests_max_query_length + 1) <=
 			(size_t)pgsql_thread___query_digests_max_query_length) {
-			return pgsql_digest_has_stmt_keyword(digest, keyword);
+			return pgsql_digest_scan(digest) & targets;
 		}
 	}
-	// No digest, or one that may miss trailing statements. Only a query holding the word at
-	// all is digested in full, so the common case costs one scan of the text.
-	if (pgsql_text_has_word(query, keyword) == false) return false;
+	// No digest, or one that may miss trailing statements. Only a query holding a target word
+	// at all is digested in full, so the common case costs one scan of the text.
+	const uint32_t words = pgsql_text_find_words(query) & targets;
+	if (words == 0) return 0;
 	// The first statement is also read from the text itself, by pgsql_stmt_skip_lead(), so the
 	// gate does not rest on the digest tokenizer alone for it. Before the tokenizer read
 	// nested comments the way PostgreSQL does, "/*/*n*/*/LISTEN ch" digested to nothing.
-	if (pgsql_stmt_first_keyword_is(pgsql_stmt_skip_lead(query, NULL), keyword)) return true;
+	uint32_t found = pgsql_scan_stmt_start(pgsql_stmt_skip_lead(query, NULL)) & words;
+	if (found == words) return found;
 	char* full = pgsql_query_full_digest(query);
-	if (full == NULL) return true; // cannot be told apart: fail closed
-	const bool found = pgsql_digest_has_stmt_keyword(full, keyword);
+	if (full == NULL) return words; // cannot be told apart: fail closed
+	found |= pgsql_digest_scan(full);
 	free(full);
-	return found;
+	return found & targets;
 }

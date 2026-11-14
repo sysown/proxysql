@@ -28,6 +28,8 @@ public:
 	uint64_t hash;
 	uint64_t total_mem_usage;
 	PGSQL_QUERY_command PgQueryCmd;
+	// PGSQL_SCAN_* targets of the query (pgsql_query_scan()). Set before the statement is shared.
+	uint32_t scan_found = 0;
 	
 	PgSQL_STMT_Global_info(uint64_t id, const char* _user, const char* _database, const char* _query, unsigned int _query_len,
 		Parse_Param_Types&& _ppt, const char* _first_comment, uint64_t _h);
@@ -224,12 +226,13 @@ public:
 	 * @param digest_text   Normalized digest text (optional, may be null).
 	 * @param digest        64-bit digest value (used only if digest_text provided).
 	 * @param PgQueryCmd    Parsed command classification.
+	 * @param scan_found    PGSQL_SCAN_* targets of the query, from the scan the caller already ran.
 	 * @param lock          If true, method manages locking internally.
 	 * @return shared_ptr to the global prepared statement (never nullptr).
 	 */
 	std::shared_ptr<const PgSQL_STMT_Global_info> add_prepared_statement(uint64_t hash, const char* user, const char* database, const char* query, 
 		unsigned int query_len, Parse_Param_Types&& ppt, const char* first_comment, const char* digest_text, uint64_t digest, 
-		PGSQL_QUERY_command PgQueryCmd, bool lock = true);
+		PGSQL_QUERY_command PgQueryCmd, uint32_t scan_found, bool lock = true);
 
 	/**
 	 * @brief Adjust client refcount for a prepared statement and update per-thread stats.

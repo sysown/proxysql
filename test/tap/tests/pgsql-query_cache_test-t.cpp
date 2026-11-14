@@ -1424,6 +1424,55 @@ void execute_locked_session_test(PGconn* admin_conn, PGconn*) {
         });
 }
 
+// set_config() changes a setting in the cache key like SET does. With the ParserSQL SET parser
+// it is tracked, so later SELECTs key on the new value; the call itself is never cached, and a
+// set_config() ProxySQL cannot follow locks the session, which then skips the cache.
+#define SC_ALGO "3" // the ParserSQL SET parser: the only one that tracks set_config()
+void execute_set_config_test(PGconn* admin_conn, PGconn*) {
+    const std::string saved_algo = single_value(admin_conn,
+        "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_soft_ttl_pct'",
+        "UPDATE global_variables SET variable_value=" SC_ALGO " WHERE variable_name='pgsql-set_parser_algorithm'",
+        "LOAD PGSQL VARIABLES TO RUNTIME",
+        "PROXYSQL FLUSH PGSQL QUERY CACHE"
+        }))
+        return;
+
+    const char* utc = "2026-11-05 10:00:00+00";
+    const char* q = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS sc1";
+    PGConnPtr a = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr b = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr locked = createNewConnection(ConnType::BACKEND, false);
+    if (a && b && locked) {
+        check_value_hits(admin_conn, a.get(), q, utc, 0, "set_config: client A before the call");
+        metrics.before = getQueryCacheMetrics(admin_conn);
+        const std::string v = single_value(a.get(), "SELECT set_config('TimeZone','Asia/Tokyo',false)");
+        metrics.after = getQueryCacheMetrics(admin_conn);
+        ok(v == "Asia/Tokyo", "set_config: the call returns 'Asia/Tokyo'. Got '%s'", v.c_str());
+        checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+        checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+        metrics.swap();
+        check_value_hits(admin_conn, a.get(), q, "2026-11-05 19:00:00+09", 0, "set_config: client A after the call");
+        check_value_hits(admin_conn, b.get(), q, utc, 1, "set_config: client B keeps its own entry");
+
+        // Not the bare call: the session is locked and must neither read nor store entries.
+        executeQueries(locked.get(), { "SELECT set_config('TimeZone','Asia/Kolkata',false), 1" });
+        check_locked_session(admin_conn, locked.get(), b.get(),
+            "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS sc2", "2026-11-05 15:30:00+05:30", "locked set_config");
+    }
+
+    executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=" + saved_algo + " WHERE variable_name='pgsql-set_parser_algorithm'",
+        "LOAD PGSQL VARIABLES TO RUNTIME"
+        });
+}
+
 std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
 	{ "Basic Test", execute_basic_test },
 	{ "Data Manipulation Test", execute_data_manipulation_test },
@@ -1439,6 +1488,7 @@ std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
 	{ "Result Settings Test", execute_result_settings_test },
 	{ "Settings Edge Test", execute_settings_edge_test },
 	{ "Locked Session Test", execute_locked_session_test },
+	{ "Set Config Test", execute_set_config_test },
 };
 
 void execute_tests(bool with_ssl, bool diff_conn) {
@@ -1492,9 +1542,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
 	if (cl.use_noise) {
-		plan(333*2 + 3);
+		plan(347*2 + 3);
 	} else {
-		plan(333*2);
+		plan(347*2);
 	}
 
     execute_tests(false, false);
