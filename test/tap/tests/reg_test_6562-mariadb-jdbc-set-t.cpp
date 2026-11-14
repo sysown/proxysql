@@ -449,9 +449,12 @@ class routing_snapshot {
 		return true;
 	}
 	bool restore_variables(const char* suffix) {
-		bool ok = admin_exec(admin,
-			"DELETE FROM global_variables WHERE variable_name LIKE 'mysql-%'");
-		return admin_exec(admin, "INSERT INTO global_variables SELECT * FROM " + name(suffix)) && ok;
+		// Admin queries repopulate missing variable rows, so restore values in place.
+		const std::string snapshot = name(suffix);
+		return admin_exec(admin,
+			"UPDATE global_variables SET variable_value=(SELECT variable_value FROM " +
+			snapshot + " v WHERE v.variable_name=global_variables.variable_name) "
+			"WHERE variable_name IN (SELECT variable_name FROM " + snapshot + ")");
 	}
 	bool restore_table(const char* table, const char* suffix) {
 		bool ok = admin_exec(admin, std::string("DELETE FROM main.") + table);
