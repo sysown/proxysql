@@ -216,13 +216,18 @@ int main(int, char**) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(63);
+	plan(64);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
 	PGConnPtr be = openConn(cl.pgsql_server_host, cl.pgsql_server_port, cl.pgsql_server_username, cl.pgsql_server_password, cl.pgsql_username);
 	if (PQstatus(admin.get()) != CONNECTION_OK || PQstatus(be.get()) != CONNECTION_OK)
 		BAIL_OUT("cannot reach the admin interface or the backend");
+	const std::string memory_snapshot = "batch_pg_memory_" + tag;
+	const std::string runtime_snapshot = "batch_pg_runtime_" + tag;
+	if (!exec(admin.get(), "CREATE TEMP TABLE " + memory_snapshot + " AS SELECT * FROM global_variables WHERE variable_name LIKE 'pgsql-%'") ||
+	    !exec(admin.get(), "CREATE TEMP TABLE " + runtime_snapshot + " AS SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'"))
+		BAIL_OUT("cannot snapshot PGSQL memory/runtime variables");
 	dropRules(admin.get());
 	const char* mode_name[2] = { "libpq", "native" };
 	std::string r[2];
@@ -496,6 +501,8 @@ int main(int, char**) {
 			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
 		const std::string saved_parser = execScalar(admin.get(),
 			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-query_processor_parser'");
+		const std::string saved_parser_runtime = execScalar(admin.get(),
+			"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-query_processor_parser'");
 		exec(admin.get(), "SET pgsql-query_processor_parser=0");
 		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 		const char* algo[2] = { "2", "3" };
@@ -524,8 +531,9 @@ int main(int, char**) {
 			}
 		}
 		exec(admin.get(), "SET pgsql-set_parser_algorithm=" + saved);
-		exec(admin.get(), "SET pgsql-query_processor_parser=" + saved_parser);
+		exec(admin.get(), "SET pgsql-query_processor_parser=" + saved_parser_runtime);
 		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		exec(admin.get(), "SET pgsql-query_processor_parser=" + saved_parser);
 	}
 
 	// --- A multiplex=0 rule pins the connection to the session after a batched unit.
@@ -1036,5 +1044,12 @@ int main(int, char**) {
 
 	dropRules(admin.get());
 	setNativeMode(admin.get(), false);
+	const bool restored = exec(admin.get(), "UPDATE global_variables SET variable_value=(SELECT variable_value FROM " + runtime_snapshot +
+		" WHERE variable_name=global_variables.variable_name) WHERE variable_name LIKE 'pgsql-%'") &&
+		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME") &&
+		exec(admin.get(), "UPDATE global_variables SET variable_value=(SELECT variable_value FROM " + memory_snapshot +
+		" WHERE variable_name=global_variables.variable_name) WHERE variable_name LIKE 'pgsql-%'") &&
+		exec(admin.get(), "DROP TABLE " + memory_snapshot) && exec(admin.get(), "DROP TABLE " + runtime_snapshot);
+	ok(restored, "PGSQL memory and runtime variables restored separately");
 	return exit_status();
 }

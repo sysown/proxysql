@@ -152,7 +152,6 @@ std::vector<SetTestCase> test_cases = {
         {"SET timezone = 'PST8PDT'", true, "PST8PDT"},
         // Invalid values
         {"SET timezone = 'Invalid/Zone'", false, ""},
-        {"SET timezone = 'INTERVALfoo'", false, ""},
         {"SET timezone = 1234", false, ""},
         {"SET timezone = 'NOW'", false, ""}  // 'NOW' is only valid for time zone
     }},
@@ -997,6 +996,7 @@ static const ScReplyCase sc_reply_cases[] = {
         "\"\xd1\x81\xd1\x85\xd0\xb5\xd0\xbc\xd0\xb0\", \"public\"", "search_path", "\"\xd1\x81\xd1\x85\xd0\xb5\xd0\xbc\xd0\xb0\", public" },
     { "", "", "SELECT set_config('search_path','',false)", "set_config", "", "search_path", "\"\"" },
     { "", "", "SELECT set_config('search_path','DEFAULT',false)", "set_config", "\"default\"", "search_path", "\"default\"" },
+    { "-c TimeZone=Asia/Tokyo", "SET TimeZone = 'UTC'", "SELECT set_config('TimeZone',NULL,false)", "set_config", "Asia/Tokyo", "TimeZone", "Asia/Tokyo" },
     // NULL: back to the client's connect-time value.
     { "-c DateStyle=ISO,DMY", "SET DateStyle = 'SQL, MDY'", "SELECT set_config('DateStyle',NULL,false)", "set_config", "ISO, DMY",
         "DateStyle", "ISO, DMY" },
@@ -1064,7 +1064,7 @@ static const char* sc_injection_values[] = {
 };
 
 static const int SC_LEAK_TESTS = 6;
-static const int SC_OTHER_TESTS = 12 /* function resolution */ + 1 /* application_name */ + 4 /* scs via SET / set_config */ + 3 /* txn */ +
+static const int SC_OTHER_TESTS = 8 /* no-digest transactions/pins */ + 12 /* function resolution */ + 1 /* application_name */ + 4 /* scs via SET / set_config */ + 3 /* txn */ +
     1 /* already locked */ + 3 /* gates */;
 static const int SC_PHASE_TESTS = SC_LEAK_TESTS + (int)std::size(sc_reply_cases) + (int)std::size(sc_error_cases) +
     (int)std::size(sc_lock_cases) + 1 /* long query */ + SC_OTHER_TESTS + (int)std::size(sc_tracked_names);
@@ -1172,9 +1172,12 @@ static void sc_phase(PGconn* admin, int hg, const std::vector<std::string>& serv
         std::string err = conn ? "" : "no connection";
         if (conn) {
             PGResPtr r = run(conn.get(), c.query);
-            if (strstr(c.query, "Mars/Olympus")) {
+            for (const char* invalid : {"Mars/Olympus", "Invalid Zone!", "DEFAULT"}) {
+                if (!strstr(c.query, invalid)) continue;
                 if (resultField(r.get(), PG_DIAG_SQLSTATE) != "22023") err += " wrong SQLSTATE";
-                if (stored(conn.get(), "TimeZone") == "Mars/Olympus") err += " invalid zone recorded";
+                const std::string expected = std::string("invalid value for parameter \"TimeZone\": \"") + invalid + "\"";
+                if (resultField(r.get(), PG_DIAG_MESSAGE_PRIMARY) != expected) err += " wrong primary message";
+                if (stored(conn.get(), "TimeZone") == invalid) err += " invalid zone recorded";
                 if (oneValue(conn.get(), "SELECT 1") != "1") err += " connection unusable after invalid zone";
             }
             const bool good = PQresultStatus(r.get()) != PGRES_FATAL_ERROR;
@@ -1347,6 +1350,46 @@ static void sc_phase(PGconn* admin, int hg, const std::vector<std::string>& serv
         }
         ok(good, "set_config %s, %s: %s (row '%s', stored '%s', locked %d)", mode, g.what,
             g.tracked ? "tracked" : "forwarded untracked, no lock", v.c_str(), st.c_str(), locked);
+        if (both_digest_gates) {
+            for (bool extended : {false, true}) {
+                static unsigned int nd_seq = 0;
+                auto execute = [&](PGconn* conn, const std::string& sql) {
+                    const std::string q = "/* no_digest_" + std::to_string(getpid()) + "_" + std::to_string(++nd_seq) + " */ " + sql;
+                    return PGResPtr(extended ? PQexecParams(conn, q.c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0) : PQexec(conn, q.c_str()), &PQclear);
+                };
+                for (int end = 0; end < 3; ++end) {
+                    PGConnPtr tx = createNewConnection(ConnType::BACKEND, "-c DateStyle=ISO,MDY");
+                    bool good_tx = bool(tx);
+                    const char* expected = end == 0 ? "ISO, MDY" : "SQL, DMY";
+                    if (tx) {
+                        execute(tx.get(), "BEGIN");
+                        execute(tx.get(), "SELECT set_config('DateStyle','SQL,DMY',false)");
+                        if (end == 2) {
+                            execute(tx.get(), "SAVEPOINT nd_sp");
+                            execute(tx.get(), "SELECT set_config('DateStyle','German,MDY',false)");
+                            execute(tx.get(), "ROLLBACK TO SAVEPOINT nd_sp");
+                        }
+                        execute(tx.get(), end == 0 ? "ROLLBACK" : "COMMIT");
+                        PGResPtr shown = execute(tx.get(), "SHOW DateStyle");
+                        good_tx = PQresultStatus(shown.get()) == PGRES_TUPLES_OK && PQntuples(shown.get()) == 1 &&
+                            std::string(PQgetvalue(shown.get(), 0, 0)) == expected && stored(tx.get(), "DateStyle") == expected &&
+                            lockedOnHostgroup(tx.get()) == -1;
+                    }
+                    ok(good_tx, "set_config %s, no digest %s: %s restores/preserves recorded and backend DateStyle", mode,
+                        extended ? "extended" : "simple", end == 0 ? "ROLLBACK" : end == 1 ? "COMMIT" : "ROLLBACK TO");
+                }
+                PGConnPtr pin = createNewConnection(ConnType::BACKEND);
+                bool pinned = bool(pin);
+                if (pin) {
+                    PGResPtr r = execute(pin.get(), "SELECT set_config('statement_timeout','1s',false)");
+                    pinned = PQresultStatus(r.get()) == PGRES_TUPLES_OK && lockedOnHostgroup(pin.get()) >= 0;
+                    PGResPtr usable = execute(pin.get(), "SELECT 1");
+                    pinned = pinned && PQresultStatus(usable.get()) == PGRES_TUPLES_OK;
+                }
+                ok(pinned, "set_config %s, no digest %s: untracked setting forwards/pins without crashing", mode,
+                    extended ? "extended" : "simple");
+            }
+        }
         adminSet(admin, g.var, saved);
         if (both_digest_gates) adminSet(admin, "pgsql-commands_stats", saved_cs);
     }

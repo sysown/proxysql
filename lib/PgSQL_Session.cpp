@@ -5075,7 +5075,7 @@ bool PgSQL_Session::is_multi_statement_command(const char* cmd) {
 #endif
 	if (index(dig, ';') && (index(dig, ';') != dig + strlen(dig) - 1)) {
 		std::string nqn;
-		if (pgsql_thread___parse_failure_logs_digest)
+		if (pgsql_thread___parse_failure_logs_digest && CurrentQuery.get_digest_text())
 			nqn = std::string(CurrentQuery.get_digest_text());
 		else
 			nqn = std::string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
@@ -5207,9 +5207,10 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 			if (it->second.size() < 1) {
 				// error not enough arguments
 				string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
-				string digest_str = string(CurrentQuery.get_digest_text());
+				const char* _digest_text = CurrentQuery.get_digest_text();
+				string digest_str = _digest_text ? string(_digest_text) : query_str;
 				string nqn;
-				if (pgsql_thread___parse_failure_logs_digest)
+				if (pgsql_thread___parse_failure_logs_digest && _digest_text)
 					nqn = digest_str;
 				else
 					nqn = query_str;
@@ -5932,7 +5933,7 @@ PgSQL_Local_Reply PgSQL_Session::handle_set_config(const char* dig, bool* lock_h
 	// A TimeZone set_config() cannot be recorded safely: ProxySQL cannot prove a zone name
 	// exists, and an invalid one would otherwise poison a pooled backend connection. Forward
 	// the statement and pin the session on its hostgroup, as for an untracked call.
-	if (idx == PGSQL_TIMEZONE) {
+	if (idx == PGSQL_TIMEZONE && !call.value_null) {
 		unable_to_parse_set_statement(lock_hostgroup, true);
 		return PgSQL_Local_Reply::NONE;
 	}
@@ -6827,7 +6828,25 @@ void PgSQL_Session::handle_transaction_state() {
 		switch (status) {
 		case PROCESSING_STMT_EXECUTE:
 		case PROCESSING_QUERY: {
-			const char* digest_text = CurrentQuery.get_digest_text();
+			const char* digest_text = nullptr;
+			std::string query_holder;
+			std::unique_ptr<char, decltype(&free)> aux_digest(nullptr, &free);
+			if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.extended_query_info.stmt_info) {
+				digest_text = CurrentQuery.extended_query_info.stmt_info->digest_text;
+				if (!digest_text && CurrentQuery.extended_query_info.stmt_info->query) {
+					query_holder.assign(CurrentQuery.extended_query_info.stmt_info->query,
+						CurrentQuery.extended_query_info.stmt_info->query_length);
+					aux_digest.reset(pgsql_query_full_digest(query_holder.c_str()));
+					digest_text = aux_digest.get();
+				}
+			} else {
+				digest_text = CurrentQuery.get_digest_text();
+				if (!digest_text && CurrentQuery.QueryPointer && CurrentQuery.QueryLength > 0) {
+					query_holder.assign((const char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+					aux_digest.reset(pgsql_query_full_digest(query_holder.c_str()));
+					digest_text = aux_digest.get();
+				}
+			}
 			if (!digest_text) return;
 			transaction_state_manager->handle_transaction(digest_text);
 		}
@@ -7435,8 +7454,9 @@ bool PgSQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 void PgSQL_Session::unable_to_parse_set_statement(bool* lock_hostgroup, bool known) {
 	// we couldn't parse the query
 	string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
-	string digest_str = string(CurrentQuery.get_digest_text());
-	const string& nqn = (pgsql_thread___parse_failure_logs_digest == true ? digest_str : query_str);
+	const char* digest_text = CurrentQuery.get_digest_text();
+	string digest_str = digest_text ? string(digest_text) : query_str;
+	const string& nqn = (pgsql_thread___parse_failure_logs_digest == true && digest_text ? digest_str : query_str);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
 	// A SET the caller forwards on purpose is no parse failure: it is logged as a lock, not as a bug to report.
 	known = known || known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest);
@@ -7605,10 +7625,23 @@ void PgSQL_Session::sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool
 			// with a rollback (a failed COMMIT does); otherwise the last transaction end among
 			// its statements ('SELECT 1; ROLLBACK'). In any other case it is not known.
 			const char* digest = NULL;
+			std::string query_holder;
+			std::unique_ptr<char, decltype(&free)> aux_digest(nullptr, &free);
 			if (status == PROCESSING_QUERY) {
 				digest = CurrentQuery.get_digest_text();
+				if (!digest && CurrentQuery.QueryPointer && CurrentQuery.QueryLength > 0) {
+					query_holder.assign((const char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+					aux_digest.reset(pgsql_query_full_digest(query_holder.c_str()));
+					digest = aux_digest.get();
+				}
 			} else if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.extended_query_info.stmt_info) {
 				digest = CurrentQuery.extended_query_info.stmt_info->digest_text;
+				if (!digest && CurrentQuery.extended_query_info.stmt_info->query) {
+					query_holder.assign(CurrentQuery.extended_query_info.stmt_info->query,
+						CurrentQuery.extended_query_info.stmt_info->query_length);
+					aux_digest.reset(pgsql_query_full_digest(query_holder.c_str()));
+					digest = aux_digest.get();
+				}
 			}
 			char ended_by = 0;
 			if (failed) {

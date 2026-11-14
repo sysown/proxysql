@@ -107,5 +107,5 @@ or did when the statement was parsed. A conservative match can also pin schema n
 and a Boolean literal remain tracked; explicitly qualified `pg_catalog.set_config()` calls do too.
 
 Over the extended protocol a NULL value is not tracked and is refused with 0A000. Simple-protocol
-NULL still records the client's connect-time value. `SET ... TO DEFAULT` and `RESET` over
+NULL records the client's connect-time value when one exists; otherwise it locks and forwards the call. `SET ... TO DEFAULT` and `RESET` over
 the extended protocol behave as before.
