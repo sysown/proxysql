@@ -133,8 +133,7 @@ struct Fixture {
 		return ntohs(addr.sin_port);
 	}
 	explicit Fixture(CommandLine& c) : cl(c) {
-		const char* temp_dir = std::getenv("TMPDIR");
-		std::string pattern = std::string(temp_dir ? temp_dir : "/tmp") + "/proxysql-replica-recovery-XXXXXX";
+		std::string pattern = (std::filesystem::temp_directory_path() / "proxysql-replica-recovery-XXXXXX").string();
 		char* created = mkdtemp(pattern.data());
 		if (!created)
 			BAIL_OUT("mkdtemp failed");
@@ -368,7 +367,7 @@ struct Fixture {
 				 cell(admin, "SELECT last_error FROM stats_duckdb_replica").c_str());
 		return matched;
 	}
-	~Fixture() {
+	void cleanup() {
 		bool cleaned = pid <= 0 || shutdown();
 		for (int fd : leases)
 			close(fd);
@@ -388,6 +387,18 @@ struct Fixture {
 			diag("recovery artifacts retained at %s", dir.c_str());
 		ok(cleaned, "reap the owned child and remove only fixture-owned source objects and files");
 	}
+	~Fixture() {
+		try {
+			cleanup();
+		} catch (...) {
+			if (pid > 0) {
+				kill(pid, SIGKILL);
+				while (waitpid(pid, nullptr, 0) < 0 && errno == EINTR) {}
+			}
+			ok(false, "recovery fixture cleanup raised an exception; artifacts retained");
+		}
+	}
+
 };
 
 } // namespace duckdb_replica_test

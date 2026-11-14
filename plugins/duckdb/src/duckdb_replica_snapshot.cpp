@@ -587,8 +587,14 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 		duckdb_connection* conn;
 		const std::function<void(void*)>& watch;
 		~ConnGuard() {
-			if (watch) watch(nullptr);
-			engine.disconnect(conn);
+			try {
+				if (watch) watch(nullptr);
+				engine.disconnect(conn);
+			} catch (...) {
+				// A failed observer/disconnect leaves connection ownership uncertain.
+				std::fputs("DuckDB replica connection cleanup failed\n", stderr);
+				std::terminate();
+			}
 		}
 	} guard { engine, &conn, watch_connection };
 

@@ -7,6 +7,7 @@
 #include "tap.h"
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <vector>
 #include <unistd.h>
@@ -40,8 +41,7 @@ struct Store {
 	DuckDBEngine engine;
 	duckdb_connection conn = nullptr;
 	explicit Store(const std::string& name) : catalog(name) {
-		const char* temp_dir = std::getenv("TMPDIR");
-		std::string pattern = std::string(temp_dir ? temp_dir : "/tmp") + "/proxysql-replica-storage-XXXXXX";
+		std::string pattern = (std::filesystem::temp_directory_path() / "proxysql-replica-storage-XXXXXX").string();
 		char* created = mkdtemp(pattern.data());
 		if (!created)
 			BAIL_OUT("mkdtemp failed");

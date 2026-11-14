@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <random>
 #include <string>
 #include <thread>
 
@@ -27,6 +28,11 @@ std::map<std::string, std::string> good_variables() {
 	};
 }
 
+const std::string& fixture_password() {
+	static const std::string password = std::to_string(std::random_device{}());
+	return password;
+}
+
 DuckDBReplicaConfig one_source() {
 	DuckDBReplicaConfig config;
 	DuckDBReplicaSource source;
@@ -34,7 +40,7 @@ DuckDBReplicaConfig one_source() {
 	source.hostname = "127.0.0.1";
 	source.port = 3306;
 	source.username = "repl";
-	source.password = "secret";
+	source.password = fixture_password();
 	source.server_id = 100;
 	source.enabled = true;
 	config.sources.push_back(source);
@@ -359,7 +365,7 @@ int main() {
 	ok(checked.binlog_file == "binlog.000003" && checked.binlog_pos == 154 &&
 	   checked.rows_applied == 3 &&
 	   checked.detail.find("snapshot complete") != std::string::npos &&
-	   checked.last_error.empty() && checked.detail.find("secret") == std::string::npos,
+	   checked.last_error.empty() && checked.detail.find(fixture_password()) == std::string::npos,
 	   "snapshotted status keeps the coordinates and does not claim apply has started");
 
 	replica.stop();

@@ -8,6 +8,8 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
+#include <exception>
 #include <memory>
 
 namespace {
@@ -295,7 +297,13 @@ std::string duckdb_replica_probe_mysql(const DuckDBReplicaSource& source,
 DuckDBReplica::DuckDBReplica() = default;
 
 DuckDBReplica::~DuckDBReplica() {
-	stop();
+	try {
+		stop();
+	} catch (...) {
+		// Destruction cannot leave a worker accessing a destroyed replica.
+		std::fputs("DuckDB replica shutdown failed during destruction\n", stderr);
+		std::terminate();
+	}
 }
 
 bool DuckDBReplica::install(DuckDBReplicaConfig config, std::string& err) {

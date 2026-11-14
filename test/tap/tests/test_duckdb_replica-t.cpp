@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <functional>
+#include <filesystem>
 #include <string>
 #include <thread>
 #include <vector>
@@ -100,11 +101,16 @@ struct Fixture {
 	MYSQL* duck = nullptr;
 	std::vector<std::string> restore_main;
 	std::vector<std::string> restore_disk;
+	std::string data_dir;
 	std::string schema = "duckdb_replica_e2e_" + std::to_string(getpid());
 	bool changed = false;
 	int duck_port = 6031;
 
 	explicit Fixture(CommandLine& c) : cl(c) {
+		std::string pattern = (std::filesystem::temp_directory_path() / "proxysql-replica-live-XXXXXX").string();
+		char* created = mkdtemp(pattern.data());
+		if (!created) BAIL_OUT("cannot create private replica directory");
+		data_dir = created;
 		if (const char* port = std::getenv("TAP_DUCKDB_PORT")) duck_port = std::atoi(port);
 	}
 	bool reconnect() {
@@ -161,7 +167,7 @@ struct Fixture {
 		query(duck, "SELECT binlog_file,binlog_pos,gtid_executed FROM proxysql_replica.position", rows);
 		return rows;
 	}
-	~Fixture() {
+	void cleanup() {
 		if (changed && admin) {
 			execute(admin, "STOP DUCKDB REPLICA");
 			if (duck) {
@@ -185,6 +191,16 @@ struct Fixture {
 		if (duck) mysql_close(duck);
 		if (admin) mysql_close(admin);
 	}
+	~Fixture() {
+		try {
+			cleanup();
+			std::error_code error;
+			std::filesystem::remove_all(data_dir, error);
+		} catch (...) {
+			ok(false, "live replica cleanup raised an exception; artifacts retained");
+		}
+	}
+
 };
 
 bool check(bool success, const char* description) {
@@ -205,8 +221,7 @@ bool run(Fixture& f) {
 		    !backup(f.admin, schema + ".duckdb_replica_tables", "source_id,schema_name,table_name,active", "", restore)) return false;
 	}
 	f.changed = true;
-	const char* temp_dir = std::getenv("TMPDIR");
-	const std::string db = std::string(temp_dir ? temp_dir : "/tmp") + "/" + f.schema + ".duckdb";
+	const std::string db = f.data_dir + "/" + f.schema + ".duckdb";
 	if (!check(execute(f.admin, "UPDATE global_variables SET variable_value=" + quote(db) +
 	                         " WHERE variable_name='duckdb-database_path'") &&
 	        execute(f.admin, "SAVE DUCKDB VARIABLES TO DISK") && f.restart(),
