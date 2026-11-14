@@ -36,6 +36,7 @@
 #include <vector>
 
 #include "mysql.h"
+#include "mysqld_error.h"
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
@@ -78,11 +79,15 @@ constexpr const char* FORWARDED_SETS[] = {
 	"SET session_track_system_variables=BOGUS('a','b')",
 };
 // Shapes that already reach the hostgroup-locking path must keep doing so.
-constexpr const char* LOCKING_SETS[] = {
-	"SET session_track_system_variables=CONCAT('autocommit',IF(LOCATE('*',@@session_track_system_variables)>0,',last_gtid',''))",
-	"SET @session_track_system_variables=CONCAT('autocommit',IF(LOCATE('*',@@session_track_system_variables)>0,',last_gtid',''))",
-	"SET session_track_system_variables=CONCAT('autocommit',IF(LOCATE('*',@@session_track_system_variables)>0 OR FIND_IN_SET('last_gtid',LOWER(REPLACE(@@session_track_system_variables,' ','')) > 0,',last_gtid','')); SELECT 1",
-	"SET session_track_system_variables=CONCAT('x',IF(@@sql_mode>0)",
+struct LockingSetCase {
+	const char* query;
+	unsigned int backend_error;
+};
+constexpr LockingSetCase LOCKING_SETS[] = {
+	{"SET session_track_system_variables=CONCAT('autocommit',IF(LOCATE('*',@@session_track_system_variables)>0,',last_gtid',''))", 0},
+	{"SET @session_track_system_variables=CONCAT('autocommit',IF(LOCATE('*',@@session_track_system_variables)>0,',last_gtid',''))", 0},
+	{"SET session_track_system_variables=CONCAT('autocommit',IF(LOCATE('*',@@session_track_system_variables)>0 OR FIND_IN_SET('last_gtid',LOWER(REPLACE(@@session_track_system_variables,' ','')) > 0,',last_gtid','')); SELECT 1", ER_PARSE_ERROR},
+	{"SET session_track_system_variables=CONCAT('x',IF(@@sql_mode>0)", ER_PARSE_ERROR},
 };
 
 /**
@@ -303,9 +308,10 @@ void check_set_routing(const CommandLine& cl, MYSQL* admin, const char* set_quer
  * @param set_query SET statement expected to trigger the lock fallback.
  * @param label Human-readable case label used in TAP output.
  * @param source Session default hostgroup.
+ * @param backend_error Expected SET error, or zero when the backend accepts it.
  */
 void check_still_locks(const CommandLine& cl, const char* set_query,
-	const char* label, int source)
+	const char* label, int source, unsigned int backend_error)
 {
 	MYSQL* client = connect_client(cl);
 	if (!client) {
@@ -313,9 +319,28 @@ void check_still_locks(const CommandLine& cl, const char* set_query,
 		return;
 	}
 
-	// The SET itself may be forwarded and can fail on the backend; only the
-	// lock is under test here.
-	mysql_query(client, set_query);
+	const int set_rc = mysql_query(client, set_query);
+	const unsigned int set_err = mysql_errno(client);
+	ok(backend_error ? (set_rc != 0 && set_err == backend_error) : set_rc == 0,
+		"%s: unsupported SET reaches the backend (rc=%d, err=%u, expected=%u: %s)",
+		label, set_rc, set_err, backend_error, mysql_error(client));
+
+	int current_hostgroup = -2;
+	int locked_hostgroup = -2;
+	const bool state_ok = read_session_route_state(client, current_hostgroup,
+		locked_hostgroup);
+	ok(state_ok && locked_hostgroup == source,
+		"%s: SET locks the session to hostgroup %d (locked_on_hostgroup=%d)",
+		label, source, locked_hostgroup);
+
+	if (set_rc != 0) {
+		// Backend errors leave transaction status unknown, which pins routing
+		// before query rules apply. Clear that state on this fresh connection
+		// so the marker tests the hostgroup lock itself.
+		const int rollback_rc = mysql_query(client, "ROLLBACK");
+		ok(rollback_rc == 0, "%s: ROLLBACK clears the rejected SET's transaction state (%s)",
+			label, mysql_error(client));
+	}
 	const int marker_rc = mysql_query(client, ROUTE_MARKER);
 	const unsigned int marker_err = mysql_errno(client);
 	ok(marker_rc != 0 && marker_err == 9006,
@@ -474,9 +499,11 @@ int main(int argc, char** argv) {
 
 		ok(admin_set_parser(admin, 2), "reset set_parser_algorithm to 2");
 		check_session_state(cl, "connector SET session state");
-		check_still_locks(cl, UNKNOWN_SET, "unknown SET", source);
-		for (const char* set_query : LOCKING_SETS) {
-			check_still_locks(cl, set_query, "locking non-connector SET", source);
+		check_still_locks(cl, UNKNOWN_SET, "unknown SET", source,
+			ER_UNKNOWN_SYSTEM_VARIABLE);
+		for (const auto& set_case : LOCKING_SETS) {
+			check_still_locks(cl, set_case.query, "locking non-connector SET", source,
+				set_case.backend_error);
 		}
 		for (const char* set_query : FORWARDED_SETS) {
 			check_forwarded_not_tracked(cl, set_query, "forwarded non-connector SET");
