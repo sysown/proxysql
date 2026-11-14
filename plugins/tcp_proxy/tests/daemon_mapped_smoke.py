@@ -545,7 +545,7 @@ def case_status(ctx, protocol):
             wait_runtime(d, protocol, source_hg, backend.port,
                          lambda r, s=state: r["status"] == s, f"runtime status {state}")
             flow.sendall(state.encode())
-            case.check(f"{state} keeps established flow", 
+            case.check(f"{state} keeps established flow",
                        base.recv_exact(flow, len(state)) == state.encode(), "")
             ok, why = base.rejected(listener)
             case.check(f"{state} rejects new admission", ok, why)
