@@ -15,7 +15,7 @@ name: Select standalone product tiers
 jobs:
   selection:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     permissions:
       contents: read
       actions: read
@@ -26,6 +26,7 @@ jobs:
       mode: ${{ steps.selection.outputs.mode }}
     steps:
     - name: Checkout CI selection code
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -41,6 +42,7 @@ jobs:
       run: |
         python3 .github/scripts/ci_tier_runtime.py selection
     - name: Save selection for reruns
+      timeout-minutes: 5
       if: ${{ steps.selection.outputs.publish_selection == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:

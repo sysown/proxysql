@@ -36,7 +36,7 @@ jobs:
     secrets: inherit
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 208
+    timeout-minutes: 238
     permissions:
       actions: read
       checks: write
@@ -58,6 +58,7 @@ jobs:
     steps:
 
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -75,7 +76,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Restore selected product handoff
-      timeout-minutes: 30
+      timeout-minutes: 60
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -106,6 +107,7 @@ jobs:
         timeout --kill-after=5s 10s mysql --connect-timeout=5 -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v 'Using a password'
 
     - name: Explain ASAN coredump exclusion
+      timeout-minutes: 1
       if: ${{ matrix.mode == 'asan' }}
       run: |
         message='On-demand coredump selftests require WITHASAN=0 (see Makefile). ASAN digest selftests remain enabled; coredump cases run in normal mode.'

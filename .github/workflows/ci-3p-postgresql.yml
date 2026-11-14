@@ -120,7 +120,7 @@ jobs:
       contents: read
     runs-on: ubuntu-22.04
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 258
+    timeout-minutes: 288
     strategy:
       fail-fast: false
       matrix:
@@ -199,7 +199,7 @@ jobs:
           src
 
     - name: Restore selected product handoff
-      timeout-minutes: 30
+      timeout-minutes: 60
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}

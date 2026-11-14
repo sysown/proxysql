@@ -36,7 +36,7 @@ jobs:
     secrets: inherit
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 135
+    timeout-minutes: 197
     permissions:
       actions: read
       checks: write
@@ -57,6 +57,7 @@ jobs:
       COVERAGE: ${{ matrix.coverage && '1' || '0' }}
     steps:
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -74,6 +75,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Install dependencies
+      timeout-minutes: 10
       run: |
         sudo apt-get update -y
         sudo apt-get install -y sysbench gettext
@@ -94,6 +96,7 @@ jobs:
 #        echo "Cache available '${BLDCACHE}'"
 
     - name: Checkout repl test suite
+      timeout-minutes: 5
       # The replication/shunning suite is vendored in-repo at test/repl/ (moved
       # off the private jenkins-build-scripts repo, so no GH_TOKEN_PROXYSQL PAT).
       # Sparse-checkout just that dir into proxysql/; the proxysql binary arrives
@@ -107,13 +110,14 @@ jobs:
           test/repl
 
     - name: Restore selected product handoff
-      timeout-minutes: 30
+      timeout-minutes: 60
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Docker-hoster
+      timeout-minutes: 5
       run: |
         cd proxysql/test/repl/infra-docker-hoster
         sed -i 's|image: .*|image: ghcr.io/mrmohebi/docker-hoster|' docker-compose.yml
@@ -146,6 +150,7 @@ jobs:
         exit $RCS
 
     - name: Fix artifact permissions
+      timeout-minutes: 2
       if: ${{ failure() && !cancelled() }}
       run: |
         # actions/upload-artifact dies with EACCES when it scandirs into
@@ -158,6 +163,7 @@ jobs:
         sudo chmod -R a+rX proxysql/ci_*_logs/ 2>/dev/null || true
 
     - name: Archive artifacts logs
+      timeout-minutes: 5
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
@@ -166,6 +172,7 @@ jobs:
           proxysql/ci_*_logs/
 
     - name: Archive artifacts bin
+      timeout-minutes: 5
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:

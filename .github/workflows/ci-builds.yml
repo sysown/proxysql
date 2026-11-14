@@ -39,6 +39,7 @@ jobs:
       control_sha: ${{ steps.plan.outputs.control_sha }}
     steps:
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -58,6 +59,7 @@ jobs:
         python3 ci-control/.github/scripts/ci_tier_runtime.py plan
       id: plan
     - name: Publish execution plan
+      timeout-minutes: 5
       if: ${{ inputs.trusted && success() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -644,8 +646,10 @@ jobs:
     - builds
     if: ${{ inputs.trusted && always() && needs.plan.result == 'success' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 50
     steps:
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -664,6 +668,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py finalize
     - name: Publish immutable manifest
+      timeout-minutes: 5
       if: ${{ inputs.trusted && steps.finalize.outputs.publish_manifest == 'true' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -671,6 +676,7 @@ jobs:
         path: manifest.json
         retention-days: 3
     - name: Publish accepted producer for native completion fanout
+      timeout-minutes: 5
       if: ${{ inputs.trusted && success() && github.event_name != 'workflow_run' }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:

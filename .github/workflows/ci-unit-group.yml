@@ -38,7 +38,7 @@ jobs:
     secrets: inherit
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 210
+    timeout-minutes: 245
     permissions:
       actions: read
       checks: write
@@ -46,6 +46,7 @@ jobs:
       packages: read
     steps:
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -63,6 +64,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
     - name: Checkout repository
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
       with:
         repository: ${{ github.repository }}
@@ -71,13 +73,14 @@ jobs:
         persist-credentials: false
 
     - name: Restore selected product handoff
-      timeout-minutes: 30
+      timeout-minutes: 60
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Pull Ubuntu 24 build image
+      timeout-minutes: 15
       env:
         GHCR_USER: ${{ github.actor }}
         GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -97,6 +100,7 @@ jobs:
         exit 1
 
     - name: Run selected unit group
+      timeout-minutes: 90
       env:
         TAP_GROUP: ${{ inputs.tap_group }}
       run: |
@@ -156,6 +160,7 @@ jobs:
           '
 
     - name: Archive unit-test logs on failure
+      timeout-minutes: 5
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
       with:

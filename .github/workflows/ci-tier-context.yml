@@ -60,7 +60,7 @@ on:
 jobs:
   context:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 50
     outputs:
       matrices: ${{ steps.context.outputs.matrices }}
       binding: ${{ steps.context.outputs.binding }}
@@ -70,6 +70,7 @@ jobs:
       runson: ${{ steps.pick.outputs.runson }}
     steps:
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -97,6 +98,7 @@ jobs:
         python3 ci-control/.github/scripts/ci_tier_runtime.py consumer
       id: context
     - name: Pick runner pool
+      timeout-minutes: 5
       if: ${{ inputs.pick_runner }}
       id: pick
       env:
@@ -108,6 +110,7 @@ jobs:
         HOSTED_ON_LOOKUP_FAILURE: ${{ inputs.hosted_on_lookup_failure }}
       run: bash ci-control/.github/scripts/pick-ci-runner.bash
     - name: Remember producer across reruns
+      timeout-minutes: 5
       if: ${{ github.run_attempt == 1 }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:

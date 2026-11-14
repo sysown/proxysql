@@ -39,7 +39,7 @@ jobs:
     - tier-context
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['unit-tests'][0] != null }}
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
-    timeout-minutes: 180
+    timeout-minutes: 292
     permissions:
       actions: read
       checks: write
@@ -47,6 +47,7 @@ jobs:
       id-token: write
     steps:
     - name: Checkout repository
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: ${{ github.repository }}
@@ -56,6 +57,7 @@ jobs:
         submodules: 'false'
         path: proxysql
     - name: Checkout CI control
+      timeout-minutes: 5
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: sysown/proxysql
@@ -74,8 +76,10 @@ jobs:
         python3 ci-control/.github/scripts/ci_tier_runtime.py result
       working-directory: ${{ github.workspace }}
     - name: Relax ASLR for AddressSanitizer
+      timeout-minutes: 1
       run: sudo sysctl -w vm.mmap_rnd_bits=28
     - name: Build selected product inside Docker
+      timeout-minutes: 90
       env:
         WITHASAN: '1'
         WITHGCOV: '1'
@@ -85,6 +89,7 @@ jobs:
       run: |
         make ubuntu24-tap
     - name: Run unit tests + capture coverage inside Docker
+      timeout-minutes: 90
       run: |
         docker compose run --rm \
           -e ASAN_OPTIONS="${ASAN_OPTIONS}" \
@@ -92,10 +97,12 @@ jobs:
           ubuntu24_dbg_build \
           -lc 'cd /opt/proxysql && test/infra/control/run-unit-tests-asan-coverage.bash'
     - name: Fix artifact permissions
+      timeout-minutes: 2
       if: always()
       run: |
         sudo chmod -R a+rX coverage/ unit-test-logs/ 2>/dev/null || true
     - name: Upload coverage LCOV file
+      timeout-minutes: 5
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -103,10 +110,12 @@ jobs:
         path: proxysql/coverage/lcov.info
         if-no-files-found: warn
     - name: Require non-empty coverage/lcov.info
+      timeout-minutes: 1
       id: require-lcov
       if: always()
       run: test -s coverage/lcov.info
     - name: Upload coverage to Codecov
+      timeout-minutes: 5
       id: codecov_1
       if: ${{ !cancelled() && steps.require-lcov.outcome == 'success' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
@@ -125,9 +134,11 @@ jobs:
         fail_ci_if_error: true
         verbose: true
     - name: Wait before Codecov retry 1
+      timeout-minutes: 1
       if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' }}
       run: sleep 15
     - name: Upload coverage to Codecov (retry 1)
+      timeout-minutes: 5
       id: codecov_2
       if: ${{ !cancelled() && steps.codecov_1.outcome == 'failure' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
@@ -146,9 +157,11 @@ jobs:
         fail_ci_if_error: true
         verbose: true
     - name: Wait before Codecov retry 2
+      timeout-minutes: 1
       if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' }}
       run: sleep 45
     - name: Upload coverage to Codecov (retry 2)
+      timeout-minutes: 5
       id: codecov_3
       if: ${{ !cancelled() && steps.codecov_2.outcome == 'failure' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       continue-on-error: true
@@ -167,9 +180,11 @@ jobs:
         fail_ci_if_error: true
         verbose: true
     - name: Report Codecov upload failure
+      timeout-minutes: 1
       if: ${{ !cancelled() && steps.codecov_3.outcome == 'failure' }}
       run: 'echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."'
     - name: Upload coverage HTML report
+      timeout-minutes: 5
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -177,6 +192,7 @@ jobs:
         path: proxysql/coverage/html/
         if-no-files-found: warn
     - name: Upload unit-test logs
+      timeout-minutes: 5
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:

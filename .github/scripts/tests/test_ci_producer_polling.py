@@ -61,7 +61,7 @@ class ProducerPollingTests(unittest.TestCase):
     def test_poll_delay_does_not_extend_the_build_deadline(self):
         def run_status(*args):
             if self.api.request.call_count == 1:
-                self.clock.now = 14350
+                self.clock.now = 20650
                 return dict(status='in_progress')
             return dict(status='completed', conclusion='success')
         self.api.request.side_effect = run_status
@@ -71,6 +71,35 @@ class ProducerPollingTests(unittest.TestCase):
                 runtime.producer_lookup()
         self.assertEqual(self.clock.waits, [50])
         self.assertEqual(self.api.request.call_count, 1)
+
+    def test_waiter_covers_planning_build_and_finalization(self):
+        def run_status(*args):
+            self.clock.now = 245*60
+            if self.api.request.call_count == 1:
+                return dict(status='in_progress')
+            return dict(status='completed', conclusion='success')
+        self.api.request.side_effect = run_status
+        with patch.object(runtime, 'resolve_producer', return_value=self.producer), \
+                patch('random.uniform', return_value=120):
+            runtime.producer_lookup()
+        self.assertEqual(json.loads(Path('producer.json').read_text()), self.producer)
+
+    def test_late_success_cannot_publish_an_accepted_producer(self):
+        def run_status(*args):
+            self.clock.now = 346*60
+            return dict(status='completed', conclusion='success')
+        self.api.request.side_effect = run_status
+        with patch.object(runtime, 'resolve_producer', return_value=self.producer):
+            with self.assertRaisesRegex(RuntimeError, 'timed out waiting for producer completion'):
+                runtime.producer_lookup()
+        self.assertFalse(Path('producer.json').exists())
+
+    def test_waiter_supplies_its_deadline_to_the_api_client(self):
+        self.api.request.return_value = dict(status='completed', conclusion='success')
+        with patch.object(runtime, 'api_for', return_value=self.api) as api_for, \
+                patch.object(runtime, 'resolve_producer', return_value=self.producer):
+            runtime.producer_lookup()
+        self.assertEqual(api_for.call_args.kwargs.get('deadline'), 20700)
 
     def test_exhausted_transport_budget_is_not_restarted_by_the_waiter(self):
         with patch.object(runtime, 'resolve_producer', side_effect=RuntimeError('retry wait budget exceeded')) as resolve:

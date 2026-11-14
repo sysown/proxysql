@@ -238,4 +238,6 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    from ci_github_transport import command_budget
+    with command_budget():
+        main()

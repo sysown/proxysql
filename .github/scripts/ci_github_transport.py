@@ -1,11 +1,14 @@
 """Bounded gh API transport used by CI orchestration."""
 from email.utils import parsedate_to_datetime
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import os
 import re
 import subprocess
 import sys
 import time
+from threading import Lock
 from urllib.parse import urlsplit
 
 
@@ -16,6 +19,69 @@ _QUOTA_HEADERS = ('x-ratelimit-limit', 'x-ratelimit-remaining',
 _TRANSIENT = ('connection reset', 'i/o timeout', 'tls handshake timeout',
               'unexpected eof', 'connection timed out',
               'temporary failure in name resolution')
+
+_COMMAND_BUDGET = ContextVar('github_command_budget', default=None)
+
+
+def current_budget():
+    return _COMMAND_BUDGET.get()
+
+
+def effective_deadline(deadline=None, budget=None):
+    budget = budget if budget is not None else current_budget()
+    deadlines = [value for value in (deadline, budget.deadline if budget else None)
+                 if value is not None]
+    return min(deadlines) if deadlines else None
+
+
+def clipped_timeout(seconds, deadline=None, budget=None):
+    deadline = effective_deadline(deadline, budget)
+    if deadline is None:
+        return seconds
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError('GitHub API command deadline exceeded')
+    return min(seconds, remaining)
+
+
+class CommandBudget:
+    """One deadline and retry-wait allowance, shared with download workers."""
+    def __init__(self, deadline=None):
+        self.deadline = deadline
+        self.waited = 0
+        self.lock = Lock()
+
+    def wait(self, delay, *, cancelled=None, deadline=None):
+        with self.lock:
+            if delay > MAX_WAIT_SECONDS - self.waited:
+                raise RuntimeError('GitHub API retry wait budget exceeded')
+            remaining = clipped_timeout(float('inf'), deadline, self)
+            if delay >= remaining:
+                raise RuntimeError('GitHub API command deadline exceeded before retry wait')
+            # Reserve before sleeping so concurrent workers cannot overspend.
+            self.waited += delay
+        started = time.monotonic()
+        if cancelled is None:
+            time.sleep(delay)
+        elif cancelled.wait(delay):
+            elapsed = min(delay, max(0, time.monotonic() - started))
+            with self.lock:
+                self.waited -= delay - elapsed
+            raise RuntimeError('artifact download cancelled')
+        clipped_timeout(float('inf'), deadline, self)
+
+
+@contextmanager
+def command_budget(timeout_seconds=1500):
+    """Bound a command's I/O and total API retry waits across all clients."""
+    inherited = current_budget()
+    budget = inherited or CommandBudget(time.monotonic() + timeout_seconds)
+    token = _COMMAND_BUDGET.set(budget)
+    try:
+        yield budget
+        clipped_timeout(float('inf'), budget=budget)
+    finally:
+        _COMMAND_BUDGET.reset(token)
 
 
 def _response(data):
@@ -81,7 +147,7 @@ def retry_delay(headers, limited, attempt):
 
 
 def request(path, method='GET', payload=None, raw=False, *, token=None,
-            retry_safe=False, before_retry=None):
+            retry_safe=False, before_retry=None, deadline=None):
     """Run gh with bounded retries; only stable PATCH writes opt into replay."""
     if retry_safe and method != 'PATCH':
         raise ValueError('retry_safe requires PATCH')
@@ -89,8 +155,10 @@ def request(path, method='GET', payload=None, raw=False, *, token=None,
     if payload is not None:
         args += ['--input', '-']
     endpoint = _endpoint(path, token)
-    waited = 0
+    budget = current_budget() or CommandBudget(deadline)
+    deadline = effective_deadline(deadline, budget)
     for attempt in range(MAX_ATTEMPTS):
+        clipped_timeout(float('inf'), deadline, budget)
         if attempt and before_retry is not None:
             before_retry()
         headers = {}
@@ -98,12 +166,13 @@ def request(path, method='GET', payload=None, raw=False, *, token=None,
         try:
             result = subprocess.run(args,
                 input=json.dumps(payload).encode() if payload is not None else None,
-                capture_output=True, timeout=900 if raw else 60,
+                capture_output=True, timeout=clipped_timeout(900 if raw else 60, deadline, budget),
                 env=dict(os.environ, GH_TOKEN=token) if token else None)
         except subprocess.TimeoutExpired:
             reason, limited = 'timed out', False
             retryable = method == 'GET' or retry_safe
         else:
+            clipped_timeout(float('inf'), deadline, budget)
             status, headers, body = _response(result.stdout)
             error = result.stderr.decode(errors='replace').lower()
             if status is None:
@@ -128,12 +197,9 @@ def request(path, method='GET', payload=None, raw=False, *, token=None,
         if not retryable or attempt == MAX_ATTEMPTS - 1:
             raise RuntimeError(diagnostic) from None
         delay = retry_delay(headers, limited, attempt)
-        if delay > MAX_WAIT_SECONDS - waited:
-            raise RuntimeError(diagnostic + ': retry wait budget exceeded') from None
         print(f'GitHub API {method} {endpoint}: retrying in {delay:g}s',
               file=sys.stderr, flush=True)
-        time.sleep(delay)
-        waited += delay
+        budget.wait(delay, deadline=deadline)
 
 
 def record_response(method, path, status, headers, *, token=None):
