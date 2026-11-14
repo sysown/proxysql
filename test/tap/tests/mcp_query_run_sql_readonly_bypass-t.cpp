@@ -131,30 +131,26 @@ static const query_test still_allowed[] = {
 // Test helpers.
 // ---------------------------------------------------------------------------
 
-std::string escape_sql_literal(const std::string& input) {
-	std::string escaped;
-	escaped.reserve(input.size());
-	for (char c : input) {
-		escaped.push_back(c);
-		if (c == '\'') {
-			escaped.push_back('\'');
-		}
-	}
+std::string escape_sql_literal(MYSQL* admin, const std::string& input) {
+	std::string escaped(input.size() * 2 + 1, '\0');
+	const unsigned long escaped_length = mysql_real_escape_string(
+		admin, escaped.data(), input.data(), static_cast<unsigned long>(input.size()));
+	escaped.resize(escaped_length);
 	return escaped;
 }
 
 bool configure_mcp_for_test(MYSQL* admin, const CommandLine& cl, const std::string& query_token) {
-	const std::string mysql_host = escape_sql_literal(cl.mysql_host);
-	const std::string mysql_user = escape_sql_literal(cl.mysql_username);
-	const std::string mysql_password = escape_sql_literal(cl.mysql_password);
-	const std::string default_schema = escape_sql_literal(k_test_schema);
+	const std::string mysql_host = escape_sql_literal(admin, cl.mysql_host);
+	const std::string mysql_user = escape_sql_literal(admin, cl.mysql_username);
+	const std::string mysql_password = escape_sql_literal(admin, cl.mysql_password);
+	const std::string default_schema = escape_sql_literal(admin, k_test_schema);
 
 	const std::vector<std::string> queries = {
 		"SET mcp-port=" + std::to_string(cl.mcp_port),
 		"SET mcp-use_ssl=false",
 		"SET mcp-enabled=true",
-		"SET mcp-config_endpoint_auth='" + escape_sql_literal(query_token) + "'",
-		"SET mcp-query_endpoint_auth='" + escape_sql_literal(query_token) + "'",
+		"SET mcp-config_endpoint_auth='" + escape_sql_literal(admin, query_token) + "'",
+		"SET mcp-query_endpoint_auth='" + escape_sql_literal(admin, query_token) + "'",
 		"DELETE FROM mcp_target_profiles WHERE target_id='" + std::string(k_target_id) + "'",
 		"DELETE FROM mcp_auth_profiles WHERE auth_profile_id='" + std::string(k_auth_profile_id) + "'",
 		"INSERT INTO mcp_auth_profiles (auth_profile_id, db_username, db_password, default_schema, use_ssl, ssl_mode, comment) VALUES "

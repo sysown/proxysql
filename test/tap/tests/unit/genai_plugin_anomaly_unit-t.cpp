@@ -31,6 +31,11 @@
  */
 class Anomaly_Detector_TestHelper {
 public:
+	static bool statistics_mutex_is_live(Anomaly_Detector& d) {
+		const int rc = pthread_mutex_trylock(&d.user_stats_mutex);
+		if (rc == 0) pthread_mutex_unlock(&d.user_stats_mutex);
+		return rc == 0;
+	}
 	static std::string normalize_query(Anomaly_Detector& d, const std::string& query) {
 		return d.normalize_query(query);
 	}
@@ -74,6 +79,23 @@ static void test_normalize_comments() {
 	Anomaly_Detector d;
 	std::string r = Anomaly_Detector_TestHelper::normalize_query(d, "SELECT * FROM users /* comment */ WHERE id = 1");
 	ok(r.find("comment") == std::string::npos, "normalize: block comment removed");
+}
+
+static void test_normalize_line_comments() {
+	Anomaly_Detector d;
+	const char* queries[] = {
+		"SELECT 1 -- trailing comment",
+		"SELECT 1 -- first comment\nFROM t",
+		"SELECT 1 -- first comment\r\nFROM t",
+		"SELECT 1 -- first comment\rFROM t",
+		"-- first comment\nSELECT 1 -- second comment\nFROM t -- last comment",
+		"SELECT /* block comment */ 1 -- line comment\nFROM t"
+	};
+	for (size_t i = 0; i < sizeof(queries) / sizeof(queries[0]); ++i) {
+		const std::string expected = i == 0 ? "select N" : "select N from t";
+		const std::string normalized = Anomaly_Detector_TestHelper::normalize_query(d, queries[i]);
+		ok(normalized == expected, "normalize: line comment case %zu preserves following SQL", i);
+	}
 }
 
 static void test_normalize_empty() {
@@ -169,10 +191,13 @@ static void test_analyze_pipeline_runs_without_vector_db() {
 	ok(r.risk_score >= 0.0 && r.risk_score <= 1.0,
 	   "analyze() returns a risk_score in [0, 1] (got %.3f)", r.risk_score);
 	d.close();
+	ok(Anomaly_Detector_TestHelper::statistics_mutex_is_live(d),
+	   "close preserves the statistics mutex until destruction");
+	d.close(); // Explicit close and destruction must remain safe to repeat.
 }
 
 int main() {
-	plan(25);
+	plan(32);
 
 	test_init_minimal();
 
@@ -181,6 +206,7 @@ int main() {
 	test_normalize_double_quoted_strings();
 	test_normalize_whitespace();
 	test_normalize_comments();
+	test_normalize_line_comments();
 	test_normalize_empty();
 	test_normalize_multiple_literals();
 

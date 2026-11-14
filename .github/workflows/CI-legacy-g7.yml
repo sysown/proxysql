@@ -17,16 +17,15 @@ on:
         required: true
         description: Exact producer attempt (manual tests)
   workflow_run:
-    workflows: [CI-trigger]
-    types: [completed]
-
+    workflows: [ CI-trigger, CI-builds ]
+    types: [ completed ]
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
+  group: ${{ github.workflow }}:${{ github.event.workflow_run.head_repository.full_name || (github.event_name == 'workflow_run' && github.run_id) || github.repository }}:${{ github.event.workflow_run.event == 'workflow_run' }}:${{ github.event.workflow_run && github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   run:
-    if: ${{ github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run }}
+    if: ${{ (!github.event.workflow_run || !startsWith(github.event.workflow_run.display_title, '[ci:skip] ')) && (github.event.workflow_run && github.event.workflow_run.conclusion == 'success' || ! github.event.workflow_run) && (!github.event.workflow_run || github.event.workflow_run.event != 'workflow_run') && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
     # `write-all` is required for the callee's `use_oidc: true` Codecov
     # upload step to mint a GitHub OIDC token. Reusable-workflow
     # permissions are the intersection of caller + callee, so the
@@ -34,6 +33,8 @@ jobs:
     # in write-all) for the callee's declaration to take effect. The
     # callee at ci-<group>.yml@GH-Actions also declares write-all.
     permissions: write-all
+    # The shared group matrix selects mysql57-core-g2 for migrated products
+    # and retains legacy-g7 for older product revisions.
     uses: sysown/proxysql/.github/workflows/ci-legacy-g7.yml@GH-Actions
     secrets: inherit
     with:

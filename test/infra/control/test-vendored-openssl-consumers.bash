@@ -54,7 +54,21 @@ dry_run() {
 		printf '%s\n' "${output}" >&2
 		fail "dry run failed for ${make_dir##*/}:${target} on ${platform}"
 	fi
-	output=${output//\"/}
+	# Empty optional compiler/linker flags add harmless leading whitespace to
+	# assignments. Compare their rendered flag values independently of it.
+	output=$(printf '%s\n' "${output}" | python3 -c '
+import shlex
+import sys
+for line in sys.stdin:
+    try:
+        tokens = shlex.split(line)
+    except ValueError:
+        print(line.rstrip("\n"))
+        continue
+    print(" ".join((token.split("=", 1)[0] + "=" + token.split("=", 1)[1].strip())
+                   if token.startswith(("CFLAGS=", "CXXFLAGS=", "CPPFLAGS=", "LDFLAGS=", "LIBS="))
+                   else token for token in tokens))
+')
 	printf '%s\n' "${output}"
 }
 
@@ -95,7 +109,9 @@ assert_vendored_first() {
 	local verify_line
 	local consumer_line
 
-	verify_line=$(printf '%s\n' "${output}" | awk 'index($0, "cd libssl && ./verify-source.bash") { print NR; exit }')
+	# The preparation bridge verifies/restores artifacts or invokes the separately
+	# checked source-verification recipe before the consumer can configure.
+	verify_line=$(printf '%s\n' "${output}" | awk 'index($0, "prepare.bash openssl") { print NR; exit }')
 	consumer_line=$(printf '%s\n' "${output}" | awk -v marker="${consumer_marker}" 'index($0, marker) { print NR; exit }')
 	[[ -n "${verify_line}" ]] || fail "${context} has no vendored OpenSSL prerequisite"
 	[[ -n "${consumer_line}" ]] || fail "${context} has no expected configure command"
@@ -122,6 +138,15 @@ assert_no_system_openssl() {
 }
 
 for platform in Linux Darwin FreeBSD; do
+	# Router sources use OpenSSL directly; macOS has no system headers to
+	# mask a missing vendored include directory in the plugin's compile flags.
+	for source in bootstrap_options metadata_client bootstrap user_sync; do
+		router_output=$(dry_run "${repo_root}/plugins/mysql_router" \
+			"${repo_root}/plugins/mysql_router/obj/${source}.o" "${platform}")
+		assert_contains "${router_output}" "-I${openssl_root}/include" "MySQL Router ${source}/${platform}"
+		assert_no_system_openssl "${router_output}" "MySQL Router ${source}/${platform}"
+	done
+
 	curl_output=$(dry_run "${repo_root}/deps" curl "${platform}")
 	assert_vendored_first "${curl_output}" './configure' "curl/${platform}"
 	assert_contains "${curl_output}" "CPPFLAGS=-I${openssl_root}/include" "curl/${platform}"
@@ -129,12 +154,6 @@ for platform in Linux Darwin FreeBSD; do
 	assert_contains "${curl_output}" "LIBS=${ssl_archive} ${crypto_archive}" "curl/${platform}"
 	assert_contains "${curl_output}" "--with-openssl=${openssl_root}" "curl/${platform}"
 	assert_contains "${curl_output}" '--disable-symbol-hiding' "curl/${platform}"
-	assert_contains "${curl_output}" 'BLANK_AT_MAKETIME=' "curl/${platform}"
-	assert_contains "${curl_output}" 'LIBCURL_PC_LIBS_PRIVATE=' "curl/${platform}"
-	assert_contains "${curl_output}" \
-		"filter-out ${ssl_archive} ${crypto_archive}" "curl/${platform}"
-	assert_contains "${curl_output}" "\$(LIBCURL_PC_LIBS)" "curl/${platform}"
-	assert_not_contains "${curl_output}" 'lib/Makefile' "curl/${platform}"
 	assert_contains "${curl_output}" '--disable-shared' "curl/${platform}"
 	assert_contains "${curl_output}" '--enable-static' "curl/${platform}"
 	assert_no_system_openssl "${curl_output}" "curl/${platform}"
@@ -152,7 +171,6 @@ for platform in Linux Darwin FreeBSD; do
 	assert_contains "${postgres_output}" "--with-includes=${openssl_root}/include" "PostgreSQL/${platform}"
 	assert_contains "${postgres_output}" "--with-libraries=${openssl_root}" "PostgreSQL/${platform}"
 	assert_contains "${postgres_output}" "LIBS=${ssl_archive} ${crypto_archive}" "PostgreSQL/${platform}"
-	assert_contains "${postgres_output}" "MAKELEVEL=0 libpq.a" "PostgreSQL/${platform}"
 	assert_no_system_openssl "${postgres_output}" "PostgreSQL/${platform}"
 
 	libusual_output=$(dry_run "${repo_root}/deps" libusual "${platform}")

@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, AsyncGenerator, Literal, Tuple
@@ -520,7 +521,8 @@ async def create_run(req: RunCreate):
     llm_key = os.getenv("LLM_API_KEY", "")
     llm_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
-    if not llm_key and "openai.com" in llm_base:
+    llm_host = urllib.parse.urlparse(llm_base).hostname or ""
+    if not llm_key and llm_host == "openai.com":
         raise HTTPException(status_code=400, detail="Set LLM_API_KEY (or use a local OpenAI-compatible server).")
 
     # MCP env

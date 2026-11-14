@@ -111,7 +111,7 @@ int main(int argc, char** argv) {
 				continue;
 			}
 			if (New_sum > 32768) {
-				k = static_cast<double>(random_u30() % New_sum);
+				k = static_cast<double>(random_u30() % static_cast<unsigned int>(New_sum));
 			} else {
 				k = fastrand() % (unsigned int)New_sum;
 			}

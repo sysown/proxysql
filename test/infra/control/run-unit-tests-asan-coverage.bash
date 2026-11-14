@@ -21,15 +21,15 @@
 #   * lib/, src/, and test/tap/tests/unit/ have been built with
 #     WITHASAN=1 WITHGCOV=1 NOJEMALLOC=1 PROXYSQL40=1 (the make
 #     target `ubuntu24-tap` does this when invoked with those flags).
-#   * The container has apt — we install lcov + libprotobuf-dev on
-#     demand if missing (the build image is package-build-focused
-#     and ships neither). libprotobuf provides the runtime
+#   * The container has apt — we install coverage tools, protocol clients,
+#     Python 3, and libprotobuf-dev on demand if missing (the build image
+#     is package-build-focused). libprotobuf provides the runtime
 #     libprotobuf.so.32 the chassis-tier *-t binaries dlopen.
 #
 # Outputs (under cwd, visible on the host via the bind mount):
 #   * coverage/lcov.info       — merged + filtered LCOV report
 #   * coverage/html/           — genhtml-rendered HTML report
-#   * unit-test-logs/<name>.log — stdout+stderr per failed test
+#   * unit-test-logs/<name>.log — stdout+stderr per test
 #
 # Exit status: 0 if all unit tests passed, 1 otherwise. Coverage
 # capture runs regardless.
@@ -45,15 +45,19 @@ cd "${REPO_ROOT}"
 # default mirrors the values the CI workflow passes through and the
 # values include/makefiles_vars.mk's WASAN block was tuned against.
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0:abort_on_error=1:symbolize=1:print_stacktrace=1:halt_on_error=1}"
+source "${SCRIPT_DIR}/unit-test-execution.bash"
 
 # Install runtime deps only if missing — keeps the script idempotent
 # for repeated local runs and skips the apt round-trip when re-running
 # inside an already-prepared container.
 if ! command -v lcov >/dev/null 2>&1 || ! command -v genhtml >/dev/null 2>&1 \
-   || ! ldconfig -p | grep -q libprotobuf\\.so; then
-    echo "==> Installing missing runtime deps (lcov, libprotobuf-dev)"
+   || ! ldconfig -p | grep -q libprotobuf\\.so \
+   || ! command -v mysql >/dev/null 2>&1 || ! command -v psql >/dev/null 2>&1 \
+   || ! command -v python3 >/dev/null 2>&1; then
+    echo "==> Installing missing runtime deps (coverage tools, protocol clients, Python, protobuf)"
     apt-get update -qq
-    apt-get install -y --no-install-recommends lcov libprotobuf-dev
+    apt-get install -y --no-install-recommends lcov libprotobuf-dev \
+        python3 default-mysql-client postgresql-client
 fi
 
 mkdir -p coverage unit-test-logs
@@ -95,12 +99,16 @@ for t in *-t; do
     [ -x "./${t}" ] || continue
     log="${REPO_ROOT}/unit-test-logs/${t}.log"
     echo "::group::${t}"
-    if ./"${t}" > "${log}" 2>&1; then
+    rc=0
+    proxysql_run_unit_test "${log}" "./${t}" || rc=$?
+    if [ "${rc}" -eq 0 ]; then
         PASSED=$((PASSED + 1))
         echo "PASS: ${t}"
     else
-        rc=$?
         FAILED+=("${t} (rc=${rc})")
+        if [ "${rc}" -eq 124 ] || [ "${rc}" -eq 137 ]; then
+            echo "TIMEOUT: ${t} after ${UNIT_TEST_TIMEOUT_SECONDS}s (rc=${rc})"
+        fi
         echo "FAIL: ${t} (rc=${rc})"
         tail -n 80 "${log}"
     fi
@@ -144,6 +152,14 @@ if [ -s coverage/lcov.info ]; then
          "/usr/*" "*/deps/*" "*/test/*" \
          --output-file coverage/lcov.info \
          --ignore-errors unused || true
+
+    # gcov records the container checkout prefix in SF: entries even though
+    # capture is rooted at lib/. Normalize those paths to the git-tree shape
+    # used by the TAP coverage producer so Codecov merges both reports.
+    sed -i \
+        -e 's|^SF:/opt/proxysql/|SF:|' \
+        -e "s|^SF:${REPO_ROOT}/|SF:|" \
+        coverage/lcov.info
 
     genhtml --quiet \
             --output-directory coverage/html \

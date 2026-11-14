@@ -17,6 +17,10 @@ template void Base_Thread::ProcessAllSessions_Partition<MySQL_Session>();
 template void Base_Thread::ProcessAllSessions_Partition<PgSQL_Session>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<MySQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+// Called directly by PostgreSQL's readiness-only scan and housekeeping.
+template void Base_Thread::check_timing_out_session<PgSQL_Thread>(unsigned int);
+template void Base_Thread::check_for_invalid_fd<PgSQL_Thread>(unsigned int);
+template void Base_Thread::read_one_byte_from_pipe<PgSQL_Thread>(unsigned int);
 template void Base_Thread::ProcessAllMyDS_BeforePoll<MySQL_Thread>();
 template void Base_Thread::ProcessAllMyDS_BeforePoll<PgSQL_Thread>();
 template void Base_Thread::register_session(MySQL_Thread*, MySQL_Session*, bool);
@@ -79,6 +83,14 @@ void Base_Thread::register_session(T thr, S _sess, bool up_start) {
 	if constexpr (std::is_same_v<T, PgSQL_Thread*>) {
 		_sess->copy_cmd_matcher = (static_cast<PgSQL_Thread*>(this))->copy_cmd_matcher;
 	}
+#ifdef PROXYSQL31
+	if constexpr (std::is_same_v<T, MySQL_Thread*>) {
+		// Clear the retained legacy marker when moving between workers.
+		// Phased dispatch now uses to_process and the continuation queue.
+		// Keep initialization consistent with newly constructed sessions.
+		_sess->handled_in_pass = 0;
+	}
+#endif // PROXYSQL31
 
 	if (up_start)
 		_sess->start_time=curtime;
@@ -215,9 +227,11 @@ void Base_Thread::check_timing_out_session(unsigned int n) {
 	auto* _sess = _myds->sess;
 	if (!_sess) return;
 
-	// Generic timeout checks (wait_until or pause_until)
-	if ((_myds->wait_until && curtime > _myds->wait_until) ||
-		(_sess->pause_until && curtime > _sess->pause_until)) {
+	// A deadline is due at equality. BeforePoll only schedules future
+	// deadlines; skipping this boundary would fall back to the full poll
+	// interval and delay query cancellation (see #6385).
+	if ((_myds->wait_until && curtime >= _myds->wait_until) ||
+		(_sess->pause_until && curtime >= _sess->pause_until)) {
 		_sess->to_process = 1;
 	}
 
@@ -498,7 +512,7 @@ void Base_Thread::configure_pollout(DS * myds, unsigned int n) {
 		if (myds->DSS > STATE_MARIADB_BEGIN && myds->DSS < STATE_MARIADB_END && myds->myconn) {
 			thr->mypolls.fds[n].events = POLLIN;
 			if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-				if (myds->myconn->async_exit_status & PG_EVENT_WRITE)
+				if (myds->myconn->needs_pollout())
 					thr->mypolls.fds[n].events |= POLLOUT;
 			} else if constexpr (std::is_same_v<T, MySQL_Thread>) {
 				if (myds->myconn->async_exit_status & MYSQL_WAIT_WRITE)
@@ -574,6 +588,11 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
  */
 template<typename T, typename DS>
 bool Base_Thread::move_session_to_idle_mysql_sessions(DS * myds, unsigned int n) {
+	// The poll scan admits only frontend streams with an attached session.
+	assert(myds && myds->sess);
+#ifdef PROXYSQL31
+	if (myds->sess->continuation_queued) return false;
+#endif
 	T* thr = static_cast<T*>(this);
 	unsigned long long _tmp_idle = thr->mypolls.last_recv[n] > thr->mypolls.last_sent[n] ? thr->mypolls.last_recv[n] : thr->mypolls.last_sent[n] ;
 

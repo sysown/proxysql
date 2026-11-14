@@ -8,7 +8,7 @@ import ast
 import json
 import re
 
-TOKEN = re.compile(r"'(?:''|[^'])*'|[A-Za-z_][A-Za-z0-9_.-]*|&&|\|\||!=|==|!|\d+|[(),\[\]]")
+TOKEN = re.compile(r"'(?:''|[^'])*'|[A-Za-z_][A-Za-z0-9_.*-]*|&&|\|\||!=|==|!|\d+|[(),\[\]]")
 FUNCTIONS = {
     'success': lambda: True,
     'always': lambda: True,
@@ -22,6 +22,8 @@ FUNCTIONS = {
 
 def evaluate(node, functions=FUNCTIONS):
     """Evaluate whitelisted AST nodes without executing workflow-supplied code."""
+    if isinstance(node, ast.List):
+        return [evaluate(item, functions) for item in node.elts]
     if isinstance(node, ast.Constant):
         return node.value
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
@@ -54,8 +56,8 @@ def evaluate(node, functions=FUNCTIONS):
     raise ValueError('unsupported condition syntax')
 
 
-def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_results=None):
-    """Check a gate for one selected tier/mode, failing closed on unknown context."""
+def condition_value(condition, tier, mode, inputs=None, job='tests', needs_results=None, event_context=None):
+    """Evaluate a typed value, failing closed on unknown context."""
     if condition is None:
         condition = True
     if isinstance(condition, bool):
@@ -68,6 +70,8 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_resu
         'inputs.trusted': True,
         'github.event.workflow_run': True,
         'github.event.workflow_run.conclusion': 'success',
+        'github.event.workflow_run.display_title': 'feature/ci-validation CI-trigger abc123',
+        'github.event.workflow_run.event': 'pull_request',
         'github.event.workflow_run.head_branch': 'feature/ci-validation',
         'github.ref_name': 'feature/ci-validation',
         'github.event.workflow_run.head_repository.full_name': 'sysown/proxysql',
@@ -79,6 +83,7 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_resu
         context.pop('needs.tier-context.result', None)
         context.update({'needs.' + key + '.result': value for key, value in needs_results.items()})
     context.update({'inputs.' + key: value for key, value in (inputs or {}).items()})
+    context.update(event_context or {})
     translated = []
     offset = 0
     for match in TOKEN.finditer(expression):
@@ -122,6 +127,11 @@ def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_resu
                              for node in ast.walk(tree))
             if not has_status and not successful:
                 return False
-        return bool(evaluate(tree, functions))
+        return evaluate(tree, functions)
     except (SyntaxError, TypeError, KeyError, AttributeError) as error:
         raise ValueError('unsupported condition expression') from error
+
+
+def condition_allows(condition, tier, mode, inputs=None, job='tests', needs_results=None, event_context=None):
+    """Check a gate for one selected tier/mode, failing closed on unknown context."""
+    return bool(condition_value(condition, tier, mode, inputs, job, needs_results, event_context))

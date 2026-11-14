@@ -1,6 +1,6 @@
 # GenAI Plugin Variable Default Seeding Design
 
-**Status:** Approved design; implementation plan pending
+**Status:** Approved design; implementation plan available
 **Issue:** #6099
 **Branch:** `fix/6099-genai-variable-defaults`
 **Base:** `v3.0` at `94b3c8260`

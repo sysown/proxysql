@@ -234,19 +234,18 @@ export TAP_GROUP="unit-tests-g1"
 
 ## 7. ProxySQL Cluster Management
 
-By default, the infrastructure starts a single ProxySQL node. For cluster-specific testing, you can enable additional nodes.
+By default, the infrastructure starts the primary ProxySQL instance and six
+additional peers in the same container (seven instances total). Set
+`PROXYSQL_CLUSTER_NODES` before starting to override the peer count, or set
+`SKIP_CLUSTER_START=1` to start only the primary.
 
 ### Starting a Cluster
 ```bash
-# 1. Start the main ProxySQL node
-./test/infra/control/start-proxysql-isolated.bash
-
-# 2. Start additional nodes (default: 9 nodes)
+# Optional override: three additional peers (four instances total)
 export PROXYSQL_CLUSTER_NODES=3
-./test/infra/control/cluster_start.bash
 
-# 3. Initialize the cluster
-./test/infra/control/cluster_init.bash
+# Start the primary and configured peers, then initialize the cluster
+./test/infra/control/start-proxysql-isolated.bash
 ```
 
 ---
@@ -258,7 +257,7 @@ The `run-multi-group.bash` script enables running multiple TAP groups in paralle
 ### Basic Usage
 ```bash
 RUN_ID="test-$(date +%s)" \
-TAP_GROUPS="legacy-g1 legacy-g2 legacy-g3 mysql84-g1" \
+TAP_GROUPS="legacy-g1 legacy-g2 mysql84-g3 mysql84-g1" \
 ./test/infra/control/run-multi-group.bash
 ```
 

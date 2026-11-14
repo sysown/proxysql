@@ -109,6 +109,14 @@ disconnect them; new admissions resume after the count drops below the cap.
 Client errors can look like a connection reset or unexpected EOF rather than a
 structured MySQL/PostgreSQL error.
 
+A connection takes its slot as soon as it is accepted, before authentication.
+A client that has not finished authenticating within `mysql-connect_timeout_client`
+(MySQL listener) or `pgsql-connect_timeout_client` (PgSQL listener) is
+disconnected, and its slot is released. This is the same rule core applies to
+normal ProxySQL sessions. A warning is logged: "Closing not established DuckDB
+client connection". Without the timeout, idle unauthenticated sockets could hold
+every slot indefinitely.
+
 ## Backup and restore
 
 For `:memory:` there is no restart-persistent database file to back up. Export

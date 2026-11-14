@@ -4,6 +4,8 @@
 
 ### Unreleased
 
+- Prevent replaying a MySQL multi-statement batch on another backend when its backend goes offline after an earlier result was returned to the client.
+
 #### Pass-Through Authentication (Phase 1 — opt-in, MySQL only)
 
 New authentication mode that lets a MySQL client authenticate through
@@ -68,6 +70,32 @@ Phase 1 limitations (documented in code + spec):
 - `COM_CHANGE_USER` targeting a pass-through user is rejected
 - Cluster sync of variables works via the standard `mysql_variables`
   path; metric counters are per-node
+
+#### PostgreSQL digest fixes and v3.0 experimental ParserSQL compatibility
+
+- Fixed `pgsql-query_digests_keep_comment`: a kept comment is followed by a
+  separator space, and the digest buffer now accounts for it, so the last
+  character of a query is no longer dropped (#6451).
+- Fixed an unterminated `/*` comment leaking its last character into the
+  digest. An unterminated comment now contributes nothing; its partial text is
+  preserved when `pgsql-query_digests_keep_comment` is on (#6451).
+- v3.0 restores the established ParserSQL digest and backend-confirmed literal
+  user-variable tracking flows while retaining ParserSQL 1.1.1 (#6507).
+  ParserSQL-generated digests can differ from legacy mode, and first-comment
+  annotations remain unavailable with `*-query_processor_parser=1`.
+- Parser classification reuses the result obtained during digest parsing;
+  intercepted commands and isolated SET scope/completeness fixes are retained.
+  Unsupported/incomplete input, arena exhaustion and expressions hidden by the
+  AST digest retain a targeted legacy fallback, without exposing first-comment
+  hints in parser mode.
+- Mixed session/user-variable SET tracking, local acknowledgement/deferred
+  backend application and captured-context replay are gated to newer builds.
+  In v3.0, mixed assignments use the existing backend-bound fallback and
+  supported pure user-variable SETs update tracked state after backend success.
+  The v3.1 redesign is tracked independently in #6508.
+- The legacy-tokenizer-only digest model (#6454), including parser-mode first
+  comments and cross-mode digest parity, remains limited to `PROXYSQL31`
+  builds pending that redesign. Its tokenizer fixes remain in every build.
 
 #### New Features (3.1)
 

@@ -46,6 +46,12 @@ for PORT in 3306 3307 3308; do
     fi
 done
 
+# The servers keep MariaDB's stock session-tracking defaults, which do not
+# include 'last_gtid'. Reporting each session's own GTID in the OK packet is
+# ProxySQL's job: with mysql-default_session_track_gtids=OWN_GTID it adds
+# 'last_gtid' to every backend connection's session_track_system_variables.
+# Enabling it globally here would hide a broken ProxySQL path (issue #6331).
+
 # Verify replication is working on nodes 2 and 3.
 # MariaDB reports this through SHOW SLAVE STATUS (it has no Replica_*_Running
 # column names, though it does accept SHOW REPLICA STATUS as an alias).

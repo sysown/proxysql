@@ -277,17 +277,26 @@ int main() {
 	command(admin, "UPDATE pgsql_query_rules SET cache_empty_result=0 WHERE rule_id=971004");
 	command(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	sets = metric(admin, "Query_Cache_count_SET");
-	r = send_extended_messages_and_read_reply(c, execution("empty", "empty") + msg('S'));
-	ok(r.types == "2TCZ" && r.rows.empty(), "Empty result has metadata but no rows");
-	ok(metric(admin, "Query_Cache_count_SET") == sets, "cache_empty_result=0 prevents insertion");
+	for (bool describe : {true, false}) {
+		r = send_extended_messages_and_read_reply(c, execution("empty", "empty", describe) + msg('S'));
+		ok(r.types == (describe ? "2TCZ" : "2CZ") && r.rows.empty(),
+			"Empty result preserves response shape (Describe=%d)", describe);
+		ok(metric(admin, "Query_Cache_count_SET") == sets,
+			"cache_empty_result=0 prevents insertion (Describe=%d)", describe);
+	}
 	command(admin, "UPDATE pgsql_query_rules SET cache_empty_result=1 WHERE rule_id=971004");
 	command(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 	for (bool describe : {true, false}) {
-		send_extended_messages_and_read_reply(c, execution("empty", "empty", describe) + msg('S'));
+		r = send_extended_messages_and_read_reply(c, execution("empty", "empty", describe) + msg('S'));
+		ok(r.types == (describe ? "2TCZ" : "2CZ") && r.rows.empty(),
+			"Uncached empty result preserves response shape (Describe=%d)", describe);
 		before = hits(admin);
+		const long long backend_before = backend_queries(admin);
 		r = send_extended_messages_and_read_reply(c, execution("empty", "empty", describe) + msg('S'));
 		ok(r.types == (describe ? "2TCZ" : "2CZ") && r.rows.empty(), "Cached empty result preserves response shape");
 		ok(hits(admin) == before + 1, "cache_empty_result=1 caches empty execution with/without Describe");
+		ok(backend_queries(admin) == backend_before,
+			"Cached empty execution issues no backend query (Describe=%d)", describe);
 	}
 	// Simple and extended entries for identical zero-parameter SQL cannot mix.
 	const std::string zero_sql = "SELECT /*ext_cache*/ 'zero'::text";

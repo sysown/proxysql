@@ -24,6 +24,7 @@
 #include "libpq-fe.h"
 #include "command_line.h"
 #include "tap.h"
+#include "pgsql_native_tier.h"
 
 CommandLine cl;
 
@@ -93,7 +94,7 @@ static bool execSql(PGConnPtr& admin, const std::string& sql) {
 }
 
 int main(int argc, char** argv) {
-	plan(6);
+	plan(10);
 
 	if (cl.getEnv()) return exit_status();
 
@@ -104,6 +105,7 @@ int main(int argc, char** argv) {
 		diag("Cannot continue without admin connection");
 		return exit_status();
 	}
+	const bool native_supported = pgsql_native_supported(admin.get());
 
 	// -----------------------------------------------------------------
 	// 1. Confirm pgsql_servers is set up the way the group expects:
@@ -128,24 +130,47 @@ int main(int argc, char** argv) {
 	//    Before the fix this failed at PQconnectdb with
 	//    "invalid port number: \"0\"".
 	// -----------------------------------------------------------------
-	auto backend = createNewConnection(BACKEND);
-	ok(backend != nullptr, "Client connection through ProxySQL (via Unix-socket backend) succeeds");
+	if (native_supported) {
+		bool native_on = execSql(admin, "SET pgsql-use_native_backend_protocol='true'") &&
+			execSql(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+		ok(native_on, "Native backend protocol enabled for the Unix-socket query");
+		auto backend = createNewConnection(BACKEND);
+		ok(backend != nullptr, "Native-enabled client connection via Unix-socket backend succeeds");
 
-	if (backend != nullptr) {
-		PGresult* res = PQexec(backend.get(), "SELECT 1 AS one");
-		bool ok_q = (PQresultStatus(res) == PGRES_TUPLES_OK
-			&& PQntuples(res) == 1
-			&& strcmp(PQgetvalue(res, 0, 0), "1") == 0);
-		ok(ok_q, "SELECT 1 through the proxy returns the expected result");
-		if (!ok_q) {
-			diag("PQresultStatus=%d, ntuples=%d, value=%s, error=%s",
-				PQresultStatus(res), PQntuples(res),
-				PQntuples(res) > 0 ? PQgetvalue(res, 0, 0) : "(none)",
-				PQerrorMessage(backend.get()));
+		if (backend != nullptr) {
+			PGresult* res = PQexec(backend.get(), "SELECT 1 AS one");
+			bool ok_q = (PQresultStatus(res) == PGRES_TUPLES_OK
+				&& PQntuples(res) == 1
+				&& strcmp(PQgetvalue(res, 0, 0), "1") == 0);
+			ok(ok_q, "SELECT 1 through the native-enabled proxy returns the expected result");
+			if (!ok_q) {
+				diag("PQresultStatus=%d, ntuples=%d, value=%s, error=%s",
+					PQresultStatus(res), PQntuples(res),
+					PQntuples(res) > 0 ? PQgetvalue(res, 0, 0) : "(none)",
+					PQerrorMessage(backend.get()));
+			}
+			PQclear(res);
+		} else {
+			ok(0, "SELECT 1 through the native-enabled proxy returns the expected result");
 		}
+		backend.reset();
+	} else {
+		skip(3, "native backend protocol is unavailable in v3.0");
+	}
+	bool native_off = !native_supported ||
+		(execSql(admin, "SET pgsql-use_native_backend_protocol='false'") &&
+		 execSql(admin, "LOAD PGSQL VARIABLES TO RUNTIME"));
+	ok(native_off, "Native backend protocol restored after the Unix-socket query");
+	auto libpq_backend = createNewConnection(BACKEND);
+	ok(libpq_backend != nullptr, "Libpq-mode client connection via Unix-socket backend succeeds");
+	if (libpq_backend != nullptr) {
+		PGresult* res = PQexec(libpq_backend.get(), "SELECT 1 AS one");
+		ok(PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1 &&
+			strcmp(PQgetvalue(res, 0, 0), "1") == 0,
+			"SELECT 1 through the libpq-mode proxy returns the expected result");
 		PQclear(res);
 	} else {
-		ok(0, "SELECT 1 through the proxy returns the expected result");
+		ok(0, "SELECT 1 through the libpq-mode proxy returns the expected result");
 	}
 
 	// -----------------------------------------------------------------

@@ -159,6 +159,49 @@ static void test_check_and_build_table_idempotent() {
     ok(count == 1, "check_and_build_table: idempotent -- data preserved");
 }
 
+static void test_if_not_exists_preserves_rows() {
+    const char* ddl = "CREATE TABLE IF NOT EXISTS guarded_table (id INTEGER PRIMARY KEY, value TEXT)";
+    ok(db->check_and_build_table("guarded_table", ddl) &&
+       db->execute("INSERT INTO guarded_table VALUES (1, 'persist')"),
+       "IF NOT EXISTS: create and seed a persistent table");
+    ok(db->check_table_structure("guarded_table", ddl) == 1,
+       "IF NOT EXISTS: definition matches SQLite's stored CREATE TABLE form");
+    ok(db->check_and_build_table("guarded_table", ddl) &&
+       db->return_one_int("SELECT COUNT(*) FROM guarded_table WHERE value='persist'") == 1,
+       "IF NOT EXISTS: repeated materialization preserves existing rows");
+    ok(db->check_table_structure("guarded_table",
+       "CREATE TABLE IF NOT EXISTS guarded_table (id TEXT, value TEXT)") == 0,
+       "IF NOT EXISTS: a genuinely different schema still does not match");
+}
+
+static void test_create_table_prefix_variants_preserve_rows() {
+    const char* prefixes[] = {
+        "CREATE TABLE if not exists ",
+        "create table IF NOT EXISTS ",
+        "CrEaTe  TaBlE\tIf\nNoT\r\nExIsTs\t",
+        "\n\t CREATE \r\nTABLE \t IF   NOT \f EXISTS    ",
+        "CREATE\tTABLE\n",
+        "create table "
+    };
+    for (const char* prefix : prefixes) {
+        db->execute("DROP TABLE IF EXISTS prefix_guard");
+        const std::string ddl = std::string(prefix) +
+            "prefix_guard (id INTEGER PRIMARY KEY, value TEXT DEFAULT 'IF NOT EXISTS  Keep Case')";
+        ok(db->check_and_build_table("prefix_guard", ddl.c_str()) &&
+           db->execute("INSERT INTO prefix_guard (id) VALUES (1)"),
+           "prefix variant: create and seed a persistent table");
+        ok(db->check_table_structure("prefix_guard", ddl.c_str()) == 1,
+           "prefix variant: definition matches SQLite's stored form");
+        ok(db->check_table_structure("prefix_guard",
+           "CREATE TABLE prefix_guard (id INTEGER PRIMARY KEY, value TEXT DEFAULT 'if not exists  Keep Case')") == 0,
+           "prefix variant: literal case in the table body remains significant");
+        ok(db->check_and_build_table("prefix_guard", ddl.c_str()) &&
+           db->return_one_int("SELECT COUNT(*) FROM prefix_guard WHERE id=1 "
+               "AND value='IF NOT EXISTS  Keep Case'") == 1,
+           "prefix variant: repeated materialization preserves the seeded row and literal");
+    }
+}
+
 // ============================================================
 // SQLite3_row — row operations
 // ============================================================
@@ -216,7 +259,7 @@ static void test_wrlock_unlock() {
 }
 
 int main() {
-    plan(23);
+    plan(51);
     test_init_minimal();
 
     setup_db();
@@ -233,6 +276,8 @@ int main() {
     test_build_table_drop_recreate();       // 3
     test_check_and_build_table_creates();   // 1
     test_check_and_build_table_idempotent();// 1
+    test_if_not_exists_preserves_rows();
+    test_create_table_prefix_variants_preserve_rows();
     test_sqlite3_row_get_size();            // 2
     test_sized_row_rejects_int_overflow();  // 2
     test_rdlock_unlock();                   // 1

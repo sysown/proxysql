@@ -550,7 +550,6 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 		);
 	}
 	configdb->execute("PRAGMA foreign_keys = ON");
-
 }
 
 

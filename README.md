@@ -84,6 +84,8 @@ for MySQL X, GenAI, and the real
 Router plugin is distinct from the MySQL X protocol plugin and is not yet
 included in release packages; source builds install
 `proxysql_mysql_router.so` under `/usr/lib/proxysql/plugins/`.
+See [AWS locality-aware backend selection](doc/aws-locality-awareness.md) for
+the optional external-provider contract and MySQL configuration controls.
 
 Building ProxySQL from source needs nothing beyond a normal `git clone`:
 the pinned OpenSSL source archive is vendored directly in git. Verify it

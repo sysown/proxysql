@@ -69,7 +69,7 @@ index e8db51a0..684aff1a 100644
      mysql->stmts= NULL;
    }
  }
-@@ -2458,6 +2475,42 @@ mysql_close(MYSQL *mysql)
+@@ -2458,6 +2475,58 @@ mysql_close(MYSQL *mysql)
    return;
  }
  
@@ -84,6 +84,22 @@ index e8db51a0..684aff1a 100644
 +        mysql->status=MYSQL_STATUS_READY; /* Force command */
 +         mysql->options.reconnect=0;
 +        end_server(mysql);
++      }
++      else if (mysql->options.extension &&
++               mysql->options.extension->async_context)
++      {
++        struct mysql_async_context *ctxt=
++          mysql->options.extension->async_context;
++        if (ctxt->pending_gai_res)
++        {
++          freeaddrinfo(ctxt->pending_gai_res);
++          ctxt->pending_gai_res= 0;
++        }
++        if (ctxt->pvio)
++        {
++          ma_pvio_close(ctxt->pvio);
++          ctxt->pvio= 0;
++        }
 +      }
 +    }
 +    mysql_close_memory(mysql);

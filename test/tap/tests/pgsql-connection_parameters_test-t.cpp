@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <algorithm>
 #include <locale>
 #include <string>
 #include <sstream>
@@ -912,6 +913,131 @@ void test_invalid_param_reg_4919_thread() {
     }
 }
 
+// A client that never asks for search_path still gets the configured default, is told that value
+// when it connects, and the backend is given it too. The last check asks PostgreSQL rather than
+// ProxySQL, so it fails if the value was dropped on the way.
+bool test_search_path_reported_and_applied() {
+    diag("=== Test: search_path is filled in, reported, and delivered to the backend ===");
+
+    PGConnPtr conn = createNewConnection(ConnType::BACKEND, "", false);
+    if (!conn || PQstatus(conn.get()) != CONNECTION_OK) {
+        diag("failed to connect");
+        return false;
+    }
+
+    const char* reported = PQparameterStatus(conn.get(), "search_path");
+    diag("ParameterStatus search_path = '%s'", reported ? reported : "(absent)");
+    if (reported == nullptr) {
+        diag("no search_path ParameterStatus was sent to the client");
+        return false;
+    }
+
+    PGresult* res = PQexec(conn.get(),
+        "SELECT current_setting('search_path'), "
+        "(SELECT reset_val FROM pg_settings WHERE name = 'search_path')");
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        diag("could not read search_path from the backend: %s", PQresultErrorMessage(res));
+        PQclear(res);
+        return false;
+    }
+    const std::string on_backend = PQgetvalue(res, 0, 0);
+    const std::string at_startup = PQgetvalue(res, 0, 1);
+    PQclear(res);
+    // reset_val is what the backend session started with, so it says whether the value arrived at
+    // connect or in a later SET on a reused connection. Reported only: either is correct here.
+    diag("backend reports search_path = '%s' (reset_val '%s', %s)", on_backend.c_str(),
+        at_startup.c_str(),
+        at_startup == on_backend ? "arrived in the startup packet" : "reused backend, synced by SET");
+
+    // Compare with spaces removed. ProxySQL and PostgreSQL format the same setting differently by
+    // one space, which is a known divergence and not what this test is for.
+    auto squeeze = [](std::string v) {
+        v.erase(std::remove(v.begin(), v.end(), ' '), v.end());
+        return v;
+    };
+    diag("comparing squeezed: reported='%s' backend='%s'",
+        squeeze(reported).c_str(), squeeze(on_backend).c_str());
+
+    return squeeze(on_backend) == squeeze(reported);
+}
+
+// Changing pgsql-default_search_path must reach new connections, and an invalid value must never
+// take effect.
+bool test_default_search_path_admin_variable() {
+    diag("=== Test: pgsql-default_search_path ===");
+
+    PGConnPtr admin = createNewConnection(ConnType::ADMIN, "", false);
+    if (!admin || PQstatus(admin.get()) != CONNECTION_OK) {
+        diag("failed to connect to admin");
+        return false;
+    }
+
+    bool result = false;
+
+    if (executeQueries(admin.get(), { "SET pgsql-default_search_path='pg_catalog'",
+                                      "LOAD PGSQL VARIABLES TO RUNTIME" }) == false) {
+        diag("could not set pgsql-default_search_path");
+        return false;
+    }
+
+    {
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn || PQstatus(conn.get()) != CONNECTION_OK) {
+            diag("failed to connect after changing the default");
+        } else {
+            PGresult* res = PQexec(conn.get(), "SELECT current_setting('search_path')");
+            if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+                const std::string seen = PQgetvalue(res, 0, 0);
+                diag("a new connection reports '%s' (want 'pg_catalog')", seen.c_str());
+                result = (seen == "pg_catalog");
+            } else {
+                diag("could not read search_path: %s", PQresultErrorMessage(res));
+            }
+            PQclear(res);
+        }
+    }
+
+    // An over-length identifier is the unambiguous invalid value; looser-looking ones are
+    // accepted. Neither the SET nor the LOAD reports an error for it -- the SET only stores the
+    // text and the LOAD quietly keeps the previous value -- so refusal has to be observed as the
+    // bad value never reaching a new connection.
+    const std::string too_long(100, 'x');   // longer than PostgreSQL's identifier limit
+    bool refused = false;
+    if (executeQueries(admin.get(), { "SET pgsql-default_search_path='" + too_long + "'",
+                                      "LOAD PGSQL VARIABLES TO RUNTIME" }) == false) {
+        diag("could not set the invalid pgsql-default_search_path");
+    } else {
+        PGConnPtr conn = createNewConnection(ConnType::BACKEND, "", false);
+        if (!conn || PQstatus(conn.get()) != CONNECTION_OK) {
+            diag("failed to connect after attempting the invalid default");
+        } else {
+            // Both the live setting and the value the session started with, so the rejected value
+            // is caught whichever way it arrived. Not asserting the previous good value instead:
+            // this connection may be a pooled one that already carries it, which would satisfy the
+            // check without testing anything.
+            PGresult* res = PQexec(conn.get(),
+                "SELECT current_setting('search_path'), "
+                "(SELECT reset_val FROM pg_settings WHERE name = 'search_path')");
+            if (PQresultStatus(res) == PGRES_TUPLES_OK) {
+                const std::string seen = PQgetvalue(res, 0, 0);
+                const std::string at_startup = PQgetvalue(res, 0, 1);
+                diag("after the invalid SET, a connection reports setting='%s' reset_val='%s' "
+                     "(neither may be the 100-char value)", seen.c_str(), at_startup.c_str());
+                refused = (seen != too_long) && (at_startup != too_long);
+            } else {
+                diag("could not read search_path after the invalid SET: %s", PQresultErrorMessage(res));
+            }
+            PQclear(res);
+        }
+    }
+    diag("invalid value refused: %s", refused ? "yes" : "no");
+
+    executeQueries(admin.get(), { "SET pgsql-default_search_path='\"$user\", public'",
+                                  "LOAD PGSQL VARIABLES TO RUNTIME" });
+
+    return result && refused;
+}
+
 int main(int argc, char** argv) {
 
     int test_count = 0;
@@ -953,6 +1079,8 @@ int main(int argc, char** argv) {
     test_count_regression += 1; // execute "select 1" to check if proxysql is alive
 	// Regression test for Issue#4919
     test_count += test_count_regression;
+
+    test_count += 2;   // search_path: reported+applied, and the pgsql-default_search_path knob
 
     plan(test_count);
 
@@ -1009,6 +1137,11 @@ int main(int argc, char** argv) {
 
 	ok(result, "ProxySQL should be alive");
     // Regression test for Issue#4919
+
+    ok(test_search_path_reported_and_applied(),
+       "search_path is filled in, reported to the client, and delivered to the backend");
+    ok(test_default_search_path_admin_variable(),
+       "pgsql-default_search_path changes new connections and refuses an invalid value");
 
     return exit_status();
 }

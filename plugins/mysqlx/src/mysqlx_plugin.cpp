@@ -41,33 +41,6 @@ bool mysqlx_init(ProxySQL_PluginServices* services) {
 	return true;
 }
 
-bool parse_bind_addr(const std::string& bind, std::string& host, int& port) {
-	if (!bind.empty() && bind[0] == '[') {
-		auto closing = bind.find(']');
-		if (closing != std::string::npos) {
-			host = bind.substr(1, closing - 1);
-			port = 33060;
-			if (closing + 1 < bind.size() && bind[closing + 1] == ':') {
-				port = std::atoi(bind.substr(closing + 2).c_str());
-			}
-			return true;
-		}
-	}
-	auto pos = bind.rfind(':');
-	if (pos == std::string::npos || pos == 0 || pos == bind.size() - 1) {
-		host = bind;
-		port = 33060;
-		return true;
-	}
-
-	host = bind.substr(0, pos);
-	port = std::atoi(bind.substr(pos + 1).c_str());
-	if (port <= 0 || port > 65535) {
-		port = 33060;
-	}
-	return true;
-}
-
 // Atomically replace `dest` with the rows from `source`. Every admindb.execute()
 // return value is checked: on any failure we ROLLBACK (defensively, even after a
 // failed BEGIN) and skip the table. Returns false if any step for this table
@@ -177,7 +150,10 @@ bool mysqlx_start() {
 				err.clear();
 			};
 			if (!ctx.config_store->install_users_from_admin(*admindb, err))     report_err("install_users_from_admin failed");
-			if (!ctx.config_store->install_routes_from_admin(*admindb, err))    report_err("install_routes_from_admin failed");
+			if (!ctx.config_store->install_routes_from_admin(*admindb, err)) {
+				report_err("install_routes_from_admin failed");
+				return false;
+			}
 			if (!ctx.config_store->install_endpoints_from_admin(*admindb, err)) report_err("install_endpoints_from_admin failed");
 			if (!ctx.config_store->install_variables_from_global(*admindb, err)) report_err("install_variables_from_global failed");
 		}

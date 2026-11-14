@@ -370,6 +370,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	CompPktIN.pkt.ptr=NULL;
 	CompPktIN.pkt.size=0;
 	CompPktIN.partial=0;
+	CompPktIN.hdr_len=0;
 	CompPktOUT.pkt.ptr=NULL;
 	CompPktOUT.pkt.size=0;
 	CompPktOUT.partial=0;
@@ -475,7 +476,7 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	if (myds_type==MYDS_BACKEND || myds_type==MYDS_BACKEND_NOT_CONNECTED) {
 		assert(myconn==NULL);
 	}
-	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
+	if ( myconn && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
 	if (encrypted) {
 		if (ssl) {
 			// NOTE: SSL standard requires a final 'close_notify' alert on socket
@@ -644,6 +645,13 @@ void MySQL_Data_Stream::check_data_flow() {
 			}
 		}
 		///////////////////////////////////////////////////////////////////////////////////////////////
+
+		// Client pipelining (#5930): a client may send the next commands while the
+		// responses to the previous ones are still being sent to it. This is not a
+		// broken data flow: the commands are processed in order by the session.
+		if (myds_type == MYDS_FRONTEND && sess && sess->client_myds == this && sess->client_may_pipeline()) {
+			return;
+		}
 
 		if (sess && sess->status == FAST_FORWARD && sess->session_fast_forward == SESSION_FORWARD_TYPE_PERMANENT) {
 			// Permanent fast-forward sessions: log warning but continue
@@ -848,7 +856,7 @@ int MySQL_Data_Stream::read_from_net() {
 			if (
 				(ssl_ret == SSL_ERROR_SYSCALL) &&
 				(
-					((errno == EINTR || errno == EAGAIN))
+					(errno == EINTR || errno == EAGAIN)
 					|| (st == 0)
 				)
 			) {
@@ -1003,12 +1011,11 @@ int MySQL_Data_Stream::write_to_net() {
 	if (bytes_io < 0) {
 		if (encrypted==false)	{
 #ifdef PROXYSQL31
-			if (poll_fds_idx < 0 || !mypolls) {
-				if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-					shut_soft();
-			} else if (mypolls->fds[poll_fds_idx].revents & POLLOUT) {
-				shut_soft();
-			}
+            // POLLOUT is a readiness snapshot, not reserved send capacity.
+            // A preceding write can fill the socket; preserve the output and
+            // retry on the next writable event, as in the PostgreSQL path.
+            if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+                shut_soft();
 #else
 			if (poll_fds_idx < 0 || !mypolls || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
 				shut_soft();
@@ -1091,6 +1098,40 @@ void MySQL_Data_Stream::set_pollout() {
 			// if we do not set POLLIN : we won't be able to timeout
 			if (sess->thread->curtime - sess->fast_forward_grace_start_time < (unsigned long long)mysql_thread___fast_forward_grace_close_ms * 1000) {
 				// for the reason listed above, we remove POLLIN unless the timeout has reached
+				_pollfd->events = 0;
+			}
+		}
+		if (myds_type == MYDS_FRONTEND && PSarrayIN->len && sess && sess->client_myds == this && sess->client_pkts_must_be_deferred()) {
+			// Client pipelining (#5930): packets received while a command is in
+			// flight are queued in PSarrayIN until the session is back to
+			// WAITING_CLIENT_DATA. Stop reading from the client while some are
+			// queued, so a client that keeps sending cannot make the queue grow
+			// unboundedly: the data stays in the kernel buffers and TCP flow control
+			// applies, as with a MySQL server that reads the next command only after
+			// it has answered the previous one. Reading resumes once the queued
+			// packets have been processed.
+			_pollfd->events = 0;
+		}
+		if (myds_type == MYDS_FRONTEND && PSarrayOUT->len && sess && sess->client_myds == this && sess->client_may_pipeline()) {
+			// Client pipelining (#5930): check_data_flow() no longer disconnects a
+			// client that sends new commands while the responses to the previous
+			// ones are still queued, so a client that never reads its responses
+			// would make PSarrayOUT grow without limit (each locally answered
+			// command, e.g. COM_PING, appends a packet). Stop reading from the
+			// client while the pending output is above the limit at which the
+			// frontend is considered slow for backend reads (see
+			// Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(), same
+			// estimate): its commands stay in the kernel buffers and TCP flow
+			// control applies, as with a MySQL server whose writes block. Output
+			// mostly accumulates here while the socket send buffer is full, so a
+			// client that reads its responses, pipelining or not, is not affected.
+			// (A single read of many pipelined commands can also cross the limit
+			// briefly; reading then pauses only until those responses are sent.) Reading
+			// resumes as soon as the client drains its responses: POLLOUT stays armed
+			// (below) because PSarrayOUT is not empty.
+			const uint64_t buffered_data =
+				(static_cast<uint64_t>(PSarrayOUT->len) + resultset->len) * RESULTSET_BUFLEN;
+			if (buffered_data > 4 * static_cast<uint64_t>(mysql_thread___threshold_resultset_size)) {
 				_pollfd->events = 0;
 			}
 		}
@@ -1366,7 +1407,7 @@ int MySQL_Data_Stream::buffer2array() {
 							PROXY_info = new ProxyProtocolInfo(ppi);
 							// we take a copy of old address/port
 							if (addr.addr) {
-								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+								snprintf(PROXY_info->proxy_address, sizeof(PROXY_info->proxy_address), "%s", addr.addr);
 								free(addr.addr);
 							}
 							PROXY_info->proxy_port = addr.port;
@@ -1387,7 +1428,7 @@ int MySQL_Data_Stream::buffer2array() {
 							// upstream LB consistently across all branches.
 							PROXY_info = new ProxyProtocolInfo(ppi);
 							if (addr.addr) {
-								strncpy(PROXY_info->proxy_address, addr.addr, INET6_ADDRSTRLEN);
+								snprintf(PROXY_info->proxy_address, sizeof(PROXY_info->proxy_address), "%s", addr.addr);
 							}
 							PROXY_info->proxy_port = addr.port;
 							if (addr.addr) {
@@ -1480,22 +1521,35 @@ int MySQL_Data_Stream::buffer2array() {
 			}
 			while (progress<datalength) {
 				if (CompPktIN.partial==0) {
+					// The compressed protocol is a byte stream: an inner packet header can be split
+					// across compressed frames. Keep the bytes available and complete the header
+					// with the next frame, instead of reading past the payload (GHSA-qg2m-q3ch-cg9v).
+					const unsigned int hdr_missing = sizeof(mysql_hdr) - CompPktIN.hdr_len;
+					if ((datalength-progress) < hdr_missing) {
+						memcpy(CompPktIN.hdr + CompPktIN.hdr_len, _ptr+progress, (datalength-progress));
+						CompPktIN.hdr_len+=(datalength-progress);
+						progress=datalength; // we reached the end
+						continue;
+					}
+					memcpy(CompPktIN.hdr + CompPktIN.hdr_len, _ptr+progress, hdr_missing);
+					progress+=hdr_missing;
+					CompPktIN.hdr_len=0;
 					mysql_hdr _a;
-					assert(datalength >= progress + sizeof(mysql_hdr)); // FIXME: this is a too optimistic assumption
-					memcpy(&_a,_ptr+progress,sizeof(mysql_hdr));
+					memcpy(&_a,CompPktIN.hdr,sizeof(mysql_hdr));
 					CompPktIN.pkt.size=_a.pkt_length+sizeof(mysql_hdr);
 					CompPktIN.pkt.ptr=(unsigned char *)l_alloc(CompPktIN.pkt.size);
-					if ((datalength-progress) >= CompPktIN.pkt.size) {
+					memcpy(CompPktIN.pkt.ptr, CompPktIN.hdr, sizeof(mysql_hdr));
+					if ((datalength-progress) >= _a.pkt_length) {
 						// we can copy the whole packet
-						memcpy(CompPktIN.pkt.ptr, _ptr+progress, CompPktIN.pkt.size);
+						memcpy((char *)CompPktIN.pkt.ptr + sizeof(mysql_hdr), _ptr+progress, _a.pkt_length);
 						CompPktIN.partial=0; // stays 0
-						progress+=CompPktIN.pkt.size;
+						progress+=_a.pkt_length;
 						PSarrayIN->add(CompPktIN.pkt.ptr, CompPktIN.pkt.size);
 						CompPktIN.pkt.ptr=NULL; // sanity
 					} else {
 						// not enough data for the whole packet
-						memcpy(CompPktIN.pkt.ptr, _ptr+progress, (datalength-progress));
-						CompPktIN.partial+=(datalength-progress);
+						memcpy((char *)CompPktIN.pkt.ptr + sizeof(mysql_hdr), _ptr+progress, (datalength-progress));
+						CompPktIN.partial=sizeof(mysql_hdr)+(datalength-progress);
 						progress=datalength; // we reached the end
 					}
 				} else {
@@ -1727,6 +1781,14 @@ unsigned char * MySQL_Data_Stream::resultset2buffer(bool del) {
 	PtrSize_t *ps;
 	for (i=0;i<resultset->len;i++) {
 		ps=resultset->index(i);
+		// Callers size the buffer, see #6229. Compare against the remaining space,
+		// so the check cannot be defeated by unsigned wraparound.
+		assert(ps->size <= resultset_length - l);
+		if (ps->size > resultset_length - l) {
+			proxy_error("Resultset packets exceed the buffer size of %u bytes: not copying\n", resultset_length);
+			l_free(resultset_length, mybuff);
+			return NULL;
+		}
 		memcpy(mybuff+l,ps->ptr,ps->size);
 		if (del) l_free(ps->size,ps->ptr);
 		l+=ps->size;
@@ -1799,9 +1861,13 @@ void MySQL_Data_Stream::unplug_backend() {
 	DSS=STATE_NOT_INITIALIZED;
 	myconn=NULL;
 	myds_type=MYDS_BACKEND_NOT_CONNECTED;
-  mypolls->remove_index_fast(poll_fds_idx);
-  mypolls=NULL;
-  fd=0;
+	// Idle-backend pings can complete or fail before poll registration,
+	// leaving mypolls == NULL with no poll entry to remove. Calling a member
+	// through NULL is undefined even when poll_fds_idx == -1; this caused
+	// crashes in v3.0.12. See https://github.com/sysown/proxysql/pull/6626.
+	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
+	mypolls=NULL;
+	fd=0;
 }
 
 void MySQL_Data_Stream::set_net_failure() {
@@ -1856,15 +1922,16 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 			destroy_MySQL_Connection_From_Pool(true);
 		}
 	} else {
-		// the auxiliary GTID lookup connection is only valid for the current
-		// session, so it must not be left open on the pooled connection
-		mc->release_gtid_lookup_connection();
 		detach_connection();
 		unplug_backend();
 #ifdef STRESSTEST_POOL
 		MyHGM->push_MyConn_to_pool(mc);  // #644
 #else
-		sess->thread->push_MyConn_local(mc);
+		sess->thread->push_MyConn_local(mc
+#ifdef PROXYSQL31
+            , sess
+#endif
+        );
 #endif
 	}
 }
@@ -2010,6 +2077,10 @@ void MySQL_Data_Stream::get_client_myds_info_json(json& j) {
 		jc2["client_flag"]["client_deprecate_eof"] = (myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
 		jc2["no_backslash_escapes"] = myconn->options.no_backslash_escapes;
 		jc2["status"]["compression"] = myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-		jc2["ps"]["client_stmt_to_global_ids"] = myconn->local_stmts->client_stmt_to_global_ids;
+		std::map<uint32_t, uint64_t> client_stmt_to_global_ids;
+		for (const auto& c : myconn->local_stmts->client_stmt_to_global_ids) {
+			client_stmt_to_global_ids.emplace(c.first, c.second.global_id);
+		}
+		jc2["ps"]["client_stmt_to_global_ids"] = client_stmt_to_global_ids;
 	}
 }

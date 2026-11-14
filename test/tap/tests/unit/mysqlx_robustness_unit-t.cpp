@@ -921,8 +921,13 @@ static void test_listener_route_tracking() {
 	thr1.remove_listeners();
 }
 
+static int pick_free_port();
+
 static void test_listener_reconciliation() {
 	diag(">>> %s", __func__);
+	const int port = pick_free_port();
+	if (port <= 0) BAIL_OUT("cannot select an explicit listener port");
+	const std::string bind = "127.0.0.1:" + std::to_string(port);
 	// Populate a fresh MysqlxConfigStore with one active route and verify
 	// that `mysqlx_reconcile_listeners_impl` binds exactly one listener
 	// across the two-thread pool and records the ownership mapping.
@@ -934,7 +939,7 @@ static void test_listener_reconciliation() {
 		std::unordered_map<std::string, MysqlxRoute> routes;
 		MysqlxRoute r {};
 		r.name = "route_rec";
-		r.bind = "127.0.0.1:0";
+		r.bind = bind;
 		r.destination_hostgroup = 0;
 		r.active = true;
 		routes.emplace("route_rec", r);
@@ -957,8 +962,28 @@ static void test_listener_reconciliation() {
 	);
 
 	int total = threads[0]->get_listener_count() + threads[1]->get_listener_count();
-	ok(total == 1 && route_to_thread.count("route_rec") == 1,
-	   "reconcile bound exactly one listener for route_rec and recorded mapping");
+	const auto mapped = route_to_thread.find("route_rec");
+	const bool bound = total == 1 && mapped != route_to_thread.end();
+	ok(bound && threads[mapped->second]->get_listener_addr_for_route("route_rec") == bind,
+	   "reconcile bound exactly one listener on explicit port %d and recorded mapping", port);
+
+	// Even a caller bypassing normal LOAD validation cannot accidentally bind
+	// the default port or tear down a working listener with an invalid bind.
+	for (const char* invalid : {"127.0.0.1:0", "[::1]:0", "127.0.0.1"}) {
+		std::unordered_map<std::string, MysqlxRoute> routes;
+		MysqlxRoute r {};
+		r.name = "route_rec";
+		r.bind = invalid;
+		routes.emplace(r.name, r);
+		store.install_for_test(std::move(routes), {});
+		mysqlx_reconcile_listeners_impl(
+			store, threads, route_to_thread, route_map_mutex, next_rr_index);
+		const auto current = route_to_thread.find("route_rec");
+		ok(bound && current != route_to_thread.end() &&
+		   threads[0]->get_listener_count() + threads[1]->get_listener_count() == 1 &&
+		   threads[current->second]->get_listener_addr_for_route("route_rec") == bind,
+		   "invalid bind '%s' leaves the existing listener unchanged", invalid);
+	}
 
 	for (auto& t : threads) {
 		t->remove_listeners();
@@ -966,8 +991,8 @@ static void test_listener_reconciliation() {
 }
 
 // Ask the kernel for a free TCP port by binding to :0, reading back the
-// assignment, and closing. Leaves a brief TIME_WAIT window but the listeners
-// we build use SO_REUSEADDR so reuse is safe.
+// assignment, and closing. Pass that explicit nonzero port through the route
+// parser; port zero is only used here for the OS allocation request.
 static int pick_free_port() {
 	int s = socket(AF_INET, SOCK_STREAM, 0);
 	if (s < 0) return -1;
@@ -1505,7 +1530,7 @@ static void test_backend_user_falls_back_to_frontend_username() {
 
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
-	plan(76);
+	plan(79);
 	diag("=== mysqlx_robustness_unit-t starting ===");
 
 	test_server_response_terminal_frame();

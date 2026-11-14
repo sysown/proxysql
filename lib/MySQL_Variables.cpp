@@ -9,6 +9,8 @@
 #endif
 
 #include <sstream>
+#include <algorithm>
+#include <charconv>
 #include "mysqld_error.h"
 
 
@@ -185,6 +187,10 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 		return false;
 	}
 
+	if (idx == SQL_CHARACTER_SET_DATABASE) {
+		session->client_myds->myconn->user_variable_database_charset_explicit = true;
+	}
+
 	/* Process SET NAMES and SET CHARSET commands
 	 * The character_set_client, character_set_results, character_set_connection variables are set here
 	 * During multiplexing/query execution these values will be used to set corresponding backend variables
@@ -206,6 +212,13 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 		}
 		// SET CHARSET command from client
 		else if (value == "2") {
+			auto* connection = session->client_myds->myconn;
+			connection->user_variable_charset_schema = mysql_user_variable_capture_schema(connection->userinfo->schemaname);
+			connection->user_variable_charset_schema_charset = connection->userinfo->schemaname_charset;
+			const char* database_charset = client_get_value(session, SQL_CHARACTER_SET_DATABASE);
+			connection->user_variable_charset_database_charset = connection->user_variable_database_charset_explicit &&
+				database_charset && *database_charset
+				? strtoul(database_charset, nullptr, 10) : 0;
 			if (mysql_variables.client_get_value(session, SQL_CHARACTER_SET)) {
 				const char* value = mysql_variables.client_get_value(session, SQL_CHARACTER_SET);
 				uint32_t hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET);
@@ -606,37 +619,162 @@ bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 	return session->handler_again___status_SETTING_SQL_LOG_BIN(&_rc);
 }
 
+namespace {
+
+bool normalize_set_boolean(const std::string& value, std::string& normalized) {
+	if (value == "0" || !strcasecmp(value.c_str(), "false") || !strcasecmp(value.c_str(), "off")) {
+		normalized = "OFF";
+		return true;
+	}
+	if (value == "1" || !strcasecmp(value.c_str(), "true") || !strcasecmp(value.c_str(), "on")) {
+		normalized = "ON";
+		return true;
+	}
+	return false;
+}
+
+bool valid_set_number(int idx, const std::string& value) {
+	if (!value.empty() && std::all_of(value.begin(), value.end(),
+		[](unsigned char c) { return c >= '0' && c <= '9'; })) return true;
+	return (idx == SQL_SQL_SELECT_LIMIT || idx == SQL_MAX_JOIN_SIZE) &&
+		!strcasecmp(value.c_str(), "default");
+}
+
+} // namespace
+
+bool MySQL_Variables::stage_set_variable(
+	const std::string& name, const std::string& input, MySQL_Session_Set_Plan& plan) const {
+	if (input.find('\0') != std::string::npos) return false;
+	// Stage locally first: a failure must leave both classes of tracked state
+	// unchanged, even if an earlier assignment in this SET was valid.
+	MySQL_Session_Set_Plan change;
+	std::string value = input;
+	if (name == "autocommit") {
+		if (!normalize_set_boolean(input, value)) return false;
+		change.autocommit.push_back(value == "ON");
+	} else if (name == "wait_timeout") {
+		unsigned long long seconds = 0;
+		const auto parsed = std::from_chars(input.data(), input.data() + input.size(), seconds);
+		if (input.empty() || parsed.ec != std::errc{} || parsed.ptr != input.data() + input.size()) return false;
+		change.wait_timeout_ms = std::clamp(seconds, 1ULL, 20ULL * 24 * 3600) * 1000;
+		change.requested_wait_timeout_seconds = seconds;
+	} else if (name == "session_track_gtids") {
+		if (!strcasecmp(input.c_str(), "ALL_GTIDS") || !strcasecmp(input.c_str(), "OWN_GTID")) {
+			change.session_track_gtids = "OWN_GTID";
+		} else if (!strcasecmp(input.c_str(), "OFF")) {
+			change.session_track_gtids = "OFF";
+		} else return false;
+	} else if (name == "tx_isolation") {
+		std::replace(value.begin(), value.end(), '-', ' ');
+		if (strcasecmp(value.c_str(), "READ UNCOMMITTED") && strcasecmp(value.c_str(), "READ COMMITTED") &&
+			strcasecmp(value.c_str(), "REPEATABLE READ") && strcasecmp(value.c_str(), "SERIALIZABLE")) return false;
+		change.values.emplace_back(SQL_ISOLATION_LEVEL, value);
+	} else if (name == "tx_read_only") {
+		if (!normalize_set_boolean(input, value)) return false;
+		change.values.emplace_back(SQL_TRANSACTION_READ, value == "ON" ? "ONLY" : "WRITE");
+	} else {
+		int idx = SQL_NAME_LAST_HIGH_WM;
+		for (int i = 0; i < SQL_NAME_LAST_HIGH_WM; ++i) {
+			if (i != SQL_NAME_LAST_LOW_WM && mysql_tracked_variables[i].status == SETTING_VARIABLE &&
+				name == mysql_tracked_variables[i].set_variable_name) {
+				idx = i;
+				break;
+			}
+		}
+		if (idx == SQL_NAME_LAST_HIGH_WM) {
+			return std::find(ignore_vars.begin(), ignore_vars.end(), name) != ignore_vars.end();
+		}
+		if (idx == SQL_CHARACTER_SET_RESULTS || idx == SQL_CHARACTER_SET_CLIENT ||
+			idx == SQL_CHARACTER_SET_CONNECTION || idx == SQL_CHARACTER_SET_DATABASE || idx == SQL_COLLATION_CONNECTION) {
+			const auto* charset = idx == SQL_COLLATION_CONNECTION
+				? proxysql_find_charset_collate(input.c_str()) : proxysql_find_charset_name(input.c_str());
+			if (charset) {
+				value = std::to_string(charset->nr);
+				if (idx == SQL_CHARACTER_SET_CONNECTION) change.values.emplace_back(SQL_COLLATION_CONNECTION, value);
+				if (idx == SQL_COLLATION_CONNECTION) change.values.emplace_back(SQL_CHARACTER_SET_CONNECTION, value);
+			} else if (idx == SQL_CHARACTER_SET_RESULTS &&
+				(!strcasecmp(input.c_str(), "NULL") || !strcasecmp(input.c_str(), "binary"))) {
+				value = !strcasecmp(input.c_str(), "NULL") ? "NULL" : "binary";
+			} else return false;
+		} else if (idx == SQL_QUERY_CACHE_TYPE) {
+			std::string boolean;
+			if (normalize_set_boolean(input, boolean)) value = boolean == "ON" ? "1" : "0";
+			else if (!strcasecmp(input.c_str(), "DEMAND")) value = "2";
+			if (!valid_set_number(idx, value)) return false;
+		} else if (mysql_tracked_variables[idx].is_bool) {
+			if (!normalize_set_boolean(input, value)) return false;
+		} else if (mysql_tracked_variables[idx].is_number) {
+			if (!valid_set_number(idx, input)) return false;
+		} else {
+			// Session tracking accepts literals, never another variable's value.
+			if (input.find('@') != std::string::npos || input.find('\0') != std::string::npos ||
+				input.find_first_of("'\\") != std::string::npos || (!input.empty() && input[0] == '(') ||
+				!strncasecmp(input.c_str(), "CONCAT", 6) || !strncasecmp(input.c_str(), "IFNULL", 6) ||
+				!strncasecmp(input.c_str(), "REPLACE", 7)) return false;
+			if (idx == SQL_TIME_ZONE && value.size() == 5 &&
+				(value[0] == '+' || value[0] == '-') && value[2] == ':') value.insert(1, "0");
+		}
+		change.values.emplace_back(idx, value);
+		if (idx == SQL_MAX_JOIN_SIZE) {
+			change.values.emplace_back(SQL_SQL_BIG_SELECTS,
+				(value == "18446744073709551615" || !strcasecmp(value.c_str(), "default")) ? "ON" : "OFF");
+		}
+	}
+	plan.values.insert(plan.values.end(), change.values.begin(), change.values.end());
+	plan.autocommit.insert(plan.autocommit.end(), change.autocommit.begin(), change.autocommit.end());
+	if (change.wait_timeout_ms) {
+		plan.wait_timeout_ms = change.wait_timeout_ms;
+		plan.requested_wait_timeout_seconds = change.requested_wait_timeout_seconds;
+	}
+	if (change.session_track_gtids) plan.session_track_gtids = std::move(change.session_track_gtids);
+	return true;
+}
+
+void MySQL_Variables::apply_set_plan(MySQL_Session* session, const MySQL_Session_Set_Plan& plan) {
+	for (const auto& assignment : plan.values) {
+		client_set_value(session, assignment.first, assignment.second);
+		if (assignment.first == SQL_SQL_MODE) {
+			session->client_myds->myconn->set_no_backslash_escapes(
+				strcasestr(assignment.second.c_str(), "NO_BACKSLASH_ESCAPES") != nullptr);
+		}
+	}
+	if (!plan.autocommit.empty()) {
+		session->autocommit = plan.autocommit.back();
+		session->client_myds->myconn->set_autocommit(plan.autocommit.back());
+	}
+	if (plan.wait_timeout_ms) {
+		const auto requested_seconds = *plan.requested_wait_timeout_seconds;
+		if (requested_seconds < 1 || requested_seconds > 20ULL * 24 * 3600) {
+			proxy_warning("Client [%s:%d] (user: %s) requested wait_timeout = %llu seconds, clamped to %llu ms (ProxySQL limits: 1s to 20 days)\n",
+				session->client_myds->addr.addr, session->client_myds->addr.port,
+				session->client_myds->myconn->userinfo->username, requested_seconds, *plan.wait_timeout_ms);
+		}
+		if (*plan.wait_timeout_ms > static_cast<unsigned long long>(mysql_thread___wait_timeout)) {
+			proxy_warning("Client [%s:%d] (user: %s) requested wait_timeout = %llu ms, exceeds the global mysql-wait_timeout = %d ms. Global timeout will still be enforced.\n",
+				session->client_myds->addr.addr, session->client_myds->addr.port,
+				session->client_myds->myconn->userinfo->username, *plan.wait_timeout_ms, mysql_thread___wait_timeout);
+		}
+		session->wait_timeout = *plan.wait_timeout_ms;
+		session->thread->status_variables.stvar[st_var_set_wait_timeout_commands]++;
+	}
+	if (plan.session_track_gtids) {
+		auto& options = session->client_myds->myconn->options;
+		free(options.session_track_gtids);
+		options.session_track_gtids = strdup(plan.session_track_gtids->c_str());
+		options.session_track_gtids_int = SpookyHash::Hash32(
+			plan.session_track_gtids->data(), plan.session_track_gtids->size(), 10);
+	}
+}
+
 
 bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, string& value1, bool * lock_hostgroup) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
-	int __tmp_value = -1;
-	if (
-		(strcasecmp(value1.c_str(),(char *)"0")==0) ||
-		(strcasecmp(value1.c_str(),(char *)"false")==0) ||
-		(strcasecmp(value1.c_str(),(char *)"off")==0)
-	) {
-		__tmp_value = 0;
-	} else {
-		if (
-			(strcasecmp(value1.c_str(),(char *)"1")==0) ||
-			(strcasecmp(value1.c_str(),(char *)"true")==0) ||
-			(strcasecmp(value1.c_str(),(char *)"on")==0)
-		) {
-			__tmp_value = 1;
-		}
-	}
-
-	if (__tmp_value >= 0) {
+	std::string normalized;
+	if (normalize_set_boolean(value1, normalized)) {
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 		uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 		if (mysql_variables.client_get_hash(sess, idx) != var_value_int) {
-			if (__tmp_value == 0) {
-				if (!mysql_variables.client_set_value(sess, idx, "OFF"))
-					return false;
-			} else {
-				if (!mysql_variables.client_set_value(sess, idx, "ON"))
-					return false;
-			}
+			if (!mysql_variables.client_set_value(sess, idx, normalized)) return false;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 		}
 	} else {
@@ -649,26 +787,8 @@ bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, strin
 
 
 bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string& value1, bool * lock_hostgroup) {
-	int vl = strlen(value1.c_str());
 	const char *v = value1.c_str();
-	bool only_digit_chars = true;
-	for (int i=0; i<vl && only_digit_chars==true; i++) {
-		if (is_digit(v[i])==0) {
-			only_digit_chars=false;
-		}
-	}
-	if (!only_digit_chars) {
-		if (
-			(strcasecmp(mysql_tracked_variables[idx].set_variable_name,(char *)"sql_select_limit")==0) // sql_select_limit allows value "default"
-			||
-			(strcasecmp(mysql_tracked_variables[idx].set_variable_name,(char *)"max_join_size")==0) // max_join_size allows value "default"
-		) {
-			if (strcasecmp(v,"default")==0) {
-				only_digit_chars = true;
-			}
-		}
-	}
-	if (only_digit_chars) {
+	if (valid_set_number(idx, value1)) {
 		// see https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_max_join_size
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 		uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);

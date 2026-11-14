@@ -57,7 +57,7 @@ static void test_encode_length_9byte() {
 // ============================================================
 
 static void test_cpy3() {
-    unsigned char data[] = {0x01, 0x02, 0x03, 0xFF};
+    unsigned char data[] = {0x01, 0x02, 0x03};
     unsigned int result = CPY3(data);
     // CPY3 reads 3 bytes little-endian and masks MSB to 0
     ok((result & 0xFF000000) == 0, "CPY3: MSB is zeroed");

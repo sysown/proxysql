@@ -241,6 +241,11 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::load_master_key(uint8_t key[
 
 ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::put(const char* owner, const char* name,
 	const uint8_t* bytes, size_t length) {
+	return put_locked(owner, name, bytes, length, SecretTransactionMode::own_transaction);
+}
+
+ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::put_locked(const char* owner, const char* name,
+	const uint8_t* bytes, size_t length, SecretTransactionMode mode) {
 	if (!valid_component(owner) || !valid_component(name) ||
 		(bytes == nullptr && length != 0) || length > static_cast<size_t>(INT_MAX)) {
 		return ProxySQL_PluginSecretResult::invalid_argument;
@@ -274,9 +279,14 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::put(const char* owner, const
 	ciphertext.resize(static_cast<size_t>(output_length + final_length));
 
 	sqlite3* db = configdb_->get_db();
-	if (!sqlite_exec(db, "BEGIN IMMEDIATE")) return ProxySQL_PluginSecretResult::storage_error;
+	const bool owns_transaction = mode == SecretTransactionMode::own_transaction;
+	const bool already_in_transaction = (*proxy_sqlite3_get_autocommit)(db) == 0;
+	if (owns_transaction == already_in_transaction) return ProxySQL_PluginSecretResult::storage_error;
+	if (owns_transaction && !sqlite_exec(db, "BEGIN IMMEDIATE")) return ProxySQL_PluginSecretResult::storage_error;
 	bool committed = false;
-	auto rollback = [&]() { if (!committed) sqlite_exec(db, "ROLLBACK"); };
+	auto rollback = [&]() {
+		if (owns_transaction && !committed && !sqlite_exec(db, "ROLLBACK")) configdb_->quarantine();
+	};
 	sqlite3_stmt* stmt = nullptr;
 	const char* sql = "INSERT INTO proxysql_plugin_secrets (owner,secret_name,nonce,ciphertext,tag,updated_at) "
 		"VALUES (?,?,?,?,?,strftime('%s','now')) "
@@ -291,12 +301,17 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::put(const char* owner, const
 		(*proxy_sqlite3_bind_blob)(stmt, 5, tag.data(), tag.size(), SQLITE_TRANSIENT) == SQLITE_OK;
 	const bool stepped = bound && sqlite_step(stmt) == SQLITE_DONE;
 	(*proxy_sqlite3_finalize)(stmt);
-	if (!stepped || !sqlite_exec(db, "COMMIT")) { rollback(); return ProxySQL_PluginSecretResult::storage_error; }
+	if (!stepped || (owns_transaction && !sqlite_exec(db, "COMMIT"))) { rollback(); return ProxySQL_PluginSecretResult::storage_error; }
 	committed = true;
 	return ProxySQL_PluginSecretResult::ok;
 }
 
 ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::get(const char* owner, const char* name,
+	std::vector<uint8_t>& plaintext) {
+	return get_locked(owner, name, plaintext);
+}
+
+ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::get_locked(const char* owner, const char* name,
 	std::vector<uint8_t>& plaintext) {
 	cleanse_vector(plaintext);
 	if (!valid_component(owner) || !valid_component(name)) return ProxySQL_PluginSecretResult::invalid_argument;
@@ -357,12 +372,22 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::get(const char* owner, const
 }
 
 ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::erase(const char* owner, const char* name) {
+	return erase_locked(owner, name, SecretTransactionMode::own_transaction);
+}
+
+ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::erase_locked(const char* owner, const char* name,
+	SecretTransactionMode mode) {
 	if (!valid_component(owner) || !valid_component(name)) return ProxySQL_PluginSecretResult::invalid_argument;
 	if (!ensure_schema()) return ProxySQL_PluginSecretResult::storage_error;
 	sqlite3* db = configdb_->get_db();
-	if (!sqlite_exec(db, "BEGIN IMMEDIATE")) return ProxySQL_PluginSecretResult::storage_error;
+	const bool owns_transaction = mode == SecretTransactionMode::own_transaction;
+	const bool already_in_transaction = (*proxy_sqlite3_get_autocommit)(db) == 0;
+	if (owns_transaction == already_in_transaction) return ProxySQL_PluginSecretResult::storage_error;
+	if (owns_transaction && !sqlite_exec(db, "BEGIN IMMEDIATE")) return ProxySQL_PluginSecretResult::storage_error;
 	bool committed = false;
-	auto rollback = [&]() { if (!committed) sqlite_exec(db, "ROLLBACK"); };
+	auto rollback = [&]() {
+		if (owns_transaction && !committed && !sqlite_exec(db, "ROLLBACK")) configdb_->quarantine();
+	};
 	sqlite3_stmt* stmt = nullptr;
 	if ((*proxy_sqlite3_prepare_v2)(db, "DELETE FROM proxysql_plugin_secrets WHERE owner=? AND secret_name=?", -1, &stmt, nullptr) != SQLITE_OK) {
 		rollback(); return ProxySQL_PluginSecretResult::storage_error;
@@ -372,7 +397,7 @@ ProxySQL_PluginSecretResult ProxySQL_PluginSecrets::erase(const char* owner, con
 	const bool stepped = bound && sqlite_step(stmt) == SQLITE_DONE;
 	const int changed = stepped ? (*proxy_sqlite3_changes)(db) : 0;
 	(*proxy_sqlite3_finalize)(stmt);
-	if (!stepped || !sqlite_exec(db, "COMMIT")) { rollback(); return ProxySQL_PluginSecretResult::storage_error; }
+	if (!stepped || (owns_transaction && !sqlite_exec(db, "COMMIT"))) { rollback(); return ProxySQL_PluginSecretResult::storage_error; }
 	committed = true;
 	return changed == 0 ? ProxySQL_PluginSecretResult::not_found : ProxySQL_PluginSecretResult::ok;
 }

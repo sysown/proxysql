@@ -88,26 +88,34 @@ int main() {
 	rc = mysql_query(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	ok(rc == 0, "Loaded MYSQL variables to runtime");
 
-	// 3. Get first binary log file name and its size
-	// Use the size of the FIRST binlog file (the one we'll read), not the total
-	// of all files. With dbdeployer, the binlog accumulates data from all earlier
-	// tests, making total_bytes much larger than the first file we actually read.
+	// 3. Pick the binlog to replay and the size of the stream it produces.
+	// A non-blocking COM_BINLOG_DUMP does not stop at the end of the requested
+	// file: it follows rotations and streams every later binlog up to the end.
+	// Pacing must therefore use the size of the requested file plus all later
+	// files, or the "reaches EOF within the grace window" iterations overrun it
+	// whenever the backend holds more binlog after the requested file (earlier
+	// tests, reruns against the same backend). Start from the file that was
+	// current before the FLUSH LOGS above (it holds the data generated here),
+	// so the stream stays bounded however much older binlog exists.
 	string binlog_file;
 	long total_bytes = 0;
+	std::vector<std::pair<string, long>> binlogs;
 	if (mysql_query(proxysql_conn, "SHOW BINARY LOGS") == 0) {
 		MYSQL_RES *res = mysql_store_result(proxysql_conn);
 		if (res) {
 			MYSQL_ROW row;
 			while ((row = mysql_fetch_row(res))) {
-				if (binlog_file.empty() && row[0]) {
-					binlog_file = row[0];
-					total_bytes = atol(row[1]);
-				}
+				if (row[0] && row[1]) binlogs.emplace_back(row[0], atol(row[1]));
 			}
 			mysql_free_result(res);
 		}
 	}
-	diag("Binlog file: %s, size: %ld bytes", binlog_file.c_str(), total_bytes);
+	if (!binlogs.empty()) {
+		const size_t first = binlogs.size() >= 2 ? binlogs.size() - 2 : 0;
+		binlog_file = binlogs[first].first;
+		for (size_t i = first; i < binlogs.size(); i++) total_bytes += binlogs[i].second;
+	}
+	diag("Binlog file: %s, streamed bytes to end of binlog: %ld", binlog_file.c_str(), total_bytes);
 	mysql_close(proxysql_conn);
 	ok(!binlog_file.empty(), "Retrieved binary log: %s", binlog_file.c_str());
 
@@ -141,7 +149,12 @@ int main() {
 
 		while (true) {
 			rc = mysql_binlog_fetch(binlog_conn, &rpl);
-			if (rc != 0) break;
+			if (rc != 0) {
+				diag("Iteration %d (target %lds): fetch failed after %ld bytes, %lds: %u '%s'",
+					i, target_times[i], bytes_read, (long)(time(NULL) - start_time),
+					mysql_errno(binlog_conn), mysql_error(binlog_conn));
+				break;
+			}
 			bytes_read += rpl.size;
 			if (target_rate > 0) {
 				usleep((rpl.size * 1000000LL) / target_rate);

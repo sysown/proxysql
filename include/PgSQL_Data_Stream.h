@@ -146,6 +146,14 @@ public:
 	bool auth_received_startup = false;
 	unsigned char tmp_login_salt[4];
 	ScramState* scram_state;
+	// The stored secret of a login still in progress. SCRAM takes two packets and the credential is
+	// looked up again on the second, so a reload in between would otherwise change it mid-login.
+	// It covers that gap only. The earlier lookup that picks the authentication method is not held,
+	// so a reload before the first password packet still breaks the login -- it fails, which is safe.
+	char* pending_auth_secret = nullptr;
+	// Wipes and releases that secret. Called on every outcome that ends the login, and again from
+	// the destructor, so a rejected or stalled client leaves no stored password on the heap.
+	void clear_pending_auth_secret();
 
 	unsigned int connect_tries;
 	int query_retries_on_failure;
@@ -167,6 +175,12 @@ public:
 	unsigned int tmp_charset;
 
 	short revents;
+#ifdef PROXYSQL31
+	// Readiness belongs to the stream, not its movable poll-array slot.
+	// Waiter rearm cleanup may remove the slot before handler() consumes it.
+	short pending_poll_revents = 0;
+	short pending_poll_events = 0;
+#endif
 
 	char kill_type;
 
@@ -175,6 +189,11 @@ public:
 	bool cancel_query;
 
 	bool com_field_list;
+#ifdef PROXYSQL31
+	// Verified frontend TLS 1.3 handshakes have no renegotiation phase.
+	// Older TLS and borrowed backend streams retain OpenSSL state checks.
+	bool tls13_handshake_complete = false;
+#endif
 	char* com_field_wild;
 
 	PgSQL_Data_Stream();
@@ -184,6 +203,11 @@ public:
 	void init(PgSQL_DS_type, PgSQL_Session*, int); // initialize with arguments
 	void shut_soft();
 	void shut_hard();
+#ifdef PROXYSQL31
+	bool ssl_handshake_is_complete() const {
+		return tls13_handshake_complete || SSL_is_init_finished(ssl);
+	}
+#endif
 	int read_from_net();
 	int write_to_net();
 	int write_to_net_poll();
@@ -215,9 +239,13 @@ public:
 	// so every caller must give up instead of carrying on.
 	bool adopt_backend_tls();
 	void release_backend_tls();
+	void refuse_reuse_on_stranded_tls();
 
 	// safe way to attach a PgSQL Connection
 	void attach_connection(PgSQL_Connection* mc) {
+#ifdef PROXYSQL31
+		pending_poll_revents = pending_poll_events = 0;
+#endif
 		statuses.pgconnpoll_get++;
 		myconn = mc;
 		myconn->statuses.pgconnpoll_get++;
@@ -228,6 +256,10 @@ public:
 		//
 		// we have a similar code in MySQL_Connection
 		// in case of ASYNC_CONNECT_SUCCESSFUL
+		//
+		// For futher details:
+		// - without ssl: we use the file descriptor from pgsql connection
+		// - with ssl: we use the SSL structure from pgsql connection
 		if (sess != NULL && sess->session_fast_forward) {
 			// Relaying without the backend's TLS would put plaintext on an encrypted
 			// socket. Close the session instead; the connection is already flagged.
@@ -237,12 +269,18 @@ public:
 
 	// safe way to detach a PgSQL Connection
 	void detach_connection() {
+#ifdef PROXYSQL31
+		pending_poll_revents = pending_poll_events = 0;
+#endif
 		assert(myconn);
 		myconn->statuses.pgconnpoll_put++;
 		statuses.pgconnpoll_put++;
 		// Give the TLS back while we still hold the connection, fast forward flag or
 		// not: a COPY clears that flag before the connection is pooled.
 		release_backend_tls();
+		// The session's named portals lived on this connection; they died with it. Done
+		// before myconn is cleared, because the session matches them by that pointer.
+		if (sess) sess->backend_connection_detached(myconn);
 		myconn->myds = NULL;
 		myconn = NULL;
 	}

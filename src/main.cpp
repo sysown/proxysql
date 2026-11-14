@@ -6,6 +6,8 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <thread>
 #include "btree_map.h"
 #include "proxysql.h"
@@ -35,6 +37,7 @@ using json = nlohmann::json;
 #include "PgSQL_Query_Processor.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_Passthrough_Auth_Cache.h"
+#include "Aws_Iam_Provider.h"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Query_Cache.h"
@@ -43,6 +46,7 @@ using json = nlohmann::json;
 #include "Web_Interface.hpp"
 #ifdef PROXYSQL40
 #include "ProxySQL_PluginManager.h"
+#include "Aws_Locality_Manager.h"
 #include "ProxySQL_PluginCLI.h"
 #endif /* PROXYSQL40 */
 #include "proxysql_utils.h"
@@ -71,6 +75,8 @@ using json = nlohmann::json;
 #ifdef DEBUG
 #include "proxy_protocol_info.h"
 #endif // DEBUG
+#include "ProxySQL_StartupGate.h"
+#include "ProxySQL_ClusterPluginHash.h"
 
 static char *make_path(const char *directory, const char *filename) {
 	std::string path(directory);
@@ -112,6 +118,10 @@ void * __mysql_ldap_auth;
 
 volatile create_Web_Interface_t * create_Web_Interface = NULL;
 void * __web_interface;
+#ifdef PROXYSQL40
+static proxysql_web_bind_managed_configuration_v1_t managed_web_binder = nullptr;
+static int managed_startup_exit_code = -1;
+#endif
 
 #ifdef PROXYSQL40
 static std::unique_ptr<ProxySQL_PluginManager> GloPluginManager;
@@ -510,6 +520,9 @@ MySQL_Query_Processor* GloMyQPro;
 PgSQL_Query_Processor* GloPgQPro;
 ProxySQL_Admin *GloAdmin;
 MySQL_Threads_Handler *GloMTH = NULL;
+#ifdef PROXYSQL40
+AwsIamTokenSource* GloAwsIamTokenSource = NULL;
+#endif // PROXYSQL40
 PgSQL_Threads_Handler* GloPTH = NULL;
 
 // GloMCPH removed in Step 4.C; GloGATH/GloAI removed in Step 5 — the
@@ -817,6 +830,22 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				}
 			}
 		}
+		// Per-component startup permissions; CLI overrides are applied below.
+		const std::pair<const char*, bool*> startup_permissions[] = {
+			{ "mysql-workers", &GloVars.mysql_workers },
+			{ "pgsql-workers", &GloVars.pgsql_workers },
+			{ "mysql-admin", &GloVars.mysql_admin },
+			{ "pgsql-admin", &GloVars.pgsql_admin },
+			{ "mysql-monitor", &GloVars.global.my_monitor },
+			{ "pgsql-monitor", &GloVars.global.pg_monitor },
+		};
+		for (const auto& permission : startup_permissions) {
+			if (root.exists(permission.first) && !root.lookupValue(permission.first, *permission.second)) {
+				proxy_error("Invalid boolean startup setting '%s'\n", permission.first);
+				exit(EXIT_FAILURE);
+			}
+		}
+
 		// if cluster_sync_interfaces is true, interfaces variables are synced too
 		if (root.exists("cluster_sync_interfaces")==true) {
 			bool value_bool;
@@ -854,6 +883,12 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.sqlite3_plugin=strdup(sqlite3_plugin.c_str());
 			}
 		}
+#ifdef PROXYSQL40
+		if (root.exists("aws_managed") && !root.lookupValue("aws_managed", GloVars.aws_managed)) {
+			proxy_error("aws_managed must be a boolean\n");
+			exit(EXIT_FAILURE);
+		}
+#endif
 		if (root.exists("web_interface_plugin")==true) {
 			string web_interface_plugin;
 			bool rc;
@@ -903,6 +938,17 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			exit(EXIT_SUCCESS); // we exit gracefully to avoid restart
 		}
 	}
+#ifdef PROXYSQL40
+	if (GloVars.aws_managed) {
+		std::string error;
+		if (GloVars.no_plugins || GloPluginManager == nullptr ||
+		    GloVars.web_interface_plugin == nullptr ||
+		    !GloPluginManager->check_managed_configuration_provider(error)) {
+			proxy_error("aws_managed requires the AWS management and web plugins: %s\n", error.c_str());
+			exit(EXIT_FAILURE);
+		}
+	}
+#endif
 	char *t=getcwd(NULL, 512);
 	if (GloVars.__cmd_proxysql_datadir==NULL) {
 		// datadir was not specified , try to read config file
@@ -1013,6 +1059,12 @@ void ProxySQL_Main_init_main_modules() {
 	PgSQL_Threads_Handler* _tmp_GloPTH = NULL;
 	_tmp_GloPTH = new PgSQL_Threads_Handler();
 	GloPTH = _tmp_GloPTH;
+
+	// LOAD ... SERVERS and monitor statistics use these objects even in
+	// --no-start mode. Construct them before accepting Admin connections;
+	// scheduler/worker threads still start only in phase 3 when permitted.
+	GloMyMon = new MySQL_Monitor();
+	GloPgMon = new PgSQL_Monitor();
 }
 
 void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
@@ -1486,6 +1538,17 @@ static void LoadPlugins() {
 			exit(EXIT_FAILURE);
 		} else {
 			GloWebInterface = create_Web_Interface();
+#ifdef PROXYSQL40
+			if (GloVars.aws_managed) {
+				dlerror();
+				managed_web_binder = reinterpret_cast<proxysql_web_bind_managed_configuration_v1_t>(
+					dlsym(__web_interface, "proxysql_web_bind_managed_configuration_v1"));
+				if (dlerror() != nullptr || managed_web_binder == nullptr || GloWebInterface == nullptr) {
+					proxy_error("aws_managed requires the web managed configuration v1 binder\n");
+					exit(EXIT_FAILURE);
+				}
+			}
+#endif
 			if (GloWebInterface) {
 				//GloAdmin->init_WebInterfacePlugin();
 				//GloAdmin->load_ldap_variables_to_runtime();
@@ -1549,6 +1612,20 @@ static void RegisterConfiguredPluginSchemas() {
 		           GloVars.plugin_modules.size());
 		return;
 	}
+	// A shutdown cycle (PROXYSQL RESTART, or STOP+START) destroys the manager
+	// and dlclose()s every module, but discovery only ever ran once, inside
+	// ProxySQL_Main_process_global_variables() before the restart loop. Without
+	// re-running it here the manager stays null, every lifecycle wrapper below
+	// silently no-ops, and the plugin chassis disappears for the rest of the
+	// process lifetime -- with no error logged. 'GloVars.plugin_modules' still
+	// holds the pre-scanned module list.
+	if (!GloPluginManager && !GloVars.plugin_modules.empty()) {
+		std::string discover_error {};
+		if (!proxysql_discover_configured_plugins(GloPluginManager, GloVars.plugin_modules, discover_error)) {
+			proxy_error("Plugin discovery failed on reload: %s\n", discover_error.c_str());
+			exit(EXIT_FAILURE);
+		}
+	}
 	std::string plugin_error {};
 	if (!proxysql_register_configured_plugin_schemas(GloPluginManager.get(), plugin_error)) {
 		proxy_error("Plugin schema registration failed: %s\n", plugin_error.c_str());
@@ -1598,13 +1675,6 @@ static void RunConfiguredPluginsRuntimeReady() {
 	}
 }
 
-static void StopConfiguredPlugins() {
-	if (GloVars.no_plugins) return;
-	std::string plugin_error {};
-	if (!proxysql_stop_configured_plugins(GloPluginManager, plugin_error)) {
-		proxy_error("%s during shutdown\n", plugin_error.c_str());
-	}
-}
 #endif /* PROXYSQL40 */
 
 /**
@@ -1613,16 +1683,33 @@ static void StopConfiguredPlugins() {
  */
 void UnloadPlugins() {
 #ifdef PROXYSQL40
-	StopConfiguredPlugins();
-#endif /* PROXYSQL40 */
-	if (GloWebInterface) {
-		GloWebInterface->stop();
+	std::string error;
+	if (!proxysql_stop_plugins_after_web_drain(GloWebInterface, GloPluginManager, error)) {
+		proxy_error("%s during shutdown\n", error.c_str());
+		// Failure to drain cannot safely continue into core-module destruction
+		// or static plugin-manager destructors. Process exit stops all threads.
+		_Exit(EXIT_FAILURE);
 	}
+	managed_web_binder = nullptr;
+#else
+	if (GloWebInterface) GloWebInterface->stop();
+#endif
 }
 
+/** Initialize TLS, plugins, and core modules before starting worker listeners. */
 void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_info) {
+	// Track the exact context created by SSL-module startup until a reload
+	// replaces it. If the first attempt fails, a phase-2 retry runs after
+	// phase 4 has drained the modules and listeners that could borrow it.
+	// Never recapture a later runtime context: those retain the existing
+	// restart/live-reload lifetime policy.
+	static SSL_CTX* startup_ssl_ctx = GloVars.global.ssl_ctx;
 	std::string msg;
 	ProxySQL_create_or_load_TLS(false, msg);
+	if (startup_ssl_ctx && startup_ssl_ctx != GloVars.global.ssl_ctx) {
+		SSL_CTX_free(startup_ssl_ctx);
+		startup_ssl_ctx = nullptr;
+	}
 
 	LoadPlugins();
 
@@ -1645,6 +1732,11 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	//   services genuinely live for early actions such as Router bootstrap,
 	//   while still running plugins before listener validation and startup.
 	RegisterConfiguredPluginSchemas();
+	// Admin commands and Cluster peer threads must not run until the plugin
+	// lifecycle (phase 3) has finished: see ProxySQL_StartupGate.h. Close the
+	// gate before the Admin listener thread starts. With --no-start, Admin
+	// commands stay allowed until PROXYSQL START.
+	proxysql_startup_gate_reset(GloVars.global.nostart);
 	ProxySQL_Main_init_Admin_module(boostrap_info);
 #else  /* !PROXYSQL40 */
 	// v3.0/v3.1 builds: no plugin loader.  Plain admin init only.
@@ -1677,9 +1769,49 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
 	}
 
 	ProxySQL_Main_init_Auth_module();
-
 	if (GloVars.global.nostart) {
 		pthread_mutex_lock(&GloVars.global.start_mutex);
+	}
+}
+
+/**
+ * @brief Exits the process if two ProxySQL modules are configured on overlapping listeners.
+ * @details A configuration error: ProxySQL logs it and exits with code 0, as v3.0.11 did, so the
+ *   angel process does not restart it (issue #6414). It runs before the plugin lifecycle and before
+ *   start_listeners(), so there is no plugin state to drain and no shutdown sequence to run (the
+ *   worker threads, still waiting for listeners, could not be joined).
+ */
+static void ProxySQL_Main_exit_on_listener_conflicts() {
+	char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
+	char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
+	char* admin_telnet_ifaces = GloAdmin->get_variable((char*)"telnet_admin_ifaces");
+	char* admin_stats_ifaces = GloAdmin->get_variable((char*)"telnet_stats_ifaces");
+	char* mysql_ifaces = GloMTH->get_variable((char*)"interfaces");
+	char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
+
+	std::vector<proxysql_listen_validator::module_listener_config> modules {
+		{ "Admin", GloVars.mysql_admin ? admin_mysql_ifaces : "" },
+		{ "Admin PostgreSQL", GloVars.pgsql_admin ? admin_pgsql_ifaces : "" },
+		{ "Admin Telnet", admin_telnet_ifaces },
+		{ "Admin Stats Telnet", admin_stats_ifaces },
+		{ "MySQL", GloVars.mysql_workers ? mysql_ifaces : "" },
+		{ "PostgreSQL", GloVars.pgsql_workers ? pgsql_ifaces : "" },
+	};
+	std::string error {};
+	const bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
+
+	free(admin_mysql_ifaces);
+	free(admin_pgsql_ifaces);
+	free(admin_telnet_ifaces);
+	free(admin_stats_ifaces);
+	free(mysql_ifaces);
+	free(pgsql_ifaces);
+
+	if (valid == false) {
+		proxy_error("%s\n", error.c_str());
+		proxy_error("Use different listen interfaces/ports or disable one of the conflicting listeners.\n");
+		proxy_error("ProxySQL startup aborted due to configuration error\n");
+		exit(EXIT_SUCCESS);
 	}
 }
 
@@ -1687,12 +1819,12 @@ void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_in
  * @brief Phase 3 of ProxySQL initialization.
  * 
  * This phase starts all the core modules, including MySQL and PostgreSQL
- * threads handlers, monitor modules, and listeners. It also performs
- * validation of listener configurations to detect cross-module conflicts
- * before starting listeners.
+ * threads handlers, monitor modules, and listeners. A cross-module listener
+ * conflict exits the process before the plugin lifecycle and before any
+ * listener starts (see ProxySQL_Main_exit_on_listener_conflicts()).
  * 
  * @return True if all modules and listeners started successfully, false if a
- * configuration conflict or other fatal error occurred.
+ * managed startup (PROXYSQL40) failed or completed a one-shot run.
  */
 bool ProxySQL_Main_init_phase3___start_all() {
 
@@ -1713,9 +1845,6 @@ bool ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : GloPgSQL_Logger initialized in ";
 #endif
 	}
-	// Initialized monitor, no matter if it will be started or not
-	GloMyMon = new MySQL_Monitor();
-	GloPgMon = new PgSQL_Monitor();
 	// load all mysql servers to GloHGH
 	{
 		cpu_timer t;
@@ -1764,53 +1893,56 @@ bool ProxySQL_Main_init_phase3___start_all() {
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 	__sync_fetch_and_add(&GloPTH->status_variables.threads_initialized, 1);
 #ifdef PROXYSQL40
-	// Router bootstrap publishes interfaces through the live worker listener
-	// path, so workers must run before early actions. The plugin manager remains
-	// reader-disabled until init/start complete; workers cannot observe the
-	// command/query-hook state while those callbacks mutate it.
+	// Early actions (e.g. mysql_router --bootstrap) are one-shot configuration
+	// steps: they write configuration to disk and then exit the process here,
+	// before start_listeners() runs, so no client traffic is ever served by a
+	// bootstrap run. Plugin publication never opens or closes listeners (see
+	// plugin_config_publish in ProxySQL_Admin.cpp); a published mysql-interfaces
+	// takes effect when ProxySQL is next started normally. The plugin manager
+	// remains reader-disabled until init/start complete; workers cannot observe
+	// the command/query-hook state while those callbacks mutate it.
 	const auto early_action_result = RunConfiguredPluginEarlyActions();
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_success) exit(EXIT_SUCCESS);
 	if (early_action_result == ProxySQL_PluginEarlyActionResult::exit_failure) exit(EXIT_FAILURE);
+#endif /* PROXYSQL40 */
+	// Validate the listener configuration before the plugin lifecycle and
+	// before any listener starts (#6414), but after the one-shot early
+	// actions above: those exit before any listener exists, so a listener
+	// overlap must not stop e.g. a mysql_router --bootstrap run.
+	ProxySQL_Main_exit_on_listener_conflicts();
+#ifdef PROXYSQL40
 	InitConfiguredPlugins();
+	if (GloVars.aws_managed) {
+		// The provider owns automatic installation from launch inputs and
+		// recovery of durable state. Both use the ordinary startup path.
+		std::string error;
+		if (!proxysql_start_managed_configuration(GloPluginManager.get(),
+			GloWebInterface, managed_web_binder, nullptr, error)) {
+			proxy_error("Managed configuration startup failed: %s\n", error.c_str());
+			managed_startup_exit_code = EXIT_FAILURE;
+			return false;
+		}
+	}
 	StartConfiguredPlugins();
 
 	// Runtime-ready callbacks run only now: HGM, Auth, QPro, and MTH all
 	// exist, but no listener has yet been validated or started.
 	RunConfiguredPluginsRuntimeReady();
-#endif /* PROXYSQL40 */
+
+	// The plugin set is now final. Publish the plugin-set hash before Cluster
+	// peer threads (gated until the open below) can compare it: peers sync only
+	// when version and plugin set both match.
 	{
-		char* admin_mysql_ifaces = GloAdmin->get_variable((char*)"mysql_ifaces");
-		char* admin_pgsql_ifaces = GloAdmin->get_variable((char*)"pgsql_ifaces");
-		char* admin_telnet_ifaces = GloAdmin->get_variable((char*)"telnet_admin_ifaces");
-		char* admin_stats_ifaces = GloAdmin->get_variable((char*)"telnet_stats_ifaces");
-		char* mysql_ifaces = GloMTH->get_variable((char*)"interfaces");
-		char* pgsql_ifaces = GloPTH->get_variable((char*)"interfaces");
-
-		std::vector<proxysql_listen_validator::module_listener_config> modules {
-			{ "Admin", admin_mysql_ifaces },
-			{ "Admin PostgreSQL", admin_pgsql_ifaces },
-			{ "Admin Telnet", admin_telnet_ifaces },
-			{ "Admin Stats Telnet", admin_stats_ifaces },
-			{ "MySQL", mysql_ifaces },
-			{ "PostgreSQL", pgsql_ifaces },
-		};
-		std::string error {};
-		bool valid = proxysql_listen_validator::validate_module_listener_conflicts(modules, error);
-
-		free(admin_mysql_ifaces);
-		free(admin_pgsql_ifaces);
-		free(admin_telnet_ifaces);
-		free(admin_stats_ifaces);
-		free(mysql_ifaces);
-		free(pgsql_ifaces);
-
-		if (valid == false) {
-			proxy_error("%s\n", error.c_str());
-			proxy_error("Use different listen interfaces/ports or disable one of the conflicting listeners.\n");
-			proxy_error("ProxySQL startup aborted due to configuration error\n");
-			return false;
-		}
+		const std::string plugin_set_hash = proxysql_cluster_plugin_set_hash(
+			proxysql_active_plugin_identities());
+		proxysql_cluster_set_local_plugin_set_hash(plugin_set_hash);
+		proxy_info("Cluster: local plugin-set hash %s\n", plugin_set_hash.c_str());
 	}
+
+	// The plugin lifecycle is complete: let Admin commands and Cluster peer
+	// threads run.
+	proxysql_startup_gate_open();
+#endif /* PROXYSQL40 */
 	{
 		cpu_timer t;
 		GloMTH->start_listeners();
@@ -1906,8 +2038,37 @@ void ProxySQL_Main_init_phase4___shutdown() {
 	cpu_timer t;
 	// Stop accepting admin work and wait for all detached admin clients before
 	// the modules used by admin queries are joined or destroyed.
-	GloAdmin->shutdown_threads();
+GloAdmin->shutdown_threads();
+#ifdef PROXYSQL40
+	// Admin cannot restart HTTP after this point. Drain web handlers while
+	// the AWS service and all core runtime dependencies are still alive.
+	// v3.x keeps the 3.0.11 order: plugins are unloaded before phase 4.
+	UnloadPlugins();
+#endif /* PROXYSQL40 */
+	// Every worker spins in run_BootstrapListener() while this flag is true and
+	// that loop never consults 'shutdown'. Reaching teardown before
+	// start_listeners() ran (a managed one-shot/recovery failure; a listener
+	// conflict now exits before the plugin lifecycle, issue #6414)
+	// would otherwise leave shutdown_threads() pthread_join()-ing threads that
+	// can never exit, wedging the process until SIGKILL. Clearing is safe
+	// unconditionally: once listeners exist the flag is already false, and
+	// clearing it never opens a listener.
+	if (GloMTH) {
+		GloMTH->bootstrapping_listeners = false;
+	}
+	if (GloPTH) {
+		GloPTH->bootstrapping_listeners = false;
+	}
 	ProxySQL_Main_join_all_threads();
+#ifdef PROXYSQL40
+	// The locality manager can retain a provider lease between refreshes.
+	// Drain it before shutting down the plugin-owned provider registry.
+	if (MyHGM != nullptr && MyHGM->aws_locality_manager() != nullptr) {
+		MyHGM->aws_locality_manager()->shutdown();
+	}
+	shutdown_global_aws_metadata_provider();
+	shutdown_global_aws_iam_token_source();
+#endif
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte
 	if (GloVars.global.nostart) {
@@ -1994,6 +2155,11 @@ void ProxySQL_daemonize_wait_daemon() {
 }
 
 
+/**
+ * @brief Complete daemon startup by entering the data directory and creating the PID file.
+ * @return True after notifying the parent and reopening logs; false if the PID file cannot be created.
+ * @note Exits the process if changing to the data directory fails.
+ */
 bool ProxySQL_daemonize_phase2() {
 	int rc;
 /*
@@ -2024,7 +2190,7 @@ bool ProxySQL_daemonize_phase2() {
 
 	/* Send OK to parent process */
 	daemon_retval_send(0);
-	GloAdmin->flush_error_log();
+	ProxySQL_Admin::flush_error_log();
 	//daemon_log(LOG_INFO, "Starting ProxySQL\n");
 	//daemon_log(LOG_INFO, "Sucessfully started");
 	proxy_info("Starting ProxySQL\n");
@@ -2329,11 +2495,18 @@ string to_string(const conn_uri_t& conn_uri) {
  *   ProxySQL fetching them as regular users.
  */
 const char BOOTSTRAP_SELECT_USERS[] {
-	"SELECT DISTINCT user,ssl_type,authentication_string,plugin,password_expired FROM mysql.user"
+	"SELECT DISTINCT user,ssl_type,authentication_string,plugin,password_expired,host FROM mysql.user"
 		" WHERE user NOT LIKE 'mysql.%' AND user NOT LIKE 'bt_proxysql_%'"
 #ifndef DEBUG
 		" AND user != 'root'"
 #endif
+		// One row per (user, host) account. 'DISTINCT' cannot collapse two rows of
+		// the same username whose credential columns differ (caching_sha2_password
+		// embeds a per-account salt), so the importer deduplicates by username.
+		// Make the winner deterministic and prefer the wildcard account: for each
+		// user, rows with host='%' come first (host<>'%' evaluates to 0), then the
+		// remaining hosts in ascending order.
+		" ORDER BY user, host<>'%', host"
 };
 
 /**
@@ -2850,6 +3023,12 @@ void watchdog_main_loop() {
 	}
 }
 
+/**
+ * @brief Initialize ProxySQL, run its service lifecycle, and release process resources on shutdown.
+ * @param argc Number of command-line arguments.
+ * @param argv Null-terminated command-line argument strings.
+ * @return Process exit status.
+ */
 int main(int argc, const char * argv[]) {
 
 	if (check_openssl_version() == false) {
@@ -3304,7 +3483,7 @@ int main(int argc, const char * argv[]) {
 		}
 
 	} else {
-		GloAdmin->flush_error_log();
+		ProxySQL_Admin::flush_error_log();
 		GloVars.install_signal_handler();
 	}
 
@@ -3323,7 +3502,7 @@ __start_label:
 	{
 		cpu_timer t;
 		if (ProxySQL_Main_init_phase3___start_all() == false) {
-			goto finish;
+			goto __shutdown;
 		}
 #ifdef DEBUG
 		std::cerr << "Main init phase3 completed in ";
@@ -3340,11 +3519,18 @@ __start_label:
 	watchdog_main_loop();
 
 __shutdown:
+#ifdef PROXYSQL40
+	if (managed_startup_exit_code >= 0) {
+		__atomic_store_n(&glovars.shutdown, 1, __ATOMIC_RELEASE);
+	}
+#endif
 
 	proxy_info("Starting shutdown...\n");
 
+#ifndef PROXYSQL40
 	// First shutdown step is to unload plugins
 	UnloadPlugins();
+#endif /* PROXYSQL40 */
 
 	ProxySQL_Main_init_phase4___shutdown();
 
@@ -3377,6 +3563,9 @@ finish:
 			dlclose(__mysql_ldap_auth);
 		}
 	}
+#endif
+#ifdef PROXYSQL40
+	if (managed_startup_exit_code >= 0) return managed_startup_exit_code;
 #endif
 	return 0;
 }

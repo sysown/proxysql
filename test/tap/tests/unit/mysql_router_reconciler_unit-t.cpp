@@ -89,7 +89,7 @@ public:
 } // namespace
 
 int main() {
-	plan(33);
+	plan(38);
 
 	Backend backend;
 	MysqlRouterReconciler reconciler(backend, {2000, 30000}, 10, 9);
@@ -267,6 +267,33 @@ int main() {
 	auto user_gate_failure = user_gate.refresh({false, false});
 	ok(!user_gate_failure.gates_ready && !user_gate_failure.user_error.empty(),
 	   "a failed gate reopen makes a user-only reconciliation fail visibly");
+
+	// Issue #6351: a member in a minority partition reports a complete view without
+	// quorum. The reconciler must keep looking for a member whose view has quorum and
+	// fall back to a no-quorum view only when no member reports one.
+	{
+		AuthoritativeViewSearch<std::string> search;
+		ok(!search.offer("minority-seed", true, false) && !search.offer("incomplete", false, true),
+		   "a no-quorum view and an incomplete view do not stop the member search");
+		ok(search.offer("majority-member", true, true),
+		   "the first complete view with quorum stops the member search");
+		const std::optional<std::string> chosen = search.take();
+		ok(chosen && *chosen == "majority-member",
+		   "a quorum view wins over an earlier minority-partition view");
+	}
+	{
+		AuthoritativeViewSearch<std::string> search;
+		(void)search.offer("first-no-quorum", true, false);
+		(void)search.offer("second-no-quorum", true, false);
+		const std::optional<std::string> chosen = search.take();
+		ok(chosen && *chosen == "first-no-quorum",
+		   "without any quorum view the first complete view is used, so quorum_traffic applies");
+	}
+	{
+		AuthoritativeViewSearch<std::string> search;
+		(void)search.offer("incomplete", false, true);
+		ok(!search.take(), "incomplete views are never selected");
+	}
 
 	return exit_status();
 }

@@ -256,9 +256,11 @@ static int mockPoolConnsNow(PGconn* admin) {
 // teardown of the last attempt can still be in flight when the client's error
 // surfaces; sampling immediately reports connections on their way out as leaks.
 // Poll toward zero for a bounded window and report the last value seen.
-static int mockPoolConns(PGconn* admin) {
+// The budget is 10s, matching pgsql-reg_test_6110_invalid_reply_sequence-t: the drain
+// was measured landing at ~2.0s, so a 2s budget decided the verdict by a coin toss.
+static int mockPoolConns(PGconn* admin, int timeout_ms = 10000) {
     int last = mockPoolConnsNow(admin);
-    for (int i = 0; i < 20 && last != 0; i++) {   // up to ~2s
+    for (int waited = 0; waited < timeout_ms && last != 0; waited += 100) {
         usleep(100000);
         last = mockPoolConnsNow(admin);
     }

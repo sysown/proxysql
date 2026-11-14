@@ -123,7 +123,8 @@ int wakup_target_server(MYSQL* proxysql_mysql, uint32_t i) {
 
 int server_status_checker(MYSQL* admin, const string& f_st, const string& n_st, uint32_t i) {
 	std::string t_server_status_query {
-		"SELECT status,hostgroup_id FROM runtime_mysql_servers WHERE port=330%d order by hostgroup_id"
+		"SELECT status,hostgroup_id FROM runtime_mysql_servers WHERE hostname='127.0.0.1' AND port=330%d"
+		" order by hostgroup_id"
 	};
 	std::string server_status_query {};
 	string_format(t_server_status_query, server_status_query, i);

@@ -1,0 +1,705 @@
+{
+  "artifacts": [
+    {
+      "dependency": "duckdb",
+      "fingerprint": "d8fb63634a1f90ed47cb46da87d85aeefbe987fccbd2f06ee8c111c4eefe76e3",
+      "identity": {
+        "custom_paths": {
+          "CPATH": "",
+          "CPLUS_INCLUDE_PATH": "",
+          "C_INCLUDE_PATH": "",
+          "LIBRARY_PATH": ""
+        },
+        "dependency": "duckdb",
+        "eligible": true,
+        "flags": {
+          "ARCHFLAGS": "",
+          "CFLAGS": "",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_C_FLAGS": "",
+          "CMAKE_EXE_LINKER_FLAGS": "",
+          "CMAKE_GENERATOR": "",
+          "CMAKE_OSX_ARCHITECTURES": "",
+          "CMAKE_PREFIX_PATH": "",
+          "CMAKE_TOOLCHAIN_FILE": "",
+          "CPPFLAGS": "",
+          "CROSS_COMPILE": "",
+          "CXXFLAGS": "",
+          "KERNEL_BITS": "",
+          "LDFLAGS": "",
+          "MACOSX_DEPLOYMENT_TARGET": "",
+          "SDKROOT": ""
+        },
+        "format_version": 1,
+        "helper": {
+          "bundles.py": "dfd9b0ac314d29ada21789ed4e76fb5073206cdcf80b7f9d1c8a5de82162afd2",
+          "identity.py": "18715810df3841c8705c004987aed77e4fd251c2edf68cc7d287534bfe6846af",
+          "manage.py": "83f59e1ae6ac534eead600577cc36c5b5f8218ee051158660be16b129c7a768b",
+          "prepare.bash": "a506192ea1aa6db3e5d3275b72028d9e1219592379dd1a24a0a1afea81336d07"
+        },
+        "recipe_sha256": "ee89cda1cc728a1c263192b1d118d054dc55a8029303cac8898483b6b26654af",
+        "settings": [
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DBUILD_UNITTESTS=OFF",
+          "-DBUILD_SHELL=OFF",
+          "-DENABLE_SANITIZER=OFF",
+          "-DBUILD_EXTENSIONS=",
+          "-DDUCKDB_EXPLICIT_VERSION=v1.4.5"
+        ],
+        "source_sha256": "29931ac91cf9077292773099a900c67be6d13b933978e176249b6e5b75b0b958",
+        "toolchain": {
+          "arch": "x86_64",
+          "cc": {
+            "command": [
+              "clang"
+            ],
+            "macros": "0499b3d399e9945ea3777f04d7023eac7de638524380647e181fd601452a6b63",
+            "target": "x86_64-pc-linux-gnu",
+            "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin"
+          },
+          "cxx": {
+            "command": [
+              "clang++"
+            ],
+            "macros": "349eb63d552dab4bd7256b66076cc6064e5d30cc5541b47f4b6e86d748c234eb",
+            "target": "x86_64-pc-linux-gnu",
+            "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin"
+          },
+          "distro": [
+            "ubuntu",
+            "24.04"
+          ],
+          "libc": [
+            "glibc",
+            "2.39"
+          ],
+          "os": "Linux",
+          "runtime": "959f125a3021b37d0e2fe4c8ebf0c43339a5fdcc09a828760b4288c7249e210b"
+        },
+        "verifier_sha256": "5dca39cacd65fd39d8b16b4557dd0dcf8c2c6e7ea78afcc0aa0d437035a18762",
+        "version": "1.4.5"
+      },
+      "provenance": {
+        "commit": "58f0445fda8f0b4bb87c8da525d40d6bf0c535fc",
+        "image": "proxysql/packaging@sha256:87d657c27df9a9e146248147a402f8adb3f7166d5f40f3300c2f695d5b5e35b6",
+        "profile": "ubuntu24-amd64-clang",
+        "run": "40241416725"
+      },
+      "sha256": "bfefb1ddddb9baa73a73a397d92679f7d1959e1488d82db74548d9b4f8291884",
+      "size": 21895141,
+      "url": "https://github.com/sysown/proxysql/releases/download/dependency-artifacts-v1-40241416725-1/duckdb-d8fb63634a1f90ed47cb46da87d85aeefbe987fccbd2f06ee8c111c4eefe76e3.tar.gz"
+    },
+    {
+      "dependency": "openssl",
+      "fingerprint": "1697af6501cb3db5c012d6a6a1c5e0885ccf590fea0913f07dbef40f9b67aea0",
+      "identity": {
+        "custom_paths": {
+          "CPATH": "",
+          "CPLUS_INCLUDE_PATH": "",
+          "C_INCLUDE_PATH": "",
+          "LIBRARY_PATH": ""
+        },
+        "dependency": "openssl",
+        "eligible": true,
+        "flags": {
+          "ARCHFLAGS": "",
+          "CFLAGS": "",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_C_FLAGS": "",
+          "CMAKE_EXE_LINKER_FLAGS": "",
+          "CMAKE_GENERATOR": "",
+          "CMAKE_OSX_ARCHITECTURES": "",
+          "CMAKE_PREFIX_PATH": "",
+          "CMAKE_TOOLCHAIN_FILE": "",
+          "CPPFLAGS": "",
+          "CROSS_COMPILE": "",
+          "CXXFLAGS": "",
+          "KERNEL_BITS": "",
+          "LDFLAGS": "",
+          "MACOSX_DEPLOYMENT_TARGET": "",
+          "SDKROOT": ""
+        },
+        "format_version": 1,
+        "helper": {
+          "bundles.py": "dfd9b0ac314d29ada21789ed4e76fb5073206cdcf80b7f9d1c8a5de82162afd2",
+          "identity.py": "18715810df3841c8705c004987aed77e4fd251c2edf68cc7d287534bfe6846af",
+          "manage.py": "83f59e1ae6ac534eead600577cc36c5b5f8218ee051158660be16b129c7a768b",
+          "prepare.bash": "a506192ea1aa6db3e5d3275b72028d9e1219592379dd1a24a0a1afea81336d07"
+        },
+        "recipe_sha256": "25d5beab6018fdaab7b3a7f327b894fbcb767b976369285046c861742b2e3459",
+        "settings": [
+          "no-shared",
+          "no-tests",
+          "-fPIC"
+        ],
+        "source_sha256": "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8",
+        "toolchain": {
+          "arch": "x86_64",
+          "cc": {
+            "command": [
+              "clang"
+            ],
+            "macros": "0499b3d399e9945ea3777f04d7023eac7de638524380647e181fd601452a6b63",
+            "target": "x86_64-pc-linux-gnu",
+            "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin"
+          },
+          "cxx": {
+            "command": [
+              "clang++"
+            ],
+            "macros": "349eb63d552dab4bd7256b66076cc6064e5d30cc5541b47f4b6e86d748c234eb",
+            "target": "x86_64-pc-linux-gnu",
+            "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin"
+          },
+          "distro": [
+            "ubuntu",
+            "24.04"
+          ],
+          "libc": [
+            "glibc",
+            "2.39"
+          ],
+          "os": "Linux",
+          "runtime": "959f125a3021b37d0e2fe4c8ebf0c43339a5fdcc09a828760b4288c7249e210b"
+        },
+        "verifier_sha256": "b0ec3862c9bd355a3c643ce5cc42267e572eb5616bdf371582faf4dab235e807",
+        "version": "3.5.7"
+      },
+      "provenance": {
+        "commit": "58f0445fda8f0b4bb87c8da525d40d6bf0c535fc",
+        "image": "proxysql/packaging@sha256:87d657c27df9a9e146248147a402f8adb3f7166d5f40f3300c2f695d5b5e35b6",
+        "profile": "ubuntu24-amd64-clang",
+        "run": "40241416725"
+      },
+      "sha256": "55d97392226b91af24d159d5fcc183221674ab75ee9cbbdc28e4ec95f7bc915c",
+      "size": 5962329,
+      "url": "https://github.com/sysown/proxysql/releases/download/dependency-artifacts-v1-40241416725-1/openssl-1697af6501cb3db5c012d6a6a1c5e0885ccf590fea0913f07dbef40f9b67aea0.tar.gz"
+    },
+    {
+      "dependency": "duckdb",
+      "fingerprint": "e2622f5d43d3ef931bda61d413515e8eb3ace5de7376f5a6410f8d8b5cff9da9",
+      "identity": {
+        "custom_paths": {
+          "CPATH": "",
+          "CPLUS_INCLUDE_PATH": "",
+          "C_INCLUDE_PATH": "",
+          "LIBRARY_PATH": ""
+        },
+        "dependency": "duckdb",
+        "eligible": true,
+        "flags": {
+          "ARCHFLAGS": "",
+          "CFLAGS": "",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_C_FLAGS": "",
+          "CMAKE_EXE_LINKER_FLAGS": "",
+          "CMAKE_GENERATOR": "",
+          "CMAKE_OSX_ARCHITECTURES": "",
+          "CMAKE_PREFIX_PATH": "",
+          "CMAKE_TOOLCHAIN_FILE": "",
+          "CPPFLAGS": "",
+          "CROSS_COMPILE": "",
+          "CXXFLAGS": "",
+          "KERNEL_BITS": "",
+          "LDFLAGS": "",
+          "MACOSX_DEPLOYMENT_TARGET": "",
+          "SDKROOT": ""
+        },
+        "format_version": 1,
+        "helper": {
+          "bundles.py": "dfd9b0ac314d29ada21789ed4e76fb5073206cdcf80b7f9d1c8a5de82162afd2",
+          "identity.py": "18715810df3841c8705c004987aed77e4fd251c2edf68cc7d287534bfe6846af",
+          "manage.py": "83f59e1ae6ac534eead600577cc36c5b5f8218ee051158660be16b129c7a768b",
+          "prepare.bash": "a506192ea1aa6db3e5d3275b72028d9e1219592379dd1a24a0a1afea81336d07"
+        },
+        "recipe_sha256": "ee89cda1cc728a1c263192b1d118d054dc55a8029303cac8898483b6b26654af",
+        "settings": [
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DBUILD_UNITTESTS=OFF",
+          "-DBUILD_SHELL=OFF",
+          "-DENABLE_SANITIZER=OFF",
+          "-DBUILD_EXTENSIONS=",
+          "-DDUCKDB_EXPLICIT_VERSION=v1.4.5"
+        ],
+        "source_sha256": "29931ac91cf9077292773099a900c67be6d13b933978e176249b6e5b75b0b958",
+        "toolchain": {
+          "arch": "x86_64",
+          "cc": {
+            "command": [
+              "gcc"
+            ],
+            "macros": "e3867e555009e14b085feb3defb9f480fa023057efc379b606c28261d7863bf0",
+            "target": "x86_64-linux-gnu",
+            "version": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+          },
+          "cxx": {
+            "command": [
+              "g++"
+            ],
+            "macros": "237c900607fef3484d48bb55bf5f2f7e98502c7841b5618369c40919f77ba9ba",
+            "target": "x86_64-linux-gnu",
+            "version": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+          },
+          "distro": [
+            "ubuntu",
+            "24.04"
+          ],
+          "libc": [
+            "glibc",
+            "2.39"
+          ],
+          "os": "Linux",
+          "runtime": "4f77d674cb94087250c664281660e2a43aabf50a6b94b196ad211baa90dcef80"
+        },
+        "verifier_sha256": "5dca39cacd65fd39d8b16b4557dd0dcf8c2c6e7ea78afcc0aa0d437035a18762",
+        "version": "1.4.5"
+      },
+      "provenance": {
+        "commit": "58f0445fda8f0b4bb87c8da525d40d6bf0c535fc",
+        "image": "proxysql/packaging@sha256:01426db87977fa64a79a1464280c1682e2fdf8c49e0cb1f15cf5fe279ba2a83d",
+        "profile": "ubuntu24-amd64-gcc",
+        "run": "40241416725"
+      },
+      "sha256": "f449083ace070e0e85213671daafbd727f42e103c897e8e5f4c6947c5e9c9d4b",
+      "size": 22181201,
+      "url": "https://github.com/sysown/proxysql/releases/download/dependency-artifacts-v1-40241416725-1/duckdb-e2622f5d43d3ef931bda61d413515e8eb3ace5de7376f5a6410f8d8b5cff9da9.tar.gz"
+    },
+    {
+      "dependency": "openssl",
+      "fingerprint": "c1cc8a4f4e51434fb4f4bbb5fa10c42e79941215a718bf3930be0941c868ad4e",
+      "identity": {
+        "custom_paths": {
+          "CPATH": "",
+          "CPLUS_INCLUDE_PATH": "",
+          "C_INCLUDE_PATH": "",
+          "LIBRARY_PATH": ""
+        },
+        "dependency": "openssl",
+        "eligible": true,
+        "flags": {
+          "ARCHFLAGS": "",
+          "CFLAGS": "",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_C_FLAGS": "",
+          "CMAKE_EXE_LINKER_FLAGS": "",
+          "CMAKE_GENERATOR": "",
+          "CMAKE_OSX_ARCHITECTURES": "",
+          "CMAKE_PREFIX_PATH": "",
+          "CMAKE_TOOLCHAIN_FILE": "",
+          "CPPFLAGS": "",
+          "CROSS_COMPILE": "",
+          "CXXFLAGS": "",
+          "KERNEL_BITS": "",
+          "LDFLAGS": "",
+          "MACOSX_DEPLOYMENT_TARGET": "",
+          "SDKROOT": ""
+        },
+        "format_version": 1,
+        "helper": {
+          "bundles.py": "dfd9b0ac314d29ada21789ed4e76fb5073206cdcf80b7f9d1c8a5de82162afd2",
+          "identity.py": "18715810df3841c8705c004987aed77e4fd251c2edf68cc7d287534bfe6846af",
+          "manage.py": "83f59e1ae6ac534eead600577cc36c5b5f8218ee051158660be16b129c7a768b",
+          "prepare.bash": "a506192ea1aa6db3e5d3275b72028d9e1219592379dd1a24a0a1afea81336d07"
+        },
+        "recipe_sha256": "25d5beab6018fdaab7b3a7f327b894fbcb767b976369285046c861742b2e3459",
+        "settings": [
+          "no-shared",
+          "no-tests",
+          "-fPIC"
+        ],
+        "source_sha256": "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8",
+        "toolchain": {
+          "arch": "x86_64",
+          "cc": {
+            "command": [
+              "gcc"
+            ],
+            "macros": "e3867e555009e14b085feb3defb9f480fa023057efc379b606c28261d7863bf0",
+            "target": "x86_64-linux-gnu",
+            "version": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+          },
+          "cxx": {
+            "command": [
+              "g++"
+            ],
+            "macros": "237c900607fef3484d48bb55bf5f2f7e98502c7841b5618369c40919f77ba9ba",
+            "target": "x86_64-linux-gnu",
+            "version": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+          },
+          "distro": [
+            "ubuntu",
+            "24.04"
+          ],
+          "libc": [
+            "glibc",
+            "2.39"
+          ],
+          "os": "Linux",
+          "runtime": "4f77d674cb94087250c664281660e2a43aabf50a6b94b196ad211baa90dcef80"
+        },
+        "verifier_sha256": "b0ec3862c9bd355a3c643ce5cc42267e572eb5616bdf371582faf4dab235e807",
+        "version": "3.5.7"
+      },
+      "provenance": {
+        "commit": "58f0445fda8f0b4bb87c8da525d40d6bf0c535fc",
+        "image": "proxysql/packaging@sha256:01426db87977fa64a79a1464280c1682e2fdf8c49e0cb1f15cf5fe279ba2a83d",
+        "profile": "ubuntu24-amd64-gcc",
+        "run": "40241416725"
+      },
+      "sha256": "900aa922a39dfa0a1e0f3875c19dc41e9e21c4012ee5a617d9f8a0dd34000dcc",
+      "size": 6310002,
+      "url": "https://github.com/sysown/proxysql/releases/download/dependency-artifacts-v1-40241416725-1/openssl-c1cc8a4f4e51434fb4f4bbb5fa10c42e79941215a718bf3930be0941c868ad4e.tar.gz"
+    },
+    {
+      "dependency": "duckdb",
+      "fingerprint": "efd22ecdcbc72532623974a59179e6f1e3f6f2d702b46007de3186c4d41dd026",
+      "identity": {
+        "custom_paths": {
+          "CPATH": "",
+          "CPLUS_INCLUDE_PATH": "",
+          "C_INCLUDE_PATH": "",
+          "LIBRARY_PATH": ""
+        },
+        "dependency": "duckdb",
+        "eligible": true,
+        "flags": {
+          "ARCHFLAGS": "",
+          "CFLAGS": "",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_C_FLAGS": "",
+          "CMAKE_EXE_LINKER_FLAGS": "",
+          "CMAKE_GENERATOR": "",
+          "CMAKE_OSX_ARCHITECTURES": "",
+          "CMAKE_PREFIX_PATH": "",
+          "CMAKE_TOOLCHAIN_FILE": "",
+          "CPPFLAGS": "",
+          "CROSS_COMPILE": "",
+          "CXXFLAGS": "",
+          "KERNEL_BITS": "",
+          "LDFLAGS": "",
+          "MACOSX_DEPLOYMENT_TARGET": "",
+          "SDKROOT": ""
+        },
+        "format_version": 1,
+        "helper": {
+          "bundles.py": "dfd9b0ac314d29ada21789ed4e76fb5073206cdcf80b7f9d1c8a5de82162afd2",
+          "identity.py": "18715810df3841c8705c004987aed77e4fd251c2edf68cc7d287534bfe6846af",
+          "manage.py": "83f59e1ae6ac534eead600577cc36c5b5f8218ee051158660be16b129c7a768b",
+          "prepare.bash": "a506192ea1aa6db3e5d3275b72028d9e1219592379dd1a24a0a1afea81336d07"
+        },
+        "recipe_sha256": "ee89cda1cc728a1c263192b1d118d054dc55a8029303cac8898483b6b26654af",
+        "settings": [
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DBUILD_UNITTESTS=OFF",
+          "-DBUILD_SHELL=OFF",
+          "-DENABLE_SANITIZER=OFF",
+          "-DBUILD_EXTENSIONS=",
+          "-DDUCKDB_EXPLICIT_VERSION=v1.4.5"
+        ],
+        "source_sha256": "29931ac91cf9077292773099a900c67be6d13b933978e176249b6e5b75b0b958",
+        "toolchain": {
+          "arch": "aarch64",
+          "cc": {
+            "command": [
+              "clang"
+            ],
+            "macros": "a33ab670b550ae7454516f748f375a7dcaea5e4b2cb32de9abfb408708895fd4",
+            "target": "aarch64-unknown-linux-gnu",
+            "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: aarch64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin"
+          },
+          "cxx": {
+            "command": [
+              "clang++"
+            ],
+            "macros": "aaf344d7143458e450428bfecbf96baa47b788f1a0981eb9ae5a01c78c782714",
+            "target": "aarch64-unknown-linux-gnu",
+            "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: aarch64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin"
+          },
+          "distro": [
+            "ubuntu",
+            "24.04"
+          ],
+          "libc": [
+            "glibc",
+            "2.39"
+          ],
+          "os": "Linux",
+          "runtime": "d94020c0f6f8207a0fddbdc3c4ad23862e8f924329f6a0c6c6796197a6a55b9a"
+        },
+        "verifier_sha256": "5dca39cacd65fd39d8b16b4557dd0dcf8c2c6e7ea78afcc0aa0d437035a18762",
+        "version": "1.4.5"
+      },
+      "provenance": {
+        "commit": "58f0445fda8f0b4bb87c8da525d40d6bf0c535fc",
+        "image": "proxysql/packaging@sha256:87d657c27df9a9e146248147a402f8adb3f7166d5f40f3300c2f695d5b5e35b6",
+        "profile": "ubuntu24-arm64-clang",
+        "run": "40241416725"
+      },
+      "sha256": "36927aea331216a52aaa9905996de3c9393041621dbcb4fa4fa18eef0c0155d7",
+      "size": 21732815,
+      "url": "https://github.com/sysown/proxysql/releases/download/dependency-artifacts-v1-40241416725-1/duckdb-efd22ecdcbc72532623974a59179e6f1e3f6f2d702b46007de3186c4d41dd026.tar.gz"
+    },
+    {
+      "dependency": "openssl",
+      "fingerprint": "c370b6d981239189afa92b60e1a0f26ea1368ba2c03081bae12b769a9a954849",
+      "identity": {
+        "custom_paths": {
+          "CPATH": "",
+          "CPLUS_INCLUDE_PATH": "",
+          "C_INCLUDE_PATH": "",
+          "LIBRARY_PATH": ""
+        },
+        "dependency": "openssl",
+        "eligible": true,
+        "flags": {
+          "ARCHFLAGS": "",
+          "CFLAGS": "",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_C_FLAGS": "",
+          "CMAKE_EXE_LINKER_FLAGS": "",
+          "CMAKE_GENERATOR": "",
+          "CMAKE_OSX_ARCHITECTURES": "",
+          "CMAKE_PREFIX_PATH": "",
+          "CMAKE_TOOLCHAIN_FILE": "",
+          "CPPFLAGS": "",
+          "CROSS_COMPILE": "",
+          "CXXFLAGS": "",
+          "KERNEL_BITS": "",
+          "LDFLAGS": "",
+          "MACOSX_DEPLOYMENT_TARGET": "",
+          "SDKROOT": ""
+        },
+        "format_version": 1,
+        "helper": {
+          "bundles.py": "dfd9b0ac314d29ada21789ed4e76fb5073206cdcf80b7f9d1c8a5de82162afd2",
+          "identity.py": "18715810df3841c8705c004987aed77e4fd251c2edf68cc7d287534bfe6846af",
+          "manage.py": "83f59e1ae6ac534eead600577cc36c5b5f8218ee051158660be16b129c7a768b",
+          "prepare.bash": "a506192ea1aa6db3e5d3275b72028d9e1219592379dd1a24a0a1afea81336d07"
+        },
+        "recipe_sha256": "25d5beab6018fdaab7b3a7f327b894fbcb767b976369285046c861742b2e3459",
+        "settings": [
+          "no-shared",
+          "no-tests",
+          "-fPIC"
+        ],
+        "source_sha256": "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8",
+        "toolchain": {
+          "arch": "aarch64",
+          "cc": {
+            "command": [
+              "clang"
+            ],
+            "macros": "a33ab670b550ae7454516f748f375a7dcaea5e4b2cb32de9abfb408708895fd4",
+            "target": "aarch64-unknown-linux-gnu",
+            "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: aarch64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin"
+          },
+          "cxx": {
+            "command": [
+              "clang++"
+            ],
+            "macros": "aaf344d7143458e450428bfecbf96baa47b788f1a0981eb9ae5a01c78c782714",
+            "target": "aarch64-unknown-linux-gnu",
+            "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: aarch64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin"
+          },
+          "distro": [
+            "ubuntu",
+            "24.04"
+          ],
+          "libc": [
+            "glibc",
+            "2.39"
+          ],
+          "os": "Linux",
+          "runtime": "d94020c0f6f8207a0fddbdc3c4ad23862e8f924329f6a0c6c6796197a6a55b9a"
+        },
+        "verifier_sha256": "b0ec3862c9bd355a3c643ce5cc42267e572eb5616bdf371582faf4dab235e807",
+        "version": "3.5.7"
+      },
+      "provenance": {
+        "commit": "58f0445fda8f0b4bb87c8da525d40d6bf0c535fc",
+        "image": "proxysql/packaging@sha256:87d657c27df9a9e146248147a402f8adb3f7166d5f40f3300c2f695d5b5e35b6",
+        "profile": "ubuntu24-arm64-clang",
+        "run": "40241416725"
+      },
+      "sha256": "87a23c1e25461c9b0d8fdc1f7fd64131076285f5bf97d377bb7c469e60585469",
+      "size": 6737274,
+      "url": "https://github.com/sysown/proxysql/releases/download/dependency-artifacts-v1-40241416725-1/openssl-c370b6d981239189afa92b60e1a0f26ea1368ba2c03081bae12b769a9a954849.tar.gz"
+    },
+    {
+      "dependency": "duckdb",
+      "fingerprint": "d483d9c8726a7dad477f02261ab902590da30f0526eba7b83e624c1884553d37",
+      "identity": {
+        "custom_paths": {
+          "CPATH": "",
+          "CPLUS_INCLUDE_PATH": "",
+          "C_INCLUDE_PATH": "",
+          "LIBRARY_PATH": ""
+        },
+        "dependency": "duckdb",
+        "eligible": true,
+        "flags": {
+          "ARCHFLAGS": "",
+          "CFLAGS": "",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_C_FLAGS": "",
+          "CMAKE_EXE_LINKER_FLAGS": "",
+          "CMAKE_GENERATOR": "",
+          "CMAKE_OSX_ARCHITECTURES": "",
+          "CMAKE_PREFIX_PATH": "",
+          "CMAKE_TOOLCHAIN_FILE": "",
+          "CPPFLAGS": "",
+          "CROSS_COMPILE": "",
+          "CXXFLAGS": "",
+          "KERNEL_BITS": "",
+          "LDFLAGS": "",
+          "MACOSX_DEPLOYMENT_TARGET": "",
+          "SDKROOT": ""
+        },
+        "format_version": 1,
+        "helper": {
+          "bundles.py": "dfd9b0ac314d29ada21789ed4e76fb5073206cdcf80b7f9d1c8a5de82162afd2",
+          "identity.py": "18715810df3841c8705c004987aed77e4fd251c2edf68cc7d287534bfe6846af",
+          "manage.py": "83f59e1ae6ac534eead600577cc36c5b5f8218ee051158660be16b129c7a768b",
+          "prepare.bash": "a506192ea1aa6db3e5d3275b72028d9e1219592379dd1a24a0a1afea81336d07"
+        },
+        "recipe_sha256": "ee89cda1cc728a1c263192b1d118d054dc55a8029303cac8898483b6b26654af",
+        "settings": [
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DBUILD_UNITTESTS=OFF",
+          "-DBUILD_SHELL=OFF",
+          "-DENABLE_SANITIZER=OFF",
+          "-DBUILD_EXTENSIONS=",
+          "-DDUCKDB_EXPLICIT_VERSION=v1.4.5"
+        ],
+        "source_sha256": "29931ac91cf9077292773099a900c67be6d13b933978e176249b6e5b75b0b958",
+        "toolchain": {
+          "arch": "aarch64",
+          "cc": {
+            "command": [
+              "gcc"
+            ],
+            "macros": "20b79e46dc172375d4e96f553e0294a43f80d745b820789a484835675fedfca6",
+            "target": "aarch64-linux-gnu",
+            "version": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+          },
+          "cxx": {
+            "command": [
+              "g++"
+            ],
+            "macros": "99ea7054fca7645c75c91469070e268eec3f6e9217c52e8ab12925a4fd8a726b",
+            "target": "aarch64-linux-gnu",
+            "version": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+          },
+          "distro": [
+            "ubuntu",
+            "24.04"
+          ],
+          "libc": [
+            "glibc",
+            "2.39"
+          ],
+          "os": "Linux",
+          "runtime": "94c8cff3aa92a4c51c14c64c16c5bf34c0383e53b71f4cc1426d32bff3cbf998"
+        },
+        "verifier_sha256": "5dca39cacd65fd39d8b16b4557dd0dcf8c2c6e7ea78afcc0aa0d437035a18762",
+        "version": "1.4.5"
+      },
+      "provenance": {
+        "commit": "58f0445fda8f0b4bb87c8da525d40d6bf0c535fc",
+        "image": "proxysql/packaging@sha256:01426db87977fa64a79a1464280c1682e2fdf8c49e0cb1f15cf5fe279ba2a83d",
+        "profile": "ubuntu24-arm64-gcc",
+        "run": "40241416725"
+      },
+      "sha256": "080438d801fe27c5e0e2467e54e9fa14c6b62477b4b2c143bf4626c17f36e673",
+      "size": 21719583,
+      "url": "https://github.com/sysown/proxysql/releases/download/dependency-artifacts-v1-40241416725-1/duckdb-d483d9c8726a7dad477f02261ab902590da30f0526eba7b83e624c1884553d37.tar.gz"
+    },
+    {
+      "dependency": "openssl",
+      "fingerprint": "4df55fba273dbc29dcf47eaec65ce4236c5eca1d748bcfb888358e643c3005da",
+      "identity": {
+        "custom_paths": {
+          "CPATH": "",
+          "CPLUS_INCLUDE_PATH": "",
+          "C_INCLUDE_PATH": "",
+          "LIBRARY_PATH": ""
+        },
+        "dependency": "openssl",
+        "eligible": true,
+        "flags": {
+          "ARCHFLAGS": "",
+          "CFLAGS": "",
+          "CMAKE_CXX_FLAGS": "",
+          "CMAKE_C_FLAGS": "",
+          "CMAKE_EXE_LINKER_FLAGS": "",
+          "CMAKE_GENERATOR": "",
+          "CMAKE_OSX_ARCHITECTURES": "",
+          "CMAKE_PREFIX_PATH": "",
+          "CMAKE_TOOLCHAIN_FILE": "",
+          "CPPFLAGS": "",
+          "CROSS_COMPILE": "",
+          "CXXFLAGS": "",
+          "KERNEL_BITS": "",
+          "LDFLAGS": "",
+          "MACOSX_DEPLOYMENT_TARGET": "",
+          "SDKROOT": ""
+        },
+        "format_version": 1,
+        "helper": {
+          "bundles.py": "dfd9b0ac314d29ada21789ed4e76fb5073206cdcf80b7f9d1c8a5de82162afd2",
+          "identity.py": "18715810df3841c8705c004987aed77e4fd251c2edf68cc7d287534bfe6846af",
+          "manage.py": "83f59e1ae6ac534eead600577cc36c5b5f8218ee051158660be16b129c7a768b",
+          "prepare.bash": "a506192ea1aa6db3e5d3275b72028d9e1219592379dd1a24a0a1afea81336d07"
+        },
+        "recipe_sha256": "25d5beab6018fdaab7b3a7f327b894fbcb767b976369285046c861742b2e3459",
+        "settings": [
+          "no-shared",
+          "no-tests",
+          "-fPIC"
+        ],
+        "source_sha256": "a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8",
+        "toolchain": {
+          "arch": "aarch64",
+          "cc": {
+            "command": [
+              "gcc"
+            ],
+            "macros": "20b79e46dc172375d4e96f553e0294a43f80d745b820789a484835675fedfca6",
+            "target": "aarch64-linux-gnu",
+            "version": "gcc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+          },
+          "cxx": {
+            "command": [
+              "g++"
+            ],
+            "macros": "99ea7054fca7645c75c91469070e268eec3f6e9217c52e8ab12925a4fd8a726b",
+            "target": "aarch64-linux-gnu",
+            "version": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+          },
+          "distro": [
+            "ubuntu",
+            "24.04"
+          ],
+          "libc": [
+            "glibc",
+            "2.39"
+          ],
+          "os": "Linux",
+          "runtime": "94c8cff3aa92a4c51c14c64c16c5bf34c0383e53b71f4cc1426d32bff3cbf998"
+        },
+        "verifier_sha256": "b0ec3862c9bd355a3c643ce5cc42267e572eb5616bdf371582faf4dab235e807",
+        "version": "3.5.7"
+      },
+      "provenance": {
+        "commit": "58f0445fda8f0b4bb87c8da525d40d6bf0c535fc",
+        "image": "proxysql/packaging@sha256:01426db87977fa64a79a1464280c1682e2fdf8c49e0cb1f15cf5fe279ba2a83d",
+        "profile": "ubuntu24-arm64-gcc",
+        "run": "40241416725"
+      },
+      "sha256": "ef0cbcbd085036ef8eed454845bd52e1650e3d453deaa3b1ef5e750ccb8a7fb5",
+      "size": 7187822,
+      "url": "https://github.com/sysown/proxysql/releases/download/dependency-artifacts-v1-40241416725-1/openssl-4df55fba273dbc29dcf47eaec65ce4236c5eca1d748bcfb888358e643c3005da.tar.gz"
+    }
+  ],
+  "format_version": 1
+}

@@ -76,6 +76,18 @@ if [ "${COVERAGE_MODE}" = "1" ]; then
     fi
 fi
 
+# The no-infra PostgreSQL user-sync asset test checks the repository's ignore
+# rule. Sparse CI workspaces may omit this root file, and the build handoff
+# contains only source/test subtrees. Restore the tested revision's asset.
+if [ "${TAP_GROUP:-}" = "no-infra-g1" ] && [ ! -f "${WORKSPACE}/.gitignore" ]; then
+    if ! git -C "${WORKSPACE}" cat-file -e HEAD:.gitignore 2>/dev/null; then
+        echo ">>> ERROR: no-infra-g1 requires .gitignore tracked at HEAD" >&2
+        exit 1
+    fi
+    git -C "${WORKSPACE}" show HEAD:.gitignore > "${WORKSPACE}/.gitignore"
+    echo ">>> Materialized .gitignore from HEAD for no-infra source asset tests"
+fi
+
 # 1. Determine Required Infras
 INFRAS_TO_CHECK=""
 BASE_GROUP=$(echo "${TAP_GROUP}" | sed -E "s/[-_]g[0-9]+.*//") # Strip -g1, -g2, _g1, _g2 etc.
@@ -305,6 +317,10 @@ sys.exit(0 if any('${TAP_GROUP}' in v for v in groups.values()) else 1)
     # Search for test binaries in known test directories
     TEST_DIRS="${WORKSPACE}/test/tap/tests/unit ${WORKSPACE}/test/tap/tests"
 
+    source "${SCRIPT_DIR}/unit-test-execution.bash"
+    UNIT_LOG_DIR="${INFRA_LOGS_PATH}/${INFRA_ID}/unit-test-logs"
+    mkdir -p "${UNIT_LOG_DIR}"
+
     TOTAL=0
     PASSED=0
     FAILED=0
@@ -329,13 +345,14 @@ sys.exit(0 if any('${TAP_GROUP}' in v for v in groups.values()) else 1)
 
         TOTAL=$((TOTAL + 1))
         echo ">>> Running: ${TEST_NAME}"
-        if "${TEST_BIN}"; then
+        if proxysql_run_unit_test "${UNIT_LOG_DIR}/${TEST_NAME}.log" "${TEST_BIN}"; then
             PASSED=$((PASSED + 1))
             echo ">>> PASSED: ${TEST_NAME}"
         else
+            rc=$?
             FAILED=$((FAILED + 1))
-            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}"
-            echo ">>> FAILED: ${TEST_NAME}"
+            FAILED_TESTS="${FAILED_TESTS} ${TEST_NAME}(rc=${rc})"
+            echo ">>> FAILED: ${TEST_NAME} (rc=${rc})"
         fi
     done
 

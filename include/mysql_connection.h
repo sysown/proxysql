@@ -28,6 +28,8 @@
 #define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
 #include "Servers_SslParams.h"
+#include "Aws_Iam_Provider.h"
+#include "MySQL_Backend_Auth.h"
 
 #ifdef PROXYSQLED25519
 #include "MySQL_Ed25519.h"
@@ -45,6 +47,15 @@ public:
 	void fill_client_internal_session(nlohmann::json &j, int idx);
 };
 
+#ifdef PROXYSQL40
+struct MySQLAwsIamIdentity {
+	AwsIamTokenKey key;
+	uint64_t token_generation{0};
+	uint8_t fresh_token_retries{0};
+	SecureString handshake_token;
+};
+#endif // PROXYSQL40
+
 enum charset_action {
 	UNKNOWN,
 	NAMES,
@@ -61,6 +72,7 @@ class MySQL_Connection_userinfo {
 	char *password;
 	PASSWORD_TYPE::E passtype;
 	char *schemaname;
+	uint32_t schemaname_charset {45};
 	char *sha1_pass;
 	char *fe_username;
 	MySQL_Connection_userinfo();
@@ -69,7 +81,7 @@ class MySQL_Connection_userinfo {
 	void clear_password();
 	void set(char *, char *, char *, char *);
 	void set(MySQL_Connection_userinfo *);
-	bool set_schemaname(char *, int);
+	bool set_schemaname(char *, int, uint32_t charset = 45);
 };
 
 const char* mysql_simple_command_log_text(const char* stmt, bool redact_statement);
@@ -79,14 +91,22 @@ bool mysql_user_variable_tracking_can_stage(
 bool mysql_user_variable_set_uses_qpo_epilogue(
 	UserVariableSetStatus analysis_status,
 	MySQL_User_Variable_Apply_Result preflight_result);
+#ifndef PROXYSQL31
 bool mysql_user_variable_commit_post_ok(
 	MySQL_User_Variable_State& frontend,
 	MySQL_User_Variable_State& backend,
 	const std::vector<UserVariableAssignment>& assignments);
+#endif
 unsigned int mysql_user_variable_replay_error_code(unsigned int backend_error_code);
 
 class MySQL_Connection {
 	private:
+#ifdef PROXYSQL40
+	MySQLBackendAuthType backend_auth_type_{MySQLBackendAuthType::PASSWORD};
+	std::unique_ptr<MySQLAwsIamIdentity> aws_iam_identity_;
+	bool aws_iam_connector_secret_active_{false};
+	bool aws_iam_async_connect_pending_{false};
+#endif // PROXYSQL40
 	void update_warning_count_from_connection();
 	void update_warning_count_from_statement();
 	unsigned long long inserted_into_pool;
@@ -99,16 +119,13 @@ class MySQL_Connection {
 	void ProcessQueryAndSetStatusFlags_UserVariables(char *, int);
 	void ProcessQueryAndSetStatusFlags_Savepoint(char *);
 	void ProcessQueryAndSetStatusFlags_SetBackslashEscapes();
-	MYSQL *gtid_lookup_mysql;
-	time_t gtid_lookup_retry_after;
-	bool connect_gtid_lookup_connection();
-	void close_gtid_lookup_connection();
+	uint8_t scalar_query_stage { 0 };
+	std::string scalar_query_sql;
 	// GTID collection steps, split out of get_gtid() to keep each one within the
 	// nesting and complexity budgets. They all assume get_gtid()'s preconditions
 	// (a live connection with no error and a changed session state) hold.
 	bool collect_gtid_to_buff(char *buff);
 	bool get_gtid_from_session_tracking(char *buff);
-	bool get_gtid_from_mariadb_lookup(char *buff);
 	public:
 	struct {
 		char *server_version;
@@ -135,6 +152,12 @@ class MySQL_Connection {
 	} options;
 
 	Variable variables[SQL_NAME_LAST_HIGH_WM];
+	// SET CHARACTER SET derives connection collation from the database selected
+	// at that moment, even if USE changes the current database afterwards.
+	std::optional<std::string> user_variable_charset_schema {std::string{}};
+	uint32_t user_variable_charset_database_charset {0};
+	uint32_t user_variable_charset_schema_charset {45};
+	bool user_variable_database_charset_explicit {false};
 	uint32_t var_hash[SQL_NAME_LAST_HIGH_WM];
 	MySQL_User_Variable_State user_variables;
 	// for now we store possibly missing variables in the lower range
@@ -220,6 +243,24 @@ class MySQL_Connection {
 
 	MySQL_Connection();
 	~MySQL_Connection();
+#ifdef PROXYSQL40
+	void set_backend_auth_type(MySQLBackendAuthType);
+	MySQLBackendAuthType backend_auth_type() const;
+	/** Check whether the current resolved policy permits password reset/reuse. */
+	bool can_reset_for_backend_auth_policy(const MySQLBackendAuthPolicy&) const;
+	void attach_aws_iam_token(const AwsIamTokenKey&, AwsIamTokenResult&&);
+	void clear_aws_iam_handshake_secret();
+	bool has_aws_iam_handshake_secret() const;
+	/** @brief Region of the IAM token this connection authenticated with, '' if none. */
+	std::string aws_iam_region() const {
+		return aws_iam_identity_ ? aws_iam_identity_->key.region : std::string();
+	}
+#else
+	// AWS IAM backend authentication is a v4.0 feature: on v3.0/v3.1 every
+	// backend connection authenticates with a password, and checks of the
+	// connection's auth type fold away at compile time.
+	MySQLBackendAuthType backend_auth_type() const { return MySQLBackendAuthType::PASSWORD; }
+#endif // PROXYSQL40
 	bool set_autocommit(bool);
 	bool set_no_backslash_escapes(bool);
 	unsigned int set_charset(unsigned int, enum charset_action);
@@ -238,6 +279,7 @@ class MySQL_Connection {
 	void set_autocommit_cont(short event);
 	void set_names_start();
 	void set_names_cont(short event);
+	void apply_local_infile_policy();
 	void real_query_start();
 	void real_query_cont(short event);
 #ifndef PROXYSQL_USE_RESULT
@@ -258,6 +300,8 @@ class MySQL_Connection {
 	int async_set_autocommit(short event, bool);
 	int async_set_names(short event, unsigned int nr);
 	int async_send_simple_command(short event, char *stmt, unsigned long length, bool redact_statement=false); // no result set expected
+	/** @brief Fetch one internal scalar without generating client result packets. */
+	int async_query_scalar(short event, const std::string& query, std::string& value);
 	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
 	int async_ping(short event);
 	int async_set_option(short event, bool mask);
@@ -311,14 +355,6 @@ class MySQL_Connection {
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
 	/**
-	 * @brief Close the auxiliary connection used to read the MariaDB GTID position.
-	 *
-	 * Must be called whenever the owning MySQL_Connection is no longer used by
-	 * the current session, so that the auxiliary connection is never left open
-	 * on an idle pooled connection.
-	 */
-	void release_gtid_lookup_connection();
-	/**
 	 * @brief Extract session variable changes from MySQL's session tracking system.
 	 *
 	 * === PR 5166: Backend Variable Extraction ===
@@ -352,7 +388,14 @@ class MySQL_Connection {
 
 	bool match_ff_req_options(const MySQL_Connection *c);
 	bool match_tracked_options(const MySQL_Connection *c);
-	bool requires_CHANGE_USER(const MySQL_Connection *client_conn);
+#ifdef PROXYSQL40
+	bool backend_auth_compatible(
+		const char *requested_username,
+		MySQLBackendAuthType requested_type) const;
+#endif // PROXYSQL40
+	bool requires_CHANGE_USER(
+		const MySQL_Connection *client_conn,
+		MySQLBackendAuthType requested_type = MySQLBackendAuthType::PASSWORD) const;
 	unsigned int number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return mysql ? mysql->thread_id : 0; }
 	static void set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_params);

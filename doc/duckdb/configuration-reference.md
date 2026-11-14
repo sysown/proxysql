@@ -49,8 +49,8 @@ other plugins, the operating system, and workload spikes.
 ## `duckdb-threads`
 
 Controls query parallelism. LOAD applies it globally and existing connections
-observe it. Direct client `SET threads=N` is routed through the same internal
-control connection, outside the client's transaction.
+observe it. Clients cannot change it: a client `SET threads=N` (or its alias
+`worker_threads`) returns an error that points to this variable.
 
 ## `duckdb-max_connections`
 
@@ -69,5 +69,6 @@ ProxySQL overrides DuckDB's permissive default and starts disabled. Tightening
 `true` to `false` works live and is applied last because it cannot be rolled
 back while open. Loosening `false` to `true` waits for the next database open.
 
-Direct managed SET follows the same restrictions. Other DuckDB session SET
-statements continue through the ordinary client connection.
+Clients cannot change it with `SET`. Engine-wide settings are Admin-only, and
+client `SET`/`RESET` statements are confined to session scope. Other DuckDB
+session `SET` statements continue through the ordinary client connection.

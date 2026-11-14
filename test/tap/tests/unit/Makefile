@@ -8,6 +8,28 @@
 #
 # See: GitHub issue #5473 (Phase 2.1: Test Infrastructure Foundation)
 
+.DEFAULT_GOAL := all
+
+# The public build owns only the provider-neutral IAM core.  Keep an explicit
+# artifact gate because it exercises the actual build output rather than a
+# source-code convention.  Capture nm completely before matching so grep
+# cannot terminate the producer early under pipefail.
+.PHONY: aws_public_provider_boundary-t
+aws_public_provider_boundary-t:
+	@test ! -d $(PROXYSQL_PATH)/plugins/aws || { \
+		echo "FAIL: public tree owns the concrete AWS provider" >&2; exit 1; \
+	}
+	@test ! -e $(PROXYSQL_PATH)/test/tap/tests/unit/aws_locality_plugin_unit-t.cpp || { \
+		echo "FAIL: public tree owns the real AWS locality provider test" >&2; exit 1; \
+	}
+	@test -x $(PROXYSQL_PATH)/src/proxysql
+	@nm -C $(PROXYSQL_PATH)/src/proxysql > /tmp/proxysql-public.nm
+	@if grep -Fq 'Aws::' /tmp/proxysql-public.nm; then \
+		echo "FAIL: src/proxysql contains AWS C++ SDK symbols" >&2; exit 1; \
+	fi
+	@test ! -e $(PROXYSQL_PATH)/plugins/aws/ProxySQL_Aws_Plugin.so || { \
+		echo "FAIL: public build produced the AWS plugin" >&2; exit 1; \
+	}
 
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
@@ -93,6 +115,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(CURL_LDIR) -L$(EV_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(DOTENV_DYN_LDIR) \
+			-L$(PCRE_LDIR) \
 			-L$(PCRE2_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
@@ -141,7 +164,6 @@ LZ4_LDIR := $(DEPS_PATH)/lz4/lz4/lib
 
 IDIRS += -I$(CLICKHOUSE_CPP_IDIR)
 
-
 # ===========================================================================
 # libproxysql.a — the core library under test
 # ===========================================================================
@@ -168,6 +190,12 @@ ifeq ($(UNAME_S),Linux)
 	STATIC_LIBS += $(COREDUMPER_LDIR)/libcoredumper.a
 endif
 
+# NOTE: vec.o is appended to STATIC_LIBS once, after the PROXYSQL40
+# autodetection block below (search for "vec.o"). It must NOT be added here
+# too — listing the same object twice on the link line produces ~98
+# duplicate-symbol errors and breaks every unit test under PROXYSQL40.
+
+
 # ===========================================================================
 # Linker flags — platform-specific
 # ===========================================================================
@@ -193,6 +221,8 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR) \
 	$(JEMALLOC_LDIR)/libjemalloc.a \
 	$(MICROHTTPD_LDIR)/libmicrohttpd.a \
 	$(LIBHTTPSERVER_LDIR)/libhttpserver.a \
+	$(PCRE_LDIR)/libpcrecpp.a \
+	$(PCRE_LDIR)/libpcre.a \
 	$(PCRE2_LDIR)/libpcre2-8.a \
 	$(LIBDAEMON_LDIR)/libdaemon.a \
 	$(LIBCONFIG_LDIR)/libconfig++.a \
@@ -223,7 +253,7 @@ LIBPROXYSQLAR_FULL := $(LIBPROXYSQLAR)
 # (`detect_odr_violation=1` aborts at startup; ld is silenced by
 # `--allow-multiple-definition`).
 MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -luuid \
-		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) \
+		  -Wl,-Bstatic -lconfig -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE_LIBS) $(PCRE2_LIBS) \
 		  -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev \
 		  -lprometheus-cpp-pull -lprometheus-cpp-core \
 		  $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a \
@@ -281,7 +311,6 @@ GENAI_PLUGIN_HOST_OWNED_LIBS = $(EXECUTABLE_EXPORT_FLAGS) \
 	$(call force_load_archives,$(CURL_STATIC_LIB)) \
 	$(OPENSSL_FORCE_LOAD_LIBS) -lz $(GENAI_PLUGIN_HOST_DLOPEN_LIBS)
 
-
 # ===========================================================================
 # Compiler flags
 # ===========================================================================
@@ -301,11 +330,19 @@ endif
 # Auto-detect feature flags from libproxysql.a symbols.
 # This ensures unit tests compile with the same flags the library was built with,
 # regardless of whether the environment variables are set during `make`.
-# The archive freshness rule below always requests the default ClickHouse
-# build. Define the same mode before compiling test globals, including when a
-# clean tree has no archive available for symbol probing yet.
+#
+# ClickHouse is handled separately: it cannot be probed reliably on a clean tree,
+# so the archive freshness rule below requests an explicit mode. Only the
+# non-legacy top-level build (Linux) enables PROXYSQLCLICKHOUSE and builds the
+# clickhouse-cpp dependency; on Darwin/FreeBSD the default build is
+# LEGACY_BUILD and does not build it. Requesting it there would make the
+# flag stamp force a lib rebuild of ClickHouse_Server.cpp without its headers.
+PROXYSQLCLICKHOUSE :=
+PSQLCH :=
+ifeq ($(UNAME_S),Linux)
 PROXYSQLCLICKHOUSE := 1
 PSQLCH := -DPROXYSQLCLICKHOUSE
+endif
 PSQLGA :=
 PSQLFFTO :=
 ifeq ($(PROXYSQLFFTO),1)
@@ -390,12 +427,12 @@ endif
 # they need.
 # Compress ELF debug sections in Linux/FreeBSD test binaries. Apple clang
 # accepts -gz but does not compress DWARF stored in Mach-O objects.
-OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLDEBUG) \
+OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLAWSIAM) $(PSQLDEBUG) \
 	   -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLX_TEST_BUILD $(NOJEM) $(WGCOV) $(WASAN) \
 	   -Wl,--no-as-needed -gz -Wl,-rpath,$(TAP_LDIR)
 
 ifeq ($(UNAME_S),Darwin)
-	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLDEBUG) \
+	OPT := $(STDCPP) -O0 -ggdb $(PSQLCH) $(PSQLGA) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519) $(PSQLAWSIAM) $(PSQLDEBUG) \
 		   -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLX_TEST_BUILD $(NOJEM) $(WGCOV) $(WASAN)
 endif
 
@@ -419,6 +456,7 @@ endif
 TEST_HELPERS_DIR := $(PROXYSQL_PATH)/test/tap/test_helpers
 FAKE_PLUGIN_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin.so
 FAKE_PLUGIN2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin2.so
+FAKE_PLUGIN_ABI13_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_abi13.so
 ROUTER_CONTRACT_FAKE_SO := $(TEST_HELPERS_DIR)/proxysql_router_contract_fake.so
 PROXYSQL_BINARY := $(PROXYSQL_PATH)/src/proxysql
 FAKE_PLUGIN_DEBUG_MISMATCH_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_plugin_debug_mismatch.so
@@ -447,6 +485,20 @@ $(ODIR)/test_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEA
 
 $(ODIR)/test_init.o: $(TEST_HELPERS_DIR)/test_init.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -Wall
+
+# These daemon probes skip before inspecting their binaries outside Linux.
+# Keep that skip independent of the platform's daemon build requirements.
+STARTUP_TLS_BINARY :=
+ifeq ($(UNAME_S),Linux)
+STARTUP_TLS_BINARY := $(PROXYSQL_BINARY)
+endif
+
+module_lifecycle_unit-t: $(STARTUP_TLS_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
+module_startup_unit-t: $(STARTUP_TLS_BINARY) $(TEST_HELPERS_DIR)/private_daemon_probe.h $(PROXYSQL_PATH)/test/infra/control/test_module_startup.py $(PROXYSQL_PATH)/test/infra/control/test_module_lifecycle.py
+
+startup_tls_ownership_unit-t: startup_tls_ownership_unit-t.cpp $(STARTUP_TLS_BINARY) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/test/infra/control/test_startup_tls_ownership.py
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -o $@
 
 # Must carry $(PSQLDEBUG) alongside $(PSQL40): the loader now refuses to
 # dlopen a plugin whose -DDEBUG setting disagrees with the core's (see
@@ -500,6 +552,9 @@ $(FAKE_PLUGIN2_SO): $(TEST_HELPERS_DIR)/fake_plugin.cpp $(PROXYSQL_PATH)/include
 		-DFAKE_PLUGIN_NAME=\"fake_plugin2\" \
 		-DFAKE_PLUGIN_ENV_PREFIX=\"PROXYSQL_FAKE_PLUGIN2_\"
 
+$(FAKE_PLUGIN_ABI13_SO): $(TEST_HELPERS_DIR)/fake_plugin_abi13.cpp | $(TEST_HELPERS_DIR)
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) -ldl
+
 $(ROUTER_CONTRACT_FAKE_SO): plugin_router_chassis_contract_unit-t.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h | $(TEST_HELPERS_DIR)
 	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) \
 		-DPROXYSQL_ROUTER_CONTRACT_FAKE
@@ -527,18 +582,19 @@ endif
 
 $(LIBPROXYSQLAR): FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/lib libproxysql.a \
-		PROXYSQLCLICKHOUSE=1 \
+		PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
 		PROXYSQLED25519=$(PROXYSQLED25519) \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) \
 		$(LIB_OPTZ_ARG) CC=$(CC) CXX=$(CXX)
 
-$(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
+# Delegate source freshness to src/Makefile even if only daemon sources change.
+$(PROXYSQL_BINARY): $(LIBPROXYSQLAR) FORCE
 	$(MAKE) -C $(PROXYSQL_PATH)/src proxysql \
 		PROXYSQL40=$(PROXYSQL40) PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) \
 		PROXYSQL31=$(PROXYSQL31) \
 		PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) \
-		PROXYSQLED25519=$(PROXYSQLED25519) CC=$(CC) CXX=$(CXX)
+		PROXYSQLED25519=$(PROXYSQLED25519) $(LIB_OPTZ_ARG) CC=$(CC) CXX=$(CXX)
 
 
 # ===========================================================================
@@ -546,13 +602,22 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR)
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
+	backend_unplug_unit-t \
+	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
+	pgsql_stable_io_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
-	query_cache_unit-t pgsql_query_cache_allocation_unit-t query_processor_unit-t digest_stats_unit-t \
-	protocol_unit-t auth_unit-t connection_pool_unit-t \
+	str_ends_with_unit-t \
+	query_cache_unit-t pgsql_query_cache_allocation_unit-t pgsql_result_flush_allocation_unit-t pgsql_scheduler_contract_unit-t query_processor_unit-t digest_stats_unit-t \
+	gtid_local_cache_unit-t gtid_writer_fallback_route_unit-t mysql_resultset_add_row2_unit-t \
+	protocol_unit-t auth_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
-	rule_matching_unit-t hostgroups_unit-t monitor_health_unit-t \
+	stmt_long_data_param_type_unit-t \
+	mysql_replication_pipeline_unit-t \
+	rule_matching_unit-t rule_matching_missing_digest_unit-t query_processor_regex_default_unit-t pcre1_query_rule_limits_unit-t hostgroups_unit-t hgc_attribute_strings_unit-t hgm_mapping_commit_sentinel_unit-t monitor_health_unit-t \
+	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
 	pgsql_command_complete_unit-t \
+	pgsql_extq_batch_unit-t \
 	ffto_protocol_unit-t \
 	server_selection_unit-t \
   hostgroup_routing_unit-t \
@@ -563,47 +628,82 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	backend_sync_unit-t \
 	mysql_encode_unit-t \
 	mysql_variables_unit-t \
+	mysql_users_rejected_attributes_unit-t \
 	mysql_user_variables_unit-t \
 	mysql_decompress_payload_unit-t \
 	mysql_resolution_unit-t \
-	pgsql_variables_validator_unit-t \
-	proxysql_utils_unit-t \
+	mariadb_tls_server_name_unit-t \
+	pgsql_variables_validator_unit-t pgsql_startup_options_escape_unit-t \
+	pgsql_set_tracked_vars_regexp_unit-t \
+	pgsql_set_transaction_regexp_unit-t \
+	proxysql_utils_unit-t startup_gate_unit-t startup_gate_admin_lock_unit-t cluster_plugin_set_hash_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
-	pgsql_txn_state_unit-t \
+	pgsql_txn_state_unit-t pgsql_txn_end_classifier_unit-t \
+	pgsql_midbatch_reset_refused_unit-t \
+	pgsql_local_error_txn_state_unit-t \
+	pgsql_poison_rollback_cancel_unit-t \
+	pgsql_conn_liveness_unit-t \
 	sqlite3db_unit-t \
 	pgsql_error_helper_unit-t \
+	pgsql_native_params_unit-t \
+	pgsql_native_tier_policy_unit-t \
+	pgsql_native_read_burst_unit-t \
+	pgsql_native_scram_order_unit-t \
+	pgsql_native_send_failure_unit-t \
+	pgsql_native_startup_params_reset_unit-t \
+	pgsql_native_teardown_state_unit-t \
+	pgsql_native_unread_reply_unit-t \
+	pgsql_named_portal_teardown_unit-t \
+	pgsql_native_tls_verify_modes_unit-t \
+	pgsql_native_unix_endpoint_unit-t \
+	pgsql_native_cancel_endpoint_unit-t \
+	pgsql_native_connect_fallback_unit-t \
+	pgsql_native_affected_rows_unit-t \
+	pgsql_listen_pin_unit-t \
+	pgsql_dns_cache_all_ips_unit-t \
+	pgsql_native_tls_handover_unit-t \
 	charset_find_unit-t \
 	config_validation_unit-t \
 	config_write_unit-t \
 	query_processor_firewall_unit-t \
 	statistics_unit-t \
 	log_utils_unit-t \
+	log_filename_variables_unit-t \
 	listen_validator_unit-t \
+	listeners_manager_identity_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
+	pgsql_digest_bounds_unit-t \
 	ezoption_parser_unit-t \
 	gtid_trxid_interval_unit-t \
 	gtid_set_unit-t \
+	gtid_set_separator_unit-t \
+	gtid_session_track_overflow_unit-t \
 	gtid_parse_unit-t \
 	gtid_server_data_unit-t \
 	gtid_wire_contract_unit-t \
 	admin_bootstrap_users_unit-t \
+	admin_global_sql_lock_unit-t \
 	admin_disk_upgrade_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \
-	connection_max_age_unit-t \
-	cluster_sync_unit-t \
-	parsersql_unit-t \
-	pgsql_query_processor_unit-t \
+	connection_max_age_unit-t latency_awareness_selection_unit-t \
+	cluster_sync_unit-t cluster_admin_lock_order_unit-t \
+	parsersql_unit-t parsersql_v30_flow_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
+	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
+	parsersql_in_values_digest_unit-t \
+	query_digest_parser_parity_unit-t \
+	mysql_set_transaction_characteristics_unit-t \
+	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
 	mysql_resultset_framer_unit-t \
 	mysql_resultset_framer_traffic_unit-t \
 	pgsql_response_framer_unit-t \
 	pgsql_response_framer_traffic_unit-t \
-	ffto_state_machine_unit-t \
 	pgsql_reconcile_unit-t \
+	ffto_state_machine_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
@@ -611,7 +711,8 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
-UNIT_TESTS += worker_load_unit-t worker_waiter_unit-t
+UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t module_lifecycle_unit-t module_startup_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
+UNIT_TESTS += worker_scheduler_cost_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
@@ -631,8 +732,21 @@ include $(PROXYSQL_PATH)/test/tap/ai_genai_unit_tests.mk
 # mysqlx plugin source references chassis types, so none of these are
 # compilable under !PROXYSQL40.
 ifeq ($(PROXYSQL40),1)
+# AWS IAM backend authentication is compiled only with PROXYSQL40.
+UNIT_TESTS += aws_iam_policy_unit-t aws_iam_connection_config_unit-t \
+	aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t \
+	aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t \
+	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t \
+	mysql_backend_auth_in_use_unit-t
 # mysqlx + plugin + test_mysqlx unit tests: always built under PROXYSQL40=1.
 UNIT_TESTS += \
+	managed_configuration_contract_unit-t \
+	managed_configuration_lifecycle_unit-t \
+	managed_configuration_database_unit-t \
+	managed_discovery_unit-t \
+	managed_runtime_mysql_unit-t \
+	managed_runtime_pgsql_unit-t \
+	managed_engine_projection_txn_unit-t \
 	plugin_config_unit-t \
 	plugin_dispatch_unit-t \
 	plugin_manager_unit-t \
@@ -643,6 +757,13 @@ UNIT_TESTS += \
 	plugin_lifecycle_unit-t \
 	plugin_cli_unit-t \
 	plugin_runtime_views_unit-t \
+	plugin_server_discovery_abi_unit-t \
+	plugin_server_runtime_install_unit-t \
+	plugin_server_reconcile_unit-t \
+	plugin_server_materialization_unit-t \
+	aws_locality_config_unit-t \
+	aws_locality_selection_unit-t \
+	aws_locality_stats_unit-t \
 	plugin_listener_gate_unit-t \
 	plugin_mysql_config_unit-t \
 	plugin_router_chassis_contract_unit-t \
@@ -685,6 +806,7 @@ UNIT_TESTS += \
 	mysqlx_backend_auth_unit-t \
 	mysqlx_credential_verify_unit-t \
 	mysqlx_robustness_unit-t \
+	mysqlx_frontend_tls_unit-t \
 	mysqlx_tls_unit-t \
 	mysqlx_compression_unit-t
 
@@ -727,6 +849,13 @@ ifneq ($(UNAME_S),Darwin)
 	ALLOW_MULTI_DEF := -Wl,--allow-multiple-definition
 endif
 
+ifeq ($(UNAME_S),Linux)
+ifneq ($(PROXYSQL31),1)
+parsersql_v30_flow_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_query_digest_and_first_comment -Wl,--wrap=pgsql_query_digest_and_first_comment -Wl,--wrap=_Z28parsersql_command_type_mysqlPKci -Wl,--wrap=_Z28parsersql_command_type_pgsqlPKci
+endif
+gtid_local_cache_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN24MySQL_HostGroups_Manager11gtid_existsEP6MySrvCPcm
+endif
+
 # Standalone header-only tests: need tap.o + noise stubs, no libproxysql.a
 $(ODIR)/tap_noise_stubs.o: | $(ODIR)
 	@printf '#include <vector>\n#include <string>\n#include <mutex>\nstd::vector<std::string> noise_failures;\nstd::mutex noise_failure_mutex;\nextern "C" { void stop_noise_tools(){} int get_noise_tools_count(){return 0;} }\n' | \
@@ -763,6 +892,11 @@ plugin_manager_unit-t: plugin_manager_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
+managed_configuration_database_unit-t: managed_configuration_database_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(HIDDEN_HOOKS_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
 plugin_secrets_unit-t: plugin_secrets_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		$(IDIRS) -I$(PROXYSQL_PATH)/lib $(LDIRS) $(OPT) $(HIDDEN_HOOKS_LIBPROXYSQL) $(STATIC_LIBS) \
@@ -784,6 +918,32 @@ plugin_dispatch_unit-t: plugin_dispatch_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUG
 
 plugin_runtime_views_unit-t: plugin_runtime_views_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_server_discovery_abi_unit-t: plugin_server_discovery_abi_unit-t.cpp $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(FAKE_PLUGIN_ABI13_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		-DPROXYSQL_FAKE_PLUGIN2_PATH=\"$(FAKE_PLUGIN2_SO)\" \
+		-DPROXYSQL_FAKE_PLUGIN_ABI13_PATH=\"$(FAKE_PLUGIN_ABI13_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_server_runtime_install_unit-t: plugin_server_runtime_install_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_server_reconcile_unit-t: plugin_server_reconcile_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+plugin_server_materialization_unit-t: plugin_server_materialization_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
@@ -1111,6 +1271,12 @@ mysqlx_robustness_unit-t: mysqlx_robustness_unit-t.cpp $(PROXYSQL_PATH)/plugins/
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
+mysqlx_frontend_tls_unit-t: mysqlx_frontend_tls_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
+
 mysqlx_tls_unit-t: mysqlx_tls_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
@@ -1133,6 +1299,11 @@ mysql_resolution_unit-t: mysql_resolution_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_n
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+mariadb_tls_server_name_unit-t: mariadb_tls_server_name_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(LDIRS) $(OPT) \
+		-Wl,-Bstatic -lmariadbclient -Wl,-Bdynamic -lssl -lcrypto -lz -lpthread -ldl \
+		$(LWGCOV) -o $@
 
 plugin_query_hook_unit-t: plugin_query_hook_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
@@ -1230,14 +1401,96 @@ $(AI_GENAI_UNIT_TESTS): %: %.cpp $(GENAI_TEST_ARCHIVE) $(TEST_HELPERS_OBJ) $(LIB
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
 ifeq ($(UNAME_S),Linux)
+# Reproduce the worker check-to-wait window without production test hooks.
+genai_thread_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZNSt18condition_variable4waitERSt11unique_lockISt5mutexE \
+	-Wl,--wrap=_ZNSt18condition_variable10notify_allEv -Wl,--wrap=pthread_mutex_lock
+
 # Let the RSA unit test observe the exact flock attempt without a production hook.
 caching_sha2_rsa_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=flock
 
+# Observe the Connector/C handshake boundary and credential cleansing without a
+# production-only test hook.
+aws_iam_connection_secret_unit-t: ALLOW_MULTI_DEF += \
+	-Wl,--wrap=mysql_options \
+	-Wl,--wrap=mysql_real_connect_start \
+	-Wl,--wrap=mysql_close_no_command \
+	-Wl,--wrap=OPENSSL_cleanse
+endif
+
+aws_iam_provider_boundary_unit-t: aws_iam_provider_boundary_unit-t.cpp \
+	$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) -ldl \
+		$(ALLOW_MULTI_DEF) -o $@
+
+# The completion inbox is intentionally independent of sessions and the core
+# archive so its producer/lifetime contract can run under TSan in isolation.
+aws_iam_completion_queue_unit-t: aws_iam_completion_queue_unit-t.cpp \
+	$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(OPT) \
+		-lpthread -lcrypto -o $@
+
+aws_locality_policy_unit-t: aws_locality_policy_unit-t.cpp \
+		$(PROXYSQL_PATH)/lib/Aws_Locality_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Aws_Locality_Manager.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		$(IDIRS) $(OPT) -lpthread -ldl -o $@
+
+aws_locality_manager_unit-t: aws_locality_manager_unit-t.cpp \
+		$(PROXYSQL_PATH)/lib/Aws_Locality_Manager.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Aws_Locality_Manager.cpp \
+		$(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		$(IDIRS) $(OPT) -lpthread -ldl -o $@
+
+test_aws_iam_metrics-t: ../test_aws_iam_metrics-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(TEST_HELPERS_OBJ) -I$(TEST_HELPERS_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+test_aws_iam_backend_auth-t: ../test_aws_iam_backend_auth-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) -DAWS_IAM_MYSQL_SERVER_PATH=\"$(PROXYSQL_PATH)/test/deps/aws_iam_mysql_server/aws_iam_mysql_server-t\" \
+		$< $(TEST_HELPERS_OBJ) -I$(TEST_HELPERS_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+aws_locality_stats_unit-t: aws_locality_stats_unit-t.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+ifeq ($(UNAME_S),Linux)
+aws_iam_session_state_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_real_connect_start -pthread
+aws_iam_pool_unit-t: ALLOW_MULTI_DEF += \
+	-Wl,--wrap=mysql_change_user_start \
+	-Wl,--wrap=mysql_real_connect_start \
+	-Wl,--wrap=pthread_create
+aws_iam_failure_unit-t: ALLOW_MULTI_DEF += \
+	-Wl,--wrap=mysql_real_connect_start \
+	-Wl,--wrap=_ZN14MySQL_Protocol16generate_pkt_ERREbPPvPjhtPKcS4_b
+aws_iam_kill_helper_unit-t: ALLOW_MULTI_DEF += \
+	-Wl,--wrap=mysql_options \
+	-Wl,--wrap=mysql_real_connect \
+	-Wl,--wrap=mysql_query \
+	-Wl,--wrap=mysql_close \
+	-Wl,--wrap=OPENSSL_cleanse
 # --wrap only rewrites references resolved by this link. Keep these tests on
 # libproxysql.a so their wrappers can reach core-library calls.
-worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
+# AWS IAM wrap tests also need the static archive for their --wrap link flags
+# to reach core-library calls (same requirement as caching_sha2_rsa_unit-t).
+worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb -Wl,--wrap=_ZN13MySQL_Session7handlerEv -Wl,--wrap=_ZN13PgSQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb
+ifeq ($(PROXYSQL31),1)
+worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13PgSQL_Session7handlerEb
+else
+worker_waiter_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13PgSQL_Session7handlerEv
+endif
+worker_scheduler_cost_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=_ZN13MySQL_Session8run_stepE23PgSQL_Pool_Acquire_Modeb
 
-STATIC_LIBPROXYSQL_TESTS := caching_sha2_rsa_unit-t worker_waiter_unit-t
+pgsql_result_flush_allocation_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=free -Wl,--wrap=PQgetCopyData
+
+STATIC_LIBPROXYSQL_TESTS := genai_thread_unit-t pgsql_result_flush_allocation_unit-t caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
+	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
+	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
+	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
+STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive
 
@@ -1254,6 +1507,40 @@ vendored_openssl_version_unit-t: private OPT += -DPROXYSQL_VENDORED_OPENSSL_VERS
 
 # This test includes the cache source to inject allocator failure locally.
 pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
+
+# The bounds fixture exercises the production tokenizer's internal compression stages.
+pgsql_digest_bounds_unit-t: $(PROXYSQL_PATH)/lib/pgsql_tokenizer.cpp
+ifeq ($(UNAME_S),Linux)
+ifeq ($(WITHASAN),1)
+pgsql_digest_bounds_unit-t: private OPT += -fsanitize=pointer-compare,pointer-subtract
+endif
+endif
+
+# The allocation fixture includes the protocol source for failure injection.
+# Compile libpq's private-header access separately so its configuration macros
+# never cross into ProxySQL's headers. The other platforms skip these probes.
+PGSQL_RESULT_LIBPQ_FIXTURE_OBJ :=
+ifeq ($(UNAME_S),Linux)
+PGSQL_RESULT_LIBPQ_FIXTURE_OBJ := $(ODIR)/pgsql_result_libpq_fixture.o
+$(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ): pgsql_result_libpq_fixture.cpp pgsql_result_libpq_fixture.h | $(ODIR)
+	$(CXX) -c -o $@ $< $(OPT) $(IDIRS)
+endif
+
+pgsql_result_flush_allocation_unit-t: pgsql_result_flush_allocation_unit-t.cpp \
+	$(PROXYSQL_PATH)/lib/PgSQL_Protocol.cpp $(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ) \
+	$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ) $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
+		$(ALLOW_MULTI_DEF) -o $@
+
+# Instrument the real call sites: remove_index_fast(-1) can otherwise hide a
+# null member call. Static linking leaves the archive's stream objects unused.
+backend_unplug_unit-t: backend_unplug_unit-t.cpp \
+	$(PROXYSQL_PATH)/lib/mysql_data_stream.cpp $(PROXYSQL_PATH)/lib/PgSQL_Data_Stream.cpp \
+	$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/lib/mysql_data_stream.cpp $(PROXYSQL_PATH)/lib/PgSQL_Data_Stream.cpp \
+		$(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) -fsanitize=null -fno-sanitize-recover=null \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against
@@ -1272,6 +1559,43 @@ pgsql_query_cache_allocation_unit-t: $(PROXYSQL_PATH)/lib/PgSQL_Query_Cache.cpp
 .SILENT: clean
 clean:
 	rm -rf $(ODIR)
-	rm -f *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ROUTER_CONTRACT_FAKE_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO)
+	rm -f $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) *-t $(FAKE_PLUGIN_SO) $(FAKE_PLUGIN2_SO) $(ROUTER_CONTRACT_FAKE_SO) $(FAKE_PLUGIN_DEBUG_MISMATCH_SO) \
+		$(FAKE_PLUGIN_ABI13_SO)
 	rm -f $(STAGED_LIBPROXYSQLSO) $(addsuffix .tmp,$(STAGED_LIBPROXYSQLSO))
 	rm -f $(PROXYSQL_LDIR)/libproxysql.so
+
+MANAGED_FAKE_PROVIDER2_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_managed_configuration2.so
+MANAGED_FAKE_PROVIDER_SO := $(TEST_HELPERS_DIR)/libproxysql_fake_managed_configuration.so
+$(MANAGED_FAKE_PROVIDER_SO): $(TEST_HELPERS_DIR)/fake_managed_configuration_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS)
+
+$(MANAGED_FAKE_PROVIDER2_SO): $(TEST_HELPERS_DIR)/fake_managed_configuration_plugin.cpp $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
+	$(CXX) -shared -fPIC -o $@ $< $(STDCPP) $(PSQL40) $(PSQLDEBUG) $(IDIRS) \
+		-DPROXYSQL_MANAGED_FAKE_NAME=\"fake_managed2\"
+
+managed_configuration_lifecycle_unit-t: managed_configuration_lifecycle_unit-t.cpp $(MANAGED_FAKE_PROVIDER_SO) $(MANAGED_FAKE_PROVIDER2_SO) $(FAKE_PLUGIN_ABI13_SO) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-DPROXYSQL_MANAGED_FAKE_PROVIDER_PATH=\"$(MANAGED_FAKE_PROVIDER_SO)\" \
+		-DPROXYSQL_MANAGED_FAKE_PROVIDER2_PATH=\"$(MANAGED_FAKE_PROVIDER2_SO)\" \
+		-DPROXYSQL_MANAGED_OLD_PLUGIN_PATH=\"$(FAKE_PLUGIN_ABI13_SO)\" \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -ldl -pthread -o $@
+
+managed_discovery_unit-t: managed_discovery_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
+# Exercise the real TLS reload operation, replacing only its generic unit stub.
+$(ODIR)/managed_runtime_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
+	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -I$(PROXYSQL_PATH)/test -Wall -DProxySQL_create_or_load_TLS=unused_managed_tls_stub
+
+managed_runtime_mysql_unit-t: managed_runtime_mysql_unit-t.cpp $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/src/obj/proxy_tls.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(PROXYSQL_PATH)/src/obj/proxy_tls.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+managed_runtime_pgsql_unit-t: managed_runtime_pgsql_unit-t.cpp $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO) $(PROXYSQL_PATH)/src/obj/proxy_tls.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(PROXYSQL_PATH)/src/obj/proxy_tls.o \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@

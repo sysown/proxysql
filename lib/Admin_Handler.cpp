@@ -1,3 +1,4 @@
+#include "AdminResponseDrain.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -21,6 +22,7 @@ using json = nlohmann::json;
 #include "PgSQL_HostGroups_Manager.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
+#include "proxysql_admin_global_sql_lock.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -130,6 +132,8 @@ extern int admin___web_verbosity;
 extern char * proxysql_version;
 
 #include "proxysql_find_charset.h"
+#include "ProxySQL_StartupGate.h"
+#include "ProxySQL_ClusterPluginHash.h"
 
 extern int admin_load_main_;
 extern bool admin_nostart_;
@@ -778,6 +782,11 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		bool rc = false;
 
 		if (admin_nostart_) {
+#ifdef PROXYSQL40
+			// Close the startup gate before releasing the main thread into
+			// phase 3, so no other Admin command runs during the plugin lifecycle.
+			proxysql_startup_gate_close_for_start();
+#endif /* PROXYSQL40 */
 			rc = __sync_bool_compare_and_swap(&GloVars.global.nostart, 1, 0);
 		}
 
@@ -858,16 +867,19 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (GloVars.prometheus_registry)
 			GloVars.prometheus_registry->ResetCounters();
 
-		// Signal shutdown and wait for completion
+		// Teardown drains this Admin client before deleting SPA. Acknowledge
+		// the request and return so the session can flush its reply and exit;
+		// waiting here for reload would deadlock against shutdown_threads().
+		// STOP rebuilds Admin in --no-start mode; clients reconnect afterward.
+		SPA->send_ok_msg_to_client(sess, "ProxySQL stop requested", 0, query_no_space);
+		// Admin exits its I/O loop once shutdown is set. Drain both protocol
+		// buffers, including TLS ciphertext, while this client is still live.
+		if (!proxysql_drain_admin_response(*sess->client_myds, 1000)) {
+			proxy_warning("STOP response did not fully drain before shutdown\n");
+		}
 		__sync_bool_compare_and_swap(&glovars.shutdown, 0, 1);
 		GloMTH->signal_all_threads(0);
 		GloPTH->signal_all_threads(0);
-
-		while (__sync_fetch_and_add(&glovars.shutdown, 0) == 1) {
-			usleep(1000);
-		}
-
-		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 
 		return false;
 	}
@@ -1103,7 +1115,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		proxy_info("Received %s command\n", query_no_space);
 		proxy_warning("A misconfigured configdb will cause undefined behaviors\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		SPA->flush_configdb();
+		SPA->flush_configdb_locked();
 		SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 		return false;
 	}
@@ -1662,7 +1674,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -1730,7 +1742,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -1802,7 +1814,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_info("Tried to load invalid user %s\n", name);
 					char *s=(char *)"Invalid name %s";
 					char *m=(char *)malloc(strlen(s)+strlen(name)+1);
-					sprintf(m,s,name);
+					snprintf(m,strlen(s)+strlen(name)+1,s,name);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -1880,7 +1892,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 #endif /* PROXYSQLCLICKHOUSE */
 
-	if ((query_no_space_length>17) && ( (!strcasecmp("SAVE MYSQL DIGEST TO DISK", query_no_space) ) )) {
+	if ((query_no_space_length>17) && ( !strcasecmp("SAVE MYSQL DIGEST TO DISK", query_no_space)  )) {
 		proxy_info("Received %s command\n", query_no_space);
         unsigned long long curtime1=monotonic_time();
 		int r1 = SPA->FlushDigestTableToDisk<SERVER_TYPE_MYSQL>(SPA->statsdb_disk);
@@ -1892,7 +1904,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		return false;
 	}
 
-	if ((query_no_space_length > 17) && ((!strcasecmp("SAVE PGSQL DIGEST TO DISK", query_no_space)))) {
+	if ((query_no_space_length > 17) && (!strcasecmp("SAVE PGSQL DIGEST TO DISK", query_no_space))) {
 		proxy_info("Received %s command\n", query_no_space);
 		unsigned long long curtime1 = monotonic_time();
 		int r1 = SPA->FlushDigestTableToDisk<SERVER_TYPE_PGSQL>(SPA->statsdb_disk);
@@ -1992,7 +2004,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2357,7 +2369,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2443,6 +2455,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(LOAD_PGSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->pgsql_servers_wrlock();
+				// Always a plain OK, as in v3.0.11: the LOAD never fails or is
+				// partially rejected (maintainer decision, #6448).
 				SPA->load_pgsql_servers_to_runtime();
 				SPA->pgsql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded pgsql servers to RUNTIME\n");
@@ -2453,6 +2467,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			if (is_admin_command_or_alias(LOAD_MYSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length)) {
 				ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
 				SPA->mysql_servers_wrlock();
+				// Always a plain OK, as in v3.0.11: the LOAD never fails or is
+				// partially rejected (maintainer decision, #6448).
 				SPA->load_mysql_servers_to_runtime();
 				SPA->mysql_servers_wrunlock();
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
@@ -2498,7 +2514,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2562,10 +2578,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			// a race condition
 			// load_proxysql_servers_to_runtime() calls ProxySQL_Cluster::load_servers_list()
 			// that then calls ProxySQL_Cluster_Nodes::load_servers_list(), holding a mutex
-			pthread_mutex_unlock(&SPA->sql_query_global_mutex);
-			SPA->load_proxysql_servers_to_runtime(true);
-			// we re-acquired the mutex because it will be released by the calling function
-			pthread_mutex_lock(&SPA->sql_query_global_mutex);
+			// The release window restores exactly the levels it released, because
+			// the mutex will be released by the calling function; see
+			// include/proxysql_admin_global_sql_lock.h.
+			{
+				proxysql_admin_global_sql_release_scope released(SPA->sql_query_global_mutex);
+				SPA->load_proxysql_servers_to_runtime(true);
+			}
 			//SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ProxySQL servers to RUNTIME\n");
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
@@ -2588,10 +2607,13 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			// a race condition
 			// save_proxysql_servers_runtime_to_database() calls ProxySQL_Cluster::dump_table_proxysql_servers()
 			// that then holds a mutex
-			pthread_mutex_unlock(&SPA->sql_query_global_mutex);
-			SPA->save_proxysql_servers_runtime_to_database(false);
-			// we re-acquired the mutex because it will be released by the calling function
-			pthread_mutex_lock(&SPA->sql_query_global_mutex);
+			// The release window restores exactly the levels it released, because
+			// the mutex will be released by the calling function; see
+			// include/proxysql_admin_global_sql_lock.h.
+			{
+				proxysql_admin_global_sql_release_scope released(SPA->sql_query_global_mutex);
+				SPA->save_proxysql_servers_runtime_to_database(false);
+			}
 			//SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved ProxySQL servers from RUNTIME\n");
 			SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
@@ -2622,7 +2644,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2666,7 +2688,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2726,6 +2748,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			const bool pgsql = query_no_space[5] == 'P' || query_no_space[5] == 'p';
+			if ((pgsql && !GloPgQPro) || (!pgsql && !GloMyQPro)) {
+				SPA->send_error_msg_to_client(sess, "Global Query Processor not started: cannot save unavailable runtime state");
+				return false;
+			}
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 				SPA->save_pgsql_firewall_from_runtime(false);
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved pgsql firewall from RUNTIME\n");
@@ -2771,7 +2798,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -2803,11 +2830,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			char* err = NULL;
+			std::string skipped_rules_warning {};
 
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p')
-				err = SPA->load_pgsql_query_rules_to_runtime();
+				err = SPA->load_pgsql_query_rules_to_runtime(nullptr, nullptr, "", 0, &skipped_rules_warning);
 			else
-				err = SPA->load_mysql_query_rules_to_runtime();
+				err = SPA->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, true, &skipped_rules_warning);
 
 			if (err==NULL) {
 				if (query_no_space[5] == 'P' || query_no_space[5] == 'p')
@@ -2815,7 +2843,12 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				else
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to RUNTIME\n");
 
-				SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
+				// A rule skipped for an invalid client_addr/proxy_addr is still a
+				// successful load, but the client must not get a bare OK: the
+				// warning message names the skipped rule_ids (issue #6426).
+				SPA->send_ok_msg_to_client(sess,
+					skipped_rules_warning.empty() ? NULL : skipped_rules_warning.c_str(),
+					0, query_no_space);
 			} else {
 				SPA->send_error_msg_to_client(sess, err);
 			}
@@ -2842,6 +2875,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin* SPA = (ProxySQL_Admin*)pa;
+			const bool pgsql = query_no_space[5] == 'P' || query_no_space[5] == 'p';
+			if ((pgsql && !GloPgQPro) || (!pgsql && !GloMyQPro)) {
+				SPA->send_error_msg_to_client(sess, "Global Query Processor not started: cannot save unavailable runtime state");
+				return false;
+			}
 			if (query_no_space[5] == 'P' || query_no_space[5] == 'p') {
 				SPA->save_pgsql_query_rules_from_runtime(false);
 				SPA->save_pgsql_query_rules_fast_routing_from_runtime(false);
@@ -2898,7 +2936,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
 					char *s=(char *)"Unable to open or parse config file %s";
 					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
+					snprintf(m,strlen(s)+strlen(GloVars.config_file)+1,s,GloVars.config_file);
 					SPA->send_error_msg_to_client(sess, m);
 					free(m);
 				}
@@ -3123,7 +3161,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 
 		switch (hdr.type) {
-		case PG_PKT_STARTUP_V2:
+		case PG_PKT_STARTUP_UNSUPPORTED:
 		case PG_PKT_STARTUP:
 		case PG_PKT_CANCEL:
 		case PG_PKT_SSLREQ:
@@ -3175,8 +3213,30 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
-	// add global mutex, see bug #1188
-	pthread_mutex_lock(&pa->sql_query_global_mutex);
+	// add global mutex, see bug #1188. The depth counter records the
+	// per-thread ownership so every re-entrant door of the same mutex
+	// (plugin services reached from this statement) re-enters instead of
+	// double-locking the non-recursive mutex; see
+	// include/proxysql_admin_global_sql_lock.h.
+#ifdef PROXYSQL40
+	// Plugin init/start/runtime_ready may call back into Admin and the
+	// Hostgroup Manager. Wait for the plugin lifecycle to finish before running
+	// any command, and do so before taking sql_query_global_mutex, so a plugin
+	// callback that needs it cannot be blocked by a waiting session.
+	//
+	// The gate is re-checked once the mutex is held: with --no-start, a
+	// session queued on the mutex while PROXYSQL START closed the gate must not
+	// run during the plugin lifecycle, or plugin init() (which can need this
+	// mutex while holding the plugin manager) and this statement (which can
+	// need the plugin manager while holding this mutex) deadlock. Such a
+	// session releases the mutex and waits for the gate to reopen.
+	proxysql_startup_gate_lock_for_admin(
+		[pa] { proxysql_admin_global_sql_lock(pa->sql_query_global_mutex); },
+		[pa] { proxysql_admin_global_sql_unlock(pa->sql_query_global_mutex); },
+		[] { return glovars.shutdown != 0; });
+#else
+	proxysql_admin_global_sql_lock(pa->sql_query_global_mutex);
+#endif /* PROXYSQL40 */
 
 		if (strcasestr(query_no_space, "INFORMATION_SCHEMA.TABLES") != nullptr) {
 			const char* info_table_name = "SELECT table_name FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = DATABASE() AND table_name = '";
@@ -3480,7 +3540,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES) - 1)) {
+		if (GloMyQPro && !strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES) - 1)) {
 			GloMyQPro->wrlock();
 			resultset = GloMyQPro->get_current_query_rules_inner();
 			if (resultset == NULL) {
@@ -3500,7 +3560,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				goto __run_query;
 			}
 		}
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
+		if (GloMyQPro && !strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
 			GloMyQPro->wrlock();
 			resultset = GloMyQPro->get_current_query_rules_fast_routing_inner();
 			if (resultset == NULL) {
@@ -3523,7 +3583,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	}
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES) - 1)) {
+		if (GloPgQPro && !strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES) - 1)) {
 			GloPgQPro->wrlock();
 			resultset = GloPgQPro->get_current_query_rules_inner();
 			if (resultset == NULL) {
@@ -3546,7 +3606,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 				goto __run_query;
 			}
 		}
-		if (!strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
+		if (GloPgQPro && !strncasecmp(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING, query_no_space, sizeof(CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING) - 1)) {
 			GloPgQPro->wrlock();
 			resultset = GloPgQPro->get_current_query_rules_fast_routing_inner();
 			if (resultset == NULL) {
@@ -3595,7 +3655,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing
 	// we just return the count
 	if (strcmp("SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing", query_no_space)==0) {
-		int cnt = GloMyQPro->get_current_query_rules_fast_routing_count();
+		int cnt = GloMyQPro ? GloMyQPro->get_current_query_rules_fast_routing_count() : 0;
 		l_free(query_length,query);
 		char buf[256];
 		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
@@ -3608,7 +3668,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	// SELECT COUNT(*) FROM runtime_pgsql_query_rules_fast_routing
 	// we just return the count
 	if (strcmp("SELECT COUNT(*) FROM runtime_pgsql_query_rules_fast_routing", query_no_space) == 0) {
-		int cnt = GloPgQPro->get_current_query_rules_fast_routing_count();
+		int cnt = GloPgQPro ? GloPgQPro->get_current_query_rules_fast_routing_count() : 0;
 		l_free(query_length, query);
 		char buf[256];
 		snprintf(buf, sizeof(buf), "SELECT %d AS 'COUNT(*)'", cnt);
@@ -3646,7 +3706,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_mysql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					int r1 = GloMyQPro->purge_query_digests(true, false);
+					int r1 = GloMyQPro ? GloMyQPro->purge_query_digests(true, false) : 0;
 					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query=false;
 					goto __run_query;
@@ -3680,7 +3740,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 					SPA->admindb->execute("DELETE FROM stats.stats_pgsql_query_digest_reset");
 					SPA->vacuum_stats(true);
 					// purge the digest map, asynchronously, in single thread
-					int r1 = GloPgQPro->purge_query_digests(true, false);
+					int r1 = GloPgQPro ? GloPgQPro->purge_query_digests(true, false) : 0;
 					SPA->send_ok_msg_to_client(sess, NULL, r1, query_no_space);
 					run_query = false;
 					goto __run_query;
@@ -3702,17 +3762,17 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 			enum SERVER_TYPE type = std::get<1>(result);
 			time_t last_seen = std::get<2>(result);
 
-			if (last_seen > 0) {
-				if (type == SERVER_TYPE_MYSQL) {
-					ret = GloMyQPro->purge_query_digests(true, false, last_seen);
-				} else if (type == SERVER_TYPE_PGSQL) {
-					ret = GloPgQPro->purge_query_digests(true, false, last_seen);
-				}
-
-				pa->send_ok_msg_to_client(sess, NULL, ret, query_no_space);
-			} else {
+			if (last_seen <= 0) {
 				pa->send_error_msg_to_client(sess, "Invalid timestamp");
+				run_query = false;
+				goto __run_query;
 			}
+			if (type == SERVER_TYPE_MYSQL && GloMyQPro) {
+				ret = GloMyQPro->purge_query_digests(true, false, last_seen);
+			} else if (type == SERVER_TYPE_PGSQL && GloPgQPro) {
+				ret = GloPgQPro->purge_query_digests(true, false, last_seen);
+			}
+			pa->send_ok_msg_to_client(sess, NULL, ret, query_no_space);
 
 			run_query = false;
 			goto __run_query;
@@ -4379,6 +4439,23 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
+#ifdef PROXYSQL40
+	// Cluster peer identity: version and plugin-set hash in one row. Must
+	// precede the "SELECT @@version" prefix match below. The hash is empty
+	// until the plugin lifecycle has finished.
+	if (query_no_space_length == sizeof(PROXYSQL_CLUSTER_PEER_IDENTITY_QUERY) - 1 &&
+		!strncasecmp(PROXYSQL_CLUSTER_PEER_IDENTITY_QUERY, query_no_space, query_no_space_length)) {
+		l_free(query_length,query);
+		const std::string q = std::string("SELECT '") +
+			(GloMyLdapAuth == nullptr ? PROXYSQL_VERSION : PROXYSQL_VERSION "-Enterprise") +
+			"' AS '@@version', '" + proxysql_cluster_local_plugin_set_hash() +
+			"' AS '@@proxysql_plugin_set_hash'";
+		query = l_strdup(q.c_str());
+		query_length = q.size() + 1;
+		goto __run_query;
+	}
+#endif /* PROXYSQL40 */
+
 	if (!strncasecmp("SELECT @@version", query_no_space, sizeof("SELECT @@version") - 1)) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS '@@version'";
@@ -4682,7 +4759,7 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		if (error) {
 			proxy_error("Error: %s\n", error);
 			char buf[1024];
-			sprintf(buf,"%s", error);
+			snprintf(buf,sizeof(buf),"%s", error);
 			SPA->send_error_msg_to_client(sess, buf);
 			run_query=false;
 		} else if (resultset) {
@@ -5162,7 +5239,11 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 		SQLite3_result* resultset = new SQLite3_result(1);
 		resultset->add_column_definition(SQLITE_TEXT,"Data");
 
-		if (__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
+		if (GloVars.prometheus_registry) {
+			// Collected with the global SQL mutex held. The Cluster node metrics
+			// refresh reached from here only tries 'ProxySQL_Cluster_Nodes::mutex'
+			// (see ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics()), so
+			// this statement never waits for a Cluster peer thread.
 			auto result = pa->serial_exposer({});
 			pta[0] = (char*)result.second.c_str();
 			resultset->add_row(pta);
@@ -5566,7 +5647,7 @@ __run_query:
 		} else {
 			char *a = (char *)"ProxySQL Admin Error: ";
 			char *new_msg = (char *)malloc(strlen(error)+strlen(a)+1);
-			sprintf(new_msg, "%s%s", a, error);
+			snprintf(new_msg, strlen(error)+strlen(a)+1, "%s%s", a, error);
 
 			admin_send_resultset(sess, resultset, new_msg, affected_rows, query);
 
@@ -5575,19 +5656,9 @@ __run_query:
 		}
 		delete resultset;
 	}
-	if (run_query == true) {
-		pthread_mutex_unlock(&pa->sql_query_global_mutex);
-	} else {
-		// The admin module may have already been freed in case of "PROXYSQL STOP"
-		if (query_no_space && strcasecmp(query_no_space, "PROXYSQL STOP") == 0) {
-			// Command is "PROXYSQL STOP"
-			if (admin_nostart_ && __sync_fetch_and_add((uint8_t*)&GloVars.global.nostart, 0)) {
-				pthread_mutex_unlock(&pa->sql_query_global_mutex);
-			}
-		} else {
-			pthread_mutex_unlock(&pa->sql_query_global_mutex);
-		}
-	}
+	// Main drains Admin clients before destroying this object, including
+	// the session issuing STOP. Every statement releases its own acquisition.
+	proxysql_admin_global_sql_unlock(pa->sql_query_global_mutex);
 
 	if (query_no_space) {
 		l_free(query_length, query_no_space);

@@ -49,8 +49,11 @@ static thread_local uint8_t seeded = 0;
  * Important:
  * - Uses CLOCK_MONOTONIC to reduce susceptibility to wall-clock changes.
  * - Not cryptographically secure. Do not use for security-sensitive code.
+ * - Kept out of line (and cold): inlined into xoshiro128_plus_plus() it makes
+ *   that function too big to inline in its callers, which then pay a full
+ *   call frame and stack-protector check on every draw.
  */
-static void init_seed(void) {
+__attribute__((noinline, cold)) static void init_seed(void) {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 
@@ -101,8 +104,8 @@ static inline uint32_t rotl(uint32_t x, int k) {
  *
  * @return A 32-bit pseudo-random number.
  */
-static uint32_t xoshiro128_plus_plus(void) {
-	if (!seeded) init_seed();
+static inline uint32_t xoshiro128_plus_plus(void) {
+	if (__builtin_expect(!seeded, 0)) init_seed();
 
 	const uint32_t result = rotl(s[0] + s[3], 7) + s[0];
 	const uint32_t t = s[1] << 9;
@@ -560,18 +563,10 @@ typedef struct _IP_CIDR_t {
 } IP_CIDR_t;
 
 /**
- * @brief Does @p value use the CIDR form, as opposed to being a plain address?
- *
- * '/' on its own is not enough to decide. A query rule's proxy_addr is also how
- * a Unix listener identifies itself -- MySQL_Thread.cpp copies ifi->address
- * straight into proxy_addr.addr, and for a socket listener that is the socket
- * path, e.g. "/tmp/proxysql.sock". Those values are compared literally and must
- * keep working, so a value that begins with '/' is a path rather than a prefix.
- *
- * Every other value containing '/' can only be a prefix list, since '/' cannot
- * occur in a rendered address.
+ * @brief CIDR-vs-literal classification for query rule address values lives in
+ *   query_processor.h (qp_addr_value_is_cidr) where it is field-aware: a
+ *   proxy_addr Unix listener path may be relative and still not be a prefix.
  */
-bool ip_cidr_spec_looks_like_prefix(const char *value);
 
 /**
  * @brief Parse one "address/prefix_len" token into @p out.
@@ -608,7 +603,9 @@ bool ip_cidr_list_is_valid(const char *spec);
  * @brief Numeric containment test: is @p sa inside @p cidr ?
  *
  * A prefix never matches an address of the other family, so an IPv4 rule
- * cannot match an IPv6 client and vice versa.
+ * cannot match an IPv6 client and vice versa. The one exception is an
+ * IPv4-mapped IPv6 client (::ffff:a.b.c.d): it is an IPv4 client, and an IPv4
+ * prefix is matched against its embedded IPv4 address.
  */
 bool ip_cidr_contains(const IP_CIDR_t *cidr, const struct sockaddr *sa);
 
@@ -621,7 +618,12 @@ bool ip_cidr_list_contains(const IP_CIDR_t *list, int count, const struct sockad
 
 std::string trim(const std::string& s);
 char* escape_string_single_quotes_and_backslashes(char* input, bool free_it);
-const char* escape_string_backslash_spaces(const char* input);
+// Appends `input` to `out`, escaped for a PostgreSQL StartupMessage 'options' value: every
+// whitespace character (space, \t, \n, \v, \f, \r -- the set the backend's pg_split_opts()
+// splits on) and every backslash is prefixed with a backslash, all other characters are
+// copied unchanged. The value therefore always stays one token. `out` is appended to, not
+// replaced.
+void pg_append_escaped_option_value(std::string& out, const char* input);
 time_t monotonic_time_to_realtime(time_t mt);
 time_t realtime_to_monotonic_time(time_t rt);
 

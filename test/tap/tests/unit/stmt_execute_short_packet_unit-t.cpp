@@ -14,6 +14,10 @@
  * bind decoding, so the path is not reachable through the protocol anymore;
  * this test exercises the function directly.
  *
+ * It also checks that a packet with new_params_bound_flag set but too short
+ * for the 2-byte type of every parameter is rejected, instead of reading the
+ * types past the end of the packet (GHSA-p5xc-69qx-m4q5).
+ *
  * @see https://github.com/sysown/proxysql/issues/6233
  * @see https://github.com/sysown/proxysql/issues/6229
  */
@@ -124,6 +128,40 @@ void test_cached_metadata(MySQL_STMT_Global_info* stmt_info) {
 }
 
 /**
+ * @brief COM_STMT_EXECUTE for the 2-parameter statement with the NULL bitmap and
+ *   new_params_bound_flag=1, but only the first of the two parameter types.
+ */
+constexpr size_t kShortTypesPktSize = 14 + 1 + 1 + 2;
+
+PtrSize_t build_short_types_execute_pkt() {
+	PtrSize_t pkt;
+	pkt.size = kShortTypesPktSize;
+	pkt.ptr = malloc(pkt.size);
+	unsigned char* p = static_cast<unsigned char*>(pkt.ptr);
+	fill_truncated_execute_pkt(p);
+	p[0] = kShortTypesPktSize - 4; // payload length
+	p[14] = 0x03;                  // NULL bitmap: both parameters are NULL
+	p[15] = 1;                     // new_params_bound_flag
+	p[16] = MYSQL_TYPE_LONG;       // type of parameter 0; parameter 1 is missing
+	p[17] = 0;
+	return pkt;
+}
+
+void test_short_type_block(MySQL_STMT_Global_info* stmt_info) {
+	MySQL_Protocol protocol;
+	PtrSize_t pkt = build_short_types_execute_pkt();
+	stmt_execute_metadata_t* stmt_meta = nullptr;
+
+	// Without effective_types the types are read from the packet. With both
+	// parameters NULL no value is read, so the old code accepted the packet.
+	stmt_execute_metadata_t* ret = protocol.get_binds_from_pkt(pkt, stmt_info, &stmt_meta, nullptr);
+	ok(ret == nullptr, "short type block: packet missing a parameter type is rejected");
+	ok(pkt.size == kShortTypesPktSize && static_cast<unsigned char*>(pkt.ptr)[16] == MYSQL_TYPE_LONG,
+		"short type block: packet left to the caller, not freed by get_binds_from_pkt()");
+	l_free(pkt.size, pkt.ptr);
+}
+
+/**
  * @brief Re-executes the test once with jemalloc junk filling enabled.
  * @details Without junk filling, jemalloc leaves freed memory untouched, so a
  *   packet or cached metadata wrongly freed by get_binds_from_pkt() would still
@@ -152,7 +190,7 @@ void reexec_with_junk_filling(char** argv) {
 int main(int /*argc*/, char** argv) {
 	reexec_with_junk_filling(argv);
 
-	plan(7);
+	plan(9);
 
 	test_init_minimal();
 
@@ -164,6 +202,7 @@ int main(int /*argc*/, char** argv) {
 	if (stmt_info != nullptr) {
 		test_first_execute(stmt_info);   // 3 tests
 		test_cached_metadata(stmt_info); // 3 tests
+		test_short_type_block(stmt_info); // 2 tests
 		delete stmt_info;
 	}
 	if (stmt) {

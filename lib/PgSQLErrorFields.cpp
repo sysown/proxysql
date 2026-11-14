@@ -7,6 +7,8 @@ PgSQLErrorResult pgsql_parse_error_response(const unsigned char* payload, size_t
     result.sqlstate[0] = '\0';
     result.message = nullptr;
     result.message_len = 0;
+    result.severity = nullptr;
+    result.severity_len = 0;
 
     if (!payload || len == 0) return result;
     result.parsed = true;
@@ -28,6 +30,9 @@ PgSQLErrorResult pgsql_parse_error_response(const unsigned char* payload, size_t
         } else if (field_type == 'M') {
             result.message = value;
             result.message_len = value_len;
+        } else if (field_type == 'V' || (field_type == 'S' && result.severity == nullptr)) {
+            result.severity = value;
+            result.severity_len = value_len;
         }
 
         pos += value_len + 1;  // skip value + null terminator

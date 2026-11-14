@@ -6,148 +6,6 @@
 #include "mysql_connection.h"
 #include <cstring>
 
-static void test_mariadb_binlog_position_selection() {
-	char position[32] = {0};
-	ok(select_mariadb_binlog_position("0-1-100", "0", position, sizeof(position))
-	       && strcmp(position, "0-1-100") == 0,
-	   "select MariaDB position copies the native value");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("", "0", position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position rejects an empty value without changing the buffer");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position(nullptr, "0", position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position rejects a null value without changing the buffer");
-
-	snprintf(position, sizeof(position), "%s", "0-1-100");
-	ok(!select_mariadb_binlog_position("0-1-100", "0", position, sizeof(position)),
-	   "select MariaDB position rejects an unchanged value");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("0-1-100", "0", position, 4)
-	       && memcmp(position, "\x5a\x5a\x5a\x5a", 4) == 0,
-	   "select MariaDB position rejects an oversized value without changing the buffer");
-
-	memset(position, 0, sizeof(position));
-	ok(select_mariadb_binlog_position("0-1-270,1-2-50", "1", position, sizeof(position))
-	       && strcmp(position, "1-2-50") == 0,
-	   "select MariaDB position extracts the requested domain of a multi-domain value");
-
-	memset(position, 0, sizeof(position));
-	ok(select_mariadb_binlog_position("0-1-270,1-2-50", "0", position, sizeof(position))
-	       && strcmp(position, "0-1-270") == 0,
-	   "select MariaDB position extracts the other requested domain of a multi-domain value");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("0-1-270,1-2-50", nullptr, position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position fails closed on multiple domains without a domain id");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("0-1-270,1-2-50", "", position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position fails closed on multiple domains with an empty domain id");
-
-	memset(position, 0, sizeof(position));
-	ok(select_mariadb_binlog_position("0-1-270", nullptr, position, sizeof(position))
-	       && strcmp(position, "0-1-270") == 0,
-	   "select MariaDB position accepts a single-domain value without a domain id");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("00-1-270", nullptr, position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position rejects a value whose domain is not canonical");
-
-	// A roomy buffer: the single MySQL UUID key must be rejected on its shape,
-	// not merely because the rendered string would not fit.
-	char roomy[128];
-	memset(roomy, 0x5a, sizeof(roomy));
-	ok(!select_mariadb_binlog_position("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1", nullptr,
-	                                    roomy, sizeof(roomy))
-	       && roomy[0] == static_cast<char>(0x5a),
-	   "select MariaDB position rejects a single MySQL UUID without a domain id");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("0-1-270", "7", position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position fails closed when the domain is absent from the value");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("0-1-270", "00", position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position rejects a non-canonical domain id");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("0-1-270,aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1",
-	                                    "0", position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position rejects mixed GTID flavors");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!select_mariadb_binlog_position("0-1-270,", "0", position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "select MariaDB position rejects a malformed position");
-}
-
-static void test_render_mariadb_domain_position() {
-	GTID_Set set;
-	ok(!render_mariadb_domain_position(set, "0", nullptr, 0),
-	   "render MariaDB position rejects a missing buffer");
-
-	char position[32];
-	memset(position, 0x5a, sizeof(position));
-	ok(!render_mariadb_domain_position(set, "0", position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "render MariaDB position rejects an empty set without changing the buffer");
-
-	set.add("0", trxid_t(1), trxid_t(270));
-	set.set_server_id("0", 5);
-	set.add("1", trxid_t(1), trxid_t(50));
-	set.set_server_id("1", 6);
-
-	memset(position, 0, sizeof(position));
-	ok(render_mariadb_domain_position(set, "1", position, sizeof(position))
-	       && strcmp(position, "1-6-50") == 0,
-	   "render MariaDB position uses the domain server id and highest end");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!render_mariadb_domain_position(set, "2", position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "render MariaDB position fails closed on an unknown domain");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!render_mariadb_domain_position(set, nullptr, position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "render MariaDB position fails closed on a multi-domain set without a domain id");
-
-	memset(position, 0x5a, sizeof(position));
-	ok(!render_mariadb_domain_position(set, "0", position, 0)
-	       && position[0] == static_cast<char>(0x5a),
-	   "render MariaDB position rejects a zero-length buffer");
-
-	GTID_Set single;
-	single.add("3", trxid_t(1), trxid_t(9));
-	single.set_server_id("3", 7);
-	memset(position, 0, sizeof(position));
-	ok(render_mariadb_domain_position(single, nullptr, position, sizeof(position))
-	       && strcmp(position, "3-7-9") == 0,
-	   "render MariaDB position accepts a single-domain set without a domain id");
-
-	// A non-canonical single key cannot be produced by the parser, so the set is
-	// built directly: the guard has to reject the key on its own shape, so that
-	// `00-1-270` is never rendered as a position.
-	GTID_Set noncanonical;
-	noncanonical.add("00", trxid_t(1), trxid_t(270));
-	noncanonical.set_server_id("00", 5);
-	memset(position, 0x5a, sizeof(position));
-	ok(!render_mariadb_domain_position(noncanonical, nullptr, position, sizeof(position))
-	       && position[0] == static_cast<char>(0x5a),
-	   "render MariaDB position fails closed on a non-canonical single key without a domain id");
-}
-
 static void test_session_tracking_reset() {
 	{
 		MySQL_Connection connection;
@@ -179,8 +37,66 @@ static void test_session_tracking_reset() {
 	}
 }
 
+static void test_own_gtid_sets_for_routing() {
+	// Issue #6415: MySQL OWN_GTID tracking delivers a GTID SET in a single OK
+	// packet (multiple commits in a procedure, multi-statement COM_QUERY,
+	// implicit DDL commits, and concurrent gaps). Routing must parse those
+	// forms and route to the highest transaction id instead of silently
+	// dropping the causal constraint.
+	char id[64];
+	uint64_t trx = 0;
+
+	ok(parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:582-584",
+		id, sizeof(id), &trx), "a tracked range set is accepted");
+	ok(trx == 584 && strcmp(id, "aaaaaaaa000011112222aaaaaaaaaaaa") == 0,
+		"uuid:582-584 routes to the highest transaction id");
+
+	ok(parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:636:638",
+		id, sizeof(id), &trx), "a tracked gap set is accepted");
+	ok(trx == 638, "uuid:636:638 routes to the highest transaction id");
+
+	ok(parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1-5:7-9",
+		id, sizeof(id), &trx), "multiple intervals in one block are accepted");
+	ok(trx == 9, "uuid:1-5:7-9 routes to the highest interval end");
+
+	// MariaDB's tracked last_gtid is NOT a set: the strict single-GTID
+	// grammar must keep owning it, otherwise every MariaDB causal read would
+	// fall into the fail-closed branch of the new parser.
+	ok(parse_gtid_set_for_routing("0-1-100", id, sizeof(id), &trx),
+		"MariaDB last_gtid still routes");
+	ok(trx == 100 && strcmp(id, "0") == 0,
+		"MariaDB last_gtid routes on its domain id, like parse_gtid_for_routing");
+
+	// Tagged GTIDs (MySQL 8.4+) cannot be honoured by routing and must FAIL,
+	// so callers fail closed instead of dropping the constraint.
+	ok(!parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:tag:5",
+		id, sizeof(id), &trx), "a tagged GTID is rejected");
+
+	// Multi-UUID sets cannot be expressed by the single (uuid, trxid) pool
+	// filter: rejected rather than honouring one block.
+	{
+		std::map<std::string, std::vector<TrxId_Interval>> set_parsed;
+		const char two_uuids[] = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:581,"
+			"bbbbbbbb-0000-1111-2222-aaaaaaaaaaaa:42";
+		ok(parse_gtid_set(two_uuids, sizeof(two_uuids) - 1, &set_parsed),
+			"multi-UUID sets parse at the grammar level");
+		ok(set_parsed.size() == 2, "both UUID blocks are recorded");
+		ok(!parse_gtid_set_for_routing(two_uuids, id, sizeof(id), &trx),
+			"routing fails closed on a multi-UUID set");
+	}
+
+	// Garbage keeps failing; single GTID and single-interval forms route.
+	ok(!parse_gtid_set_for_routing("nope", id, sizeof(id), &trx), "garbage is rejected");
+	ok(!parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:", id, sizeof(id), &trx),
+		"a trailing empty interval component is rejected");
+	ok(parse_gtid_set_for_routing("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42",
+		id, sizeof(id), &trx) && trx == 42,
+		"a plain single-GTID tracked value still routes");
+}
+
 int main() {
-	plan(62);
+	// 32 pre-existing ok() calls + 15 in test_own_gtid_sets_for_routing().
+	plan(47);
 	ok(test_init_minimal() == 0, "test_init_minimal() succeeds");
 	ParsedGTID p;
 
@@ -204,32 +120,8 @@ int main() {
 	ok(!parse_gtid("not-a-gtid", &p), "reject junk");
 	ok(!parse_gtid(nullptr, &p), "reject null");
 
-	GTID_Set set;
-	ok(parse_gtid_set("0-1-270,1-2-50", &set)
-	       && set.has_gtid("0", 100) && set.has_gtid("0", 270)
-	       && !set.has_gtid("0", 271) && set.has_gtid("1", 50),
-	   "MariaDB set is per-domain watermark [1, seq]");
-	GTID_Set mysql_set;
-	ok(parse_gtid_set("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1-3:5", &mysql_set)
-	       && mysql_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 3)
-	       && !mysql_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 4)
-	       && mysql_set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 5),
-	   "MySQL set keeps sparse intervals");
-	ok(!parse_gtid_set("0-1-270,aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1", &set),
-	   "reject mixed flavors in one set");
-	ok(!parse_gtid_set("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1:", &set),
-	   "reject a MySQL token with a trailing colon");
-	ok(!parse_gtid_set("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1:2:", &set),
-	   "reject a MySQL token with a trailing colon after several intervals");
-	ok(!parse_gtid_set("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:", &set),
-	   "reject a MySQL token with no interval");
-	ok(parse_gtid_set("aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:1:2:5", &set)
-	       && set.has_gtid("aaaaaaaa000011112222aaaaaaaaaaaa", 2),
-	   "accept a MySQL token with several intervals");
-	ok(!parse_gtid_set("", &set), "reject empty");
 	ok(!parse_gtid(" 0-1-100 ", &p), "reject surrounding whitespace");
 	ok(!parse_gtid("0-1-100", nullptr), "reject null out");
-	ok(!parse_gtid_set("0-1-270,", &set), "reject trailing comma");
 	ok(!parse_gtid("aaaaaaaa000011112222aaaaaaaaaaaa: 42", &p), "reject whitespace after colon");
 
 	char id[64];
@@ -275,45 +167,67 @@ int main() {
 	ok(parse_gtid(bounded_gtid, 7, &p) && p.id == "0" && p.trxid == 100,
 	   "bounded parser accepts exactly supplied length");
 
-	std::unordered_map<std::string, std::string> sysvars;
 	char session_gtid[128] = {0};
 	const char mysql_gtid[] = "aaaaaaaa-0000-1111-2222-aaaaaaaaaaaa:42";
-	ok(select_session_gtid(mysql_gtid, sizeof(mysql_gtid) - 1, sysvars,
+	ok(select_session_gtid(mysql_gtid, sizeof(mysql_gtid) - 1, nullptr, 0,
 	                       session_gtid, sizeof(session_gtid))
 	       && strcmp(session_gtid, mysql_gtid) == 0,
 	   "select session GTID copies MySQL payload");
 
 	memset(session_gtid, 0, sizeof(session_gtid));
-	sysvars["gtid_binlog_pos"] = "0-1-100";
-	ok(select_session_gtid(nullptr, 0, sysvars,
+	const char last_gtid[] = "0-100-15";
+	ok(select_session_gtid(nullptr, 0, last_gtid, sizeof(last_gtid) - 1,
 	                       session_gtid, sizeof(session_gtid))
-	       && strcmp(session_gtid, "0-1-100") == 0,
-	   "select session GTID copies MariaDB binlog position");
+	       && strcmp(session_gtid, "0-100-15") == 0,
+	   "select session GTID copies MariaDB last_gtid");
 
 	memset(session_gtid, 0, sizeof(session_gtid));
-	sysvars["gtid_current_pos"] = "0-1-99";
-	ok(select_session_gtid(nullptr, 0, sysvars,
+	ok(select_session_gtid(mysql_gtid, sizeof(mysql_gtid) - 1, last_gtid, sizeof(last_gtid) - 1,
 	                       session_gtid, sizeof(session_gtid))
-	       && strcmp(session_gtid, "0-1-100") == 0,
-	   "select session GTID prefers binlog position");
+	       && strcmp(session_gtid, mysql_gtid) == 0,
+	   "select session GTID prefers the SESSION_TRACK_GTIDS payload");
 
-	snprintf(session_gtid, sizeof(session_gtid), "%s", "0-1-100");
-	ok(!select_session_gtid(nullptr, 0, sysvars,
+	// issue #6335: only the session's own single GTID is accepted. A list can
+	// only be a global position and would break causal routing.
+	char untouched[sizeof(session_gtid)];
+	memset(session_gtid, 0x5a, sizeof(session_gtid));
+	memcpy(untouched, session_gtid, sizeof(session_gtid));
+	const char gtid_list[] = "0-1-5,1-2-7";
+	ok(!select_session_gtid(nullptr, 0, gtid_list, sizeof(gtid_list) - 1,
+	                        session_gtid, sizeof(session_gtid))
+	       && memcmp(session_gtid, untouched, sizeof(session_gtid)) == 0,
+	   "select session GTID rejects a multi-domain list without changing the buffer");
+
+	ok(!select_session_gtid(nullptr, 0, nullptr, 0,
+	                        session_gtid, sizeof(session_gtid))
+	       && memcmp(session_gtid, untouched, sizeof(session_gtid)) == 0,
+	   "select session GTID leaves buffer unchanged without a value");
+
+	char tiny[8];
+	memset(tiny, 0x5a, sizeof(tiny));
+	char tiny_before[sizeof(tiny)];
+	memcpy(tiny_before, tiny, sizeof(tiny));
+	ok(!select_session_gtid(nullptr, 0, last_gtid, sizeof(last_gtid) - 1,
+	                        tiny, sizeof(tiny))
+	       && memcmp(tiny, tiny_before, sizeof(tiny)) == 0,
+	   "select session GTID rejects a value that does not fit the buffer");
+
+	snprintf(session_gtid, sizeof(session_gtid), "%s", "0-100-15");
+	ok(!select_session_gtid(nullptr, 0, last_gtid, sizeof(last_gtid) - 1,
 	                        session_gtid, sizeof(session_gtid)),
 	   "select session GTID rejects unchanged value");
 
-	char unchanged[sizeof(session_gtid)];
-	memset(unchanged, 0x5a, sizeof(unchanged));
-	char unchanged_before[sizeof(unchanged)];
-	memcpy(unchanged_before, unchanged, sizeof(unchanged));
-	sysvars.clear();
-	ok(!select_session_gtid(nullptr, 0, sysvars,
-	                        unchanged, sizeof(unchanged))
-	       && memcmp(unchanged, unchanged_before, sizeof(unchanged)) == 0,
-	   "select session GTID leaves buffer unchanged without a value");
+	// The tracked value is not NUL-terminated inside the OK packet: only
+	// `last_gtid_len` bytes may be read.
+	const char unterminated[] = "0-1-77junk";
+	memset(session_gtid, 0, sizeof(session_gtid));
+	ok(select_session_gtid(nullptr, 0, unterminated, 6,
+	                       session_gtid, sizeof(session_gtid))
+	       && strcmp(session_gtid, "0-1-77") == 0,
+	   "select session GTID copies exactly the reported length");
 
-	test_mariadb_binlog_position_selection();
-	test_render_mariadb_domain_position();
+	test_own_gtid_sets_for_routing();
+
 	test_session_tracking_reset();
 	test_cleanup_minimal();
 	return exit_status();

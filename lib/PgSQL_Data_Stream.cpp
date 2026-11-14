@@ -10,6 +10,7 @@
 #include "PgSQL_Data_Stream.h"
 
 #include "openssl/x509v3.h"
+#include "openssl/crypto.h"   // OPENSSL_cleanse - a wipe the compiler is not allowed to drop
 
 #define RESULTSET_BUFLEN_DS_16K 16000
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
@@ -188,6 +189,11 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 				return PGSQL_SSLSTATUS_FAIL;
 			}
 		}
+#ifdef PROXYSQL31
+		// Publish the fast path only after the certificate checks above.
+		tls13_handshake_complete = myds_type == MYDS_FRONTEND &&
+			SSL_version(ssl) == TLS1_3_VERSION;
+#endif
 	}
 	status = get_sslstatus(ssl, n);
 	//proxy_info("SSL status = %d\n", status);
@@ -363,7 +369,7 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 	if (myds_type == MYDS_BACKEND || myds_type == MYDS_BACKEND_NOT_CONNECTED) {
 		assert(myconn == NULL);
 	}
-	if ((myconn) && (myds_type == MYDS_FRONTEND)) { delete myconn; myconn = NULL; }
+	if (myconn && (myds_type == MYDS_FRONTEND)) { delete myconn; myconn = NULL; }
 	if (encrypted) {
 		if (ssl) {
 			// NOTE: SSL standard requires a final 'close_notify' alert on socket
@@ -397,6 +403,15 @@ PgSQL_Data_Stream::~PgSQL_Data_Stream() {
 	}
 
 	free_scram_state(scram_state);
+	clear_pending_auth_secret();
+}
+
+void PgSQL_Data_Stream::clear_pending_auth_secret() {
+	if (pending_auth_secret) {
+		OPENSSL_cleanse(pending_auth_secret, strlen(pending_auth_secret));
+		free(pending_auth_secret);
+		pending_auth_secret = NULL;
+	}
 }
 
 // this function initializes a PgSQL_Data_Stream 
@@ -601,14 +616,22 @@ int PgSQL_Data_Stream::read_from_net() {
 				}
 				src += n2;
 				len -= n2;
+#ifdef PROXYSQL31
+				if (!ssl_handshake_is_complete()) {
+#else
 				if (!SSL_is_init_finished(ssl)) {
+#endif
 					//proxy_info("SSL_is_init_finished NOT completed\n");
 					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 						//proxy_info("SSL_is_init_finished failed!!\n");
 						shut_soft();
 						return -1;
 					}
+#ifdef PROXYSQL31
+					if (!ssl_handshake_is_complete()) {
+#else
 					if (!SSL_is_init_finished(ssl)) {
+#endif
 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
 						return 0;
 					}
@@ -719,6 +742,7 @@ int PgSQL_Data_Stream::read_from_net() {
 
 int PgSQL_Data_Stream::write_to_net() {
 	int bytes_io = 0;
+	int send_error = 0;
 	int s = queue_data(queueOUT);
 	int n;
 	if (encrypted) {
@@ -787,9 +811,9 @@ int PgSQL_Data_Stream::write_to_net() {
 					shut_soft();
 					return 0;
 				}
-				else {
-					return -1;
-				}
+				// SSL_write may already have consumed plaintext. EAGAIN/EINTR
+				// defer only the ciphertext flush; account for that plaintext
+				// below so a retry cannot encrypt and send it a second time.
 			}
 		}
 	}
@@ -799,6 +823,7 @@ int PgSQL_Data_Stream::write_to_net() {
 #else
 		bytes_io = send(fd, queue_r_ptr(queueOUT), s, MSG_NOSIGNAL);
 #endif
+		if (bytes_io < 0) send_error = errno;
 		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p, Datastream=%p: send() wrote %d bytes in FD %d\n", sess, this, bytes_io, fd);
 	}
 	if (encrypted) {
@@ -807,18 +832,11 @@ int PgSQL_Data_Stream::write_to_net() {
 	//VALGRIND_ENABLE_ERROR_REPORTING;
 	if (bytes_io < 0) {
 		if (encrypted == false) {
-#ifdef PROXYSQL31
-			if (poll_fds_idx < 0 || !mypolls) {
-				if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
-					shut_soft();
-			} else if (mypolls->fds[poll_fds_idx].revents & POLLOUT) {
+			// Readiness is a snapshot, not a reservation of socket capacity.
+			// A previous send in this pass can consume it; retain queued bytes
+			// and let POLLOUT retry instead of closing a healthy slow client.
+			if (send_error != EINTR && send_error != EAGAIN && send_error != EWOULDBLOCK)
 				shut_soft();
-			}
-#else
-			if (poll_fds_idx < 0 || !mypolls || (mypolls->fds[poll_fds_idx].revents & POLLOUT)) {
-				shut_soft();
-			}
-#endif
 		}
 		else {
 			int ssl_ret = SSL_get_error(ssl, bytes_io);
@@ -894,14 +912,22 @@ void PgSQL_Data_Stream::set_pollout() {
 				_pollfd->events |= POLLOUT;
 			}
 			else {
+#ifdef PROXYSQL31
+				if (!ssl_handshake_is_complete()) {
+#else
 				if (!SSL_is_init_finished(ssl)) {
+#endif
 					//proxy_info("SSL_is_init_finished NOT completed\n");
 					if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 						//proxy_info("SSL_is_init_finished failed!!\n");
 						shut_soft();
 						return;
 					}
+#ifdef PROXYSQL31
+					if (!ssl_handshake_is_complete()) {
+#else
 					if (!SSL_is_init_finished(ssl)) {
+#endif
 						//proxy_info("SSL_is_init_finished yet NOT completed\n");
 						return;
 					}
@@ -932,7 +958,11 @@ int PgSQL_Data_Stream::write_to_net_poll() {
 		}
 	*/
 	if (encrypted) {
+#ifdef PROXYSQL31
+		if (!ssl_handshake_is_complete()) {
+#else
 		if (!SSL_is_init_finished(ssl)) {
+#endif
 			//proxy_info("SSL_is_init_finished completed: NO!\n");
 			if (do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
 				//proxy_info("SSL_is_init_finished failed!!\n");
@@ -1216,8 +1246,22 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
 		myconn->reusable = false;
 		return false;
 	}
+#ifdef PROXYSQL31
+	tls13_handshake_complete = false;
+#endif
 	encrypted = true;
 	ssl = ssl_obj;
+	if (myconn->native_mode) {
+		// The native path built this SSL with two memory BIOs and keeps reading and
+		// writing through those same pointers. Share them rather than installing a
+		// pair here: SSL_set_bio() would free the ones still in use, and the next
+		// query on the connection would touch freed memory. Nothing is displaced,
+		// so there is nothing for release_backend_tls() to put back.
+		assert(myconn->native_rbio != NULL && myconn->native_wbio != NULL);
+		rbio_ssl = myconn->native_rbio;
+		wbio_ssl = myconn->native_wbio;
+		return true;
+	}
 	backend_tls_adopted = true;
 	// libpq's BIO carries the PGconn as app data and cannot be rebuilt from out
 	// here, so hold a reference: SSL_set_bio() frees whatever it replaces.
@@ -1254,45 +1298,68 @@ bool PgSQL_Data_Stream::adopt_backend_tls() {
 	return true;
 }
 
+// Bytes the relay never delivered leave the TLS stream out of step, so the connection is
+// destroyed rather than pooled: nothing else will ever send them. Only the stream's own
+// partial write counts on a native borrow -- there the BIOs belong to the connection, whose
+// next read and next flush still deliver whatever is left sitting in them.
+void PgSQL_Data_Stream::refuse_reuse_on_stranded_tls() {
+	const int unread = (backend_tls_adopted && rbio_ssl) ? BIO_pending(rbio_ssl) : 0;
+	const int unsent = (backend_tls_adopted && wbio_ssl) ? BIO_pending(wbio_ssl) : 0;
+	const unsigned long stranded = (unsigned long)(unsent > 0 ? unsent : 0) + (unsigned long)ssl_write_len;
+	if (unread <= 0 && stranded == 0) return;
+	const PgSQL_SrvC* srv = myconn->parent;
+	proxy_warning("Backend TLS left %d unread and %lu undelivered bytes leaving fast forward mode; not reusing this connection. hostgroup=%d backend=%s:%d Session=%p\n",
+		(unread > 0 ? unread : 0), stranded,
+		((srv && srv->myhgc) ? (int)srv->myhgc->hid : -1),
+		((srv && srv->address) ? srv->address : "?"),
+		(srv ? srv->port : 0), (void*)sess);
+	myconn->healthy = false;
+	myconn->reusable = false;
+}
+
 // Undo adopt_backend_tls(), while the connection is still attached. Without it
 // libpq keeps writing into our buffers and the next query never reaches the
 // backend, in this session or in whichever one gets the connection next.
 void PgSQL_Data_Stream::release_backend_tls() {
-	if (backend_tls_adopted == false) return; // nothing was borrowed here
+#ifdef PROXYSQL31
+	tls13_handshake_complete = false;
+#endif
+	if (backend_tls_adopted == false) {
+		if (myconn != NULL && myconn->native_mode && ssl != NULL) {
+			// A native borrow shares the connection's own BIOs, so there is nothing to
+			// hand back. The stream still has to stop claiming the TLS: leaving these
+			// set makes the next query on this session take the encrypted path for a
+			// transport the connection is driving itself. The BIO pointers stay as the
+			// connection owns them.
+			// Still check whether the relay stopped mid-TLS-record: the connection's
+			// writer looks only at its own buffer and never sends what was left here.
+			refuse_reuse_on_stranded_tls();
+			// This buffer belongs to the stream, not the connection, and nothing else frees it.
+			if (ssl_write_buf) {
+				free(ssl_write_buf);
+				ssl_write_buf = NULL;
+			}
+			ssl_write_len = 0;
+			encrypted = false;
+			ssl = NULL;
+		}
+		return; // nothing was borrowed here
+	}
 	if (myconn == NULL || ssl == NULL || myconn->saved_backend_rbio == NULL) {
-		// Cannot hand it back. Clear our side anyway: leaving 'encrypted' set would
-		// make ~PgSQL_Data_Stream() SSL_free() the connection's own SSL, which libpq
-		// frees again at PQfinish(). The connection keeps the saved reference, and
+		// Cannot hand it back, but our side is still cleared below: leaving 'encrypted'
+		// set would make ~PgSQL_Data_Stream() SSL_free() the connection's own SSL, which
+		// libpq frees again at PQfinish(). The connection keeps the saved reference, and
 		// is destroyed rather than pooled.
 		proxy_error("Cannot restore the backend TLS transport. Session=%p, DataStream=%p\n", (void*)sess, (void*)this);
 		if (myconn) { myconn->healthy = false; myconn->reusable = false; }
-		rbio_ssl = NULL;
-		wbio_ssl = NULL;
-		ssl = NULL;
-		encrypted = false;
-		backend_tls_adopted = false;
-		return;
+	} else {
+		refuse_reuse_on_stranded_tls();
+		// Frees the memory pair and takes back the reference held since adopt.
+		SSL_set_bio(ssl, myconn->saved_backend_rbio,
+			(myconn->saved_backend_wbio ? myconn->saved_backend_wbio : myconn->saved_backend_rbio));
+		myconn->saved_backend_rbio = NULL;
+		myconn->saved_backend_wbio = NULL;
 	}
-	// Buffered ciphertext that never reaches its peer leaves the TLS stream out
-	// of step, so report it and destroy the connection instead of pooling it.
-	const int unread = (rbio_ssl ? BIO_pending(rbio_ssl) : 0);
-	const int unsent = (wbio_ssl ? BIO_pending(wbio_ssl) : 0);
-	const unsigned long stranded = (unsigned long)(unsent > 0 ? unsent : 0) + (unsigned long)ssl_write_len;
-	if (unread > 0 || stranded) {
-		const PgSQL_SrvC* srv = myconn->parent;
-		proxy_warning("Dropping %d unread and %lu unsent bytes of backend TLS data leaving fast forward mode; not reusing this connection. hostgroup=%d backend=%s:%d Session=%p\n",
-			(unread > 0 ? unread : 0), stranded,
-			((srv && srv->myhgc) ? (int)srv->myhgc->hid : -1),
-			((srv && srv->address) ? srv->address : "?"),
-			(srv ? srv->port : 0), (void*)sess);
-		myconn->healthy = false;
-		myconn->reusable = false;
-	}
-	// Frees the memory pair and takes back the reference held since adopt.
-	SSL_set_bio(ssl, myconn->saved_backend_rbio,
-		(myconn->saved_backend_wbio ? myconn->saved_backend_wbio : myconn->saved_backend_rbio));
-	myconn->saved_backend_rbio = NULL;
-	myconn->saved_backend_wbio = NULL;
 	// Ciphertext a partial write left behind belongs to the connection we are
 	// giving up; it must not leak into whatever this stream is used for next.
 	if (ssl_write_buf) {
@@ -1319,7 +1386,11 @@ void PgSQL_Data_Stream::unplug_backend() {
 	DSS = STATE_NOT_INITIALIZED;
 	myconn = NULL;
 	myds_type = MYDS_BACKEND_NOT_CONNECTED;
-	mypolls->remove_index_fast(poll_fds_idx);
+	// Idle-backend pings can complete or fail before poll registration,
+	// leaving mypolls == NULL with no poll entry to remove. Calling a member
+	// through NULL is undefined even when poll_fds_idx == -1; this caused
+	// crashes in v3.0.12. See https://github.com/sysown/proxysql/pull/6626.
+	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 	mypolls = NULL;
 	fd = 0;
 }
@@ -1368,7 +1439,7 @@ void PgSQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 #ifdef STRESSTEST_POOL
 		PgHGM->push_MyConn_to_pool(mc);  // #644
 #else
-		sess->thread->push_MyConn_local(mc);
+		sess->thread->push_MyConn_local(mc, sess);
 #endif
 	}
 }
@@ -1390,7 +1461,9 @@ void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	// This arm ends in PgSQL_Connection::reset(), which clears 'reusable' and pools the
 	// connection. An unhealthy one must not take it: the transport is fine and
 	// PQtransactionStatus() reports idle, so no other condition here can reject it.
-	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE &&
+	// Nor may a connection still holding a group's unsynced work (a client gone after a Flush): the
+	// reset would end that work with a Sync, committing it. It is closed, which rolls it back.
+	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE && mc->is_pipeline_active() == false &&
 		mc->healthy == true &&
 		mc->is_expired(sess->thread->curtime) == false &&
 		mc->async_state_machine == ASYNC_IDLE &&
@@ -1398,6 +1471,11 @@ void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset PgSQL_Connection %p, server %s:%d\n", mc, mysrvc->address, mysrvc->port);
 		sess->create_new_session_and_reset_connection(this);
 	} else {
+		if (sq && mc->is_pipeline_active()) {
+			// The expected way out for a client gone after a Flush, so not a warning; traced for debugging.
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Closing PgSQL_Connection %p, server %s:%d: it holds unsynced extended-query work, which closing rolls back\n",
+				mc, mysrvc->address, mysrvc->port);
+		}
 		mc->last_time_used = sess->thread->curtime;
 		mc->send_quit = sq;
 		detach_connection();
@@ -1434,6 +1512,10 @@ void PgSQL_Data_Stream::reset_connection() {
 		}
 	}
 }
+
+// Upper bounds for the size of messages received from clients, see buffer2array().
+static constexpr uint32_t PGSQL_MAX_PREAUTH_MESSAGE_SIZE = 65536;
+static constexpr uint32_t PGSQL_MAX_MESSAGE_SIZE = 0x40000000; // PostgreSQL's 1GB message limit
 
 int PgSQL_Data_Stream::buffer2array() {
 	int ret = 0;
@@ -1474,9 +1556,29 @@ int PgSQL_Data_Stream::buffer2array() {
 			return 0;
 		}
 
+		// The length prefix is untrusted: bound it before allocating (GHSA-33xp-q4g3-r79r).
+		// Before authentication only startup, SSL and authentication messages are valid;
+		// PostgreSQL itself limits these to 10000 bytes (startup) and 65535 (auth tokens).
+		// After it, no message may exceed PostgreSQL's 1GB message size limit.
+		uint32_t max_pkgsize = UINT32_MAX;
+		if (myds_type == MYDS_FRONTEND) {
+			max_pkgsize = (sess == nullptr || sess->status == CONNECTING_CLIENT)
+				? PGSQL_MAX_PREAUTH_MESSAGE_SIZE : PGSQL_MAX_MESSAGE_SIZE;
+		}
+		if (pkgsize > max_pkgsize) {
+			proxy_error("Oversized packet (size=%u, max=%u) received from client %s:%d\n", pkgsize, max_pkgsize, addr.addr ? addr.addr : "", addr.port);
+			shut_soft();
+			return 0;
+		}
+
 		// PostgreSQL packets should always be >= 5 bytes.
-		queueIN.pkt.size = pkgsize;
 		queueIN.pkt.ptr = l_alloc(pkgsize);
+		if (queueIN.pkt.ptr == NULL) {
+			proxy_error("Failed to allocate %u bytes for packet received from %s:%d\n", pkgsize, addr.addr ? addr.addr : "", addr.port);
+			shut_soft();
+			return 0;
+		}
+		queueIN.pkt.size = pkgsize;
 
 		memcpy(queueIN.pkt.ptr, header, sizeof(header)); // immediately copy the header into the packet
 		queueIN.partial = sizeof(header);

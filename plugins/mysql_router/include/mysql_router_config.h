@@ -18,6 +18,13 @@ enum class MysqlRouterConfigKey : uint8_t {
 	ro_port,
 	rw_split_port,
 	metadata_ssl_mode,
+	metadata_ssl_ca,
+	metadata_ssl_capath,
+	metadata_ssl_cert,
+	metadata_ssl_key,
+	metadata_ssl_cipher,
+	metadata_ssl_crl,
+	metadata_ssl_crlpath,
 };
 
 struct MysqlRouterRuntimeConfig {
@@ -28,7 +35,8 @@ struct MysqlRouterRuntimeConfig {
 	uint16_t rw_port {6446};
 	uint16_t ro_port {6447};
 	uint16_t rw_split_port {6450};
-	MetadataTlsMode metadata_ssl_mode {MetadataTlsMode::preferred};
+	/** TLS for the metadata connection; persisted by bootstrap as metadata_ssl_* keys. */
+	TlsOptions metadata_tls {};
 };
 
 class MysqlRouterConfigStore {

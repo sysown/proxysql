@@ -146,6 +146,10 @@ void connect_cb(EV_P_ ev_io *w, int revents) {
 			proxy_warning("GTID: failed to connect to ProxySQL binlog reader on port %d for server %s:%d\n", sd->port, sd->address, sd->mysql_port);
 			close(fd);
 		} else {
+			// A new connection may reach a different reader, even one serving the
+			// other GTID flavor: start from its bootstrap, not from what the
+			// previous connection established (issue #6334).
+			sd->reset_reader_stream();
 			struct ev_io *read_watcher = (struct ev_io *) malloc(sizeof(struct ev_io));
 			read_watcher->data = sd;
 			sd->w = read_watcher;
@@ -280,6 +284,20 @@ bool GTID_Server_Data::readall() {
 }
 
 
+void GTID_Server_Data::reset_reader_stream() {
+	pthread_rwlock_wrlock(&executed_rwlock);
+	gtid_flavor = GTID_ID_FLAVOR_UNKNOWN;
+	memset(uuid_server, 0, sizeof(uuid_server));
+	pos = 0;
+	len = 0;
+	// The new connection is not known to reach the same server (failover,
+	// address reassigned, server restored from a backup): keeping the old set
+	// could route a causal read to a server that lacks the GTID. Until the
+	// bootstrap re-sends the set, GTID-routed reads skip this server.
+	gtid_executed.clear();
+	pthread_rwlock_unlock(&executed_rwlock);
+}
+
 bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
 	pthread_rwlock_rdlock(&executed_rwlock);
 	bool found = gtid_executed.has_gtid((std::string)gtid_uuid, gtid_trxid);
@@ -292,9 +310,29 @@ bool GTID_Server_Data::add_gtid_from_ok(const char* gtid) {
 		return false;
 	}
 
+	// A single GTID covers the common case: MariaDB's 'last_gtid' (d-s-n) and
+	// MySQL's tracked OWN_GTID value when exactly one transaction was committed.
 	ParsedGTID parsed;
 	if (!parse_gtid(gtid, &parsed)) {
-		return false;
+		// A session that committed several transactions delivers a GTID SET
+		// ('uuid:582-584', 'uuid:636:638'): record every interval instead of
+		// rejecting it, otherwise the server advertises less than the session
+		// actually wrote and causal reads wait forever (issue #6415,
+		// pre-existing at v3.0.11 but closed here while the grammar is being
+		// taught to the routing paths).
+		std::map<std::string, std::vector<TrxId_Interval>> intervals;
+		if (!parse_gtid_set(gtid, strlen(gtid), &intervals)) {
+			return false;
+		}
+		bool updated = false;
+		pthread_rwlock_wrlock(&executed_rwlock);
+		for (const auto& entry : intervals) {
+			for (const auto& iv : entry.second) {
+				updated |= gtid_executed.add(entry.first, iv);
+			}
+		}
+		pthread_rwlock_unlock(&executed_rwlock);
+		return updated;
 	}
 
 	pthread_rwlock_wrlock(&executed_rwlock);

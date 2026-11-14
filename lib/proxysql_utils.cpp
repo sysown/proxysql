@@ -478,7 +478,7 @@ std::string get_checksum_from_hash(uint64_t hash) {
 	memcpy(&d32, &hash, sizeof(hash));
 
 	vector<char> s_buf(ProxySQL_Checksum_Value_LENGTH, 0);
-	sprintf(&s_buf[0],"0x%0X%0X", d32[0], d32[1]);
+	snprintf(&s_buf[0],s_buf.size(),"0x%0X%0X", d32[0], d32[1]);
 	replace_checksum_zeros(&s_buf[0]);
 
 	return string { &s_buf.front() };

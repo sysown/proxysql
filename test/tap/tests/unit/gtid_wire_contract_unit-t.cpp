@@ -136,10 +136,10 @@ static void test_fixture_replays_as_documented() {
 	// and nowhere else. If the carry-over were dropped, the set would grow a
 	// second, empty domain instead of collapsing to one.
 	//
-	// The display form is `domain-server-end`; the reader puts no server id on
-	// the wire, so it stays 0 here.
+	// The reader puts no server id on the wire, so the display lists the domain
+	// interval rather than the native `domain-server-seq` form (issue #6336).
 	const std::string display = sd.gtid_executed.to_display_string();
-	ok(display == "0-0-79",
+	ok(display == "0:1-79",
 	   "wire contract: the whole fixture collapses to one domain watermark (got '%s')",
 	   display.c_str());
 }

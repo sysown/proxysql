@@ -1,4 +1,23 @@
-# Literal MySQL user-variable tracking
+# Literal MySQL user-variable tracking in v3.0
+
+v3.0 retains the established v3.0.11 tracking flow with ParserSQL 1.1.1.
+Supported literal user-variable SETs are confirmed by the backend before they
+are committed to tracked state. Mixed session/user-variable SETs use the
+connection-bound fallback. No new settings or default changes are required.
+
+ParserSQL remains experimental in v3.0. With `mysql-query_processor_parser=1`,
+first-comment hints are unavailable and digests need not match legacy mode.
+The existing SET parser precedence is retained. Unsupported/incomplete parsing,
+expressions hidden by digest emission, and arena exhaustion retain a targeted
+legacy digest fallback; its first comment is discarded in parser mode.
+
+The newer tracking extension is gated to `PROXYSQL31` builds and documented
+[separately](internal/mysql-user-variable-tracking-v31.md). The restoration is
+tracked in [#6507](https://github.com/sysown/proxysql/issues/6507); the v3.1
+analysis and performance design is tracked in [#6508](https://github.com/sysown/proxysql/issues/6508).
+This restoration is a temporary compatibility measure for v3.0; it does not
+define the parser architecture for v3.1.
+
 
 `mysql-user_variable_tracking` is an opt-in, conservative way to keep a
 small, proven subset of MySQL user-defined variables multiplexable. It tracks

@@ -103,11 +103,16 @@ ifeq ($(CURVER_CHECK),0)
 endif
 
 export CURVER
+export DEPS_MODE ?= auto
 export PROXYSQL40
 export PROXYSQL31
 export PROXYSQLFFTO
 export PROXYSQLTSDB
 export PROXYSQLED25519
+
+# ClickHouse is part of every normal build, including Darwin and FreeBSD.
+# Export the same layout flag to core, plugins and test targets.
+export PROXYSQLCLICKHOUSE ?= 1
 
 ### NOTES:
 ### SOURCE_DATE_EPOCH is used for reproducible builds
@@ -142,7 +147,7 @@ O3 := -O3 -mtune=native
 ALL_DEBUG := $(O0) -ggdb -DDEBUG
 NO_DEBUG := $(O2) -ggdb
 DEBUG := $(ALL_DEBUG)
-#export DEBUG
+unexport DEBUG
 #export EXTRALINK
 export MAKE
 
@@ -168,7 +173,6 @@ ifeq ($(OS),Linux)
 endif
 ifneq (,$(findstring $(OS),Darwin FreeBSD))
 	NPROCS := $(shell sysctl -n hw.ncpu)
-	LEGACY_BUILD := 1
     CC ?= cc
     CXX ?= c++
     export CC
@@ -239,22 +243,22 @@ debug_clickhouse: build_src_debug_clickhouse
 ### helper targets
 
 .PHONY: build_deps
-build_deps: $(if $(LEGACY_BUILD),build_deps_legacy,build_deps_default)
+build_deps: build_deps_default
 
 .PHONY: build_lib
-build_lib: $(if $(LEGACY_BUILD),build_lib_legacy,build_lib_default)
+build_lib: build_lib_default
 
 .PHONY: build_src
-build_src: $(if $(LEGACY_BUILD),build_src_legacy,build_src_default)
+build_src: build_src_default
 
 .PHONY: build_deps_debug
-build_deps_debug: $(if $(LEGACY_BUILD),build_deps_debug_legacy,build_deps_debug_default)
+build_deps_debug: build_deps_debug_default
 
 .PHONY: build_lib_debug
-build_lib_debug: $(if $(LEGACY_BUILD),build_lib_debug_legacy,build_lib_debug_default)
+build_lib_debug: build_lib_debug_default
 
 .PHONY: build_src_debug
-build_src_debug: $(if $(LEGACY_BUILD),build_src_debug_legacy,build_src_debug_default)
+build_src_debug: build_src_debug_default
 
 # RAG ingester (PoC)
 .PHONY: rag_ingest
@@ -265,38 +269,24 @@ rag_ingest: build_deps
 rag_ingest_clean:
 	cd RAG_POC && ${MAKE} clean
 
-# legacy build targets (pre c++17)
+# Compatibility aliases: C++17 and ClickHouse no longer need a separate path.
 .PHONY: build_deps_legacy
-build_deps_legacy:
-	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+build_deps_legacy: build_deps_default
 
 .PHONY: build_lib_legacy
-build_lib_legacy: build_deps_legacy
-	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+build_lib_legacy: build_lib_default
 
 .PHONY: build_src_legacy
-build_src_legacy: build_lib_legacy
-	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
-	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
-	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
-	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
-	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysql_router && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysql_router plugin (PROXYSQL40 not set)")
+build_src_legacy: build_src_default
 
 .PHONY: build_deps_debug_legacy
-build_deps_debug_legacy:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_deps_debug_legacy: build_deps_debug_default
 
 .PHONY: build_lib_debug_legacy
-build_lib_debug_legacy: build_deps_debug_legacy
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+build_lib_debug_legacy: build_lib_debug_default
 
 .PHONY: build_src_debug_legacy
-build_src_debug_legacy: build_lib_debug_legacy
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
-	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
-	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
-	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
-	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysql_router && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysql_router plugin (PROXYSQL40 not set)")
+build_src_debug_legacy: build_src_debug_default
 #--
 
 .PHONY: build_src_testaurora
@@ -411,23 +401,23 @@ build_src_debug_clickhouse: build_src_debug_default
 
 .PHONY: build_deps_default
 build_deps_default:
-	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_deps_debug_default
 build_deps_debug_default:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_default
 build_lib_default: build_deps_default
-	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug_default
 build_lib_debug_default: build_deps_debug_default
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_default
 build_src_default: build_lib_default
-	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
@@ -435,7 +425,7 @@ build_src_default: build_lib_default
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=$(PROXYSQLCLICKHOUSE) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) PROXYSQLED25519=$(PROXYSQLED25519) CC=${CC} CXX=${CXX} ${MAKE}
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysqlx && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysqlx plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
@@ -471,7 +461,7 @@ amd64-centos: centos9 centos9-clang centos9-dbg centos10 centos10-clang centos10
 amd64-debian: debian12 debian12-clang debian12-dbg debian13 debian13-clang debian13-dbg
 amd64-fedora: fedora42 fedora42-clang fedora42-dbg fedora43 fedora43-clang fedora43-dbg fedora44 fedora44-clang fedora44-dbg
 amd64-opensuse: opensuse16 opensuse16-clang opensuse16-dbg
-amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg
+amd64-ubuntu: ubuntu22 ubuntu22-clang ubuntu22-dbg ubuntu24 ubuntu24-clang ubuntu24-dbg ubuntu26 ubuntu26-clang ubuntu26-dbg
 amd64-tarball: tarball-almalinux9
 amd64-pkglist:
 	@${MAKE} -nk amd64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'
@@ -483,7 +473,7 @@ arm64-centos: centos9 centos10
 arm64-debian: debian12 debian13
 arm64-fedora: fedora42 fedora43 fedora44
 arm64-opensuse: opensuse16
-arm64-ubuntu: ubuntu22 ubuntu24
+arm64-ubuntu: ubuntu22 ubuntu24 ubuntu26
 arm64-tarball: tarball-almalinux9
 arm64-pkglist:
 	@${MAKE} -nk arm64-packages 2>/dev/null | grep -Eo 'binaries/proxysql[^ ]*' | sed 's,^binaries/,,'

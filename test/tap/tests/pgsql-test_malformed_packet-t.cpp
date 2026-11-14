@@ -187,6 +187,38 @@ void test_malformed_packet(const std::string& test_name,
 }
 
 /**
+ * @brief A GSSAPI encryption request is well formed, so it gets an answer rather than a close
+ *
+ * ProxySQL does not speak GSSAPI encryption. The protocol's answer for that is a single 'N',
+ * which lets the client fall back to SSL or plaintext on the same connection, and it is what
+ * PostgreSQL sends. Closing the connection instead strands a client that only offered it.
+ */
+void test_gss_encrypt_request(const std::string& test_name, const std::string& host, int port) {
+    int sock = create_raw_connection(host, port);
+    if (sock < 0) {
+        ok(0, "%s: Failed to create connection", test_name.c_str());
+        return;
+    }
+
+    const std::vector<uint8_t> data = {0x00, 0x00, 0x00, 0x08,
+        (PG_GSS_ENCRYPT_CODE >> 24) & 0xFF, (PG_GSS_ENCRYPT_CODE >> 16) & 0xFF,
+        (PG_GSS_ENCRYPT_CODE >> 8) & 0xFF, PG_GSS_ENCRYPT_CODE & 0xFF};
+
+    if (!send_exact(sock, data.data(), data.size())) {
+        close(sock);
+        ok(0, "%s: Failed to send data", test_name.c_str());
+        return;
+    }
+
+    char reply = 0;
+    const bool answered = recv_exact(sock, &reply, 1);
+    ok(answered && reply == 'N', "%s: refused with 'N', connection left usable (got '%c')",
+       test_name.c_str(), reply);
+
+    close(sock);
+}
+
+/**
  * @brief Verify ProxySQL is still operational after malformed packet test
  */
 bool verify_proxysql_alive(const CommandLine& cl, Connection_type_t conn_type) {
@@ -405,13 +437,8 @@ void run_malformed_packet_tests(const std::string& host, int port, const char* t
         {0x00, 0x00, 0x00, 0x08,
          0xDE, 0xAD, 0xBE, 0xEF});
 
-    // Test 15: GSS encrypt request (not supported)
-    test_malformed_packet("GSS encrypt request", host, port,
-        {0x00, 0x00, 0x00, 0x08,
-         (PG_GSS_ENCRYPT_CODE >> 24) & 0xFF,
-         (PG_GSS_ENCRYPT_CODE >> 16) & 0xFF,
-         (PG_GSS_ENCRYPT_CODE >> 8) & 0xFF,
-         PG_GSS_ENCRYPT_CODE & 0xFF});
+    // Test 15: GSS encrypt request. Well formed, so it is answered, not dropped.
+    test_gss_encrypt_request("GSS encrypt request", host, port);
 
     // ==================== CANCEL REQUEST TESTS ====================
 

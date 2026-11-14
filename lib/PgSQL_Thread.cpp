@@ -29,6 +29,8 @@ using json = nlohmann::json;
 #include "PgSQL_Logger.hpp"
 #include "PgSQL_Variables_Validator.h"
 #include <fcntl.h>
+#include <cerrno>
+#include <climits>
 
 using std::vector;
 using std::function;
@@ -51,6 +53,9 @@ extern PgSQL_Threads_Handler* GloPTH;
 extern MySQL_Monitor* GloMyMon;
 extern PgSQL_Monitor* GloPgMon;
 extern PgSQL_Logger* GloPgSQL_Logger;
+
+
+#include "Worker_Scheduler.h"
 
 typedef struct mythr_st_vars {
 	enum PgSQL_Thread_status_variable v_idx;
@@ -158,6 +163,7 @@ PgSQL_Listeners_Manager::~PgSQL_Listeners_Manager() {
 }
 
 int PgSQL_Listeners_Manager::add(const char* iface, unsigned int num_threads, int** perthrsocks) {
+	const std::string original_iface { iface };
 	for (unsigned int i = 0; i < ifaces->len; i++) {
 		iface_info* ifi = (iface_info*)ifaces->index(i);
 		if (strcmp(ifi->iface, iface) == 0) {
@@ -202,7 +208,7 @@ int PgSQL_Listeners_Manager::add(const char* iface, unsigned int num_threads, in
 			for (i = 0; i < num_threads; i++) {
 				s = listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, true);
 				ioctl_FIONBIO(s, 1);
-				iface_info* ifi = new iface_info((char*)iface, address, atoi(port), s);
+				iface_info* ifi = new iface_info((char*)original_iface.c_str(), address, atoi(port), s);
 				ifaces->add(ifi);
 				l_perthrsocks[i] = s;
 			}
@@ -223,7 +229,7 @@ int PgSQL_Listeners_Manager::add(const char* iface, unsigned int num_threads, in
 	}
 	if (s > 0) {
 		ioctl_FIONBIO(s, 1);
-		iface_info* ifi = new iface_info((char*)iface, address, atoi(port), s);
+		iface_info* ifi = new iface_info((char*)original_iface.c_str(), address, atoi(port), s);
 		ifaces->add(ifi);
 	}
 	if (is_ipv6 == false) {
@@ -423,6 +429,9 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"server_encoding",
 	(char*)"keep_multiplexing_variables",
 	(char*)"kill_backend_connection_when_disconnect",
+#ifdef PROXYSQL31
+	(char*)"use_native_backend_protocol",
+#endif
 	(char*)"sessions_sort",
 #ifdef IDLE_THREADS
 	(char*)"session_idle_show_processlist",
@@ -1136,7 +1145,13 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.default_query_timeout = 24 * 3600 * 1000;
 	variables.query_processor_iterations = 0;
 	variables.query_processor_first_comment_parsing = 2;
+	// Regex engine for query rules (issue #6411): PCRE (1) everywhere, except
+	// v4.0, which defaults to PCRE2 (3). v3.1 keeps 1 for upgrade compatibility.
+#ifdef PROXYSQL40
+	variables.query_processor_regex = 3;
+#else
 	variables.query_processor_regex = 1;
+#endif
 	variables.query_processor_parser = 0;
 	variables.set_query_lock_on_hostgroup = 1;
 	variables.set_parser_algorithm = 2; // before 2.6.0 this was 1
@@ -1197,6 +1212,11 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.stats_time_query_processor = false;
 	variables.query_cache_stores_empty_result = true;
 	variables.kill_backend_connection_when_disconnect = true;
+#ifdef PROXYSQL31
+	variables.use_native_backend_protocol = true;
+#else
+	variables.use_native_backend_protocol = false;
+#endif
 	variables.sessions_sort = true;
 #ifdef IDLE_THREADS
 	variables.session_idle_ms = 1;
@@ -1239,7 +1259,7 @@ unsigned int PgSQL_Threads_Handler::get_global_version() {
 
 int PgSQL_Threads_Handler::listener_add(const char* address, int port) {
 	char* s = (char*)malloc(strlen(address) + 32);
-	sprintf(s, "%s:%d", address, port);
+	snprintf(s, strlen(address) + 32, "%s:%d", address, port);
 	int ret = listener_add((const char*)s);
 	free(s);
 	return ret;
@@ -1496,7 +1516,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		std::unordered_map<std::string, std::tuple<bool*, bool>>::const_iterator it = VariablesPointers_bool.find(nameS);
 		if (it != VariablesPointers_bool.end()) {
 			bool* v = std::get<0>(it->second);
-			return strdup((*v ? "true" : "false"));
+			return strdup(*v ? "true" : "false");
 		}
 	}
 
@@ -1623,7 +1643,7 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 		// if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
 	if (!strcasecmp(name, "threads")) {
-		snprintf(intbuf, sizeof(intbuf), "%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
+		snprintf(intbuf, sizeof(intbuf), "%d", (configured_num_threads ? configured_num_threads : (num_threads ? num_threads : DEFAULT_NUM_THREADS)));
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name, "stacksize")) {
@@ -1637,6 +1657,73 @@ char* PgSQL_Threads_Handler::get_variable(char* name) {	// this is the public fu
 
 
 
+#ifdef PROXYSQL40
+bool PgSQL_Threads_Handler::validate_variable(const char* name, const char* value) const {
+ if (!name || !value) return false;
+ std::string key(name);
+ std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return std::tolower(c); });
+ auto boolean = [&]() { return !strcasecmp(value,"true") || !strcasecmp(value,"false") || !strcmp(value,"0") || !strcmp(value,"1"); };
+ auto number = [&](long long low, long long high) {
+  char* end = nullptr; errno = 0; long long v = strtoll(value,&end,10);
+  return value[0] && end && !*end && errno != ERANGE && v >= low && v <= high;
+ };
+ auto integer = VariablesPointers_int.find(key);
+ if (integer != VariablesPointers_int.end() && !std::get<3>(integer->second))
+  return number(std::get<1>(integer->second),std::get<2>(integer->second));
+ if (VariablesPointers_bool.count(key)) return boolean();
+ if (key == "binlog_reader_connect_retry_msec") return number(200,120000);
+ if (key == "wait_timeout") return number(0,20LL*24*3600*1000);
+ if (key == "eventslog_format") return number(1,2);
+ if (key == "eventslog_flush_timeout" || key == "eventslog_flush_size" ||
+     key == "auditlog_flush_timeout" || key == "auditlog_flush_size") return number(0,INT_MAX);
+ if (key == "eventslog_rate_limit") return number(1,INT_MAX);
+ if (key == "data_packets_history_size") return number(0,INT_MAX-1);
+ if (key == "stacksize") return number(256*1024,4*1024*1024);
+ if (key == "threads") return number(1,255);
+ if (key == "interfaces") return value[0] && (!variables.interfaces[0] || !strcmp(value,variables.interfaces));
+ if (key == "server_encoding") return value[0] && PgSQL_Connection::char_to_encoding(value) != -1;
+ if (key == "monitor_replication_lag_use_percona_heartbeat") {
+  if (!value[0]) return true;
+  re2::RE2::Options options(RE2::Quiet); options.set_case_sensitive(false);
+  re2::RE2 pattern("`?([a-z\\d_]+)`?\\.`?([a-z\\d_]+)`?",options);
+  return re2::RE2::FullMatch(value,pattern);
+ }
+ if (key == "monitor_username" || key == "default_schema" || key == "server_version" ||
+     key == "keep_multiplexing_variables") return value[0];
+ if (key == "auditlog_filename" || key == "eventslog_filename") {
+  const size_t n = strlen(value);
+  if (n && value[n-1] == '/') return false;
+  if (value[0] != '/') return true;
+  std::string path(value); const auto split = path.rfind('/');
+  DIR* directory = opendir(split == 0 ? "/" : path.substr(0,split).c_str());
+  if (!directory) return false;
+  closedir(directory); return true;
+ }
+ if (key == "monitor_password" || key == "monitor_dbname" || key == "init_connect" ||
+     key == "firewall_whitelist_errormsg" || key == "ldap_user_variable" || key == "add_ldap_user_comment" ||
+     key == "ssl_p2s_ca" || key == "ssl_p2s_capath" || key == "ssl_p2s_cert" || key == "ssl_p2s_key" ||
+     key == "ssl_p2s_cipher" || key == "ssl_p2s_crl" || key == "ssl_p2s_crlpath") return true;
+ if (key.compare(0,8,"default_") == 0) {
+  for (int i=0; i<PGSQL_NAME_LAST_LOW_WM; ++i) {
+   const auto &variable = pgsql_tracked_variables[i];
+   if (key != std::string("default_") + variable.internal_variable_name) continue;
+   char* transformed = nullptr;
+   bool accepted = !variable.validator || !variable.validator->validate ||
+      (*variable.validator->validate)(value,&variable.validator->params,nullptr,&transformed);
+   free(transformed);
+   return accepted;
+  }
+ }
+ return false;
+}
+#endif
+
+/**
+ * @brief Validate and update a PostgreSQL runtime variable through the admin interface.
+ * @param name Null-terminated variable name.
+ * @param value Null-terminated value; nullptr is rejected. Empty log filenames disable logging.
+ * @return True if the variable accepts the supplied value, false otherwise.
+ */
 bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// this is the public function, accessible from admin
 	// IN:
 	// name: variable name
@@ -1737,7 +1824,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		if (!strcasecmp(name, "monitor_replication_lag_use_percona_heartbeat")) {
 			if (vallen == 0) { // empty string
 				free(variables.monitor_replication_lag_use_percona_heartbeat);
-				variables.monitor_replication_lag_use_percona_heartbeat = strdup((value));
+				variables.monitor_replication_lag_use_percona_heartbeat = strdup(value);
 				return true;
 			}
 			else {
@@ -2059,7 +2146,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	}
 
 	if (!strcasecmp(name, "auditlog_filename")) {
-		if (value[strlen(value) - 1] == '/') {
+		if (vallen > 0 && value[vallen - 1] == '/') {
 			proxy_error("%s is an invalid value for auditlog_filename, please specify a filename not just the path\n", value);
 			return false;
 		}
@@ -2086,7 +2173,7 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 		}
 	}
 	if (!strcasecmp(name, "eventslog_filename")) {
-		if (value[strlen(value) - 1] == '/') {
+		if (vallen > 0 && value[vallen - 1] == '/') {
 			proxy_error("%s is an invalid value for eventslog_filename, please specify a filename not just the path\n", value);
 			return false;
 		}
@@ -2126,7 +2213,8 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 	if (!strcasecmp(name, "threads")) {
 		unsigned int intv = atoi(value);
 		if ((num_threads == 0 || num_threads == intv || pgsql_threads == NULL) && intv > 0 && intv < 256) {
-			num_threads = intv;
+			configured_num_threads = intv;
+			num_threads = GloVars.pgsql_workers ? intv : 0;
 			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(intv);
 			return true;
 		}
@@ -2194,6 +2282,9 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["enforce_autocommit_on_reads"] = make_tuple(&variables.enforce_autocommit_on_reads, false);
 		VariablesPointers_bool["firewall_whitelist_enabled"] = make_tuple(&variables.firewall_whitelist_enabled, false);
 		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
+#ifdef PROXYSQL31
+		VariablesPointers_bool["use_native_backend_protocol"] = make_tuple(&variables.use_native_backend_protocol, false);
+#endif
 		VariablesPointers_bool["log_unhealthy_connections"] = make_tuple(&variables.log_unhealthy_connections, false);
 #ifdef PROXYSQLFFTO
 		VariablesPointers_bool["ffto_enabled"] = make_tuple(&variables.ffto_enabled, false);
@@ -2303,7 +2394,13 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_rules_fast_routing_algorithm"] = make_tuple(&variables.query_rules_fast_routing_algorithm, 1, 2, false);
 		VariablesPointers_int["query_processor_iterations"] = make_tuple(&variables.query_processor_iterations, 0, 1000 * 1000, false);
 		VariablesPointers_int["query_processor_first_comment_parsing"] = make_tuple(&variables.query_processor_first_comment_parsing, 0, 3, false);
+		// See MySQL_Thread.cpp: engine 3 (PCRE2) is unavailable on the Stable
+		// tier (issue #6411).
+#ifdef PROXYSQL31
+		VariablesPointers_int["query_processor_regex"] = make_tuple(&variables.query_processor_regex, 1, 3, false);
+#else
 		VariablesPointers_int["query_processor_regex"] = make_tuple(&variables.query_processor_regex, 1, 2, false);
+#endif
 		VariablesPointers_int["query_processor_parser"] = make_tuple(&variables.query_processor_parser, 0, 1, false);
 		VariablesPointers_int["query_retries_on_failure"] = make_tuple(&variables.query_retries_on_failure, 0, 1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"] = make_tuple(&variables.set_query_lock_on_hostgroup, 0, 1, false);
@@ -2398,7 +2495,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 	size_t fv = 0;
 	for (i = 0; i < PGSQL_NAME_LAST_LOW_WM; i++) {
 		char* m = (char*)malloc(strlen(pgsql_tracked_variables[i].internal_variable_name) + 1 + strlen((char*)"default_"));
-		sprintf(m, "default_%s", pgsql_tracked_variables[i].internal_variable_name);
+		snprintf(m, strlen(pgsql_tracked_variables[i].internal_variable_name) + 1 + strlen((char*)"default_"), "default_%s", pgsql_tracked_variables[i].internal_variable_name);
 		ret[fv] = m;
 		fv++;
 	}
@@ -2441,22 +2538,19 @@ void PgSQL_Threads_Handler::print_version() {
 }
 
 void PgSQL_Threads_Handler::init(unsigned int num, size_t stack) {
+	if (num) configured_num_threads = num;
+	if (!configured_num_threads) configured_num_threads = num_threads ? num_threads : DEFAULT_NUM_THREADS;
+	if (!GloVars.pgsql_workers) {
+		num_threads = 0;
+		return;
+	}
+
 	if (stack) {
 		stacksize = stack;
+	} else if (stacksize == 0) {
+		stacksize = DEFAULT_STACK_SIZE;
 	}
-	else {
-		if (stacksize == 0) stacksize = DEFAULT_STACK_SIZE;
-	}
-	if (num) {
-		num_threads = num;
-		//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(num);
-	}
-	else {
-		if (num_threads == 0) {
-			num_threads = DEFAULT_NUM_THREADS; //default
-			//this->status_variables.p_gauge_array[p_th_gauge::mysql_thread_workers]->Set(DEFAULT_NUM_THREADS);
-		}
-	}
+	num_threads = configured_num_threads;
 	int rc = pthread_attr_setstacksize(&attr, stacksize);
 	assert(rc == 0);
 	pgsql_threads = (proxysql_pgsql_thread_t*)calloc(num_threads, sizeof(proxysql_pgsql_thread_t));
@@ -2572,6 +2666,11 @@ void PgSQL_Threads_Handler::wait_for_all_threads_to_exit_run_loop() {
 }
 
 void PgSQL_Threads_Handler::start_listeners() {
+	if (!GloVars.pgsql_workers) {
+		bootstrapping_listeners = false;
+		return;
+	}
+
 	// we set bootstrapping_listeners to true
 	// In this way PgSQL_Thread will knows there are more listeners to add
 	// and it will continue looping until all listeners are added
@@ -2955,10 +3054,6 @@ PgSQL_Thread::~PgSQL_Thread() {
 		delete sr;
 		sr = match_regexes[1];
 		delete sr;
-		sr = match_regexes[2];
-		delete sr;
-		sr = match_regexes[3];
-		delete sr;
 		free(match_regexes);
 		match_regexes = NULL;
 	}
@@ -3010,16 +3105,15 @@ bool PgSQL_Thread::init() {
 	assert(i == 0);
 
 	thr_SetParser = new PgSQL_Set_Stmt_Parser("");
-	match_regexes = (Session_Regex**)malloc(sizeof(Session_Regex*) * 4);
+	match_regexes = (Session_Regex**)malloc(sizeof(Session_Regex*) * 2);
 	//	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
 	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
 
-	std::stringstream ss;
-	//ss << "^SET (|SESSION |@@|@@session.|@@local.)`?(" << pgsql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION|TX_READ_ONLY|TRANSACTION_ISOLATION|TRANSACTION_READ_ONLY)`?( *)(:|)=( *)";
-	ss << "^SET(?: +)(|SESSION +)`?(" << pgsql_variables.variables_regexp << ")`?( *)(|=|TO)( *)";
-	match_regexes[1] = new Session_Regex((char*)ss.str().c_str());
-	match_regexes[2] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
-	match_regexes[3] = new Session_Regex((char*)"^SET(?: +)(|SESSION +)`?(client_encoding|names)`?( *)(|=|TO)( *)");
+	const std::string set_tracked_vars_regexp = PgSQL_Variables::build_set_tracked_vars_regexp(pgsql_variables.variables_regexp);
+	match_regexes[1] = new Session_Regex((char*)set_tracked_vars_regexp.c_str());
+	// SET [LOCAL|SESSION] TRANSACTION ... is recognised by PgSQL_Variables::is_set_transaction(),
+	// which reads comments the way PostgreSQL does (they nest), so no regex slot is needed for it.
+	// client_encoding / NAMES are tracked variables matched by match_regexes[1].
 
 	copy_cmd_matcher = new CopyCmdMatcher();
 
@@ -3112,6 +3206,7 @@ void PgSQL_Thread::unregister_session(int idx) {
 	if (mysql_sessions == NULL) return;
 #ifdef PROXYSQL31
 	PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(idx);
+	cancel_session_continuation(sess);
 	leave_waiter(sess, false);
 	drop_from_poll(sess->client_myds);
 	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
@@ -3122,6 +3217,25 @@ void PgSQL_Thread::unregister_session(int idx) {
 	mysql_sessions->remove_index_fast(idx);
 }
 #ifdef PROXYSQL31
+
+void PgSQL_Thread::queue_session_continuation(PgSQL_Session *sess) {
+    queue_session_work(session_continuations, sess);
+}
+
+void PgSQL_Thread::cancel_session_continuation(PgSQL_Session *sess) {
+    cancel_session_work(session_continuations, sess);
+}
+
+void PgSQL_Thread::close_scheduled_session(unsigned index) {
+    auto *sess = static_cast<PgSQL_Session*>(mysql_sessions->index(index));
+    char location[1024];
+    if (sess->client_myds && sess->killed)
+        proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
+    snprintf(location, sizeof(location), "%s:%d:%s()", __FILE__, __LINE__, __func__);
+    GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, location);
+    unregister_session(index);
+    delete sess;
+}
 
 void PgSQL_Thread::enter_waiter(PgSQL_Session *sess, unsigned hid) {
 	if (sess->waiter_node.session) return;
@@ -3161,7 +3275,8 @@ void PgSQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 
 		sess->to_process = 1;
 		myds->wait_until = curtime + pgsql_thread___ping_timeout_server * 1000;	// max_timeout
-		mc->last_time_used = curtime;
+		// last_time_used is left alone so a failed ping logs how long the connection sat
+		// idle; a successful one re-stamps it when the connection goes back to the pool.
 		myds->myprot.init(&myds, myds->myconn->userinfo, NULL);
 		sess->status = PINGING_SERVER;
 		myds->DSS = STATE_MARIADB_PING;
@@ -3193,6 +3308,10 @@ void PgSQL_Thread::run___cleanup_mirror_queue() {
 
 int PgSQL_Thread::run_ComputePollTimeout() {
 	int ttw = (mypolls.poll_timeout ? (mypolls.poll_timeout / 1000 < (unsigned int)pgsql_thread___poll_timeout ? mypolls.poll_timeout / 1000 : pgsql_thread___poll_timeout) : pgsql_thread___poll_timeout);
+	// Buffered next-command work survives run_SetAllSession_ToProcess0().
+	// A reply throttle may have paused it during the preceding writeout;
+	// sleep until its deadline, but never block with eligible work queued.
+	if (tune_queued_work_poll_timeout(session_continuations, curtime, ttw)) return 0;
 
 	// Adaptive poll timeout. partition_pool_nulls holds the count from the
 	// process_all_sessions() pass that just ran: update_partition_gate()
@@ -3364,13 +3483,16 @@ void PgSQL_Thread::run() {
 			const bool b_rearm = (curtime >= last_b_rearm_us + 50000);
 			if (b_rearm) {
 				last_b_rearm_us = curtime;
-				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
-					unsigned guard = 0;
-					for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
+					// Bound the scan by the real list size: a fixed cap would
+					// permanently skip the tail (never re-armed, never noticing a
+					// client disconnect) once a list grew past it.
+					for (auto *n = head; n; n = n->next) {
 						auto *sess = static_cast<PgSQL_Session*>(n->session);
 						if (sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0)
 							mypolls.add(POLLIN, sess->client_myds->fd, sess->client_myds, curtime);
 					}
+					(void)waiter_count;
 				});
 			}
 #endif // PROXYSQL31
@@ -3426,6 +3548,9 @@ void PgSQL_Thread::run() {
 		else {
 			maintenance_loop = false;
 		}
+		// Sessions read init_connect from this thread's copy; refresh it if
+		// LOAD PGSQL SERVERS TO RUNTIME changed it.
+		refresh_hostgroup_strings(PgHGM);
 
 		handle_kill_queues();
 
@@ -3496,15 +3621,25 @@ void PgSQL_Thread::run() {
 		}
 #endif // IDLE_THREADS
 
+#ifdef PROXYSQL31
+		{
+			ProcessAllMyDS_AfterPoll();
+			process_poll_housekeeping();
+		}
+#else
 		ProcessAllMyDS_AfterPoll<PgSQL_Thread>();
+#endif
 #ifdef PROXYSQL31
 		if (last_b_rearm_us == pre_poll_time) {
-			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head) {
-				unsigned guard = 0;
-				for (auto *n = head; n && guard < 100000; n = n->next, ++guard) {
+			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
+				// Bound the scan by the real list size: a fixed cap would
+				// permanently skip the tail (never dropped from the poll set)
+				// once a list grew past it.
+				for (auto *n = head; n; n = n->next) {
 					auto *sess = static_cast<PgSQL_Session*>(n->session);
 					drop_from_poll(sess->client_myds);
 				}
+				(void)waiter_count;
 			});
 		}
 #endif // PROXYSQL31
@@ -3712,6 +3847,52 @@ void PgSQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 #endif // IDLE_THREADS
 
 
+#ifdef PROXYSQL31
+void PgSQL_Thread::ProcessAllMyDS_AfterPoll() {
+	// Do not accept, read, decrypt, frame packets or relay notifications here.
+	// Capture every stream's readiness before a handler can mutate the poll set.
+	ready_listeners.clear();
+	notification_pipe_ready = false;
+	for (unsigned n = 0; n < mypolls.len; ++n) {
+		auto *ds = mypolls.myds[n];
+		if (!ds) {
+			if (mypolls.fds[n].fd == pipefd[0] && mypolls.fds[n].revents)
+				notification_pipe_ready = true;
+			continue;
+		}
+		if (!mypolls.fds[n].revents) {
+			if (poll_timeout_bool) check_timing_out_session<PgSQL_Thread>(n);
+			continue;
+		}
+		check_for_invalid_fd<PgSQL_Thread>(n);
+		if (ds->myds_type == MYDS_LISTENER) {
+			ready_listeners.push_back(ds);
+			continue;
+		}
+		if (!process_data_on_data_stream(ds, n)) --n;
+	}
+}
+
+void PgSQL_Thread::process_poll_housekeeping() {
+	// The notification pipe and listeners have no owning session handler.
+	if (notification_pipe_ready) {
+		for (unsigned n = 0; n < mypolls.len; ++n) {
+			if (!mypolls.myds[n] && mypolls.fds[n].fd == pipefd[0]) {
+				read_one_byte_from_pipe<PgSQL_Thread>(n);
+				break;
+			}
+		}
+		notification_pipe_ready = false;
+	}
+	for (auto *ds : ready_listeners) {
+		const int n = ds->poll_fds_idx;
+		if (n >= 0 && static_cast<unsigned>(n) < mypolls.len && mypolls.myds[n] == ds)
+			listener_handle_new_connection(ds, n);
+	}
+	ready_listeners.clear();
+}
+#endif
+
 bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n) {
 	if (mypolls.fds[n].revents) {
 #ifdef IDLE_THREADS
@@ -3735,6 +3916,10 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 #endif // IDLE_THREADS
 		mypolls.last_recv[n] = curtime;
 		myds->revents = mypolls.fds[n].revents;
+#ifdef PROXYSQL31
+		myds->pending_poll_revents |= mypolls.fds[n].revents;
+		myds->pending_poll_events |= mypolls.fds[n].events;
+#endif
 		myds->sess->to_process = 1;
 		assert(myds->sess->status != session_status___NONE);
 	}
@@ -3756,8 +3941,25 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 			myds->sess->to_process = 1;
 		}
 	}
+#ifdef PROXYSQL31
+	return true;
+}
+
+bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
+	const short ready = myds->pending_poll_revents;
+	if (!ready) return true;
+	const short requested = myds->pending_poll_events;
+	// Clear before doing work: handler() can re-enter and a connection can be
+	// detached/reused. A poll notification must never be consumed twice.
+	myds->pending_poll_revents = myds->pending_poll_events = 0;
+	myds->revents = ready;
+#endif
 	if (myds->myds_type == MYDS_BACKEND && myds->sess->status != FAST_FORWARD) {
+#ifdef PROXYSQL31
+		if (ready) {
+#else
 		if (mypolls.fds[n].revents) {
+#endif
 			// this part of the code fixes an important bug
 			// if a connection in use but idle (ex: running a transaction)
 			// get data, immediately destroy the session
@@ -3765,6 +3967,18 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 			// this can happen, for example, with a low wait_timeout and running transaction
 			if (myds->sess->status == WAITING_CLIENT_DATA) {
 				if (myds->myconn->async_state_machine == ASYNC_IDLE) {
+					// The rule below is MySQL's: that server never speaks first, so readable
+					// bytes on an idle backend mean it died. A connection subscribed by
+					// LISTEN is the one case where PostgreSQL does speak first, and the
+					// client holding it is the one that asked for those notifications.
+					// Only that case is treated differently; every other connection keeps
+					// the old behaviour exactly.
+					if (myds->myconn->get_status(STATUS_PGSQL_CONNECTION_LISTEN) &&
+						myds->myconn->native_mode && myds->sess->client_myds) {
+						if (myds->myconn->native_relay_async_messages(myds->sess->client_myds->PSarrayOUT) >= 0) {
+							return true;
+						}
+					}
 					proxy_warning("Detected broken idle connection on %s:%d\n", myds->myconn->parent->address, myds->myconn->parent->port);
 					myds->destroy_MySQL_Connection_From_Pool(false);
 					myds->sess->set_unhealthy();
@@ -3774,8 +3988,13 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 		}
 		return true;
 	}
+#ifdef PROXYSQL31
+	if (ready) {
+		if (myds->DSS < STATE_MARIADB_BEGIN || myds->DSS > STATE_MARIADB_END) {
+#else
 	if (mypolls.fds[n].revents) {
 		if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
+#endif
 			// only if we aren't using MariaDB Client Library
 			int rb = 0;
 			do {
@@ -3814,7 +4033,11 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 						else { // we are in fast_forward mode and encrypted == false
 							struct pollfd _fds;
 							nfds_t _nfds = 1;
+#ifdef PROXYSQL31
+							_fds.fd = myds->fd;
+#else
 							_fds.fd = mypolls.fds[n].fd;
+#endif
 							_fds.events = POLLIN;
 							_fds.revents = 0;
 							int _rc = poll(&_fds, _nfds, 0);
@@ -3835,7 +4058,11 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 					bool set_rb_zero = true;
 					if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
 						if (myds->encrypted == true) {
+#ifdef PROXYSQL31
+							if (myds->ssl_handshake_is_complete()) {
+#else
 							if (SSL_is_init_finished(myds->ssl)) {
+#endif
 								if (myds->data_in_rbio()) {
 									set_rb_zero = false;
 								}
@@ -3849,13 +4076,24 @@ bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigne
 
 		}
 		else {
+#ifdef PROXYSQL31
+			if (ready) {
+				myds->myconn->handler(ready);
+#else
 			if (mypolls.fds[n].revents) {
 				myds->myconn->handler(mypolls.fds[n].revents);
+#endif
 			}
 		}
+#ifdef PROXYSQL31
+		if ((requested & POLLOUT)
+			&&
+			((ready & POLLERR) || (ready & POLLHUP))
+#else
 		if ((mypolls.fds[n].events & POLLOUT)
 			&&
 			((mypolls.fds[n].revents & POLLERR) || (mypolls.fds[n].revents & POLLHUP))
+#endif
 			) {
 			myds->set_net_failure();
 		}
@@ -4029,6 +4267,7 @@ void PgSQL_Thread::apt_update_window() {
 }
 
 #endif // PROXYSQL31
+
 void PgSQL_Thread::process_all_sessions() {
 	unsigned int n;
 	unsigned int total_active_transactions_ = 0;
@@ -4046,6 +4285,10 @@ void PgSQL_Thread::process_all_sessions() {
 	if (sess_sort && mysql_sessions->len > 3 && partition_wanted) {
 		ProcessAllSessions_Partition<PgSQL_Session>();
 	}
+#ifdef PROXYSQL31
+    Worker_Scheduler<PgSQL_Thread, PgSQL_Session, PgSQL_Connection, PgSQL_HostGroups_Manager> scheduler(*this, *PgHGM);
+    bool no_backend_loop_needed = false;
+#endif
 	for (n = 0; n < mysql_sessions->len; n++) {
 		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
 #ifdef DEBUG
@@ -4076,11 +4319,12 @@ void PgSQL_Thread::process_all_sessions() {
 #endif // IDLE_THREADS
 			{
 				ProcessAllSessions_MaintenanceLoop(sess, sess_time, total_active_transactions_);
+
 			}
 #ifdef IDLE_THREADS
 			else
 			{
-				if ((sess_time / 1000 > (unsigned long long)pgsql_thread___wait_timeout)) {
+				if (sess_time / 1000 > (unsigned long long)pgsql_thread___wait_timeout) {
 					sess->killed = true;
 					sess->to_process = 1;
 					proxy_warning("Killing client connection %s:%d because inactive for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time / 1000);
@@ -4093,6 +4337,15 @@ void PgSQL_Thread::process_all_sessions() {
 			// removing this logic in 2.0.15
 			//sess->active_transactions = -1;
 		}
+#ifdef PROXYSQL31
+		// Pauses and pool starvation stop query execution, not socket I/O.
+		// POLLIN stays armed during a pause; drain it (including disconnects)
+		// here instead of repeatedly waking poll until the query delay expires.
+		if (sess->healthy && !sess->killed && sess->to_process &&
+			(sess->pause_until > curtime || sess->waiter_node.session)) {
+			if (scheduler.run_session(sess, PgSQL_Pool_Acquire_Mode::Normal, true) == PgSQL_Session_Run_Result::Close) sess->healthy = 0;
+		}
+#endif
 		if (sess->healthy == 0) {
 			char _buf[1024];
 			if (sess->client_myds) {
@@ -4135,11 +4388,16 @@ void PgSQL_Thread::process_all_sessions() {
 			if (sess->to_process == 1) {
 				if (sess->pause_until <= curtime) {
 #ifdef PROXYSQL31
-					if (!(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+					if (sess->continuation_queued || !(sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn)) {
+						if (!sess->continuation_queued) no_backend_loop_needed = true;
 						continue;
 					}
 #endif // PROXYSQL31
+#ifdef PROXYSQL31
+					rc = scheduler.run_session(sess) == PgSQL_Session_Run_Result::Close ? -1 : 0;
+#else
 					rc = sess->handler();
+#endif
 					//total_active_transactions_+=sess->active_transactions;
 					if (rc == -1 || sess->killed == true) {
 						char _buf[1024];
@@ -4151,7 +4409,13 @@ void PgSQL_Thread::process_all_sessions() {
 						n--;
 						delete sess;
 					}
+
 				}
+#ifdef PROXYSQL31
+				else if (sess->killed) {
+					no_backend_loop_needed = true;
+				}
+#endif
 			}
 			else {
 				if (sess->killed == true) {
@@ -4168,74 +4432,12 @@ void PgSQL_Thread::process_all_sessions() {
 				}
 			}
 		}
+#ifdef PROXYSQL31
+		scheduler.dispatch_released();
+#endif
 	}
 #ifdef PROXYSQL31
-	if (!waiter_lists.empty()) {
-		waiter_lists.for_each_hid([&](unsigned hid, PgSQL_Waiter_Node *head) {
-			(void)hid;
-			unsigned walk_guard = 0;
-			for (PgSQL_Waiter_Node *n = head; n && walk_guard < 100000; ++walk_guard) {
-				PgSQL_Waiter_Node *next = n->next;
-				auto *sess = static_cast<PgSQL_Session*>(n->session);
-				if (sess->pause_until > curtime && !sess->killed) {
-					n = next;
-					continue;
-				}
-				sess->to_process = 1;
-				rc = sess->handler();
-				if (rc == -1 || sess->killed == true) {
-					char _buf[1024];
-					if (sess->client_myds && sess->killed)
-						proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
-					snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
-					GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
-					unsigned int i;
-					for (i = 0; i < mysql_sessions->len; i++) {
-						if (mysql_sessions->index(i) == sess) {
-							unregister_session(i);
-							break;
-						}
-					}
-					delete sess;
-					n = next;
-					continue;
-				}
-				const bool got = sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn;
-				if (got) {
-					leave_waiter(sess);
-					PgSQL_Data_Stream *bds = sess->mybe->server_myds;
-					if (bds && bds->fd >= 0 && bds->poll_fds_idx < 0)
-						mypolls.add(POLLIN | POLLOUT, bds->fd, bds, curtime);
-				} else if (sess->status != CONNECTING_SERVER) {
-					// A checkout timeout can finish the request without a connection.
-					// Restore the client so its error response and next query can flow.
-					leave_waiter(sess);
-				} else if (vanilla_pool_checkout(sess->last_pool_ff, sess->last_pool_gtid ? "" : nullptr, sess->last_pool_max_lag_ms)) {
-					break;
-				}
-				n = next;
-			}
-		});
-	}
-
-	for (n = 0; n < mysql_sessions->len; n++) {
-		PgSQL_Session* sess = (PgSQL_Session*)mysql_sessions->index(n);
-		if (sess->waiter_node.session) continue;
-		if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) continue;
-		if (sess->to_process == 1 && sess->pause_until <= curtime) {
-			rc = sess->handler();
-			if (rc == -1 || sess->killed == true) {
-				char _buf[1024];
-				if (sess->client_myds && sess->killed)
-					proxy_warning("Closing killed client connection %s:%d\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
-				snprintf(_buf, sizeof(_buf), "%s:%d:%s()", __FILE__, __LINE__, __func__);
-				GloPgSQL_Logger->log_audit_entry(PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE, sess, NULL, _buf);
-				unregister_session(n);
-				n--;
-				delete sess;
-			}
-		}
-	}
+		scheduler.run_late(no_backend_loop_needed);
 
 #endif // PROXYSQL31
 	if (maintenance_loop) {
@@ -4290,6 +4492,12 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___unshun_algorithm = GloPTH->get_variable_int((char*)"unshun_algorithm");
 	pgsql_thread___free_connections_pct = GloPTH->get_variable_int((char*)"free_connections_pct");
 	pgsql_thread___kill_backend_connection_when_disconnect = (bool)GloPTH->get_variable_int((char*)"kill_backend_connection_when_disconnect");
+#ifdef PROXYSQL31
+	pgsql_thread___use_native_backend_protocol = (bool)GloPTH->get_variable_int((char*)"use_native_backend_protocol");
+#else
+	// Stable builds do not expose this setting and always use libpq.
+	pgsql_thread___use_native_backend_protocol = false;
+#endif
 	pgsql_thread___max_allowed_packet = GloPTH->get_variable_int((char*)"max_allowed_packet");
 	pgsql_thread___set_query_lock_on_hostgroup = GloPTH->get_variable_int((char*)"set_query_lock_on_hostgroup");
 	pgsql_thread___verbose_query_error = (bool)GloPTH->get_variable_int((char*)"verbose_query_error");
@@ -4720,7 +4928,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{ // uptime
 		unsigned long long t1 = monotonic_time();
 		pta[0] = (char*)"ProxySQL_Uptime";
-		sprintf(buf, "%llu", (t1 - GloVars.global.start_time) / 1000 / 1000);
+		snprintf(buf, sizeof(buf), "%llu", (t1 - GloVars.global.start_time) / 1000 / 1000);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4753,47 +4961,47 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Connections created
 		pta[0] = (char*)"Client_Connections_aborted";
-		sprintf(buf, "%lu", PgHGM->status.client_connections_aborted);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.client_connections_aborted);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Connections
 		pta[0] = (char*)"Client_Connections_connected";
-		sprintf(buf, "%d", PgHGM->status.client_connections);
+		snprintf(buf, sizeof(buf), "%d", PgHGM->status.client_connections);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Connections created
 		pta[0] = (char*)"Client_Connections_created";
-		sprintf(buf, "%lu", PgHGM->status.client_connections_created);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.client_connections_created);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0] = (char*)"Server_Connections_aborted";
-		sprintf(buf, "%lu", PgHGM->status.server_connections_aborted);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.server_connections_aborted);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0] = (char*)"Server_Connections_connected";
-		sprintf(buf, "%lu", PgHGM->status.server_connections_connected);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.server_connections_connected);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections
 		pta[0] = (char*)"Server_Connections_created";
-		sprintf(buf, "%lu", PgHGM->status.server_connections_created);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.server_connections_created);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{
 		// Connections delayed
 		pta[0] = (char*)"Server_Connections_delayed";
-		sprintf(buf, "%lu", PgHGM->status.server_connections_delayed);
+		snprintf(buf, sizeof(buf), "%lu", PgHGM->status.server_connections_delayed);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4837,31 +5045,31 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}*/
 	{	// Queries commit
 		pta[0] = (char*)"Commit";
-		sprintf(buf, "%llu", PgHGM->status.commit_cnt);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.commit_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered commit
 		pta[0] = (char*)"Commit_filtered";
-		sprintf(buf, "%llu", PgHGM->status.commit_cnt_filtered);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.commit_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries rollback
 		pta[0] = (char*)"Rollback";
-		sprintf(buf, "%llu", PgHGM->status.rollback_cnt);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.rollback_cnt);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries filtered rollback
 		pta[0] = (char*)"Rollback_filtered";
-		sprintf(buf, "%llu", PgHGM->status.rollback_cnt_filtered);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.rollback_cnt_filtered);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Queries backend RESET_CONNECTION
 		pta[0] = (char*)"Backend_reset_connection";
-		sprintf(buf, "%llu", PgHGM->status.backend_reset_connection);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.backend_reset_connection);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4873,7 +5081,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}*/
 	{	// Queries backend SET client_encoding 
 		pta[0] = (char*)"Backend_set_client_encoding";
-		sprintf(buf, "%llu", PgHGM->status.backend_set_client_encoding);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.backend_set_client_encoding);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4885,7 +5093,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}*/
 	{	// Queries frontend SET client_encoding 
 		pta[0] = (char*)"Frontend_set_client_encoding";
-		sprintf(buf, "%llu", PgHGM->status.frontend_set_client_encoding);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.frontend_set_client_encoding);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4944,7 +5152,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Queries that are SELECT for update or equivalent
 		pta[0] = (char*)"Selects_for_update__autocommit0";
-		sprintf(buf, "%llu", PgHGM->status.select_for_update_or_equivalent);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.select_for_update_or_equivalent);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -4962,19 +5170,19 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	}
 	{	// Access_Denied_Wrong_Password
 		pta[0] = (char*)"Access_Denied_Wrong_Password";
-		sprintf(buf, "%llu", PgHGM->status.access_denied_wrong_password);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.access_denied_wrong_password);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Access_Denied_Max_Connections
 		pta[0] = (char*)"Access_Denied_Max_Connections";
-		sprintf(buf, "%llu", PgHGM->status.access_denied_max_connections);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.access_denied_max_connections);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
 	{	// Access_Denied_Max_User_Connections
 		pta[0] = (char*)"Access_Denied_Max_User_Connections";
-		sprintf(buf, "%llu", PgHGM->status.access_denied_max_user_connections);
+		snprintf(buf, sizeof(buf), "%llu", PgHGM->status.access_denied_max_user_connections);
 		pta[1] = buf;
 		result->add_row(pta);
 	}
@@ -5588,11 +5796,20 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_Processlist(processlist_config_t arg
 				case PROCESSING_STMT_EXECUTE:
 					pta[13] = strdup("Execute");
 					break;
+				case PROCESSING_EXTQ_BATCH:
+					pta[13] = strdup("Execute batch");
+					break;
 				case PROCESSING_STMT_DESCRIBE:
 					pta[13] = strdup("Describe");
 					break;
 				case PROCESSING_STMT_PREPARE:
 					pta[13] = strdup("Prepare");
+					break;
+				case PROCESSING_STMT_BIND:
+					pta[13] = strdup("Bind");
+					break;
+				case PROCESSING_STMT_CLOSE:
+					pta[13] = strdup("Close");
 					break;
 				case CONNECTING_CLIENT:
 					pta[13] = strdup("Connecting client");
@@ -6142,7 +6359,7 @@ PgSQL_Connection* PgSQL_Thread::get_MyConn_local(unsigned int _hid, PgSQL_Sessio
 	return NULL;
 }
 
-void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
+void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c, PgSQL_Session *releasing_session) {
 	// Bounded local cache: cache 1-in-N releases (N = pgsql_threads), push the
 	// rest to the shared HGM pool so peer workers can pick them up.
 	// At N=1 always cache (no sibling to share with).
@@ -6153,21 +6370,24 @@ void PgSQL_Thread::push_MyConn_local(PgSQL_Connection * c) {
 	if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine == ASYNC_IDLE) {
 #ifdef PROXYSQL31
-			// Never cache locally while this worker has connection waiters.
+            if (collecting_releases) released_hostgroups.push_back(mysrvc->myhgc->hid);
+            if (releasing_session) releasing_session->note_backend_release(mysrvc->myhgc->hid);
+#endif
+			unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
+#ifdef PROXYSQL31
+			// With multiple workers, bypass local caching when there are waiters.
 			// return_local_connections() only publishes the cache at the end
 			// of the pass, and a pass walks every session this worker owns --
 			// so the time a cached connection stays invisible to peer workers
 			// grows with client count, precisely when starvation is worst.
 			// The 1-in-N ratio below is fixed and does not scale with that.
-			if (!pool_has_waiters() && waiter_lists.empty()) {
-				unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
+			if (n == 1 || (!pool_has_waiters() && waiter_lists.empty())) {
 				if ((push_local_counter++ % n) == 0) {
 					cached_connections->add(c);
 					return;
 				}
 			}
 #else
-			unsigned int n = (GloPTH && GloPTH->num_threads > 0) ? GloPTH->num_threads : 1;
 			if ((push_local_counter++ % n) == 0) {
 				cached_connections->add(c);
 				return;
@@ -6264,7 +6484,15 @@ bool PgSQL_Thread::Scan_Sessions_to_Kill___handle_query_cancellation(PgSQL_Sessi
 					should_kill = true;
 				}
 			}
-			if (should_kill && sess->mybe && sess->mybe->server_myds) {
+			// An idle session has nothing to cancel, and nothing there clears cancel_query:
+			// BeforePoll, which wakes at once while it is set, would spin the thread.
+			// The rollback-only reset is internal cleanup after the client's transaction
+			// has ended. It also has no client statement to cancel or flag consumer.
+			const bool internal_rollback = sess->status == RESETTING_CONNECTION_V2 &&
+				sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn &&
+				sess->mybe->server_myds->myconn->reset_session_rollback_only;
+			if (should_kill && sess->mybe && sess->mybe->server_myds &&
+				sess->status != WAITING_CLIENT_DATA && !internal_rollback) {
 				proxy_info("Query cancellation requested [Session ID=%u]\n", it->thread_id);
 				sess->mybe->server_myds->cancel_query = true;
 				sess->mybe->server_myds->kill_type = 1;

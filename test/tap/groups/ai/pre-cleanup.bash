@@ -19,6 +19,11 @@ if [ -z "${WORKSPACE:-}" ]; then
     exit 0
 fi
 
+if [ "${PROXYSQL_LOAD_GENAI_PLUGIN:-1}" != "1" ]; then
+    echo ">>> AI pre-cleanup hook: compiled product has no MCP plugin"
+    exit 0
+fi
+
 export ROOT_PASSWORD=$(echo -n "${INFRA_ID}" | sha256sum | head -c 10)
 PROXY_CONTAINER="proxysql.${INFRA_ID}"
 

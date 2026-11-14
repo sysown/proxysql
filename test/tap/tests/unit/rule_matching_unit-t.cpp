@@ -19,6 +19,8 @@
 #include "QP_rule_text.h"
 
 #include <cstring>
+#include <string>
+#include <vector>
 
 #ifdef DEBUG
 // Debug-only seam implemented in Query_Processor.cpp. It keeps the adapter and
@@ -29,6 +31,12 @@ extern bool pcre2_query_rule_replace_for_test(
 	const char* legacy_rewrite,
 	bool global,
 	std::string* rewritten
+);
+extern bool pcre2_query_rule_replace_sequence_for_test(
+	const char* pattern,
+	const char* legacy_rewrite,
+	bool global,
+	std::vector<std::string>* subjects
 );
 #endif
 
@@ -336,6 +344,32 @@ static void test_cidr_requires_parsed_address() {
 	ok(!match_client_addr(&r, "10.1.2.3", nullptr), "CIDR criterion rejects a null sockaddr");
 }
 
+// Issue #6316: an IPv4 client can reach ProxySQL as an IPv4-mapped IPv6
+// address (::ffff:a.b.c.d), e.g. through a dual-stack PROXY protocol load
+// balancer. IPv4 prefixes must match it by its embedded IPv4 address.
+static void test_cidr_ipv4_mapped_client() {
+	QP_rule_t r = make_rule();
+	r.client_addr = const_cast<char *>("10.0.0.0/8");
+	ok(qp_addr_predicate_init(&r.client_addr_pred, r.client_addr, QP_ADDR_FIELD_CLIENT), "IPv4 /8 resolves");
+
+	struct sockaddr_storage mapped_in = make_sa("::ffff:10.1.2.3");
+	struct sockaddr_storage mapped_out = make_sa("::ffff:11.1.2.3");
+	struct sockaddr_storage v6 = make_sa("2001:db8::a01:203");
+	ok(match_client_addr(&r, "::ffff:10.1.2.3", (struct sockaddr *)&mapped_in),
+		"IPv4 prefix matches an IPv4-mapped client inside it");
+	ok(!match_client_addr(&r, "::ffff:11.1.2.3", (struct sockaddr *)&mapped_out),
+		"IPv4 prefix rejects an IPv4-mapped client outside it");
+	ok(!match_client_addr(&r, "2001:db8::a01:203", (struct sockaddr *)&v6),
+		"IPv4 prefix still rejects a native IPv6 client");
+
+	// The mapped form stays an IPv6 address for IPv6 prefixes.
+	QP_rule_t r6 = make_rule();
+	r6.client_addr = const_cast<char *>("::ffff:0:0/96");
+	ok(qp_addr_predicate_init(&r6.client_addr_pred, r6.client_addr, QP_ADDR_FIELD_CLIENT), "IPv6 mapped /96 resolves");
+	ok(match_client_addr(&r6, "::ffff:10.1.2.3", (struct sockaddr *)&mapped_in),
+		"IPv6 mapped /96 matches an IPv4-mapped client");
+}
+
 // Acceptance criterion 6: the pre-existing forms keep their behaviour, and a
 // bare '_' now reaches mywildcmp() instead of being compared literally.
 static void test_addr_predicate_mode_selection() {
@@ -371,29 +405,103 @@ static void test_addr_predicate_mode_selection() {
 
 	// A Unix socket path is how a socket listener spells itself in proxy_addr,
 	// so a leading '/' must not be read as the start of a malformed prefix.
-	ok(ip_cidr_spec_looks_like_prefix("/tmp/proxysql.sock") == false,
+	// The classification is field-aware since #6426: qp_addr_value_is_cidr()
+	// is the single decision the admin validator and the predicate consult.
+	ok(qp_addr_value_is_cidr("/run/proxysql.sock", QP_ADDR_FIELD_PROXY) == false,
 		"a leading '/' is a path, not a prefix");
-	ok(ip_cidr_spec_looks_like_prefix("10.0.0.0/8") == true, "addr/len is a prefix");
-	ok(ip_cidr_spec_looks_like_prefix("2001:db8::/32") == true, "IPv6 addr/len is a prefix");
-	ok(ip_cidr_spec_looks_like_prefix("10.0.0.1") == false, "a bare address is not a prefix");
-	ok(ip_cidr_spec_looks_like_prefix("") == false, "an empty value is not a prefix");
-	ok(ip_cidr_spec_looks_like_prefix(NULL) == false, "a null value is not a prefix");
+	ok(qp_addr_value_is_cidr("10.0.0.0/8", QP_ADDR_FIELD_PROXY) == true, "addr/len is a prefix");
+	ok(qp_addr_value_is_cidr("2001:db8::/32", QP_ADDR_FIELD_PROXY) == true, "IPv6 addr/len is a prefix");
+	ok(qp_addr_value_is_cidr("10.0.0.1", QP_ADDR_FIELD_PROXY) == false, "a bare address is not a prefix");
+	ok(qp_addr_value_is_cidr("", QP_ADDR_FIELD_PROXY) == false, "an empty value is not a prefix");
+	ok(qp_addr_value_is_cidr(NULL, QP_ADDR_FIELD_PROXY) == false, "a null value is not a prefix");
 
 	// The path exception is reserved for proxy_addr, which is the field a Unix
 	// listener writes its socket path into.
-	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", QP_ADDR_FIELD_PROXY), "Unix socket path resolves on proxy_addr");
+	ok(qp_addr_predicate_init(&pred, "/run/proxysql.sock", QP_ADDR_FIELD_PROXY), "Unix socket path resolves on proxy_addr");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "Unix socket path stays on the exact-match path");
-	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
+	ok(qp_addr_predicate_init(&pred, "/run/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
 		"a socket path is refused on client_addr");
 
 	// A listener path is not a rendered address, so neither the length cap nor
 	// the '%'-position rule may be applied to it.
-	ok(qp_addr_predicate_init(&pred, "/tmp/a-very-long-socket-path-that-exceeds-inet6-addrstrlen-by-a-way.sock",
+	ok(qp_addr_predicate_init(&pred, "/run/a-very-long-socket-path-that-exceeds-inet6-addrstrlen-by-a-way.sock",
 		QP_ADDR_FIELD_PROXY), "an over-long socket path is accepted on proxy_addr");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "an over-long socket path stays exact");
-	ok(qp_addr_predicate_init(&pred, "/tmp/a%b.sock", QP_ADDR_FIELD_PROXY),
+	ok(qp_addr_predicate_init(&pred, "/run/a%b.sock", QP_ADDR_FIELD_PROXY),
 		"a socket path containing '%' is accepted on proxy_addr");
 	ok(pred.match == QP_ADDR_MATCH_EXACT, "a socket path containing '%' stays exact");
+}
+
+// Issue #6426: a Unix listener may be declared with a RELATIVE path, and
+// MySQL_Thread copies that configured string verbatim into proxy_addr. A
+// relative path ('./proxysql.sock', 'run/proxysql.sock') contains a '/' but is
+// not a prefix list, so the rule must load and match exactly, as in v3.0.11.
+static void test_qp_addr_relative_socket_paths() {
+	qp_addr_predicate_t pred;
+	const char *paths[] = { "./proxysql.sock", "run/proxysql.sock", "../run/p.sock",
+		"/run/proxysql.sock", "proxysql.sock" };
+	for (const char *path : paths) {
+		ok(qp_addr_predicate_init(&pred, path, QP_ADDR_FIELD_PROXY) == true,
+			"socket-path proxy_addr '%s' resolves", path);
+		ok(pred.match == QP_ADDR_MATCH_EXACT, "socket-path proxy_addr '%s' is exact", path);
+	}
+	for (const char *path : paths) {
+		ok(validate_qp_addr_value("42", QP_ADDR_FIELD_PROXY, path) == true,
+			"socket-path proxy_addr '%s' passes admin validation", path);
+	}
+
+	// The criterion must match the identical session string, which is exactly
+	// the listener's configured text.
+	QP_rule_t r = make_rule();
+	r.proxy_addr = const_cast<char *>("run/proxysql.sock");
+	ok(qp_addr_predicate_init(&r.proxy_addr_pred, r.proxy_addr, QP_ADDR_FIELD_PROXY), "predicate resolves");
+	ok(rule_matches_query(&r, 0, "u", "d", "10.0.0.1",
+		nullptr,
+		"run/proxysql.sock",
+		nullptr, -1, 0, nullptr, "SELECT 1", nullptr, 1),
+		"a relative socket path matches the identical session string");
+
+	// classifier ground truth for proxy_addr
+	ok(qp_addr_value_is_cidr("./proxysql.sock", QP_ADDR_FIELD_PROXY) == false,
+		"a relative socket path is not classified as CIDR");
+	ok(qp_addr_value_is_cidr("run/proxysql.sock", QP_ADDR_FIELD_PROXY) == false,
+		"'run/x.sock' is not classified as CIDR");
+	ok(qp_addr_value_is_cidr("10.0.0.0/8", QP_ADDR_FIELD_PROXY) == true,
+		"a literal addr/len on proxy_addr is still a prefix list");
+
+	// Malformed lists whose head IS a literal keep entering the CIDR branch so
+	// typo protection is preserved: they fail init and are never loaded.
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/33", QP_ADDR_FIELD_PROXY) == false,
+		"'10.0.0.0/33' on proxy_addr is rejected");
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/8,foo", QP_ADDR_FIELD_PROXY) == false,
+		"'10.0.0.0/8,foo' on proxy_addr is rejected");
+	ok(validate_qp_addr_value("42", QP_ADDR_FIELD_PROXY, "10.0.0.0/33") == false,
+		"admin validation rejects '10.0.0.0/33' on proxy_addr");
+	ok(validate_qp_addr_value("42", QP_ADDR_FIELD_PROXY, "10.0.0.0/8,garbage") == false,
+		"admin validation rejects a list with a bad token on proxy_addr");
+
+	//.client_addr semantics are unchanged: a non-CIDR '/' form is refused.
+	ok(qp_addr_predicate_init(&pred, "10.0.0.0/255.0.0.0", QP_ADDR_FIELD_CLIENT) == false,
+		"a netmask-form prefix is rejected on client_addr");
+	ok(qp_addr_predicate_init(&pred, "/run/x", QP_ADDR_FIELD_CLIENT) == false,
+		"a socket path is still rejected on client_addr");
+	ok(qp_addr_predicate_init(&pred, "10.0.0._", QP_ADDR_FIELD_CLIENT) == true,
+		"'10.0.0._' resolves on client_addr");
+	ok(pred.match == QP_ADDR_MATCH_WILDCARD, "'_' is a single-character wildcard on client_addr");
+
+	// An inert (QP_ADDR_MATCH_NONE) predicate can never match: it must NOT
+	// fall through to a strcmp of the raw strings.
+	QP_rule_t none_rule = make_rule();
+	none_rule.client_addr = const_cast<char *>("10.0.0.0/8,foo");
+	ok(qp_addr_predicate_init(&none_rule.client_addr_pred, none_rule.client_addr,
+		QP_ADDR_FIELD_CLIENT) == false, "the malformed list fails predicate init");
+	ok(none_rule.client_addr_pred.match == QP_ADDR_MATCH_NONE, "the predicate is inert");
+	struct sockaddr_storage sa = make_sa("10.0.0.0");
+	ok(!rule_matches_query(&none_rule, 0, "u", "d", "10.0.0.0/8,foo",
+		(struct sockaddr *)&sa,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"a MATCH_NONE predicate never matches, even against an identical string");
 }
 
 // An IPv6 literal may embed a dotted quad, which makes the longest legal token
@@ -507,7 +615,7 @@ static void test_cidr_rejects_malformed() {
 	// rejected rather than becoming a criterion that could never match.
 	ok(qp_addr_predicate_init(&pred, "/8", QP_ADDR_FIELD_CLIENT) == false,
 		"a leading '/' is rejected on client_addr");
-	ok(qp_addr_predicate_init(&pred, "/tmp/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
+	ok(qp_addr_predicate_init(&pred, "/run/proxysql.sock", QP_ADDR_FIELD_CLIENT) == false,
 		"a socket path is rejected on client_addr");
 	ok(qp_addr_predicate_init(&pred, "/8", QP_ADDR_FIELD_PROXY) == true,
 		"a leading '/' is accepted on proxy_addr");
@@ -633,6 +741,9 @@ static void test_proxy_addr_port() {
 	QP_rule_t r = make_rule();
 	r.proxy_addr = const_cast<char *>("10.0.0.5");
 	r.proxy_port = 6033;
+	// Production (new_query_rule) always resolves the predicate; a raw
+	// QP_rule_t must too, since a NONE predicate is inert by design (#6426).
+	qp_addr_predicate_init(&r.proxy_addr_pred, r.proxy_addr, QP_ADDR_FIELD_PROXY);
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"10.0.0.5",
@@ -692,8 +803,8 @@ static void test_match_digest_pcre2() {
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"127.0.0.1",
-		nullptr, 6033, 0, "AAB", "SELECT 1", nullptr, 1),
-		"PCRE-compatible mode accepts PCRE2 variable-length lookbehind");
+		nullptr, 6033, 0, "AAB", "SELECT 1", nullptr, 3),
+		"PCRE2 mode (engine 3) accepts variable-length lookbehind");
 }
 
 static void test_match_digest_pcre2_lookaround_reset_start() {
@@ -702,8 +813,8 @@ static void test_match_digest_pcre2_lookaround_reset_start() {
 	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"127.0.0.1",
-		nullptr, 6033, 0, "a", "SELECT 1", nullptr, 1),
-		"PCRE-compatible mode accepts legacy \\K inside positive lookahead");
+		nullptr, 6033, 0, "a", "SELECT 1", nullptr, 3),
+		"PCRE2 mode (engine 3) accepts legacy \\K inside positive lookahead");
 }
 
 static void test_invalid_pcre2_pattern() {
@@ -712,8 +823,8 @@ static void test_invalid_pcre2_pattern() {
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"127.0.0.1",
-		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
-		"invalid PCRE2 pattern safely returns no match");
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 3),
+		"invalid PCRE2 pattern safely returns no match on engine 3");
 }
 
 static void test_invalid_negated_pcre2_pattern() {
@@ -723,9 +834,86 @@ static void test_invalid_negated_pcre2_pattern() {
 	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
 		nullptr,
 		"127.0.0.1",
-		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
-		"invalid PCRE2 pattern does not match a negated rule");
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 3),
+		"invalid PCRE2 pattern does not match a negated rule on engine 3");
 }
+
+// Issue #6411 (maintainer decision): engines 1 and 2 keep the v3.0.11
+// semantics of an invalid regex. It never matches, so a negated rule matches
+// every query.
+static void test_invalid_re2_pattern() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("(");
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"invalid RE2 pattern safely returns no match");
+	r.negate_match_pattern = true;
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 2),
+		"invalid RE2 pattern matches a negated rule (v3.0.11 semantics)");
+}
+
+static void test_invalid_pcre1_pattern() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("(");
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"invalid PCRE pattern safely returns no match on engine 1");
+	r.negate_match_pattern = true;
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, "SELECT 1", nullptr, 1),
+		"invalid PCRE pattern matches a negated rule on engine 1 (v3.0.11 semantics)");
+}
+
+#ifdef PROXYSQL31
+// Issue #6411: a large query must still be matched by an ordinary pattern on
+// engine 3; the PCRE2 match limit must not be lower than PCRE's.
+static void test_pcre2_large_query_matches() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("^SELECT .* FROM big_table");
+	// The greedy '.*' runs to the end and backtracks over the whole 1 MB
+	// value to find ' FROM big_table', as PCRE does on engine 1.
+	const std::string query = "SELECT * FROM big_table WHERE v='" + std::string(1024 * 1024, 'a') + "'";
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, query.c_str(), nullptr, 3),
+		"PCRE2 matches '^SELECT .* FROM' against a query with a 1 MB value on engine 3");
+	ok(rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, query.c_str(), nullptr, 1),
+		"PCRE matches the same query on engine 1");
+}
+
+// Issue #6411: a PCRE2 limit hit is "unknown", not "no match": it must not
+// make a negated rule match.
+static void test_pcre2_limit_does_not_match_negated() {
+	QP_rule_t r = make_rule();
+	r.match_pattern = const_cast<char *>("^(.|\\n)*FOR UPDATE");
+	r.negate_match_pattern = true;
+	const std::string query = "SELECT '" + std::string(1024 * 1024, 'a') + "' FROM t";
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, query.c_str(), nullptr, 3),
+		"a PCRE2 heap/match limit hit does not make a negated rule match");
+	r.negate_match_pattern = false;
+	ok(!rule_matches_query(&r, 0, "u", "d", "1.2.3.4",
+		nullptr,
+		"127.0.0.1",
+		nullptr, 6033, 0, nullptr, query.c_str(), nullptr, 3),
+		"a PCRE2 heap/match limit hit does not make a rule match");
+}
+#endif
 
 static void test_match_pattern() {
 	QP_rule_t r = make_rule();
@@ -824,6 +1012,30 @@ static void test_pcre2_rewrites() {
 	ok(rc && rewritten == "XY XY",
 		"PCRE global rewrite expands unset optional captures as empty");
 }
+
+// Issue #6321: a rule reuses its compiled regex, match data and translated
+// rewrite across queries. Each substitution allocates its own output buffer.
+// Verify reuse across small and large queries, including output-size retries.
+static void test_pcre2_rewrite_reuse() {
+	// Both 1000 and 30000 matches outgrow their call's initial output buffer
+	// and exercise the retry with the exact size reported by PCRE2.
+	const std::string x1k(1000, 'x');
+	const std::string x30k(30000, 'x');
+	auto expanded = [](size_t n) {
+		std::string out {};
+		for (size_t i = 0; i < n; i++) {
+			out += "<x>";
+		}
+		return out;
+	};
+	std::vector<std::string> subjects { "x", x1k, "a x b", x30k, "x", x1k };
+	const bool rc = pcre2_query_rule_replace_sequence_for_test("(x)", "<\\1>", true, &subjects);
+	ok(rc, "one compiled regex rewrites a sequence of queries");
+	ok(subjects[0] == "<x>" && subjects[2] == "a <x> b" && subjects[4] == "<x>",
+		"small rewrites are exact before and after large ones");
+	ok(subjects[1] == expanded(1000) && subjects[3] == expanded(30000) && subjects[5] == expanded(1000),
+		"large rewrites remain complete across output-size retries and match-data reuse");
+}
 #endif
 
 // ============================================================================
@@ -837,6 +1049,7 @@ static void test_combined_criteria() {
 	r.proxy_addr = const_cast<char *>("10.0.0.9");
 	r.proxy_port = 6033;
 	r.match_pattern = const_cast<char *>("SELECT");
+	qp_addr_predicate_init(&r.proxy_addr_pred, r.proxy_addr, QP_ADDR_FIELD_PROXY);
 	ok(rule_matches_query(&r, 0, "appuser", "analytics", "1.2.3.4",
 		nullptr,
 		"10.0.0.9",
@@ -866,10 +1079,19 @@ static void test_null_rule() {
 // ============================================================================
 
 int main() {
-#ifdef DEBUG
-	plan(200);
+#ifdef PROXYSQL31
+	// Engine-3 tests run only on the Innovative/Plugin tiers.
+#	ifdef DEBUG
+	plan(248);
+#	else
+	plan(238);
+#	endif
 #else
-	plan(193);
+#	ifdef DEBUG
+	plan(240);
+#	else
+	plan(230);
+#	endif
 #endif
 
 	test_init_minimal();
@@ -885,7 +1107,9 @@ int main() {
 	test_cidr_ipv6();
 	test_cidr_mixed_families();
 	test_cidr_requires_parsed_address();
+	test_cidr_ipv4_mapped_client();
 	test_addr_predicate_mode_selection();
+	test_qp_addr_relative_socket_paths();
 	test_cidr_ipv6_embedded_dotted_quad();
 	test_bare_underscore_wildcard_matches();
 	test_cidr_rejects_malformed();
@@ -895,16 +1119,25 @@ int main() {
 	test_digest();
 	test_match_digest_re2();
 	test_match_digest_pcre();
+// Engine 3 (PCRE2) exists only on the Innovative/Plugin tiers; on the Stable
+// tier these would exercise engine 1 and fail (issue #6411).
+#ifdef PROXYSQL31
 	test_match_digest_pcre2();
 	test_match_digest_pcre2_lookaround_reset_start();
 	test_invalid_pcre2_pattern();
 	test_invalid_negated_pcre2_pattern();
+	test_pcre2_large_query_matches();
+	test_pcre2_limit_does_not_match_negated();
+#endif
+	test_invalid_re2_pattern();
+	test_invalid_pcre1_pattern();
 	test_match_pattern();
 	test_negate_match_pattern();
 	test_caseless_modifier();
 	test_rewritten_query();
 #ifdef DEBUG
 	test_pcre2_rewrites();
+	test_pcre2_rewrite_reuse();
 #endif
 	test_combined_criteria();
 	test_null_rule();

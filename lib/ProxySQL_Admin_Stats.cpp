@@ -8,12 +8,14 @@
 #include "cpp.h"
 
 #include "MySQL_Authentication.hpp"
+#include "Aws_Iam_Provider.h"
 #include "MySQL_Passthrough_Auth_Cache.h"
 #include "PgSQL_Authentication.h"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_PreparedStatement.h"
 #include "PgSQL_PreparedStatement.h"
 #include "ProxySQL_Cluster.hpp"
+#include "proxysql_admin_global_sql_lock.h"
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Query_Cache.h"
 #include "PgSQL_Query_Cache.h"
@@ -62,7 +64,17 @@ extern ProxySQL_Statistics *GloProxyStats;
 extern MySQL_Logger *GloMyLogger;
 extern PgSQL_Logger *GloPgSQL_Logger;
 
+#ifdef PROXYSQL40
+static AwsIamStatsSnapshot global_aws_iam_stats_snapshot() {
+	AwsIamTokenSourceLease source = acquire_global_aws_iam_token_source();
+	return source ? source->snapshot() : AwsIamStatsSnapshot {};
+}
+#endif // PROXYSQL40
+
 void ProxySQL_Admin::p_update_metrics() {
+#ifdef PROXYSQL40
+	update_aws_iam_prometheus_metrics(global_aws_iam_stats_snapshot());
+#endif // PROXYSQL40
 	// Update proxysql_uptime
 	auto t1 = monotonic_time();
 	auto new_uptime = (t1 - GloVars.global.start_time)/1000/1000;
@@ -185,31 +197,31 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 	// ===============================================================
 
 	// proxysql_auth_memory metric
-	unsigned long mu = GloMyAuth->memory_usage();
+	unsigned long mu = GloMyAuth ? GloMyAuth->memory_usage() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::auth_memory_bytes]->Set(mu);
 
 	// proxysql_query_digest_memory metric
-	const auto& query_digest_t_size = GloMyQPro->get_query_digests_total_size();
+	const auto& query_digest_t_size = GloMyQPro ? GloMyQPro->get_query_digests_total_size() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::query_digest_memory_bytes]->Set(query_digest_t_size);
 
 	// mysql_query_rules_memory metric
-	const auto& rules_mem_used = GloMyQPro->get_rules_mem_used();
+	const auto& rules_mem_used = GloMyQPro ? GloMyQPro->get_rules_mem_used() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_query_rules_memory_bytes]->Set(rules_mem_used);
 
 	// mysql_firewall_users_table metric
-	const auto& firewall_users_table = GloMyQPro->get_firewall_memory_users_table();
+	const auto& firewall_users_table = GloMyQPro ? GloMyQPro->get_firewall_memory_users_table() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_table]->Set(firewall_users_table);
 
 	// mysql_firewall_users_config metric
-	const auto& firewall_users_config = GloMyQPro->get_firewall_memory_users_config();
+	const auto& firewall_users_config = GloMyQPro ? GloMyQPro->get_firewall_memory_users_config() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_config]->Set(firewall_users_config);
 
 	// mysql_firewall_rules_table metric
-	const auto& firewall_rules_table = GloMyQPro->get_firewall_memory_rules_table();
+	const auto& firewall_rules_table = GloMyQPro ? GloMyQPro->get_firewall_memory_rules_table() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_table]->Set(firewall_rules_table);
 
 	// mysql_firewall_rules_table metric
-	const auto& firewall_rules_config = GloMyQPro->get_firewall_memory_rules_config();
+	const auto& firewall_rules_config = GloMyQPro ? GloMyQPro->get_firewall_memory_rules_config() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_config]->Set(firewall_rules_config);
 
 	// proxysql_stack_memory_mysql_threads
@@ -668,6 +680,13 @@ void ProxySQL_Admin::stats___mysql_global() {
 			sqlite3_global_stats_row_step(statsdb, row_stmt, var_name.c_str(), it->second);
 		}
 	}
+
+#ifdef PROXYSQL40
+	for (const AwsIamNamedStat& row :
+		aws_iam_stats_mysql_global_rows(global_aws_iam_stats_snapshot())) {
+		sqlite3_global_stats_row_step(statsdb, row_stmt, row.name, row.value);
+	}
+#endif // PROXYSQL40
 
 	statsdb->execute("COMMIT");
 }
@@ -1603,9 +1622,14 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 	//        | ProxySQL_Node_Entry::set_checksums
 	//      + ProxySQL_Cluster::pull_mysql_query_rules_from_peer -> tries to lock on 'sql_query_global_mutex'
 	//  Producing a deadlock scenario between the two threads.
-	pthread_mutex_unlock(&this->sql_query_global_mutex);
-	SQLite3_result* resultset = GloProxyCluster->get_stats_proxysql_servers_checksums();
-	pthread_mutex_lock(&this->sql_query_global_mutex);
+	// The release window gives up every level this thread holds and restores
+	// exactly those levels (an Admin session, or a plugin that entered through
+	// the shared protocol); see include/proxysql_admin_global_sql_lock.h.
+	SQLite3_result* resultset = nullptr;
+	{
+		proxysql_admin_global_sql_release_scope released(this->sql_query_global_mutex);
+		resultset = GloProxyCluster->get_stats_proxysql_servers_checksums();
+	}
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_proxysql_servers_checksums");
 	if (resultset) {
@@ -1639,12 +1663,22 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 }
 
 void ProxySQL_Admin::stats___proxysql_servers_metrics() {
-	//SQLite3_result * resultset=GloProxyCluster->get_stats_proxysql_servers_metrics();
-	//if (resultset==NULL) return;
+	// Same ABBA as stats___proxysql_servers_checksums() above: this Admin
+	// session holds 'sql_query_global_mutex' and
+	// get_stats_proxysql_servers_metrics() takes 'ProxySQL_Cluster_Nodes::mutex',
+	// while a Cluster peer thread holds that nodes mutex across
+	// ProxySQL_Node_Entry::set_checksums(), whose tail pulls configuration and
+	// takes 'sql_query_global_mutex'. Release the global mutex around the
+	// snapshot; the returned resultset is a self-contained copy.
+	// Release window: see stats___proxysql_servers_checksums() above and the
+	// shared protocol in include/proxysql_admin_global_sql_lock.h.
+	SQLite3_result *resultset = nullptr;
+	{
+		proxysql_admin_global_sql_release_scope released(this->sql_query_global_mutex);
+		resultset = GloProxyCluster->get_stats_proxysql_servers_metrics();
+	}
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_proxysql_servers_metrics");
-	SQLite3_result *resultset=NULL;
-	resultset=GloProxyCluster->get_stats_proxysql_servers_metrics();
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement1=NULL;

@@ -5,7 +5,6 @@
 #include "MySQL_Monitor.hpp"
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Thread.h"
-#include "MySQL_Thread_test.h"
 #include "ProxySQL_PluginConfig_test.h"
 #include "ProxySQL_PluginSecrets.h"
 #include "ProxySQL_Statistics.hpp"
@@ -14,6 +13,7 @@
 #include "sqlite3db.h"
 #include "tap.h"
 #include "test_init.h"
+#include "test_globals.h"
 
 #include <algorithm>
 #include <arpa/inet.h>
@@ -58,6 +58,20 @@ public:
 		std::vector<table_def_t*> definitions;
 		admin->insert_into_tables_defs(&definitions, "proxysql_plugin_secrets",
 			proxysql_plugin_secrets_table_definition());
+		const bool materialized = admin->check_and_build_standard_tables(&db, &definitions);
+		admin->drop_tables_defs(&definitions);
+		free(storage);
+		return materialized;
+	}
+
+	static bool materialize_plugin_config_schema(SQLite3DB& db) {
+		void* storage = calloc(1, sizeof(ProxySQL_Admin));
+		auto* admin = reinterpret_cast<ProxySQL_Admin*>(storage);
+		std::vector<table_def_t*> definitions;
+		admin->insert_into_tables_defs(&definitions, "proxysql_plugin_owned_objects",
+			PROXYSQL_PLUGIN_OWNED_OBJECTS_DDL);
+		admin->insert_into_tables_defs(&definitions, "proxysql_plugin_config_generations",
+			PROXYSQL_PLUGIN_CONFIG_GENERATIONS_DDL);
 		const bool materialized = admin->check_and_build_standard_tables(&db, &definitions);
 		admin->drop_tables_defs(&definitions);
 		free(storage);
@@ -573,32 +587,9 @@ struct AuthMidpointThrowOnce {
 	}
 };
 
-struct InterfaceRecoveryFailure {
-	std::string old_interface;
-	int rejected_commits {1};
-	int old_add_failures {1};
-	int old_add_attempts {0};
-
-	static bool fail_add(void* opaque, const char* iface) {
-		auto& self = *static_cast<InterfaceRecoveryFailure*>(opaque);
-		if (self.old_interface != iface) return false;
-		++self.old_add_attempts;
-		if (self.old_add_failures < 0) return true;
-		if (self.old_add_failures == 0) return false;
-		--self.old_add_failures;
-		return true;
-	}
-
-	static bool reject_commit(void* opaque) {
-		auto& self = *static_cast<InterfaceRecoveryFailure*>(opaque);
-		if (self.rejected_commits == 0) return false;
-		--self.rejected_commits;
-		return true;
-	}
-};
-
 } // namespace
 
+/** Exercise plugin publication, rollback, and result ownership through TAP. */
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	plan(NO_PLAN);
@@ -614,6 +605,31 @@ int main() {
 		ownership_schema.execute("INSERT INTO disk.proxysql_plugin_owned_objects VALUES "
 			"('mysql_router','mysql_user_v2','v2:1:0:41',1)"),
 		"the ownership schema accepts discriminated exact user keys in main and disk");
+
+	SQLite3DB generation_schema;
+	generation_schema.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool generation_seeded = TestDiskUpgrade::materialize_plugin_config_schema(generation_schema) &&
+		generation_schema.execute("INSERT INTO proxysql_plugin_config_generations VALUES ('mysql_router',12)");
+	const std::string generation_ddl = text_value(generation_schema,
+		"SELECT sql FROM sqlite_master WHERE name='proxysql_plugin_config_generations'");
+	ok(generation_seeded && TestDiskUpgrade::materialize_plugin_config_schema(generation_schema) &&
+		TestDiskUpgrade::materialize_plugin_config_schema(generation_schema) &&
+		scalar(generation_schema, "SELECT generation FROM proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 12 &&
+		text_value(generation_schema,
+			"SELECT sql FROM sqlite_master WHERE name='proxysql_plugin_config_generations'") == generation_ddl,
+		"repeated production schema setup preserves plugin generations and the stored DDL");
+
+	SQLite3DB unknown_generation_schema;
+	unknown_generation_schema.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	const bool unknown_generation_seeded = unknown_generation_schema.execute(
+		"CREATE TABLE proxysql_plugin_config_generations (owner TEXT, generation INTEGER, extra TEXT)") &&
+		unknown_generation_schema.execute(
+			"INSERT INTO proxysql_plugin_config_generations VALUES ('mysql_router',12,'keep')");
+	ok(unknown_generation_seeded && !TestDiskUpgrade::materialize_plugin_config_schema(unknown_generation_schema) &&
+		text_value(unknown_generation_schema,
+			"SELECT extra FROM proxysql_plugin_config_generations WHERE owner='mysql_router'") == "keep",
+		"unknown generation schemas fail closed without dropping their data");
 
 	SQLite3DB secret_schema;
 	secret_schema.open(const_cast<char*>(":memory:"), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
@@ -891,6 +907,35 @@ int main() {
 		scalar(upgraded_admin,
 			"SELECT COUNT(*) FROM disk.proxysql_plugin_owned_objects WHERE owner='other_plugin'") == 1,
 		"publication migrates marker-proven ownership and preserves operator rows after schema upgrade");
+
+	Fixture restart_fence;
+	SQLite3DB restart_disk;
+	const char* restart_uri = "file:plugin-generation-restart?mode=memory&cache=shared";
+	restart_disk.open(const_cast<char*>(restart_uri),
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI);
+	create_schema(restart_disk, "");
+	const bool disk_seeded = restart_disk.execute("DROP TABLE proxysql_plugin_owned_objects") &&
+		restart_disk.execute("DROP TABLE proxysql_plugin_config_generations") &&
+		TestDiskUpgrade::materialize_plugin_config_schema(restart_disk) &&
+		restart_disk.execute("INSERT INTO proxysql_plugin_config_generations VALUES ('mysql_router',12)");
+	const bool restart_schemas = disk_seeded && restart_fence.db.execute("DETACH DATABASE disk") &&
+		restart_fence.db.execute((std::string("ATTACH DATABASE '") + restart_uri + "' AS disk").c_str()) &&
+		restart_fence.db.execute("DROP TABLE main.proxysql_plugin_owned_objects") &&
+		restart_fence.db.execute("DROP TABLE main.proxysql_plugin_config_generations");
+	const bool restart_restored = restart_schemas &&
+		TestDiskUpgrade::materialize_plugin_config_schema(restart_disk) &&
+		TestDiskUpgrade::materialize_plugin_config_schema(restart_fence.db) &&
+		TestDiskUpgrade::restore_plugin_config_runtime_state(restart_fence.db);
+	restart_fence.plan.generation = 5;
+	const auto stale_after_restart = proxysql_apply_plugin_mysql_config(
+		restart_fence.db, restart_fence.plan, restart_fence.runtime.hooks());
+	ok(restart_restored && !stale_after_restart.applied &&
+		stale_after_restart.message.find("generation must be strictly newer") != std::string::npos &&
+		scalar(restart_fence.db, "SELECT generation FROM main.proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 12 &&
+		scalar(restart_disk, "SELECT generation FROM proxysql_plugin_config_generations "
+			"WHERE owner='mysql_router'") == 12,
+		"schema setup and startup restoration retain the generation fence against replayed plans");
 
 	Fixture v2_validation;
 	ProxySQL_PluginMysqlRuleAttributesRow valid_v2_attribute {
@@ -1698,30 +1743,17 @@ int main() {
 	if (new_reservation >= 0) close(new_reservation);
 	const std::string old_interface = "127.0.0.1:" + std::to_string(old_port);
 	const std::string new_interface = "127.0.0.1:" + std::to_string(new_port);
-	std::string interface_error;
 	const bool initial_interface = old_port > 0 && new_port > 0 &&
 		GloMTH->set_variable("caching_sha2_password_auto_generate_rsa_keys", "false") &&
 		GloMTH->set_variable("caching_sha2_password_private_key_path", "") &&
 		GloMTH->set_variable("caching_sha2_password_public_key_path", "") &&
 		GloMTH->set_variable("interfaces", old_interface.c_str()) &&
 		GloMTH->listener_add(old_interface.c_str()) >= 0;
-	GloMTH->wrlock();
-	const bool changed_interface = initial_interface &&
-		GloMTH->apply_interfaces_under_lock(new_interface.c_str(), interface_error);
-	GloMTH->wrunlock();
-	char* changed_value = GloMTH->get_variable("interfaces");
-	const bool changed_listener = changed_interface && changed_value != nullptr &&
-		new_interface == changed_value && !can_connect_loopback(old_port) && can_connect_loopback(new_port);
-	free(changed_value);
-	GloMTH->wrlock();
-	const bool restored_interface = changed_listener &&
-		GloMTH->apply_interfaces_under_lock(old_interface.c_str(), interface_error);
-	GloMTH->wrunlock();
-	char* restored_value = GloMTH->get_variable("interfaces");
-	ok(restored_interface && restored_value != nullptr && old_interface == restored_value &&
+	char* initial_value = GloMTH->get_variable("interfaces");
+	ok(initial_interface && initial_value != nullptr && old_interface == initial_value &&
 		can_connect_loopback(old_port) && !can_connect_loopback(new_port),
-		"initialized mysql-interfaces changes remove, add, and restore real listeners under lock");
-	free(restored_value);
+		"the startup-opened MySQL listener fixture serves only the old interface");
+	free(initial_value);
 	auto live_users = result_value(v.db,
 		"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,"
 		"transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment "
@@ -1813,10 +1845,10 @@ int main() {
 		"hostgroup_settings,servers_defaults,comment FROM main.mysql_hostgroup_attributes "
 		"ORDER BY hostgroup_id").release();
 	admin->mysql_servers_wrlock();
-	const bool initial_hgm_loaded = admin->load_mysql_servers_to_runtime(initial_hgm);
+	admin->load_mysql_servers_to_runtime(initial_hgm);
 	admin->mysql_servers_wrunlock();
 	char* initial_rules_error = admin->load_mysql_query_rules_to_runtime();
-	ok(initial_hgm_loaded && initial_rules_error == nullptr,
+	ok(initial_rules_error == nullptr,
 		"real HGM and query processor are seeded from generation 12");
 	free(initial_rules_error);
 
@@ -1891,13 +1923,23 @@ int main() {
 	const uint64_t hgm_before_error = MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum();
 	ok(v.db.execute("DROP TABLE main.mysql_galera_hostgroups"),
 		"an early real HGM companion-table failure is injected");
+	// Change the servers too: the LOAD must install the change despite the
+	// companion-table failure, so an unchanged checksum would mean no install.
+	ok(v.db.execute("UPDATE main.mysql_servers SET max_latency_ms=max_latency_ms+1"),
+		"the server fixture is changed before the failing LOAD");
 	admin->mysql_servers_wrlock();
-	const bool hgm_error_reported = admin->load_mysql_servers_to_runtime();
+	admin->load_mysql_servers_to_runtime();
 	admin->mysql_servers_wrunlock();
-	ok(!hgm_error_reported &&
-		MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == hgm_before_error,
-		"the live HGM adapter propagates an early SQL failure after later reads succeed");
+	ok(MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() != hgm_before_error,
+		"an SQL failure on a companion table is logged and the LOAD still installs the changed servers");
+	ok(v.db.execute("UPDATE main.mysql_servers SET max_latency_ms=max_latency_ms-1"),
+		"the server fixture change is reverted");
 	ok(v.db.execute(k_galera), "the HGM failure fixture is repaired");
+	admin->mysql_servers_wrlock();
+	admin->load_mysql_servers_to_runtime();
+	admin->mysql_servers_wrunlock();
+	ok(MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == hgm_before_error,
+		"the repaired fixture reloads the original servers");
 
 	const auto live_applied = admin->apply_plugin_mysql_config(v.plan);
 	SQLite3_result* applied_users = GloMyAuth->get_current_mysql_users();
@@ -1927,10 +1969,18 @@ int main() {
 	ok(applied_servers != nullptr && result_row(applied_servers, 1, "writer-new") != nullptr &&
 		applied_rules != nullptr && applied_rules->rows_count == 3 && applied_router_rule != nullptr &&
 		applied_router_rule->fields[3] != nullptr && std::string(applied_router_rule->fields[3]) == "0" &&
-		scalar(v.db, "SELECT flagIN FROM mysql_query_rules WHERE rule_id=9000") == 0 &&
-		applied_interfaces != nullptr &&
-		new_interface == applied_interfaces && !can_connect_loopback(old_port) && can_connect_loopback(new_port),
-		"real Admin publication updates HGM, canonical QPro flagIN, and initialized MySQL listeners");
+		scalar(v.db, "SELECT flagIN FROM mysql_query_rules WHERE rule_id=9000") == 0,
+		"real Admin publication updates HGM and canonical QPro flagIN");
+	// Issue #6341: publication stages mysql-interfaces for the next startup and never
+	// opens or closes listeners, because doing so under the publication locks deadlocks
+	// the MySQL workers.
+	ok(applied_interfaces != nullptr && old_interface == applied_interfaces &&
+		can_connect_loopback(old_port) && !can_connect_loopback(new_port) &&
+		text_value(v.db, "SELECT variable_value FROM main.global_variables "
+			"WHERE variable_name='mysql-interfaces'") == new_interface &&
+		text_value(v.db, "SELECT variable_value FROM disk.global_variables "
+			"WHERE variable_name='mysql-interfaces'") == new_interface,
+		"real Admin publication stages mysql-interfaces in main and disk but leaves the active listeners untouched");
 	free(applied_interfaces);
 
 	const uint64_t stable_auth_checksum = GloMyAuth->get_current_mysql_users()->raw_checksum();
@@ -1940,54 +1990,6 @@ int main() {
 	const unsigned long long stable_users_checksum_version = GloVars.checksums_values.mysql_users.version;
 	const unsigned long long stable_users_checksum_epoch = GloVars.checksums_values.mysql_users.epoch;
 	v.plan.generation = 14;
-	int recovery_port = 0;
-	const int recovery_reservation = reserve_loopback_port(recovery_port);
-	if (recovery_reservation >= 0) close(recovery_reservation);
-	const std::string recovery_interface = "127.0.0.1:" + std::to_string(recovery_port);
-	v.interfaces[0] = recovery_interface.c_str();
-	InterfaceRecoveryFailure transient_readd {new_interface, 1, 1, 0};
-	ProxySQL_PluginMysqlConfigResult transient_recovery;
-	{
-		mysql_thread_test::scoped_interface_hooks hooks(
-			&InterfaceRecoveryFailure::fail_add, &InterfaceRecoveryFailure::reject_commit,
-			&transient_readd);
-		transient_recovery = admin->apply_plugin_mysql_config(v.plan);
-	}
-	char* transient_interfaces = GloMTH->get_variable("interfaces");
-	ok(recovery_port > 0 && !transient_recovery.applied && transient_readd.old_add_attempts >= 2 &&
-		transient_interfaces != nullptr && new_interface == transient_interfaces &&
-		can_connect_loopback(new_port) && !can_connect_loopback(recovery_port) &&
-		transient_recovery.message.find("restore failed") == std::string::npos,
-		"outer interface restore reconciles a listener missed by the rejected publish's first re-add");
-	free(transient_interfaces);
-
-	int persistent_port = 0;
-	const int persistent_reservation = reserve_loopback_port(persistent_port);
-	if (persistent_reservation >= 0) close(persistent_reservation);
-	const std::string persistent_interface = "127.0.0.1:" + std::to_string(persistent_port);
-	v.interfaces[0] = persistent_interface.c_str();
-	InterfaceRecoveryFailure persistent_readd {new_interface, 1, -1, 0};
-	ProxySQL_PluginMysqlConfigResult persistent_recovery;
-	{
-		mysql_thread_test::scoped_interface_hooks hooks(
-			&InterfaceRecoveryFailure::fail_add, &InterfaceRecoveryFailure::reject_commit,
-			&persistent_readd);
-		persistent_recovery = admin->apply_plugin_mysql_config(v.plan);
-	}
-	char* persistent_interfaces = GloMTH->get_variable("interfaces");
-	ok(persistent_port > 0 && !persistent_recovery.applied && persistent_readd.old_add_attempts >= 2 &&
-		persistent_recovery.message.find("restore failed") != std::string::npos &&
-		persistent_interfaces != nullptr && new_interface != persistent_interfaces &&
-		!can_connect_loopback(new_port) && !can_connect_loopback(persistent_port),
-		"persistent listener re-add failure is reported and never claims the old interface string was restored");
-	free(persistent_interfaces);
-	std::string recovery_error;
-	GloMTH->wrlock();
-	const bool recovered_after_injection =
-		GloMTH->apply_interfaces_under_lock(new_interface.c_str(), recovery_error);
-	GloMTH->wrunlock();
-	ok(recovered_after_injection && can_connect_loopback(new_port),
-		"listener state is repaired after persistent recovery-failure coverage");
 	v.interfaces[0] = new_interface.c_str();
 
 	v.users[0].password = "must-rollback"; // NOSONAR: synthetic rollback marker.
@@ -2003,30 +2005,46 @@ int main() {
 		GloVars.checksums_values.mysql_users.epoch == stable_users_checksum_epoch &&
 		MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == stable_server_checksum &&
 		GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum &&
-		after_qpro_interfaces != nullptr && new_interface == after_qpro_interfaces &&
-		can_connect_loopback(new_port),
-		"a real QPro adapter failure restores exact Auth checksum state, HGM, and listeners at generation 13");
+		after_qpro_interfaces != nullptr && old_interface == after_qpro_interfaces &&
+		can_connect_loopback(old_port) && !can_connect_loopback(new_port),
+		"a real QPro adapter failure restores exact Auth checksum state and HGM at generation 13 without touching listeners");
 	free(after_qpro_interfaces);
 	ok(v.db.execute(k_fast_rules), "query processor failure fixture is repaired");
 
-	int occupied_port = 0;
-	const int occupied_fd = reserve_loopback_port(occupied_port);
-	const std::string occupied_interface = "127.0.0.1:" + std::to_string(occupied_port);
-	v.interfaces[0] = occupied_interface.c_str();
-	const auto interface_failure = admin->apply_plugin_mysql_config(v.plan);
-	char* after_interface_failure = GloMTH->get_variable("interfaces");
-	ok(occupied_fd >= 0 && !interface_failure.applied &&
-		interface_failure.message.find("cannot add MySQL listener") != std::string::npos &&
-		scalar(v.db, "SELECT generation FROM proxysql_plugin_config_generations WHERE owner='mysql_router'") == 13 &&
-		GloMyAuth->get_current_mysql_users()->raw_checksum() == stable_auth_checksum &&
-		MyHGM->get_current_mysql_table("cluster_mysql_servers")->raw_checksum() == stable_server_checksum &&
-		GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum &&
-		after_interface_failure != nullptr && new_interface == after_interface_failure &&
-		can_connect_loopback(new_port),
-		"a real interface failure reverses QPro, Auth, and HGM and restores the prior listener");
-	free(after_interface_failure);
-	if (occupied_fd >= 0) close(occupied_fd);
-	v.interfaces[0] = new_interface.c_str();
+	// Exercise both SQL-error branches, including mixed caller-owned and
+	// locally queried inputs. LSan also verifies that successful companion
+	// queries are released when publication never transfers them to QPro.
+	{
+		auto supplied_rules = std::make_unique<SQLite3_result>(GloMyQPro->get_current_query_rules_inner());
+		auto supplied_fast_rules = std::make_unique<SQLite3_result>(5);
+		ok(v.db.execute("ALTER TABLE main.mysql_query_rules RENAME TO mysql_query_rules_error_fixture"),
+			"the first query-rule SELECT can fail without discarding configured rules");
+		std::unique_ptr<char, decltype(&std::free)> rules_error(
+			admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false), &std::free);
+		ok(rules_error && std::string(rules_error.get()).find("mysql_query_rules") != std::string::npos,
+			"first SELECT failure returns its SQL error after querying fast-routing rules");
+		rules_error.reset(admin->load_mysql_query_rules_to_runtime(nullptr, supplied_fast_rules.get(), "", 0, false));
+		ok(rules_error && supplied_fast_rules->columns == 5 && supplied_fast_rules->rows_count == 0,
+			"first SELECT failure preserves the caller-owned fast-routing result");
+		ok(admin->load_mysql_query_rules_to_runtime() == nullptr &&
+			GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum,
+			"legacy first SELECT failure leaves live query rules unchanged");
+		ok(v.db.execute("ALTER TABLE main.mysql_query_rules_error_fixture RENAME TO mysql_query_rules"),
+			"the first query-rule input table is restored");
+		ok(v.db.execute("ALTER TABLE main.mysql_query_rules_fast_routing RENAME TO mysql_fast_rules_error_fixture"),
+			"the second query-rule SELECT can fail independently");
+		rules_error.reset(admin->load_mysql_query_rules_to_runtime(nullptr, nullptr, "", 0, false));
+		ok(rules_error && std::string(rules_error.get()).find("mysql_query_rules_fast_routing") != std::string::npos,
+			"second SELECT failure returns its SQL error after querying ordinary rules");
+		rules_error.reset(admin->load_mysql_query_rules_to_runtime(supplied_rules.get(), nullptr, "", 0, false));
+		ok(rules_error && supplied_rules->raw_checksum() == stable_rule_checksum,
+			"second SELECT failure preserves the caller-owned ordinary-rule result");
+		ok(admin->load_mysql_query_rules_to_runtime() == nullptr &&
+			GloMyQPro->get_current_query_rules_inner()->raw_checksum() == stable_rule_checksum,
+			"legacy second SELECT failure leaves live query rules unchanged");
+		ok(v.db.execute("ALTER TABLE main.mysql_fast_rules_error_fixture RENAME TO mysql_query_rules_fast_routing"),
+			"the second query-rule input table is restored");
+	}
 
 	const pid_t auth_exception_pid = fork();
 	if (auth_exception_pid == 0) {

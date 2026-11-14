@@ -62,11 +62,7 @@ std::string percent_decode(std::string_view value) {
 }
 
 MetadataTlsMode parse_tls_mode(const std::string& value, const char* option) {
-	if (value == "DISABLED") return MetadataTlsMode::disabled;
-	if (value == "PREFERRED") return MetadataTlsMode::preferred;
-	if (value == "REQUIRED") return MetadataTlsMode::required;
-	if (value == "VERIFY_CA") return MetadataTlsMode::verify_ca;
-	if (value == "VERIFY_IDENTITY") return MetadataTlsMode::verify_identity;
+	if (const auto mode = metadata_tls_mode_from_name(value)) return *mode;
 	throw std::invalid_argument(std::string("invalid ") + option + " value");
 }
 
@@ -301,6 +297,9 @@ BootstrapOptions parse_bootstrap_options(const ProxySQL_PluginEarlyActionContext
 	if (auto value = get_value(context, "--ssl-cipher")) options.tls.cipher = *value;
 	if (auto value = get_value(context, "--ssl-crl")) options.tls.crl = *value;
 	if (auto value = get_value(context, "--ssl-crlpath")) options.tls.crlpath = *value;
+	if (const std::string problem = metadata_tls_problem(options.tls); !problem.empty()) {
+		throw std::invalid_argument(problem);
+	}
 	return options;
 }
 

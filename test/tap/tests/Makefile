@@ -40,6 +40,7 @@ LDIRS :=	-L$(TAP_LDIR) \
 			-L$(CURL_LDIR) -L$(EV_LDIR) \
 			-L$(PROMETHEUS_LDIR) \
 			-L$(DOTENV_DYN_LDIR) \
+			-L$(PCRE_LDIR) \
 			-L$(PCRE2_LDIR) \
 			-L$(LIBINJECTION_LDIR) \
 			-L$(POSTGRESQL_LDIR) \
@@ -93,14 +94,14 @@ POSTGRESQL_STATIC_LIBS := $(POSTGRESQL_PATH)/interfaces/libpq/libpq.a \
 
 ifeq ($(UNAME_S),Darwin)
 MYLIBS_DYNAMIC_PART := -lgnutls -lcpp_dotenv
-MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
+MYLIBS_STATIC_PART := -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_LAST_PART := -lpthread -lm -lz -lzstd -liconv -ldl $(EXTRALINK)
 MYLIBS := -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
 	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
 	$(MYLIBS_LAST_PART)
 else
 MYLIBS_DYNAMIC_PART := -Wl,--export-dynamic -Wl,-Bdynamic -lgnutls -lcpp_dotenv -luuid
-MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
+MYLIBS_STATIC_PART := -Wl,-Bstatic -lconfig -lproxysql -lsqlparser -ldaemon -lconfig++ $(RE2_STATIC_LIBS) $(PCRE_LIBS) $(PCRE2_LIBS) -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core
 MYLIBS_LAST_PART := $(ZSTD_LDIR)/libzstd.a -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 MYLIBS := -Wl,-Bdynamic -ltap $(MYLIBS_DYNAMIC_PART) $(MYLIBS_STATIC_PART) \
 	$(POSTGRESQL_STATIC_LIBS) $(CURL_STATIC_LIB) $(OPENSSL_STATIC_LIBS) \
@@ -137,16 +138,17 @@ ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
 endif
 endif
 
-# Keep public class layouts identical to libproxysql.a. In particular,
-# PROXYSQL40 adds members to ProxySQL_GlobalVariables; omitting the define in
-# TAP translation units makes their GloVars allocation smaller than the
-# constructor linked from the archive.
+# Keep public class layouts identical to libproxysql.a. PROXYSQL40 and
+# PROXYSQLCLICKHOUSE both change ProxySQL_GlobalVariables. PSQLCH comes from
+# makefiles_vars.mk and follows the core's default and explicit opt-out.
+# Omitting either define can make TAP-owned GloVars smaller than the
+# constructor linked from the archive expects.
 PSQL40 :=
 ifeq ($(PROXYSQL40),1)
 	PSQL40 := -DPROXYSQL40
 endif
 
-OPT := $(STDCPP) -O2 -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+OPT := $(STDCPP) -O2 -ggdb $(PSQLCH) $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 # Compress ELF debug sections in test binaries. Apple clang accepts -gz but
 # does not compress DWARF stored in Mach-O objects, so Darwin omits it.
 ifneq ($(UNAME_S),Darwin)
@@ -179,7 +181,7 @@ tests_no_infra: admin_set_credentials_logging-t listener_conflicts_validation-t
 	./admin_set_credentials_logging-t
 	./listener_conflicts_validation-t
 
-DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+DEBUG_OPT := $(STDCPP) -O0 -DDEBUG -ggdb $(PSQLCH) $(PSQL40) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 ifneq ($(UNAME_S),Darwin)
 DEBUG_OPT += -Wl,--no-as-needed -gz
 endif
@@ -239,7 +241,7 @@ TESTS_FILTER_DARWIN := test_wexecvp_syscall_failures-t
 TESTS_CPP_FILTER := $(if $(filter Darwin,$(UNAME_S)),$(TESTS_FILTER_DARWIN),)
 
 ifeq ($(PROXYSQL40_DETECTED),0)
-TESTS_CPP := $(filter-out test_mysqlx_% test_duckdb_plugin_load-t test_duckdb_bench-t $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
+TESTS_CPP := $(filter-out test_mysqlx_% test_aws_iam_% test_duckdb_plugin_load-t test_duckdb_bench-t $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 else
 TESTS_CPP := $(filter-out $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 endif
@@ -284,6 +286,9 @@ sh-%:
 	chmod +x $(patsubst sh-%.sh,%,$@)
 
  test_com_register_slave_enables_fast_forward-t: binlog_rpl.h
+
+# The lifecycle regression includes the real fixture implementation.
+kill_connection2_fixture-t: kill_connection2_fixture-t.cpp kill_connection2-t.cpp
 
 %-t: %-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
@@ -398,6 +403,22 @@ test_ignore_min_gtid-t: test_ignore_min_gtid-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT
 test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
+# Keep the IAM observability contract deterministic and independent of an
+# external provider while exercising the production admin/process-global
+# integrations through the platform-aware unit-test linker configuration.
+.PHONY: test_aws_iam_metrics-t
+test_aws_iam_metrics-t:
+	$(MAKE) -C unit PROXYSQL40=$(PROXYSQL40) test_aws_iam_metrics-t
+	ln -fs unit/test_aws_iam_metrics-t $@
+
+# Build the controlled server first, then use the component-test linker so the
+# production MySQL_Connection path can run without a daemon or external provider.
+.PHONY: test_aws_iam_backend_auth-t
+test_aws_iam_backend_auth-t:
+	$(MAKE) -C $(PROXYSQL_PATH)/test/deps/aws_iam_mysql_server PROXYSQL40=$(PROXYSQL40)
+	$(MAKE) -C unit PROXYSQL40=$(PROXYSQL40) test_aws_iam_backend_auth-t
+	ln -fs unit/test_aws_iam_backend_auth-t $@
+
 create_connection_annotation: test_connection_annotation-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
 
@@ -501,23 +522,39 @@ test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)
 endif
 
 # Every test that links pg_lite_client.cpp shares one link line. pg_lite_client
-# implements PostgreSQL MD5 and SCRAM-SHA-256 client authentication, so it needs
-# -lscram/-lusual; $(ALLOW_MULTI_DEF) resolves the duplicate symbols between
+# implements PostgreSQL MD5 and SCRAM-SHA-256 client authentication (including the
+# stepwise saslBegin/saslFinish pair the mid-handshake reload test drives), so it
+# needs -lscram/-lusual; $(ALLOW_MULTI_DEF) resolves the duplicate symbols between
 # libscram/libusual and the other vendored static libs (test binaries only, and
 # it is empty on Darwin where the linker has no such flag).
 PG_LITE_CLIENT_TESTS := \
 	pgsql-extended_query_protocol_test-t \
+	pgsql-extended_query_flush-t \
 	pgsql-reg_test_5273_bind_parameter_format-t \
 	pgsql-reg_test_5899_bind_zero_param_formats-t \
 	pgsql-reg_test_5300_threshold_resultset_deadlock-t \
 	pgsql-reg_test_5866_result_format-t \
 	pgsql-reg_test_6138_mixed_result_formats-t \
 	pgsql-auth_method_matrix-t \
+	pgsql-datatype_matrix-t \
+	pgsql-server_side_cursors-t \
 	pgsql-scram_reload_midhandshake-t \
 	pgsql-scram_user_removed_midhandshake-t \
 	pgsql-scram_rotate_midhandshake_backend-t \
-	pgsql-datatype_matrix-t \
-	pgsql-server_side_cursors-t \
+	pgsql-native_portals-t \
+	pgsql-native_portal_backend_kill-t \
+	pgsql-native_portal_close_after_cache_hit-t \
+	pgsql-native_extq_orphaned_sync-t \
+	pgsql-native_extq_batch-t \
+	pgsql-native_extq_named_portals-t \
+	pgsql-extq_local_error_in_txn-t \
+	pgsql-extq_implicit_prepare_refused-t \
+	pgsql-extq_rule_error_stops_batch-t \
+	pgsql-discard_all_txn_block-t \
+	pgsql-local_error_txn_state-t \
+	pgsql-reg_test_6521_cancel_idle_session_busy_poll-t \
+	pgsql-reg_test_6345_admin_extended_query_sync-t \
+	pgsql-reg_test_6349_auth_anti_enumeration-t \
 	test_ffto_pgsql_pipeline-t \
 	test_ffto_pgsql_stmt_portal-t
 
@@ -533,11 +570,26 @@ $(PG_LITE_CLIENT_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h $(TAP_LDIR
 # from MYLIBS, and unlike the pg_lite_client rules above there is no -lscram or
 # -lusual to create duplicate symbols, so $(ALLOW_MULTI_DEF) does not apply.
 PGSQL_MOCK_BACKEND_TESTS := \
+	pgsql-reg_test_6389_monitor_lifecycle-t \
 	pgsql-reg_test_6109_midresult_disconnect-t \
-	pgsql-reg_test_6110_invalid_reply_sequence-t
+	pgsql-reg_test_6110_invalid_reply_sequence-t \
+	pgsql-backend_death_query_retry-t \
+	pgsql-reg_test_6375_offline_retry-t \
+	pgsql-native_hostile_backend-t \
+	pgsql-native_scram_mechanism-t \
+	pgsql-native_notify-t \
+	pgsql-native_send_failure_pool-t \
+	pgsql-idle_ping_dead_conns-t
 
 $(PGSQL_MOCK_BACKEND_TESTS): %: %.cpp pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
 	$(CXX) $< pgsql_mock_backend.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
+
+# Tests that drive the mock backend with raw extended-query messages need both.
+PG_LITE_CLIENT_MOCK_BACKEND_TESTS := \
+	pgsql-native_extq_named_portals_mock-t
+
+$(PG_LITE_CLIENT_MOCK_BACKEND_TESTS): %: %.cpp pg_lite_client.cpp pg_lite_client.h pgsql_mock_backend.cpp pgsql_mock_backend.h $(TAP_LDIR)/libtap$(SHLIB_EXT)
+	$(CXX) $< pg_lite_client.cpp pgsql_mock_backend.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -lscram -lusual $(ALLOW_MULTI_DEF) -o $@
 
 MYSQLX_PROTO_DIR := $(PROXYSQL_PATH)/plugins/mysqlx/proto
 MYSQLX_PROTO_SRCS := $(wildcard $(MYSQLX_PROTO_DIR)/*.pb.cc)
@@ -610,12 +662,16 @@ else
 	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 endif
 
+parsersql_digest_test: private PARSERSQL_DIGEST_TIER_FLAGS := $(if $(filter 1,$(PROXYSQL31) $(PROXYSQL40)),-DPROXYSQL31)
 parsersql_digest_test: parsersql_digest_test.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a
 ifeq ($(PROXYSQL40),1)
-	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o $(PARSERSQL_LDIR)/libsqlparser.a -o $@
+	$(CXX) $< $(PARSERSQL_DIGEST_TIER_FLAGS) -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(SQLITE3_LDIR)/vec.o $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 else
-	$(CXX) $< -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
+	$(CXX) $< $(PARSERSQL_DIGEST_TIER_FLAGS) -DEXCLUDE_TRACKING_VARIABLES $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) $(PARSERSQL_LDIR)/libsqlparser.a -o $@
 endif
 
 parsersql_digest_test-t: parsersql_digest_test
 	ln -fs parsersql_digest_test parsersql_digest_test-t
+
+# These tests query the target server capability or active backend mode.
+pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-local_error_txn_state-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t pgsql-reg_test_6375_offline_retry-t pgsql-extended_query_protocol_test-t pgsql-unsupported_feature_test-t pgsql-idle_ping_dead_conns-t: pgsql_native_tier.h

@@ -9,12 +9,14 @@ env:
   RUNTIME_CACHE_DIR: .cluster-simulator-runtime
 jobs:
   tier-selection:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     uses: sysown/proxysql/.github/workflows/ci-tier-selection.yml@GH-Actions
     permissions:
       contents: read
       actions: read
       pull-requests: read
   build:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     name: build / ${{ matrix.tier }}
     runs-on: ubuntu-22.04
     timeout-minutes: 120
@@ -61,11 +63,16 @@ jobs:
       run: |
         python3 - <<'PY_TIER'
         import os
+        import subprocess
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path('ci-control/.github/scripts').resolve()))
-        from ci_tier_artifacts import binary_version, validate_binary
-        version = binary_version(Path.cwd())
+        from ci_tier_artifacts import validate_binary
+        # The cached executable uses the Ubuntu build image's loader.
+        version = subprocess.check_output(
+            ['docker', 'compose', 'run', '--rm', '--no-deps',
+             '--entrypoint', '/opt/proxysql/src/proxysql', 'ubuntu24_build', '--version'],
+            text=True, timeout=300)
         validate_binary(os.environ['EXPECTED_TIER'], version)
         print(version)
         PY_TIER
@@ -86,6 +93,7 @@ jobs:
     env:
       BUILD_CACHE_KEY: cluster-simulator-v3-ubuntu24-${{ matrix.tier }}-${{ github.sha }}
   test:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     name: test / ${{ matrix.tier }} / ${{ matrix.group }}
     needs:
     - tier-selection
@@ -135,11 +143,16 @@ jobs:
       run: |
         python3 - <<'PY_TIER'
         import os
+        import subprocess
         import sys
         from pathlib import Path
         sys.path.insert(0, str(Path('ci-control/.github/scripts').resolve()))
-        from ci_tier_artifacts import binary_version, validate_binary
-        version = binary_version(Path.cwd())
+        from ci_tier_artifacts import validate_binary
+        # The cached executable uses the Ubuntu build image's loader.
+        version = subprocess.check_output(
+            ['docker', 'compose', 'run', '--rm', '--no-deps',
+             '--entrypoint', '/opt/proxysql/src/proxysql', 'ubuntu24_build', '--version'],
+            text=True, timeout=300)
         validate_binary(os.environ['EXPECTED_TIER'], version)
         print(version)
         PY_TIER
@@ -159,8 +172,15 @@ jobs:
       id: require-lcov
       if: always()
       run: test -s ci_infra_logs/${{ env.INFRA_ID }}/coverage-report/${{ env.INFRA_ID }}.info
+    - name: Archive simulator coverage
+      if: ${{ !cancelled() && steps.require-lcov.outcome == 'success' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ matrix.group }}-coverage-run${{ github.run_number }}-${{ matrix.tier }}-attempt${{ github.run_attempt }}
+        path: ci_infra_logs/${{ env.INFRA_ID }}/coverage-report/
+        if-no-files-found: error
     - name: Upload coverage to Codecov
-      if: always() && steps.require-lcov.outcome == 'success'
+      if: ${{ (always() && steps.require-lcov.outcome == 'success') && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && (!github.event.workflow_run || github.event.workflow_run.head_repository.full_name == github.repository) }}
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
       with:
         codecov_yml_path: codecov.yml

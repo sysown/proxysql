@@ -5,6 +5,7 @@
 #include <map>
 #include <cassert>
 #include <utility> // for std::pair
+#include <cctype>
 //#ifdef PARSERDEBUG
 #include <iostream>
 //#endif
@@ -71,7 +72,7 @@ void MySQL_Set_Stmt_Parser::set_query(const std::string& nq) {
 #define NAMES "(NAMES)"
 #define NAME_VALUE "((?:\\w|\\d)+)"
 
-#define SESSION_P1 "(?:|SESSION +|@@|@@session.|@@local.)"
+#define SESSION_P1 "(?:|SESSION +|LOCAL +|@@|@@session.|@@local.)"
 #define VAR_P1 "`?(@\\w+|\\w+)`?"
 
 // added (?:[\\w]+=(?:on|off)|,)+ for optimizer_switch
@@ -455,33 +456,66 @@ std::map<std::string,std::vector<std::string>> MySQL_Set_Stmt_Parser::parse2() {
 
 	std::map<std::string,std::vector<std::string>> result;
 
-	// Regex used:
-	// SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))
-	const std::string pattern="(|SESSION) *TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))";
+	// Same grammar as MYSQL_SET_TRANSACTION_DIGEST_REGEX (the digest matched
+	// before calling parse2()), applied to the query without its leading SET.
+	// LOCAL is a MySQL synonym of SESSION and is reported as "session".
+	// The digest collapses whitespace, the query does not: accept any whitespace.
+	// The scope and TRANSACTION are matched once, followed by the first
+	// characteristic; further characteristics follow after a comma and share
+	// the scope (MySQL: SET [scope] TRANSACTION characteristic [, characteristic]).
+#define SET_TRX_CHARACTERISTIC "(?:(?:(ISOLATION\\s+LEVEL)\\s+(REPEATABLE\\s+READ|READ\\s+COMMITTED|READ\\s+UNCOMMITTED|SERIALIZABLE))|(?:(READ)\\s+(WRITE|ONLY)))"
+	const std::string pattern="(|SESSION|LOCAL)\\s*TRANSACTION\\s+" SET_TRX_CHARACTERISTIC;
+	const std::string next_pattern="\\s*,\\s*" SET_TRX_CHARACTERISTIC;
+#undef SET_TRX_CHARACTERISTIC
 	re2::RE2 re(pattern, *opt2);
-	std::string var;
-	std::string value1, value2, value3, value4, value5;
+	re2::RE2 next_re(next_pattern, *opt2);
+	// "READ\n COMMITTED" -> "READ COMMITTED"
+	auto collapse_spaces = [](std::string& value) {
+		std::string out;
+		for (char c : value) {
+			if (isspace(static_cast<unsigned char>(c))) {
+				if (!out.empty() && out.back() != ' ') out.push_back(' ');
+			} else {
+				out.push_back(c);
+			}
+		}
+		value.swap(out);
+	};
+	std::string scope;
+	std::string value2, value3, value4, value5;
 	re2::StringPiece input(query);
-	while (re2::RE2::Consume(&input, re, &value1, &value2, &value3, &value4, &value5)) {
+	// Adds one characteristic to result. Returns false if it is already there:
+	// MySQL rejects a repeated characteristic (including READ ONLY, READ WRITE).
+	auto add_characteristic = [&]() -> bool {
 		std::vector<std::string> op;
+		collapse_spaces(value2);
+		collapse_spaces(value3);
 #ifdef DEBUG
-		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", value1.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", scope.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
 #endif // DEBUG
 		std::string key;
-		//if (value1 != "") { // session is specified
-			if (value2 != "") { // isolation level
-				key = value1 + ":" + value2;
-				std::transform(value3.begin(), value3.end(), value3.begin(), ::toupper);
-				op.push_back(value3);
-			} else {
-				key = value1 + ":" + value4;
-				std::transform(value5.begin(), value5.end(), value5.begin(), ::toupper);
-				op.push_back(value5);
-			}
-		//}
+		if (value2 != "") { // isolation level
+			key = scope + ":" + value2;
+			std::transform(value3.begin(), value3.end(), value3.begin(), ::toupper);
+			op.push_back(value3);
+		} else {
+			key = scope + ":" + value4;
+			std::transform(value5.begin(), value5.end(), value5.begin(), ::toupper);
+			op.push_back(value5);
+		}
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-		result[key] = op;
+		if (key.compare(0, 6, "local:") == 0) key.replace(0, 5, "session");
+		return result.emplace(key, op).second;
+	};
+	bool parsed = re2::RE2::Consume(&input, re, &scope, &value2, &value3, &value4, &value5)
+		&& add_characteristic();
+	while (parsed && re2::RE2::Consume(&input, next_re, &value2, &value3, &value4, &value5)) {
+		parsed = add_characteristic();
 	}
+	// Anything left (e.g. trailing tokens or a malformed characteristic) was not
+	// parsed: report nothing rather than a subset of the statement.
+	while (!input.empty() && isspace(static_cast<unsigned char>(input[0]))) input.remove_prefix(1);
+	if (!parsed || !input.empty()) result.clear();
 
 	delete opt2;
 	return result;

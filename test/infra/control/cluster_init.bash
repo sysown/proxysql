@@ -14,7 +14,7 @@ export WORKSPACE="${REPO_ROOT}"
 # Default INFRA_ID if not provided
 export INFRA_ID="${INFRA_ID:-dev-$USER}"
 
-NUM_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+NUM_NODES=${PROXYSQL_CLUSTER_NODES:-6}
 if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]] || [[ "${NUM_NODES}" == "0" ]]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] >>> Cluster init SKIPPED (SKIP_CLUSTER_START=${SKIP_CLUSTER_START}, Nodes=${NUM_NODES})"
     exit 0

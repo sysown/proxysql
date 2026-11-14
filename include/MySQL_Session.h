@@ -7,7 +7,9 @@
 #ifndef PROXYSQL_MYSQL_SESSION_H
 #define PROXYSQL_MYSQL_SESSION_H
 
+#include <chrono>
 #include <functional>
+#include <string>
 #include <optional>
 #include <vector>
 
@@ -16,8 +18,11 @@
 #include "MySQL_Variables.h"
 #include "MySQL_User_Variables.h"
 #include "Base_Session.h"
+#include "Aws_Iam_Provider.h"
+#include "MySQL_Backend_Auth.h"
 #ifdef PROXYSQL31
 #include "PgSQL_Waiter_List.h"
+#include "Session_Scheduler.h"
 #endif // PROXYSQL31
 
 #ifndef PROXYJSON
@@ -109,6 +114,8 @@ class Query_Info {
 	uint64_t last_insert_id;
 	uint64_t rows_sent;
 	uint64_t waiting_since;
+	// The request returned more than one result (multi-statement or CALL); see #6229.
+	bool multi_result;
 	std::string show_warnings_prev_query_digest;
 
 	Query_Info();
@@ -206,6 +213,13 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+	/**
+	 * @brief Routes a causal read to 'gtid_from_hostgroup' when the GTID tracked there cannot be
+	 *   used for routing (multi-UUID set, tagged GTID). Called while the destination hostgroup is
+	 *   chosen, before a backend is selected and the query attached to it (issue #6415).
+	 * @return True if 'current_hostgroup' was redirected.
+	 */
+	bool route_unusable_tracked_gtid_to_writer();
 
 	//void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
@@ -252,6 +266,12 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	// caches the credential and completes the client handshake, on
 	// failure sends a generic ERR and tears down the session.
 	int handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT();
+#ifdef PROXYSQL40
+	void fail_aws_iam_backend(const char *failure_code,
+		const AwsIamRedactedFailure *provider_failure = nullptr);
+	void fail_invalid_backend_auth_policy(MySQL_Data_Stream *backend,
+		const char *database_user, const char *failure_code);
+#endif // PROXYSQL40
 	bool handler_again___status_SHOW_WARNINGS(MySQL_Data_Stream *, bool);
 	void handler_again___new_thread_to_kill_connection();
 	void handler_KillConnectionIfNeeded();
@@ -331,6 +351,7 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	bool handler_again___status_SETTING_USER_VARIABLES(int* rc);
+	bool handler_again___status_SETTING_USER_VARIABLE_CONTEXT(int* rc);
 	bool handler_again___multiple_statuses(int *rc);
 
 	//void init();
@@ -345,6 +366,10 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	void housekeeping_before_pkts();
 #endif // 0
 	int get_pkts_from_client(bool&, PtrSize_t&);
+	/**
+	 * @brief One pass of the session state machine (the former body of handler()).
+	 */
+	int handler_pass();
 
 	// GPFC_ functions are subfunctions of get_pkts_from_client()
 	int GPFC_Statuses2(bool&, PtrSize_t&);
@@ -438,8 +463,18 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	std::stack<enum session_status> previous_status;
 	std::vector<MySQL_User_Variable_Replay_Batch> user_variable_replay_batches;
 	size_t user_variable_replay_batch_index { 0 };
-	std::optional<UserVariableSetAnalysis> pending_user_variable_set;
 	bool current_query_user_variable_safe { false };
+	// CHANGING_AUTOCOMMIT completes a locally tracked mixed SET after its implicit commit.
+	bool committing_tracked_set { false };
+	struct PendingTrackedSet {
+		MySQL_Session_Set_Plan session_variables;
+		MySQL_User_Variable_State user_variables;
+		size_t assignments;
+	};
+	std::optional<PendingTrackedSet> pending_tracked_set;
+#ifndef PROXYSQL31
+	std::optional<UserVariableSetAnalysis> pending_user_variable_set;
+#endif
 	bool current_query_user_variable_unsafe_fallback { false };
 	bool current_query_user_variable_context_change { false };
 	bool user_variable_tracking_latched { false };
@@ -447,6 +482,14 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 #ifdef PROXYSQL31
 	PgSQL_Waiter_Node waiter_node;
+    Pool_Acquire_Mode pool_acquire_mode = Pool_Acquire_Mode::Normal;
+    bool established_checkout_unavailable = false;
+    bool scheduler_managed = false;
+    bool yield_after_release = false;
+    bool continuation_queued = false;
+	// Legacy pass marker retained with the session layout. Phased dispatch
+	// uses to_process and the continuation queue to prevent duplicate work.
+	unsigned long long handled_in_pass { 0 };
 	bool last_pool_ff{ false };
 	bool last_pool_gtid{ false };
 	int last_pool_max_lag_ms{ -1 };
@@ -636,6 +679,40 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 */
 	bool passthrough_connect_failed;
 	const char *passthrough_connect_fail_reason;
+
+#ifdef PROXYSQL40
+	// AWS IAM backend authentication state (v4.0 only).
+	// Owner-thread state for a fresh backend connection parked while an IAM
+	// token is acquired. Provider threads never receive any of these pointers.
+	AwsIamTokenSourceLease aws_iam_token_source_lease {};
+	AwsIamRequestHandle aws_iam_request_handle {};
+	AwsIamTokenKey aws_iam_token_key {};
+	AwsIamTokenResult aws_iam_completion {};
+	MySQL_Connection *aws_iam_connection { nullptr };
+	// Backend authentication policy (mysql_users.attributes 'backend_auth') of
+	// the session's backend user. Resolved on first use and kept for the life of
+	// the session, like the credentials in client userinfo: LOAD MYSQL USERS
+	// applies to new client connections only. Resolved again only if the user
+	// itself changes (COM_CHANGE_USER).
+	MySQLBackendAuthPolicy cached_backend_auth_policy {};
+	std::string cached_backend_auth_policy_user {};
+	bool cached_backend_auth_policy_valid { false };
+	const MySQLBackendAuthPolicy& backend_auth_policy_for(const char *backend_username);
+	uint64_t aws_iam_waiter_id { 0 };
+	unsigned long long aws_iam_deadline_us { 0 };
+	bool aws_iam_completion_ready { false };
+	bool aws_iam_waiting_session_counted { false };
+	// Authentication identity used by the current backend connect attempt.
+	// It outlives handshake-token cleanup so a terminal 1045 can invalidate
+	// only the exact failed cache generation before the connection is freed.
+	AwsIamTokenKey aws_iam_connect_token_key {};
+	uint64_t aws_iam_connect_token_generation { 0 };
+	bool aws_iam_fresh_token_retry_attempted { false };
+	// True once this session entered the AWS IAM backend-connect path, until
+	// cancel_aws_iam_wait() clears the IAM state again. Lets the reset and
+	// destroy paths of non-IAM sessions skip that cleanup entirely.
+	bool aws_iam_state_used { false };
+#endif // PROXYSQL40
 	// Fast forward grace close flags: track backend closure during fast forward mode
 	// to allow pending client data to drain before closing the session.
 	bool backend_closed_in_fast_forward;
@@ -650,7 +727,44 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	//void set_unhealthy();
 
 	void set_status(enum session_status e);
+	/**
+	 * @brief Process the session: one pass of the state machine, repeated while
+	 *   client packets deferred by get_pkts_from_client() are pending and the
+	 *   session is back to WAITING_CLIENT_DATA.
+	 * @details Clients that pipeline commands (e.g. MariaDB Connector/J batches,
+	 *   #5930) send several commands without waiting for the responses. The
+	 *   packets received while a command is still in flight are kept, in order,
+	 *   in 'client_myds->PSarrayIN' and are executed one by one once the session
+	 *   returns to WAITING_CLIENT_DATA. No further socket event is guaranteed for
+	 *   them (the client already sent everything), so they are drained here
+	 *   regardless of which path made the pass end.
+	 */
 	int handler();
+#ifdef PROXYSQL31
+    Session_Run_Result run_step(Pool_Acquire_Mode mode = Pool_Acquire_Mode::Normal, bool io_only = false);
+    void note_backend_release(unsigned int hostgroup);
+#endif
+	/**
+	 * @brief Whether a client packet received now must be deferred until the
+	 *   command in flight completes (pipelining, #5930).
+	 * @details True only for an authenticated, non fast-forward, non mirror
+	 *   session that is busy serving a command. False in every status where
+	 *   client packets are consumed directly (WAITING_CLIENT_DATA,
+	 *   CONNECTING_CLIENT, FAST_FORWARD, CONNECTING_SERVER towards FAST_FORWARD)
+	 *   and before the client is authenticated.
+	 */
+	bool client_pkts_must_be_deferred() const;
+	/**
+	 * @brief Whether the client may legitimately have sent commands that are not
+	 *   processed yet: the session is either ready for them (WAITING_CLIENT_DATA)
+	 *   or deferring them (see client_pkts_must_be_deferred()).
+	 */
+	bool client_may_pipeline() const;
+#ifdef PROXYSQL40
+	int handler_again___status_WAITING_AWS_IAM_TOKEN();
+	void accept_aws_iam_completion(uint64_t opaque_id, AwsIamTokenResult&& result);
+	void cancel_aws_iam_wait();
+#endif // PROXYSQL40
 
 	void (*handler_function) (MySQL_Session* sess, void *, PtrSize_t *pkt);
 	//MySQL_Backend * find_backend(int);
@@ -747,9 +861,19 @@ public:
 	int kill_type;
 	unsigned int hid;
 	int use_ssl;
+	MySQLBackendAuthType backend_auth_type { MySQLBackendAuthType::PASSWORD };
+	std::string configured_endpoint;
+	std::string region;
+	std::string database_user;
+	std::chrono::steady_clock::time_point token_deadline;
 
 	KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt);
 	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip);
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid,
+		unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip,
+		MySQLBackendAuthType auth_type, const char *endpoint,
+		const char *aws_region, const char *db_user,
+		std::chrono::steady_clock::time_point deadline);
 	~KillArgs();
 	const char* get_host_address() const;
 	KillArgs(const KillArgs&) = delete;

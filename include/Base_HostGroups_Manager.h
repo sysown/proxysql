@@ -21,6 +21,10 @@ class MetricsCollector;
 #include "GTID_Server_Data.h"
 #ifdef PROXYSQL31
 #include "HostgroupPoolStats.h"
+#include "Hostgroup_Strings.h"
+#endif
+#ifdef PROXYSQL40
+#include "Aws_Locality_Types.h"
 #endif
 
 
@@ -28,6 +32,8 @@ class MetricsCollector;
 #include <thread>
 #include <iostream>
 #include <mutex>
+#include <shared_mutex>
+#include <string>
 
 // Headers for declaring Prometheus counters
 #include "prometheus/counter.h"
@@ -94,6 +100,10 @@ class BaseHGC {	// MySQL Host Group Container
 	std::atomic<uint32_t> num_online_servers;
 #ifdef PROXYSQL31
 	std::atomic<uint64_t> backup_servers_selected;
+	// Per-hostgroup throttle for the backup-weight selection warning. A
+	// function-local static would be shared by every hostgroup and thread, so
+	// one busy hostgroup would silence the warning everywhere else.
+	time_t last_log_time_backup_selection;
 #endif
 	time_t last_log_time_num_online_servers;
 	unsigned long long current_time_now;
@@ -106,6 +116,12 @@ class BaseHGC {	// MySQL Host Group Container
 		char * init_connect;
 		char * comment;
 		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
+#ifdef PROXYSQL40
+		char * aws_iam_region;
+#endif // PROXYSQL40
+#ifdef PROXYSQL40
+		AwsLocalityPolicy aws_locality_policy;
+#endif
 		uint32_t max_num_online_servers;
 		uint32_t throttle_connections_per_sec;
 		int32_t monitor_slave_lag_when_null;
@@ -123,6 +139,17 @@ class BaseHGC {	// MySQL Host Group Container
 		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
 		nlohmann::json * ignore_session_variables_json = nullptr; // the JSON format of ignore_session_variables
 	} attributes;
+	/**
+	 * @brief Replace an attribute string. Called by the reload paths and by
+	 *   reset_attributes(): under the Hostgroup Manager lock once the hostgroup
+	 *   is published, and without it only from the constructor, before any
+	 *   other thread can see the hostgroup. Worker threads do not read these
+	 *   strings here: they use their own copy (HostgroupStrings).
+	 */
+	void set_attribute_init_connect(const char* value);
+#ifdef PROXYSQL40
+	void set_attribute_aws_iam_region(const char* value);
+#endif // PROXYSQL40
 	struct {
 		int64_t weight;
 		int64_t max_connections;

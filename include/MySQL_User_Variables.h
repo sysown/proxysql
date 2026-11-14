@@ -4,8 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
+#include <utility>
 
 enum class UserVariableSetStatus : uint8_t {
 	NOT_USER_VARIABLE_SET,
@@ -29,18 +31,45 @@ enum class UserVariableUsage : uint8_t {
 	UNSAFE_OR_UNKNOWN
 };
 
+struct UserVariableLiteralContext {
+	uint32_t client_charset { 0 };
+	uint32_t connection_collation { 0 };
+	bool no_backslash_escapes { false };
+	bool ansi_quotes { false };
+	bool resolve_database_collation { false };
+	std::optional<std::string> database_schema {std::string{}};
+	uint32_t database_charset {0};
+	uint32_t database_schema_charset {45};
+	bool operator==(const UserVariableLiteralContext& other) const {
+		return client_charset == other.client_charset && connection_collation == other.connection_collation &&
+			no_backslash_escapes == other.no_backslash_escapes && ansi_quotes == other.ansi_quotes &&
+			resolve_database_collation == other.resolve_database_collation && database_schema == other.database_schema &&
+			database_charset == other.database_charset && database_schema_charset == other.database_schema_charset;
+	}
+};
+
 struct UserVariableAssignment {
 	std::string canonical_name;
 	std::string replay_target;
 	std::string raw_literal;
 	UserVariableLiteralKind kind;
 	uint64_t hash;
+	UserVariableLiteralContext context;
+};
+
+struct SessionVariableAssignment {
+	std::string name;
+	std::string value;
+	bool quoted_string { false };
 };
 
 struct UserVariableSetAnalysis {
 	UserVariableSetStatus status { UserVariableSetStatus::NOT_USER_VARIABLE_SET };
 	bool is_set_statement { false };
 	std::vector<UserVariableAssignment> assignments;
+	// Independent session assignments, in source order. Validation and
+	// normalization belong to the same registry used by session tracking.
+	std::vector<SessionVariableAssignment> session_assignments;
 };
 
 struct MySQL_User_Variable_Entry {
@@ -48,6 +77,7 @@ struct MySQL_User_Variable_Entry {
 	std::string raw_literal;
 	UserVariableLiteralKind kind;
 	uint64_t hash;
+	UserVariableLiteralContext context;
 
 	size_t stored_bytes() const;
 	bool exactly_equals(const MySQL_User_Variable_Entry& other) const;
@@ -66,7 +96,8 @@ struct MySQL_User_Variable_Replay_Batch {
 
 enum class MySQL_User_Variable_Replay_Status : uint8_t {
 	OK,
-	ASSIGNMENT_TOO_LARGE
+	ASSIGNMENT_TOO_LARGE,
+	UNRESOLVED_CONTEXT
 };
 
 enum class MySQL_User_Variable_Replay_Packet_Budget_Status : uint8_t {
@@ -120,6 +151,10 @@ public:
 		const MySQL_User_Variable_State& actual,
 		size_t max_query_bytes) const;
 	std::string diagnostic_fingerprint() const;
+	/** @brief Return one database whose captured literal collation needs resolution. */
+	bool unresolved_context(UserVariableLiteralContext& context) const;
+	/** @brief Resolve captured contexts for a schema after backend metadata lookup. */
+	void resolve_context(const UserVariableLiteralContext& context, uint32_t collation);
 
 private:
 	std::map<std::string, MySQL_User_Variable_Entry> entries_;
@@ -134,6 +169,14 @@ MySQL_User_Variable_Replay_Completion mysql_user_variable_replay_complete(
 
 MySQL_User_Variable_Replay_Packet_Budget mysql_user_variable_replay_packet_budget(
 	uint32_t max_allowed_pkt, size_t framing_bytes);
+
+/** @brief Check that a captured literal can be replayed independently of later SETs. */
+bool mysql_user_variable_literal_is_replayable(const UserVariableAssignment& assignment);
+/** @brief Capture a bounded database identifier for deferred metadata lookup. */
+std::optional<std::string> mysql_user_variable_capture_schema(const char* schema);
+
+/** @brief Decode a quoted SET literal in the frontend's original parsing context. */
+bool mysql_decode_set_string(const std::string& raw, const UserVariableLiteralContext& context, std::string& bytes);
 
 UserVariableSetAnalysis parsersql_analyze_user_variable_set_mysql(
 	const char* query, size_t query_length);

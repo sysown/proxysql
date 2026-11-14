@@ -2,6 +2,7 @@
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_Session.h"
 #include "cpp.h"
+#include <cmath>
 #include <string_view>
 
 /**
@@ -442,19 +443,60 @@ bool pgsql_variable_validate_client_encoding(const char* value, const params_t* 
 	}
 
 	if (transformed_value) {
-		*transformed_value = strdup(value);
-
-		if (*transformed_value) { // Ensure strdup succeeded
-			char* tmp_val = *transformed_value;
-
-			while (*tmp_val) {
-				*tmp_val = toupper((unsigned char)*tmp_val);
-				tmp_val++;
-			}
-		}
+		// Store the standard name, as PostgreSQL does (check_client_encoding()). The lookup
+		// ignores punctuation, so a value like "'utf-8'" (asyncpg) is valid, and keeping that
+		// spelling put the quotes into the SET sent to the backend. PostgreSQL keeps exactly
+		// "UNICODE" as written, because pre-9.1 JDBC drivers expect to read it back.
+		*transformed_value = strdup(strcmp(value, "UNICODE") == 0 ? value :
+			PgSQL_Connection::encoding_to_char(charset_encoding));
 	}
 
 	return true;
+}
+
+/**
+ * @brief Tells whether a byte is an ASCII control character (0x00-0x1F or 0x7F).
+ *
+ * Tracked variable values travel to the backend inside the startup 'options' string,
+ * where whitespace control characters separate "-c name=value" tokens. Real time zone
+ * names and schema names never contain one.
+ */
+static inline bool pgsql_is_control_char(unsigned char c) {
+	return c < 0x20 || c == 0x7f;
+}
+
+// A zone name, a POSIX rule or a number of hours. PostgreSQL decides whether the zone
+// exists; this only refuses what can never be one (quotes, spaces, ';' ...), so the
+// mistake fails where the client makes it, not on a later query when ProxySQL applies it.
+bool pgsql_variable_validate_timezone(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
+	(void)params;
+	(void)session;
+	if (transformed_value) *transformed_value = nullptr;
+	if (value == nullptr || *value == '\0' || strlen(value) > 255) return false;
+	// PostgreSQL reads any value starting with "interval" as an INTERVAL. Such a value cannot be
+	// applied again on another backend connection: a SET with one is forwarded to the backend
+	// and keeps its connection, but at login or as pgsql-default_timezone it is refused.
+	if (strncasecmp(value, "INTERVAL", 8) == 0) return false;
+	// LOCAL is only a keyword of SET TIME ZONE, meaning DEFAULT; as a value PostgreSQL refuses it.
+	if (strcasecmp(value, "LOCAL") == 0) return false;
+	for (const char* c = value; *c; c++) {
+		if (!isalnum((unsigned char)*c) && strchr("/_-+,.:<>", *c) == nullptr) return false;
+	}
+	// A value that is entirely a number is read by PostgreSQL as hours east of UTC: it
+	// refuses infinity, NaN and anything from 168 hours on.
+	char* end = nullptr;
+	const double hours = strtod(value, &end);
+	if (end != value && *end == '\0') return std::isfinite(hours) && std::fabs(hours) < 168;
+	// In a POSIX rule '<' opens a quoted abbreviation such as <+03>. PostgreSQL refuses a value
+	// whose last '<' is never closed by a '>'.
+	const char* last_lt = strrchr(value, '<');
+	if (last_lt && strchr(last_lt, '>') == nullptr) return false;
+	// A zone name is a file path under PostgreSQL's zone directory, read with one leading
+	// ':' dropped. An empty path, or one that starts at '/' or ':' or has an empty or hidden
+	// part, is never a zone.
+	const char* name = value + (value[0] == ':');
+	return name[0] != '\0' && name[0] != '/' && name[0] != ':' && name[0] != '.' &&
+		strstr(name, "//") == nullptr && strstr(name, "/.") == nullptr;
 }
 
 bool pgsql_variable_validate_search_path(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
@@ -499,6 +541,14 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 						break;
 					}
 				}
+				// A quoted part is copied verbatim into the value ProxySQL later sends in
+				// the backend's startup 'options', so it must not carry control bytes:
+				// a tab, newline or similar would be a token separator there. PostgreSQL
+				// tolerates them in a quoted identifier, but no real schema name uses one,
+				// so the value is rejected outright.
+				if (pgsql_is_control_char((unsigned char)*search)) {
+					break;
+				}
 				search++;
 				effective_len++;
 			}
@@ -537,7 +587,11 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 		}
 
 		if (!first) {
-			normalized.push_back(',');
+			// ", " is how PostgreSQL itself re-renders a search_path list. Joining without
+			// the space made every value that reaches a backend as a SET come back spaced
+			// while ProxySQL kept tracking the unspaced form, so the two disagreed on a
+			// string they both considered current.
+			normalized.append(", ");
 		}
 		first = false;
 
@@ -639,6 +693,12 @@ const pgsql_variable_validator pgsql_variable_validator_client_encoding = {
 const pgsql_variable_validator pgsql_variable_validator_search_path = {
 	.type = VARIABLE_TYPE_STRING,
 	.validate = &pgsql_variable_validate_search_path,
+	.params = {}
+};
+
+const pgsql_variable_validator pgsql_variable_validator_timezone = {
+	.type = VARIABLE_TYPE_STRING,
+	.validate = &pgsql_variable_validate_timezone,
 	.params = {}
 };
 

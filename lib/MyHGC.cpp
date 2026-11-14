@@ -1,4 +1,6 @@
 #include "../deps/json/json.hpp"
+#include <array>
+#include <vector>
 using json = nlohmann::json;
 #define PROXYJSON
 
@@ -118,13 +120,26 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		fprintf(stderr, "Total: %llu, Candidates: %llu\n", array_mysrvc_total-l, array_mysrvc_cands);
 	}
 #endif // TEST_AURORA
-	MySrvC *mysrvcCandidates_static[32];
-	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
+	std::array<MySrvC*, 32> mysrvcCandidates_static;
+	std::vector<MySrvC *> mysrvcCandidates_heap;
+	MySrvC **mysrvcCandidates = mysrvcCandidates_static.data();
 	unsigned int num_candidates = 0;
 	bool used_backup = false;
 	bool max_connections_reached = false;
-	if (l>32) {
-		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
+	bool use_aws_locality = false;
+#ifdef PROXYSQL40
+	std::shared_ptr<const AwsLocalitySnapshot> aws_locality_snapshot;
+	if (mysql_thread___aws_locality_awareness && MyHGM != nullptr &&
+		MyHGM->aws_locality_manager() != nullptr) {
+		aws_locality_snapshot = MyHGM->aws_locality_manager()->snapshot();
+		use_aws_locality = aws_locality_snapshot != nullptr &&
+			aws_locality_snapshot->enabled &&
+			aws_locality_snapshot->has_hostgroup(hid);
+	}
+#endif
+	if (l > mysrvcCandidates_static.size()) {
+		mysrvcCandidates_heap.resize(l);
+		mysrvcCandidates = mysrvcCandidates_heap.data();
 	}
 	if (l) {
 		//int j=0;
@@ -348,9 +363,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #endif
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
-			if (l>32) {
-				free(mysrvcCandidates);
-			}
 #ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
@@ -383,9 +395,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
-			if (l>32) {
-				free(mysrvcCandidates);
-			}
 #ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
@@ -409,30 +418,93 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 					// all servers have some latency.
 					// That is good. If any server have no latency, something is wrong
 					// and we will skip this algorithm
-					sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
 					unsigned int avg_latency_us = 0;
 					avg_latency_us = total_latency_us/num_candidates;
+					// The filter below keeps only the candidates at or below the average
+					// latency. Weight-0 servers are candidates too, so when they are the
+					// fastest ones the filter can keep only weight-0 servers: the total
+					// weight would then be 0 and the lottery below would divide by zero.
+					// Compute the weight the filter would keep first, and apply the filter
+					// only if that weight is not 0. Otherwise skip the algorithm, as done
+					// above when a server has no latency, and select among all candidates.
+					uint64_t filtered_sum = 0;
 					for (j=0; j<num_candidates; j++) {
 						mysrvc = mysrvcCandidates[j];
-						if (mysrvc->current_latency_us > avg_latency_us) {
-							// remove the candidate
-							if (j+1 < num_candidates) {
-								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-							}
-							j--;
-							num_candidates--;
+						if (mysrvc->current_latency_us <= avg_latency_us) {
+							filtered_sum+=mysrvc->weight;
 						}
 					}
-					// we scan again to adjust weight
-					New_sum = 0;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						New_sum+=mysrvc->weight;
+					if (filtered_sum) {
+						sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+						for (j=0; j<num_candidates; j++) {
+							mysrvc = mysrvcCandidates[j];
+							if (mysrvc->current_latency_us > avg_latency_us) {
+								// remove the candidate
+								if (j+1 < num_candidates) {
+									mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+								}
+								j--;
+								num_candidates--;
+							}
+						}
+						// the weight of the remaining candidates, never 0
+						New_sum = filtered_sum;
 					}
 				}
 			}
 		}
 
+#ifdef PROXYSQL40
+		if (use_aws_locality) {
+			uint64_t total_weight = 0;
+			for (j = 0; j < num_candidates; ++j) {
+				mysrvc = mysrvcCandidates[j];
+				total_weight = aws_locality_saturating_add(total_weight,
+					aws_locality_snapshot->effective_weight(
+						hid, mysrvc->address, mysrvc->port, mysrvc->weight));
+			}
+			const uint64_t random_value =
+				(static_cast<uint64_t>(rand_fast()) << 32) |
+				static_cast<uint64_t>(rand_fast());
+			// Effective weights only scale configured weights: a weight-0 server
+			// stays at 0, and the zero-weight checks above already returned NULL
+			// for a hostgroup without weight, exactly as without locality.
+			size_t selected = num_candidates;
+			if (total_weight != 0) {
+				const uint64_t target = random_value % total_weight;
+				uint64_t cumulative = 0;
+				for (j = 0; j < num_candidates; ++j) {
+					mysrvc = mysrvcCandidates[j];
+					cumulative = aws_locality_saturating_add(cumulative,
+						aws_locality_snapshot->effective_weight(
+							hid, mysrvc->address, mysrvc->port, mysrvc->weight));
+					if (target < cumulative) {
+						selected = j;
+						break;
+					}
+				}
+			}
+			if (selected < num_candidates) {
+				mysrvc = mysrvcCandidates[selected];
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7,
+					"Returning MySrvC %p, server %s:%d with AWS locality weighting\n",
+					mysrvc, mysrvc->address, mysrvc->port);
+				if (used_backup) {
+					backup_servers_selected.fetch_add(1, std::memory_order_relaxed);
+				}
+#ifdef TEST_AURORA
+				array_mysrvc_cands += num_candidates;
+#endif // TEST_AURORA
+				return mysrvc;
+			}
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7,
+				"Returning MySrvC NULL because no AWS locality candidate is eligible\n");
+#ifdef TEST_AURORA
+			array_mysrvc_cands += num_candidates;
+#endif // TEST_AURORA
+			return NULL;
+		}
+#endif
 
 		uint64_t k;
 		// rand_fast() yields 32 bits only: combine two draws so the lottery covers
@@ -451,18 +523,14 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #ifdef PROXYSQL31
 				if (used_backup) {
 					backup_servers_selected.fetch_add(1, std::memory_order_relaxed);
-					static time_t last_backup_log = 0;
 					time_t now = time(NULL);
-					if (now - last_backup_log > 1) {
-						last_backup_log = now;
+					if (now - last_log_time_backup_selection > 1) {
+						last_log_time_backup_selection = now;
 						proxy_warning("Hostgroup %u: selecting backup-weight server %s:%d\n",
 							hid, mysrvc->address, mysrvc->port);
 					}
 				}
 #endif
-				if (l>32) {
-					free(mysrvcCandidates);
-				}
 #ifdef TEST_AURORA
 				array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
@@ -478,9 +546,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
-	if (l>32) {
-		free(mysrvcCandidates);
-	}
 #ifdef TEST_AURORA
 	array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA

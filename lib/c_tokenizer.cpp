@@ -32,7 +32,12 @@ void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int e
 		if (result->s_length > (PROXYSQL_TOKENIZER_BUFFSIZE-1)) {
 			result->s = strdup(s);
 		} else {
-			snprintf(result->buffer, sizeof(result->buffer), "%.*s", (int)result->s_length, s);
+			// Avoid printf formatting for this per-query text copy. Preserve its
+			// bound and explicit terminator even if s_length narrowed from size_t.
+			const size_t copy_length = (size_t)result->s_length < sizeof(result->buffer)
+				? (size_t)result->s_length : sizeof(result->buffer) - 1;
+			memcpy(result->buffer, s, copy_length);
+			result->buffer[copy_length] = '\0';
 			result->s = result->buffer;
 		}
 		}
@@ -1532,7 +1537,7 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 					new_cur_pos += 1;
 				}
 
-				while ((new_cur_pos < digest_end)) {
+				while (new_cur_pos < digest_end) {
 					if (*new_cur_pos == '?' && *(new_cur_pos+1) == ',') {
 						new_cur_pos += 2;
 					} else {
@@ -1911,11 +1916,16 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	// - Semicolons (';') marking the end of the query are also removed.
 	{
 		// v1_crashing_payload_06
-		char* f_char = shared_st->res_cur_pos - 1;
-		while (f_char > shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
+		char* f_char = shared_st->res_cur_pos;
+		// An empty result has nothing to trim, and 'res_cur_pos - 1' would point
+		// before the buffer. The first char is never trimmed (unchanged behaviour).
+		if (f_char > shared_st->res_init_pos) {
 			f_char--;
+			while (f_char > shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
+				f_char--;
+			}
+			f_char++;
 		}
-		f_char++;
 		*f_char = '\0';
 		// NOTE: Since this is the last operation this isn't really required. But it's left in case this block
 		// is moved in the future.
@@ -2518,11 +2528,11 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	//              ^ never collapsed
 	// ```
 	if (shared_st.res_cur_pos > shared_st.res_it_init_pos) {
-		char* wspace = shared_st.res_cur_pos - 1;
-		while (*wspace == ' ') {
+		char* wspace = shared_st.res_cur_pos;
+		// stop at the start of the result: it can be only spaces
+		while (wspace > shared_st.res_it_init_pos && *(wspace - 1) == ' ') {
 			wspace--;
 		}
-		wspace++;
 		*wspace = '\0';
 	}
 

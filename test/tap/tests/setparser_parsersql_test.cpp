@@ -93,8 +93,9 @@ static Test parsersql_syntax_errors[] = {
     { Expected("sql_mode", { "(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))" } ) } },
   { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
     { Expected("sql_mode", { "(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
-  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
-    { Expected("sql_mode", { "(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))" } ) } },
+  // "SET sql_mode=(SELCT ...)" must be unparsed: it is in
+  // parsersql_parse_fail_strict, because TestParse accepts any non-empty
+  // result for an empty expectation.
 };
 
 // Byte-exact regression tests for the walker's function-call source preservation
@@ -629,6 +630,10 @@ struct EmptyOnParseFailCase {
 static EmptyOnParseFailCase parsersql_parse_fail_strict[] = {
   { "SET search_path = \"unclosed_quote, public",  EmptyOnParseFailCase::PGSQL },
   { "SET `unclosed_ident = 1",                      EmptyOnParseFailCase::MYSQL },
+  // Not a subquery: ParserSQL parses only `sql_mode=(SELCT` (full_input false),
+  // so the statement is unparsed, as with set_parser_algorithm=1/2.
+  { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))",
+    EmptyOnParseFailCase::MYSQL },
 };
 
 // Direct invocation of the search_path validator with values the walker would
@@ -695,6 +700,49 @@ void TestPartialAstGate() {
 			got_nonempty ? "nonempty" : "empty",
 			c.query);
 	}
+}
+
+// Simple-query protocol payloads include one terminating NUL in QueryLength.
+// The adapter must preserve the same SET value with and without that byte,
+// without treating an embedded NUL as permission to ignore subsequent SQL.
+void TestPgsqlProtocolTerminator() {
+	const std::map<std::string, std::vector<std::string>> expected = {
+		{"search_path", {"\"$user\""}}
+	};
+	for (const char* sql : {
+		"SET search_path TO \"$user\"",
+		"SET search_path TO \"$user\" ,",
+		"SET search_path TO \"$user\" ,;",
+		"SET search_path TO \"$user\" ,; \t\n"
+	}) {
+		std::string query(sql);
+		ok(parsersql_parse_set_pgsql(query) == expected,
+			"PG SET preserves exact quoted value without protocol terminator: %s", sql);
+		query.push_back('\0');
+		ok(parsersql_parse_set_pgsql(query) == expected,
+			"PG SET preserves exact quoted value with protocol terminator: %s", sql);
+	}
+	for (const char* sql : {
+		"SET search_path TO public,,schema1",
+		"SET search_path TO public || schema1"
+	}) {
+		std::string query(sql);
+		query.push_back('\0');
+		ok(parsersql_parse_set_pgsql(query).empty(),
+			"PG SET still rejects malformed values with protocol terminator: %s", sql);
+	}
+	std::string embedded("SET search_path TO public");
+	embedded.push_back('\0');
+	embedded += "; SET search_path TO private";
+	ok(parsersql_parse_set_pgsql(embedded).empty(),
+		"PG SET rejects embedded NUL followed by SQL");
+	embedded.push_back('\0');
+	ok(parsersql_parse_set_pgsql(embedded).empty(),
+		"PG SET rejects embedded NUL even with a protocol terminator");
+	std::string double_nul("SET search_path TO public");
+	double_nul.append(2, '\0');
+	ok(parsersql_parse_set_pgsql(double_nul).empty(),
+		"PG SET rejects multiple NUL terminators");
 }
 
 void TestWalkerToValidatorChain184() {
@@ -798,6 +846,7 @@ int main(int argc, char** argv) {
 	p += std::size(parsersql_search_path_validator_cases) * 2;
 	p += 2;  // TestWalkerToValidatorChain184
 	p += std::size(parsersql_partial_ast_strict);  // TestPartialAstGate
+	p += 13;  // TestPgsqlProtocolTerminator
 	plan(p);
 	TestParse(sql_mode, std::size(sql_mode), "sql_mode");
 	TestParse(time_zone, std::size(time_zone), "time_zone");
@@ -824,6 +873,7 @@ int main(int argc, char** argv) {
 	TestSearchPathValidator();
 	TestWalkerToValidatorChain184();
 	TestPartialAstGate();
+	TestPgsqlProtocolTerminator();
 
 	return exit_status();
 }

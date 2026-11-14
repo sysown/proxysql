@@ -3,6 +3,7 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "Query_Processor_ParserSQL.h"
+#include "SpookyV2.h"
 #include "MySQL_User_Variables.h"
 
 #include <cstring>
@@ -17,10 +18,6 @@ bool mysql_user_variable_tracking_can_stage(
 bool mysql_user_variable_set_uses_qpo_epilogue(
 	UserVariableSetStatus analysis_status,
 	MySQL_User_Variable_Apply_Result preflight_result);
-bool mysql_user_variable_commit_post_ok(
-	MySQL_User_Variable_State& frontend,
-	MySQL_User_Variable_State& backend,
-	const std::vector<UserVariableAssignment>& assignments);
 bool mysql_user_variable_must_classify_and_sync_policy(
 	int mode, int set_parser_algorithm, int query_processor_parser,
 	bool plain_text_com_query, bool connection_bound_fallback,
@@ -28,6 +25,15 @@ bool mysql_user_variable_must_classify_and_sync_policy(
 
 static inline size_t str_view_len(const char *s) {
 	return s ? std::string_view{s}.size() : 0;
+}
+
+// Releases digest_text the way Query_Processor::query_parser_free() does: a digest
+// shorter than QUERY_DIGEST_BUF is stored in qp->buf, only a longer one is heap-allocated.
+static void free_digest(SQP_par_t& qp) {
+	if (qp.digest_text && qp.digest_text != qp.buf) {
+		free(qp.digest_text);
+	}
+	qp.digest_text = NULL;
 }
 
 static void test_mysql_digest_select() {
@@ -39,8 +45,8 @@ static void test_mysql_digest_select() {
 	ok(qp.digest != 0, "MySQL digest: SELECT produces non-zero hash");
 	if (qp.digest_text) {
 		ok(strstr(qp.digest_text, "?") != NULL, "MySQL digest: literals replaced with ?");
-		free(qp.digest_text);
 	}
+	free_digest(qp);
 }
 
 static void test_mysql_digest_insert() {
@@ -50,7 +56,7 @@ static void test_mysql_digest_insert() {
 	parsersql_digest_init_mysql(&qp, q, str_view_len(q));
 	ok(qp.digest_text != NULL, "MySQL digest: INSERT produces digest_text");
 	ok(qp.digest != 0, "MySQL digest: INSERT produces non-zero hash");
-	if (qp.digest_text) free(qp.digest_text);
+	free_digest(qp);
 }
 
 static void test_mysql_digest_same_for_different_literals() {
@@ -62,8 +68,8 @@ static void test_mysql_digest_same_for_different_literals() {
 	parsersql_digest_init_mysql(&qp1, q1, str_view_len(q1));
 	parsersql_digest_init_mysql(&qp2, q2, str_view_len(q2));
 	ok(qp1.digest == qp2.digest, "MySQL digest: same query with different literals produces same hash");
-	if (qp1.digest_text) free(qp1.digest_text);
-	if (qp2.digest_text) free(qp2.digest_text);
+	free_digest(qp1);
+	free_digest(qp2);
 }
 
 static void test_mysql_digest_different_queries() {
@@ -75,8 +81,30 @@ static void test_mysql_digest_different_queries() {
 	parsersql_digest_init_mysql(&qp1, q1, str_view_len(q1));
 	parsersql_digest_init_mysql(&qp2, q2, str_view_len(q2));
 	ok(qp1.digest != qp2.digest, "MySQL digest: different tables produce different hashes");
-	if (qp1.digest_text) free(qp1.digest_text);
-	if (qp2.digest_text) free(qp2.digest_text);
+	free_digest(qp1);
+	free_digest(qp2);
+}
+
+// The digest is stored in qp->buf when it fits, and heap-allocated otherwise;
+// callers must release it with the query_parser_free() rule (see free_digest()).
+static void test_digest_text_ownership() {
+	SQP_par_t qp;
+	memset(&qp, 0, sizeof(qp));
+	const char* short_q = "SELECT * FROM t1 WHERE id = 1";
+	parsersql_digest_init_mysql(&qp, short_q, str_view_len(short_q));
+	ok(qp.digest_text == qp.buf, "Digest shorter than QUERY_DIGEST_BUF is stored in qp->buf");
+	free_digest(qp);
+
+	std::string long_q = "SELECT ";
+	for (int i = 0; i < QUERY_DIGEST_BUF; i++) {
+		long_q += "col" + std::to_string(i) + ", ";
+	}
+	long_q += "x FROM t1";
+	memset(&qp, 0, sizeof(qp));
+	parsersql_digest_init_mysql(&qp, long_q.c_str(), long_q.size());
+	ok(qp.digest_text != NULL && qp.digest_text != qp.buf && strlen(qp.digest_text) >= QUERY_DIGEST_BUF,
+		"Digest of QUERY_DIGEST_BUF bytes or more is heap-allocated");
+	free_digest(qp);
 }
 
 static void test_pgsql_digest_select() {
@@ -86,7 +114,7 @@ static void test_pgsql_digest_select() {
 	parsersql_digest_init_pgsql(&qp, q, str_view_len(q));
 	ok(qp.digest_text != NULL, "PgSQL digest: SELECT produces digest_text");
 	ok(qp.digest != 0, "PgSQL digest: SELECT produces non-zero hash");
-	if (qp.digest_text) free(qp.digest_text);
+	free_digest(qp);
 }
 
 static void test_pgsql_digest_same_for_different_literals() {
@@ -98,8 +126,8 @@ static void test_pgsql_digest_same_for_different_literals() {
 	parsersql_digest_init_pgsql(&qp1, q1, str_view_len(q1));
 	parsersql_digest_init_pgsql(&qp2, q2, str_view_len(q2));
 	ok(qp1.digest == qp2.digest, "PgSQL digest: same query with different literals produces same hash");
-	if (qp1.digest_text) free(qp1.digest_text);
-	if (qp2.digest_text) free(qp2.digest_text);
+	free_digest(qp1);
+	free_digest(qp2);
 }
 
 static void test_mysql_command_type_select() {
@@ -299,13 +327,112 @@ static void test_mysql_set_invalid() {
 	ok(m.empty(), "MySQL SET: invalid input produces empty map");
 }
 
+static void test_mysql_session_set_scopes() {
+	using Assignments = std::map<std::string, std::vector<std::string>>;
+	struct Case { const char* sql; Assignments expected; };
+	const Case cases[] = {
+		{"SET LOCAL innodb_lock_wait_timeout=5", {{"innodb_lock_wait_timeout", {"5"}}}},
+		{"SET SESSION sql_safe_updates=1, LOCAL innodb_lock_wait_timeout=5",
+			{{"sql_safe_updates", {"1"}}, {"innodb_lock_wait_timeout", {"5"}}}},
+		{"SET @@local.sql_safe_updates=1, @@session.innodb_lock_wait_timeout=5",
+			{{"sql_safe_updates", {"1"}}, {"innodb_lock_wait_timeout", {"5"}}}},
+		{"SET sql_mode='GLOBAL,PERSIST'", {{"sql_mode", {"GLOBAL,PERSIST"}}}},
+		{"SET LOCAL time_zone=@@global.time_zone", {{"time_zone", {"@@global.time_zone"}}}},
+		{"SET NAMES utf8mb4", {{"names", {"utf8mb4"}}}},
+		{"SET CHARACTER SET utf8mb4", {{"character_set_results", {"utf8mb4"}}}},
+		{"SET GLOBAL time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, GLOBAL time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, @@global.time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, @@GLOBAL.`time_zone`='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, PERSIST time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, PERSIST_ONLY time_zone='+00:00'", {}},
+		{"SET GLOBAL time_zone='+00:00', LOCAL innodb_lock_wait_timeout=5", {}},
+		{"SET LOCAL time_zone='+01:00', GLOBAL time_zone='+00:00'", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, @user_var=1", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, GLOBAL time_zone=", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, GLOBAL time_zone=, LOCAL sql_safe_updates=1", {}},
+		{"SET GLOBAL time_zone=, LOCAL innodb_lock_wait_timeout=5", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, GLOBAL", {}},
+		{"SET LOCAL @@global.innodb_lock_wait_timeout=5", {}},
+		{"SET LOCAL innodb_lock_wait_timeout=5, LOCAL @@global.time_zone='+00:00'", {}},
+		{"SET LOCAL time_zone=(SELECT @@global.time_zone)", {{"time_zone", {"(SELECT @@global.time_zone)"}}}},
+		{"SET LOCAL sql_safe_updates=(1); /* trailing comment */", {{"sql_safe_updates", {"(1)"}}}},
+		{"SET LOCAL time_zone=CONCAT('+', '00:00')", {{"time_zone", {"CONCAT('+', '00:00')"}}}},
+		{"SET LOCAL innodb_lock_wait_timeout=5; SET GLOBAL time_zone='+00:00'", {}},
+	};
+	for (const auto& c : cases) {
+		const auto actual = parsersql_parse_set_mysql(c.sql, true);
+		ok(actual == c.expected,
+			"Session SET extraction preserves scope atomically: %s", c.sql);
+		if (actual != c.expected) {
+			for (const auto& assignment : actual) {
+				for (const auto& value : assignment.second)
+					diag("Unexpected assignment: %s=%s", assignment.first.c_str(), value.c_str());
+			}
+		}
+	}
+}
+
+/**
+ * set_parser_algorithm=3: a SET that ParserSQL parses only in part (status OK,
+ * full_input false) must be reported as unparsed (empty map), like any other
+ * non-OK result, so the session forwards it instead of tracking a prefix.
+ * Trailing ';' and whitespace are part of a complete parse. A second statement
+ * is not: the session locks the hostgroup for multi-statement SETs before
+ * parsing, with every algorithm, and the parser must not track the prefix.
+ */
+static void test_set_partial_parse() {
+	const char* mysql_partial[] = {
+		"SET wait_timeout=100 junk",
+		"SET NAMES utf8 junk",
+		"SET wait_timeout=100, =2",
+		"SET wait_timeout=100; SELECT 1",
+		"SET NAMES utf8; SELECT 1",
+		"SET wait_timeout=100;;",
+	};
+	for (const char* sql : mysql_partial) {
+		ok(parsersql_parse_set_mysql(sql).empty() && parsersql_parse_set_mysql(sql, true).empty(),
+			"MySQL SET parsed in part is unparsed: %s", sql);
+	}
+	using Assignments = std::map<std::string, std::vector<std::string>>;
+	const std::pair<const char*, Assignments> mysql_complete[] = {
+		{"SET wait_timeout=100;", {{"wait_timeout", {"100"}}}},
+		{"SET wait_timeout=100 ;  \n", {{"wait_timeout", {"100"}}}},
+		{"SET NAMES utf8 ;", {{"names", {"utf8"}}}},
+	};
+	for (const auto& c : mysql_complete) {
+		ok(parsersql_parse_set_mysql(c.first) == c.second && parsersql_parse_set_mysql(c.first, true) == c.second,
+			"MySQL SET with trailing ';' / whitespace is parsed: %s", c.first);
+	}
+	const char* pgsql_partial[] = {
+		"SET search_path = a b",
+		"SET search_path = a, TRANSACTION READ ONLY",
+		"SET search_path = a; SELECT 1",
+		"SET client_encoding = 'UTF8' junk",
+		"SET search_path = a;;",
+	};
+	for (const char* sql : pgsql_partial) {
+		ok(parsersql_parse_set_pgsql(sql).empty(), "PgSQL SET parsed in part is unparsed: %s", sql);
+	}
+	const std::pair<const char*, Assignments> pgsql_complete[] = {
+		{"SET search_path = a;", {{"search_path", {"a"}}}},
+		{"SET search_path = a, b ;  \n", {{"search_path", {"a", "b"}}}},
+	};
+	for (const auto& c : pgsql_complete) {
+		ok(parsersql_parse_set_pgsql(c.first) == c.second,
+			"PgSQL SET with trailing ';' / whitespace is parsed: %s", c.first);
+	}
+}
+
 static void test_mysql_digest_empty_query() {
 	SQP_par_t qp;
 	memset(&qp, 0, sizeof(qp));
 	const char* q = "";
 	parsersql_digest_init_mysql(&qp, q, 0);
-	ok(qp.digest_text == NULL, "MySQL digest: empty query produces NULL digest_text");
-	ok(qp.digest == 0, "MySQL digest: empty query produces zero hash");
+	// As in legacy mode: digest text "" and the hash of "" (#6454).
+	ok(qp.digest_text != NULL && *qp.digest_text == '\0', "MySQL digest: empty query produces empty digest_text");
+	ok(qp.digest == SpookyHash::Hash64("", 0, 0), "MySQL digest: empty query produces the hash of \"\"");
+	if (qp.digest_text && qp.digest_text != qp.buf) free(qp.digest_text);
 }
 
 static void test_mysql_command_type_unknown() {
@@ -414,7 +541,10 @@ static void test_user_variable_non_user_statuses() {
 static void test_user_variable_rejections() {
 	struct Case { const char* query; UserVariableSetStatus status; };
 	const Case cases[] = {
-		{"SET @x=1, sql_mode='x'", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=1, sql_mode=CONCAT(@@sql_mode,'x')", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=1, sql_mode=DEFAULT", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=1, GLOBAL sort_buffer_size=32768", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x=1, @@global.unique_checks=0", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=1+2", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=CAST(1 AS SIGNED)", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=(1)", UserVariableSetStatus::UNSUPPORTED},
@@ -423,8 +553,12 @@ static void test_user_variable_rejections() {
 		{"SET @x=?", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=NOW()", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=1,@y=NOW()", UserVariableSetStatus::UNSUPPORTED},
-		{"SET @x=_utf8mb4'hello'", UserVariableSetStatus::PARSE_ERROR},
-		{"SET @x='hello' COLLATE utf8mb4_bin", UserVariableSetStatus::PARSE_ERROR},
+		// ParserSQL recognizes these expressions, but replay deliberately
+		// supports only plain literals. Reject the entire assignment list.
+		{"SET @x=_utf8mb4'hello'", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @x='hello' COLLATE utf8mb4_bin", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @a=1,@x=_utf8mb4'hello'", UserVariableSetStatus::UNSUPPORTED},
+		{"SET @a=1,@x='hello' COLLATE utf8mb4_bin", UserVariableSetStatus::UNSUPPORTED},
 		{"SET @x=1,", UserVariableSetStatus::PARSE_ERROR},
 		{"SET @x=1; SELECT 1", UserVariableSetStatus::PARSE_ERROR},
 		{"SET @x='unterminated", UserVariableSetStatus::PARSE_ERROR},
@@ -472,6 +606,28 @@ static void test_user_variable_hash_contract() {
 		"typed user SET hash distinguishes literal kind");
 	ok(supported && boundary_left.assignments[0].hash != boundary_right.assignments[0].hash,
 		"typed user SET hash length-delimits tuple boundaries");
+}
+
+static void test_mixed_session_and_user_assignments() {
+	const char* cases[] = {
+		"SET @tag='web', SESSION max_execution_time=1000",
+		"SET SESSION group_concat_max_len=4096, @tag='web', sql_safe_updates=ON",
+		"SET @tag='web', time_zone='+01:00', optimizer_switch='index_merge=off'",
+		"SET @@session.unique_checks=0, @tag='web', @@local.sort_buffer_size=32768",
+		"SET @tag='web', transaction_isolation='READ-COMMITTED', autocommit=0",
+		"SET @tag='web', wait_timeout=600, net_read_timeout=60",
+		"SET @tag='web', unique_checks=TRUE, foreign_key_checks=FALSE",
+	};
+	for (const char* query : cases) {
+		auto parsed = analyze_user_set(query);
+#ifdef PROXYSQL31
+		ok(parsed.status == UserVariableSetStatus::SUPPORTED && parsed.assignments.size() == 1,
+			"mixed SET retains user literals alongside session assignments: %s", query);
+#else
+		ok(parsed.status == UserVariableSetStatus::UNSUPPORTED && parsed.assignments.empty(),
+			"v3.0 mixed SET remains a backend-bound fallback: %s", query);
+#endif
+	}
 }
 
 static void test_user_variable_usage() {
@@ -556,7 +712,7 @@ static void test_user_variable_staging_preflight() {
 static void test_user_variable_routing_disposition() {
 	ok(mysql_user_variable_set_uses_qpo_epilogue(
 		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::OK),
-		"supported preflighted UDV SET forwards through the qpo routing epilogue");
+		"locally handled UDV SET honors the qpo routing epilogue");
 	ok(!mysql_user_variable_set_uses_qpo_epilogue(
 		UserVariableSetStatus::SUPPORTED, MySQL_User_Variable_Apply_Result::VARIABLE_LIMIT),
 		"variable-limit UDV SET does not take the safe qpo routing disposition");
@@ -569,50 +725,6 @@ static void test_user_variable_routing_disposition() {
 	ok(!mysql_user_variable_set_uses_qpo_epilogue(
 		UserVariableSetStatus::UNSUPPORTED, MySQL_User_Variable_Apply_Result::OK),
 		"unsupported UDV SET takes connection-bound fallback instead of safe routing");
-}
-
-static void test_user_variable_post_ok_atomic_commit() {
-	auto initial = analyze_user_set("SET @kept=1");
-	auto update = analyze_user_set("SET @new='value'");
-	MySQL_User_Variable_State frontend;
-	MySQL_User_Variable_State backend;
-	frontend.apply(initial.assignments);
-	backend.apply(initial.assignments);
-	const bool committed = mysql_user_variable_commit_post_ok(
-		frontend, backend, update.assignments);
-	unsigned int frontend_not_matching = 0;
-	unsigned int backend_not_matching = 0;
-	ok(committed && frontend.size() == 2 && backend.size() == 2 &&
-		frontend.count_matches(backend, frontend_not_matching) == 2 &&
-		frontend_not_matching == 0 &&
-		backend.count_matches(frontend, backend_not_matching) == 2 &&
-		backend_not_matching == 0,
-		"post-OK helper commits the same supported assignments to both maps");
-
-	std::vector<UserVariableAssignment> fill;
-	for (size_t i = 0; i < MySQL_User_Variable_State::MAX_VARIABLES; ++i) {
-		const std::string name = "v" + std::to_string(i);
-		fill.push_back({name, "@" + name, "1", UserVariableLiteralKind::INTEGER, i + 1});
-	}
-	std::vector<UserVariableAssignment> overflow {
-		{"overflow", "@overflow", "2", UserVariableLiteralKind::INTEGER, 999}
-	};
-
-	MySQL_User_Variable_State full_frontend;
-	MySQL_User_Variable_State empty_backend;
-	full_frontend.apply(fill);
-	ok(!mysql_user_variable_commit_post_ok(full_frontend, empty_backend, overflow) &&
-		full_frontend.size() == MySQL_User_Variable_State::MAX_VARIABLES &&
-		empty_backend.size() == 0,
-		"frontend post-OK staging failure commits neither map and requests fallback");
-
-	MySQL_User_Variable_State empty_frontend;
-	MySQL_User_Variable_State full_backend;
-	full_backend.apply(fill);
-	ok(!mysql_user_variable_commit_post_ok(empty_frontend, full_backend, overflow) &&
-		empty_frontend.size() == 0 &&
-		full_backend.size() == MySQL_User_Variable_State::MAX_VARIABLES,
-		"backend post-OK staging failure commits neither map and requests fallback");
 }
 
 static void test_user_variable_query_disposition() {
@@ -793,7 +905,7 @@ static void test_user_variable_replay_context() {
 }
 
 int main() {
-	plan(202);
+	plan(255);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -801,6 +913,7 @@ int main() {
 	test_mysql_digest_insert();
 	test_mysql_digest_same_for_different_literals();
 	test_mysql_digest_different_queries();
+	test_digest_text_ownership();
 	test_pgsql_digest_select();
 	test_pgsql_digest_same_for_different_literals();
 	test_mysql_digest_empty_query();
@@ -839,6 +952,8 @@ int main() {
 	test_mysql_set_session_scope();
 	test_mysql_set_global_scope();
 	test_mysql_set_invalid();
+	test_mysql_session_set_scopes();
+	test_set_partial_parse();
 
 	test_pgsql_set_simple();
 	test_pgsql_set_multiple_values();
@@ -851,11 +966,11 @@ int main() {
 	test_user_variable_non_user_statuses();
 	test_user_variable_rejections();
 	test_user_variable_hash_contract();
+	test_mixed_session_and_user_assignments();
 	test_user_variable_usage();
 	test_user_variable_tracking_policy();
 	test_user_variable_staging_preflight();
 	test_user_variable_routing_disposition();
-	test_user_variable_post_ok_atomic_commit();
 	test_user_variable_query_disposition();
 	test_user_variable_runtime_drain_policy();
 	test_user_variable_digest_independent_runtime_policy();

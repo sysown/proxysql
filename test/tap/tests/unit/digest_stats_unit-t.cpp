@@ -4,7 +4,9 @@
 
 #include "proxysql.h"
 #include "query_processor.h"
+#include "digest_text_merge.h"
 
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -81,8 +83,52 @@ static void test_concurrent_add_time() {
 	ok(qds.max_time == 7, "concurrent add_time: max_time is 7");
 }
 
+static void test_merge_digest_text_maps_eager() {
+	umap_query_digest_text dst;
+	umap_query_digest_text src;
+	dst.emplace(1, strdup("a"));
+	dst.emplace(2, strdup("b"));
+	src.emplace(2, strdup("b"));
+	src.emplace(3, strdup("c"));
+
+	char* dst_two = dst.at(2);
+	char* src_three = src.at(3);
+
+	merge_digest_text_maps(dst, src);
+
+	ok(dst.size() == 3, "merge_digest_text_maps: dst has all keys");
+	ok(dst.at(2) == dst_two, "merge_digest_text_maps: dst keeps its own pointer for a duplicate key");
+	ok(dst.at(3) == src_three, "merge_digest_text_maps: a new key takes the source pointer");
+	ok(src.empty(), "merge_digest_text_maps: src is cleared");
+
+	for (auto& entry : dst) free(entry.second);
+}
+
+static void test_merge_digest_text_maps_deferred() {
+	umap_query_digest_text dst;
+	umap_query_digest_text src;
+	dst.emplace(1, strdup("a"));
+	dst.emplace(2, strdup("b"));
+	src.emplace(2, strdup("b"));
+	src.emplace(3, strdup("c"));
+
+	char* dst_two = dst.at(2);
+	char* src_three = src.at(3);
+
+	std::vector<char*> duplicates;
+	merge_digest_text_maps(dst, src, &duplicates);
+
+	ok(duplicates.size() == 1, "merge_digest_text_maps: the deferred duplicate is collected, not freed");
+	ok(dst.at(2) == dst_two, "merge_digest_text_maps (deferred): dst keeps its own pointer");
+	ok(dst.at(3) == src_three, "merge_digest_text_maps (deferred): a new key takes the source pointer");
+	ok(src.empty(), "merge_digest_text_maps (deferred): src is cleared");
+
+	for (char* text : duplicates) free(text);
+	for (auto& entry : dst) free(entry.second);
+}
+
 int main() {
-	plan(19);
+	plan(27);
 	test_init_minimal();
 
 	test_add_time_accumulates();
@@ -91,6 +137,8 @@ int main() {
 	test_first_last_seen();
 	test_merge();
 	test_concurrent_add_time();
+	test_merge_digest_text_maps_eager();
+	test_merge_digest_text_maps_deferred();
 
 	test_cleanup_minimal();
 	return exit_status();

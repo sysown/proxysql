@@ -12,6 +12,10 @@
 
 class SQLite3DB;
 
+// Listener binds require host:port (or [host]:port) with an explicit decimal
+// port in 1..65535. Invalid input must never select a default listener port.
+bool mysqlx_parse_bind_address(const std::string& bind, std::string& host, int& port);
+
 enum class MysqlxBackendAuthMode : uint8_t {
 	mapped = 0,
 	service_account = 1,
@@ -232,6 +236,13 @@ public:
 	void install_for_test(
 		std::unordered_map<std::string, MysqlxRoute> routes,
 		std::unordered_map<int, std::vector<MysqlxBackendEndpoint>> endpoints);
+#ifdef MYSQLX_TEST_BUILD
+	// Test-only: populate the resolved identity map without bootstrapping
+	// the admin SQLite tables. Used by worker-level tests that need the
+	// thread's accept-time identity lookup to succeed.
+	void install_identities_for_test(
+		std::unordered_map<std::string, MysqlxResolvedIdentity> identities);
+#endif
 
 	uint64_t topology_generation() const;
 	void bump_topology_generation();

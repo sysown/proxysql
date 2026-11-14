@@ -170,55 +170,33 @@ Shared parse helper used by:
 
 Write-path GTID collection:
 
+> **Revised (#6270).** The first implementation read the MariaDB position with a
+> blocking `SELECT @@gtid_binlog_pos` on an auxiliary connection after every
+> statement without a result set. That lookup has been removed: the GTID comes
+> from the OK packet only, as `mysql-update_gtid_from_ok` implies, and ProxySQL
+> never issues an extra query to collect it.
+
 - Keep `SESSION_TRACK_GTIDS` for MySQL.
-- On MariaDB backends (version comment contains `MariaDB`), the server may
-  accept `gtid_binlog_pos` in `session_track_system_variables` but still not
-  return a session-state payload. `MySQL_Connection::get_gtid()` therefore uses
-  a dedicated auxiliary MariaDB connection to run
-  `SELECT @@gtid_binlog_pos`; it never queries the live
-  connection, whose response buffer, `mysql->info`, and session state must
-  remain intact.
-- `@@gtid_binlog_pos` can list several domains (`0-1-270,1-2-50`). The lookup
-  asks for no domain, so it succeeds only when the position carries exactly one
-  domain and that domain's key is a canonical MariaDB domain id, which it
-  stores as `domain-server-seq`. A multi-domain position fails closed instead of
-  being attributed to any domain, and a malformed single-UUID position is
-  rejected rather than rendered as `uuid-server-seq`.
-
-  **Known limitation (multi-domain selection):** the client session's own
-  `@@gtid_domain_id` is never read, so no domain can be requested. A client
-  session that issues `SET @@gtid_domain_id=1` is therefore not collected at
-  all while the reported position is multi-domain, because ProxySQL never runs
-  that `SET` on the auxiliary connection and never reads the live connection.
-  Multi-domain positions are not collected until the live session domain is
-  available. Choosing the client's own domain would require reading it from the
-  live connection, which this design explicitly avoids; it is left to a
-  follow-up.
-- The auxiliary connection is created lazily, reused while the session is
-  active, released when the pooled connection is returned, and closed on
-  reset/destruction. Connect is capped at one second with a one-second negative
-  retry window. Read and write timeouts are also capped at one second, even
-  when `mysql-connect_timeout_server` is larger. The connected gauge includes
-  the auxiliary connection; `server_connections_created` remains a
-  pool-connection counter.
-- `MySQL_Connection::get_gtid()` still tries MySQL session tracking first.
-  The MariaDB auxiliary lookup is **opt-in**: it runs only when
-  `mysql-update_gtid_from_ok` is enabled, because that is the flag that
-  consumes the collected GTID. `mysql-client_session_track_gtid` alone does not
-  enable it, even though it defaults to on.
-
-  **Consequence: MariaDB `gtid_from_hostgroup` requires
-  `mysql-update_gtid_from_ok=true`.** With the default configuration no MariaDB
-  GTID is collected and `gtid_from_hostgroup` skips GTID routing for MariaDB
-  backends, as it does today.
-
-  **Known limitation (P1, follow-up):** the auxiliary lookup is a blocking
-  connect plus query issued on the worker event loop. Opting in and capping the
-  timeouts bounds the stall to about one second per failing backend, it does
-  not remove it. A full async sub-state machine (non-blocking connect, timer,
-  and a state that suspends the write path until the position arrives) is a
-  follow-up, not something this change delivers. Do not describe this path as
-  async.
+- MariaDB has no `SESSION_TRACK_GTIDS`. Its equivalent of `OWN_GTID` is the
+  session system variable `last_gtid`: with `last_gtid` in
+  `session_track_system_variables`, MariaDB 10.11 sets
+  `SERVER_SESSION_STATE_CHANGED` and reports `last_gtid=<domain-server-seq>` in
+  the OK packet of every statement that commits a transaction (an autocommit
+  write, or `COMMIT`), and reports nothing for reads, no-op writes, `BEGIN`, or
+  writes inside an open transaction. (Tracking the global `gtid_binlog_pos`
+  does not work: it is not reported.)
+- When GTID tracking is wanted for a backend connection (the same rule as
+  MySQL: `mysql-default_session_track_gtids=OWN_GTID`, or the client enabled
+  `session_track_gtids`), the existing asynchronous `SETTING_SESSION_TRACK_GTIDS`
+  step sends, on MariaDB, a `SET session_track_system_variables=...` that adds
+  `last_gtid` to the tracked variables and keeps the rest: `*` already includes
+  it (and `CONCAT('*', ...)` is an error), an empty list becomes `last_gtid`,
+  and a list that already has it is kept. This runs once per backend
+  connection, and again after a connection reset, like the MySQL `SET`.
+- `select_session_gtid()` takes the GTID from `last_gtid` first, then from
+  `gtid_binlog_pos` / `gtid_current_pos`.
+- `mysql-update_gtid_from_ok` and `mysql-client_session_track_gtid` keep their
+  MySQL meaning for MariaDB; no MariaDB-specific opt-in is needed.
 - Store the native string on the backend (`0-1-100` or `uuid:seq`). If tracking
   is off, the string stays empty and `gtid_from_hostgroup` skips GTID routing
   (same as today).
@@ -237,10 +215,8 @@ Write-path GTID collection:
   domain endpoint and vice versa.
 - MariaDB snapshot with neither a MySQL executed set nor `@@gtid_binlog_pos`:
   reader refuses to start.
-- MariaDB auxiliary lookup connect/query failure is best-effort: close the
-  auxiliary connection, leave the live response untouched, and retry no more
-  than once per second. A position that does not resolve to a single
-  `domain-server-seq` is treated the same way — nothing is stored.
+- A MariaDB OK packet without `last_gtid` stores nothing, exactly like a MySQL
+  OK packet without a GTID.
 - Non-GTID binlog events stay ignored.
 - Invalid `ST=` / `I*` still sets `active = false` and disconnects.
 
@@ -265,13 +241,13 @@ ProxySQL (this repo):
   unknown domain, and on a non-canonical domain id, and leaves the buffer
   untouched on every failure.
 - Unit: `_is_valid_gtid` accepts `0-1-100` and still rejects junk.
-- Unit: `select_session_gtid` and MariaDB position selection are bounded and
-  deduplicated; auxiliary lookup helpers preserve response metadata.
+- Unit: `select_session_gtid` is bounded and deduplicated, and prefers
+  `last_gtid` over the global positions.
 - Existing MySQL causal-read TAP stays green.
-- Live MariaDB 10.11 probe (requires `mysql-update_gtid_from_ok=true`): client
-  OK-packet metadata is identical with GTID lookup gate off/on;
-  `GTID_session_collected` advances with the gate on; the auxiliary connection
-  is released when the session returns to the pool.
+- `test_binlog_reader-t` on `mariadb10-binlog-g1` (causal reads end to end).
+  Like the MySQL binlog infras (`session_track_gtids=OWN_GTID`), the MariaDB
+  infra enables the tracking server-side, adding `last_gtid` to the global
+  `session_track_system_variables`.
 
 Binlog reader (sibling repo):
 
@@ -288,5 +264,3 @@ Binlog reader (sibling repo):
 - Reader: TAP build, parser unit binary, MariaDB live TAP, existing MySQL TAP
   unchanged.
 
-Not yet verified: an async auxiliary lookup. The lookup is still synchronous on
-the worker event loop; see the P1 limitation above.

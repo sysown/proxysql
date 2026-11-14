@@ -104,6 +104,34 @@ public:
 	int get_savepoint_count() const { return savepoint.size(); }
     bool is_in_transaction() const { return !transaction_state.empty(); }
     void reset_state();
+    // Make the tracker agree with the backend's own transaction status, read at a
+    // cycle boundary: end the tracked transaction when it is idle, open one the keywords
+    // never showed ('SELECT 1; BEGIN', COMMIT AND CHAIN) when it is in one.
+    // 'ended_by' says how a tracked transaction the backend no longer has came to end:
+    // 'R' rolled back (the tracked SET variables go back to their values at BEGIN, as
+    // PostgreSQL put them back), 'C' committed (they are kept), 0 unknown (they are kept,
+    // and the ones changed since BEGIN are re-sent to the backend before its next use,
+    // since its own values cannot be known).
+    void sync_with_backend(bool backend_in_txn, char ended_by = 0);
+    // How the statements of `digest` last end a transaction: 'R' for ROLLBACK / ABORT,
+    // 'C' for COMMIT / END, 0 for neither or when the digest cannot be followed to its
+    // end. ROLLBACK TO SAVEPOINT and the PREPARED forms end no transaction block.
+    static char txn_end_in_digest(const char* digest);
+    // Whether running the statements of `digest` could have made a transaction's work durable:
+    // a COMMIT (any form), END, or PREPARE TRANSACTION. A digest that cannot be followed to its
+    // end counts as one, so a caller asking about a COMMIT that got no reply errs on the safe side.
+    static bool commit_in_digest(const char* digest);
+    /**
+     * @brief Like commit_in_digest(), for a statement's own text.
+     *
+     * A stored digest may be missing or cut short, even under the current
+     * query_digests_max_query_length, so the query text is digested in full here. If that cannot
+     * be done the answer is true: a COMMIT that may have taken effect must not be reported as an
+     * aborted transaction.
+     *
+     * @param query The statement's own text (NUL-terminated), or NULL.
+     */
+    static bool commit_in_query(const char* query);
     void fill_internal_session(nlohmann::json& j);
 
 private:

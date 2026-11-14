@@ -3,6 +3,9 @@ name: CI-lint-groups-json
 on:
   pull_request:
   push:
+    branches:
+      - 'v[0-9].[0-9x]+.?[0-9xy]?[0-9]?'
+      - GH-Actions
   workflow_dispatch:
 
 permissions:
@@ -10,6 +13,7 @@ permissions:
 
 jobs:
   lint:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:

@@ -115,19 +115,21 @@ ConnectionPoolDecision evaluate_pool_state(
 	return decision;
 }
 
-void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn) {
+void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn, MySQLBackendAuthType requested_type) {
 	char *schema = client_conn->userinfo->schemaname;
 	MySQL_Connection * conn=NULL;
 	unsigned int k;
 	for (k = start;  k < end; k++) {
 		conn = (MySQL_Connection *)conns->index(k);
+		// Established connections remain authenticated across policy changes.
+		// Candidates needing CHANGE_USER use the requesting user's policy on reset.
 		if (conn->match_tracked_options(client_conn)) {
 			if (connection_quality_level == 0) {
 				// this is our best candidate so far
 				connection_quality_level = 1;
 				conn_found_idx = k;
 			}
-			if (conn->requires_CHANGE_USER(client_conn)==false) {
+			if (conn->requires_CHANGE_USER(client_conn, requested_type)==false) {
 				if (connection_quality_level == 1) {
 					// this is our best candidate so far
 					connection_quality_level = 2;
@@ -180,7 +182,13 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 
 
 
-MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
+MySQL_Connection * MySrvConnList::get_random_MyConn(
+	MySQL_Session *sess, bool ff, MySQLBackendAuthType requested_type
+#ifdef PROXYSQL31
+    , Pool_Acquire_Mode mode
+#endif
+)
+{
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int conn_found_idx = 0;
@@ -209,13 +217,31 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			needs_warming = true;
 		}
 	}
+#ifdef PROXYSQL31
+    if (mode == Pool_Acquire_Mode::EstablishedOnly) {
+        if (needs_warming) return nullptr;
+        // Speculation may reuse a compatible established connection, but must
+        // never warm, evict, reset credentials, or allocate a new connection.
+        if (l && !ff && sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
+            get_random_MyConn_inner_search(0, l, conn_found_idx, connection_quality_level,
+                                          number_of_matching_session_variables, sess->client_myds->myconn, requested_type);
+            if (connection_quality_level >= 2) {
+                auto *candidate = static_cast<MySQL_Connection*>(conns->index(conn_found_idx));
+                if (candidate->fd >= 0 && candidate->mysql && candidate->healthy && candidate->reusable &&
+                    candidate->async_state_machine == ASYNC_IDLE)
+                    return static_cast<MySQL_Connection*>(conns->remove_index_fast(conn_found_idx));
+            }
+        }
+        return nullptr;
+    }
+#endif
 	if (l && ff==false && needs_warming==false) {
 		i=rand_fast()%l;
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
 			MySQL_Connection * client_conn = sess->client_myds->myconn;
-			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
+			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn, requested_type);
 			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
-				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
+				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn, requested_type);
 			}
 			// Evaluate pool state to determine create-vs-reuse and eviction (warming already handled above)
 			ConnectionPoolDecision decision = evaluate_pool_state(

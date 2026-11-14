@@ -74,6 +74,10 @@ export FAKE_CONTAINER_BIN="$FAKE_BIN"
 export ZYPPER_ARGS_LOG
 
 cases=(
+  'proxysql_3.0.12-ubuntu26_amd64.deb|ubuntu:26.04'
+  'proxysql_3.1.12-ubuntu26_arm64.deb|ubuntu:26.04'
+  'proxysql_4.0.12-dbg-ubuntu26_amd64.deb|ubuntu:26.04'
+  'proxysql_4.0.12-ubuntu26-clang_amd64.deb|ubuntu:26.04'
   'proxysql_3.1.11-ubuntu24_arm64.deb|ubuntu:24.04'
   'proxysql_3.1.11-dbg-debian12_amd64.deb|debian:bookworm-slim'
   'proxysql_3.1.11-ubuntu22-clang_amd64.deb|ubuntu:22.04'

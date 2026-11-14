@@ -23,6 +23,7 @@ using json = nlohmann::json;
 #include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
+#include "ProxySQL_ServerDiscovery.h"
 #include "ProxySQL_Cluster.hpp"
 #include "proxysql.h"
 #include "cpp.h"
@@ -255,6 +256,7 @@ public:
 	~MySQL_Monitor_Connection_Pool() {
 		purge_all_connections();
 #ifdef DEBUG
+		delete conns;
 		pthread_mutex_destroy(&m2);
 #endif // DEBUG
 	}
@@ -1638,7 +1640,7 @@ bool MySQL_Monitor_State_Data::set_wait_timeout() {
 	char *qt=(char *)"SET wait_timeout=%d";
 	int wait_timeout=mysql_thread___monitor_ping_interval*10/1000;	// convert to second and multiply by 10
 	query=(char *)malloc(strlen(qt)+32);
-	sprintf(query,qt,wait_timeout);
+	snprintf(query,strlen(qt)+32,qt,wait_timeout);
 	t1=monotonic_time();
 	async_exit_status=mysql_query_start(&interr,mysql,query);
 	while (async_exit_status) {
@@ -1750,7 +1752,7 @@ void * monitor_read_only_thread(const std::vector<MySQL_Monitor_State_Data*>& da
 		if (rc==false) {
 			unsigned long long now=monotonic_time();
 			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
-			sprintf(new_error,"timeout on creating new connection: %s",mmsd->mysql_error_msg);
+			snprintf(new_error,50+strlen(mmsd->mysql_error_msg),"timeout on creating new connection: %s",mmsd->mysql_error_msg);
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
 			proxy_error("Timeout on read_only check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
@@ -1862,7 +1864,19 @@ __exit_monitor_read_only_thread:
 	mmsd->t2=monotonic_time();
 	if (mmsd->get_task_type() == MON_AWS_RDS_TOPOLOGY_DISCOVERY) {
 		if (mmsd->interr == 0 && mmsd->result) {
+#ifdef PROXYSQL40
+			bool inventory_managed = false;
+			{
+				ScopedServerDiscoveryProtocolLock inventory_lock(
+					ProxySQL_ServerProtocol::mysql);
+				inventory_managed = proxysql_is_server_inventory_managed_locked(
+					ProxySQL_ServerProtocol::mysql, mmsd->writer_hostgroup,
+					mmsd->reader_hostgroup);
+			}
+			if (!inventory_managed) GloMyMon->process_aws_rds_topology(mmsd);
+#else
 			GloMyMon->process_aws_rds_topology(mmsd);
+#endif
 			mysql_free_result(mmsd->result);
 			mmsd->result = NULL;
 			read_only_success = true;
@@ -2165,12 +2179,15 @@ __exit_monitor_group_replication_thread:
 		char buf[128];
 		char *s=NULL;
 		int l=strlen(mmsd->hostname);
+		size_t s_size;
 		if (l<110) {
 			s=buf;
+			s_size=sizeof(buf);
 		}	else {
 			s=(char *)malloc(l+16);
+			s_size=l+16;
 		}
-		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+		snprintf(s,s_size,"%s:%d",mmsd->hostname,mmsd->port);
 		bool viable_candidate=false;
 		bool read_only=true;
 		int num_timeouts = 0;
@@ -2424,7 +2441,7 @@ void * monitor_galera_thread(const std::vector<MySQL_Monitor_State_Data*>& data)
 		if (rc==false) {
 			unsigned long long now=monotonic_time();
 			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
-			sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
+			snprintf(new_error,50+strlen(mmsd->mysql_error_msg),"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
 			proxy_error("Error on Galera check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
@@ -2555,12 +2572,15 @@ __exit_monitor_galera_thread:
 		char buf[128];
 		char *s=NULL;
 		int l=strlen(mmsd->hostname);
+		size_t s_size;
 		if (l<110) {
 			s=buf;
+			s_size=sizeof(buf);
 		}	else {
 			s=(char *)malloc(l+16);
+			s_size=l+16;
 		}
-		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+		snprintf(s,s_size,"%s:%d",mmsd->hostname,mmsd->port);
 		bool primary_partition = false;
 		bool read_only=true;
 		bool wsrep_desync = true;
@@ -3706,7 +3726,7 @@ void * MySQL_Monitor::monitor_read_only() {
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)SELECT_SERVERS_FOR_READ_ONLY;
+		const char* query = "read-only monitor server enumeration";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -3721,8 +3741,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			goto __sleep_monitor_read_only;
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_read_only_interval;
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-		resultset = MyHGM->execute_query(query, &error);
+		resultset = MyHGM->get_read_only_servers(&error);
 		assert(resultset);
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
@@ -6126,6 +6145,16 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	}
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 
+	bool inventory_managed = false;
+#ifdef PROXYSQL40
+	{
+		ScopedServerDiscoveryProtocolLock inventory_lock(
+			ProxySQL_ServerProtocol::mysql);
+		inventory_managed = proxysql_is_server_inventory_managed_locked(
+			ProxySQL_ServerProtocol::mysql, wHG, rHG);
+	}
+#endif
+
 	bool exit_now = false;
 	unsigned long long t1 = 0;
 	//unsigned long long t2 = 0;
@@ -6268,7 +6297,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 				if (strncmp(mmsd->mysql_error_msg,(char *)"Access denied for user",strlen((char *)"Access denied for user"))==0) {
 					access_denied = true;
 				}
-				sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
+				snprintf(new_error,50+strlen(mmsd->mysql_error_msg),"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
 				free(mmsd->mysql_error_msg);
 				mmsd->mysql_error_msg = new_error;
 				proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. %sError: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, (access_denied ? "" : "If the server is overload, increase mysql-monitor_connect_timeout. " ) , new_error);
@@ -6373,12 +6402,15 @@ __exit_monitor_aws_aurora_HG_thread:
 			char buf[128];
 			char *s=NULL;
 			int l=strlen(mmsd->hostname);
+			size_t s_size;
 			if (l<110) {
 				s=buf;
+				s_size=sizeof(buf);
 			}	else {
 				s=(char *)malloc(l+16);
+				s_size=l+16;
 			}
-			sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
+			snprintf(s,s_size,"%s:%d",mmsd->hostname,mmsd->port);
 			unsigned long long time_now=realtime_time();
 			time_now=time_now-(mmsd->t2 - start_time);
 			//AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
@@ -6408,13 +6440,23 @@ __exit_monitor_aws_aurora_HG_thread:
 				delete l_ase;
 			}
 			lasts_ase[ase_idx] = ase_l;
-			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks);
+			GloMyMon->evaluate_aws_aurora_results(wHG, rHG, &lasts_ase[0], ase_idx, max_lag_ms, add_lag_ms, min_lag_ms, lag_num_checks, inventory_managed);
 
 			// Auto-purge servers that disappear from REPLICA_HOST_STATUS
 			// Only process if autopurge is enabled and query was successful with results
-			if (autopurge_missing_checks > 0 && mmsd->interr == 0 && ase->host_statuses->size() > 0) {
+#ifdef PROXYSQL40
+			if (!inventory_managed && autopurge_missing_checks > 0 &&
+				mmsd->interr == 0 && ase->host_statuses->size() > 0) {
+				GloMyMon->aws_aurora_autopurge_servers(
+					wHG, rHG, ase, autopurge_missing_checks,
+					autopurge_counter, domain_name);
+			}
+#else
+			if (autopurge_missing_checks > 0 &&
+				mmsd->interr == 0 && ase->host_statuses->size() > 0) {
 				GloMyMon->aws_aurora_autopurge_servers(wHG, rHG, ase, autopurge_missing_checks, autopurge_counter, domain_name);
 			}
+#endif
 
 			for (auto h : *(ase_l->host_statuses)) {
 				for (auto h2 : *(ase->host_statuses)) {
@@ -6500,7 +6542,7 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 	}
 __exit_monitor_AWS_Aurora_thread_HG_now:
 	if (mmsd) {
-		delete (mmsd);
+		delete mmsd;
 		mmsd = NULL;
 	for (unsigned int i=0; i<N_L_ASE; i++) {
 		if (lasts_ase[i]) {
@@ -7348,6 +7390,11 @@ void MySQL_Monitor::aws_rds_bgd_add_green_writer_in_hg(AWS_RDS_BGD_State& st) {
 	if (st.green_writer_hg < 0) {
 		return;
 	}
+#ifdef PROXYSQL40
+	ScopedServerDiscoveryProtocolLock inventory_lock(ProxySQL_ServerProtocol::mysql);
+	if (proxysql_is_server_inventory_managed_locked(
+		ProxySQL_ServerProtocol::mysql, st.writer_hg, st.reader_hg)) return;
+#endif
 	for (AWS_RDS_BlueGreenPair& p : st.bg_map) {
 		if (!p.is_writer) {
 			continue;
@@ -8286,7 +8333,7 @@ void MySQL_Monitor::aws_aurora_autopurge_servers(unsigned int wHG, unsigned int 
 	MyHGM->wrunlock();
 }
 
-void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
+void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks, bool inventory_managed) {
 #ifdef TEST_AURORA
 	unsigned int i = 0;
 	bool verbose = false;
@@ -8374,7 +8421,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					proxy_info("Calling update_aws_aurora_set_writer for %s\n", hse->server_id);
 #endif // TEST_AURORA
-					MyHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id);
+					MyHGM->update_aws_aurora_set_writer(wHG, rHG, hse->server_id, inventory_managed);
 					time_t __timer;
 					char lut[30];
 					struct tm __tm_info;
@@ -8390,7 +8437,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #ifdef TEST_AURORA
 					proxy_info("Calling update_aws_aurora_set_reader for %s\n", hse->server_id);
 #endif // TEST_AURORA
-					MyHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id);
+					MyHGM->update_aws_aurora_set_reader(wHG, rHG, hse->server_id, inventory_managed);
 				}
 				}
 			}
@@ -9146,7 +9193,19 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 				__sync_fetch_and_add(&read_only_check_OK, 1);
 				if (mmsd->interr == 0 && mmsd->result) {
+#ifdef PROXYSQL40
+					bool inventory_managed = false;
+					{
+						ScopedServerDiscoveryProtocolLock inventory_lock(
+							ProxySQL_ServerProtocol::mysql);
+						inventory_managed = proxysql_is_server_inventory_managed_locked(
+							ProxySQL_ServerProtocol::mysql, mmsd->writer_hostgroup,
+							mmsd->reader_hostgroup);
+					}
+					if (!inventory_managed) process_aws_rds_topology(mmsd);
+#else
 					process_aws_rds_topology(mmsd);
+#endif
 				}
 				if (mmsd->result) {
 					mysql_free_result(mmsd->result);
@@ -9357,10 +9416,17 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset, bool do_d
 			// On discovery cycles, enqueue an additional standalone topology-discovery
 			// task for AWS RDS endpoints. The read_only check above is unaffected.
 			string hostname = r->fields[0];
-			if (do_discovery_check && hostname.find(AWS_ENDPOINT_SUFFIX_STRING) != std::string::npos) {
+			bool inventory_managed = false;
+#ifdef PROXYSQL40
+			inventory_managed = proxysql_is_server_inventory_managed(
+				ProxySQL_ServerProtocol::mysql, atoi(r->fields[5]), atoi(r->fields[4]));
+#endif
+			if (do_discovery_check && !inventory_managed &&
+				hostname.find(AWS_ENDPOINT_SUFFIX_STRING) != std::string::npos) {
 				std::unique_ptr<MySQL_Monitor_State_Data> tmmsd(
 					new MySQL_Monitor_State_Data(MON_AWS_RDS_TOPOLOGY_DISCOVERY, r->fields[0], atoi(r->fields[1]), atoi(r->fields[2])));
 				tmmsd->reader_hostgroup = atoi(r->fields[4]);
+				tmmsd->writer_hostgroup = atoi(r->fields[5]);
 				tmmsd->mondb = monitordb;
 				tmmsd->mysql = My_Conn_Pool->get_connection(tmmsd->hostname, tmmsd->port, tmmsd.get());
 				if (tmmsd->mysql) {
@@ -9427,12 +9493,15 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vec
 		char buf[128];
 		char* s = NULL;
 		int l = strlen(mmsd->hostname);
+		size_t s_size;
 		if (l < 110) {
 			s = buf;
+			s_size = sizeof(buf);
 		} else {
 			s = (char*)malloc(l + 16);
+			s_size = l + 16;
 		}
-		sprintf(s, "%s:%d", mmsd->hostname, mmsd->port);
+		snprintf(s, s_size, "%s:%d", mmsd->hostname, mmsd->port);
 		bool viable_candidate = false;
 		bool read_only = true;
 		int num_timeouts = 0;
@@ -9922,12 +9991,15 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 		char buf[128];
 		char* s = NULL;
 		int l = strlen(mmsd->hostname);
+		size_t s_size;
 		if (l < 110) {
 			s = buf;
+			s_size = sizeof(buf);
 		} else {
 			s = (char*)malloc(l + 16);
+			s_size = l + 16;
 		}
-		sprintf(s, "%s:%d", mmsd->hostname, mmsd->port);
+		snprintf(s, s_size, "%s:%d", mmsd->hostname, mmsd->port);
 		bool primary_partition = false;
 		bool read_only = true;
 		bool wsrep_desync = true;

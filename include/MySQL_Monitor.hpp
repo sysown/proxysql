@@ -590,10 +590,6 @@ struct AWS_RDS_BGD_State {
 // Maps a switchover status enum to its stored/display string.
 const char* aws_rds_bgd_status_str(AWS_RDS_BGD_Status s);
 
-// read_only monitor server-enumeration query.
-// Every server that belongs to a replication hostgroup and status NOT IN (OFFLINE_SOFT, OFFLINE_HARD)
-#define SELECT_SERVERS_FOR_READ_ONLY "SELECT hostname, port, MAX(use_ssl) use_ssl, check_type, reader_hostgroup FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()"
-
 // Defined in MySQL_HostGroups_Manager.h; forward-declared here because the include cycle
 // (Monitor.hpp -> HGM.h -> cpp.h -> Monitor.hpp) can leave them undefined at this point. Only
 // used below via pointer, so a forward declaration is sufficient.
@@ -863,7 +859,7 @@ class MySQL_Monitor {
 	std::vector<string> * galera_find_possible_last_nodes(int);
 	bool server_responds_to_ping(char *address, int port);
 	// FIXME : add AWS Aurora actions
-	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
+	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks, bool inventory_managed);
 	unsigned int estimate_lag(char* server_id, AWS_Aurora_status_entry** ase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 	void aws_aurora_autopurge_servers(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry *ase, unsigned int threshold, std::map<std::string, int>& autopurge_counter, const std::string& domain_name);
 //	void gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname);

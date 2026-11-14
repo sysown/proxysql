@@ -36,7 +36,10 @@ proxysql --load-plugin=mysql_router \
 Bootstrap uses the MySQL Shell-compatible registration and account contracts,
 stores the service credential through the core encrypted-secret service, and
 publishes the first complete topology before marking local bootstrap complete.
-After bootstrap, start ProxySQL normally while continuing to load the plugin:
+Bootstrap is a one-shot configuration step: it writes the configuration to disk,
+including the Router endpoints in `mysql-interfaces`, and then exits. A bootstrap
+run never opens client listeners and never serves traffic. After bootstrap, start
+ProxySQL normally while continuing to load the plugin:
 
 ```bash
 proxysql --load-plugin=mysql_router
@@ -46,6 +49,40 @@ The plugin resumes from its persisted identity, starts its reconciliation
 worker, and opens the Router-owned listener gates only after a complete live
 generation is available. `MYSQL ROUTER RECONCILE` requests an immediate
 reconciliation through the Admin interface.
+
+## Metadata connection TLS
+
+Bootstrap accepts the MySQL Router TLS options for the metadata connection:
+`--ssl-mode`, `--ssl-ca`, `--ssl-capath`, `--ssl-cert`, `--ssl-key`,
+`--ssl-cipher`, `--ssl-crl` and `--ssl-crlpath`. Bootstrap stores them in
+`mysql_router_config` (`metadata_ssl_mode`, `metadata_ssl_ca`, ...,
+`metadata_ssl_crlpath`). The reconciler then uses the same TLS settings for
+every later metadata, health and user-sync connection.
+
+| Mode | Behavior |
+|---|---|
+| `DISABLED` | Plaintext. |
+| `PREFERRED` (default) | Requests TLS, and continues in plaintext only if the server does not offer it. |
+| `REQUIRED` | Requires TLS. The connection fails if TLS is not negotiated. The certificate is not verified. See the note below. |
+| `VERIFY_CA` | Requires TLS and verifies the server certificate against `--ssl-ca`/`--ssl-capath`. Connector/C also checks the hostname, so this is as strict as `VERIFY_IDENTITY`. |
+| `VERIFY_IDENTITY` | Requires TLS and verifies the certificate chain and the server hostname. |
+
+`VERIFY_CA` and `VERIFY_IDENTITY` require `--ssl-ca` or `--ssl-capath`. They
+never fall back to the system trust store. A client certificate and its key
+must be given together. Configurations that break these rules are rejected
+both by bootstrap and when the reconciler loads its configuration. Deployments
+bootstrapped before these keys existed have no `metadata_ssl_*` rows and use
+`PREFERRED`.
+
+With `REQUIRED`, Connector/C 3.3 cannot refuse a server that offers no TLS
+before authenticating. ProxySQL checks for TLS once the connection is
+established and closes it if TLS was not negotiated, but by then the server has
+already received the metadata user name and the password's challenge response.
+The password itself is not sent unless the metadata account uses a cleartext
+authentication plugin. As in MySQL, `REQUIRED` does not verify the server, so
+it protects only against passive eavesdropping, not against an active attacker.
+Use `VERIFY_CA` or `VERIFY_IDENTITY` when the network path is not trusted: in
+those modes, Connector/C refuses a server without TLS before it authenticates.
 
 ## Endpoints
 
@@ -60,6 +97,12 @@ The port numbers above are defaults. `--conf-base-port` and the listener
 options can move the three Router endpoints; behavior follows the compiled
 endpoint intent, not a hard-coded port comparison.
 
+Like every other MySQL listener in ProxySQL, the Router endpoints are opened only
+at startup. Publication stores the Router endpoints in `mysql-interfaces` (memory
+and disk) but never opens or closes a listener at runtime. If a publication stages
+a `mysql-interfaces` value that differs from the active listeners, ProxySQL logs a
+warning, and the change takes effect at the next restart.
+
 The direct rules use the native query-rule attribute
 `{"switch_to_fast_forward":true}`. Operators can insert a lower rule ID with
 `apply=1` to override a Router default for selected users or traffic. Such
@@ -67,6 +110,18 @@ operator rules remain operator-owned and are preserved byte-for-byte during
 Router reconciliation. The 6450 rules do not contain the fast-forward action,
 so normal ProxySQL query processing, hostgroup selection, and transaction
 tracking remain available there.
+
+## Network partitions
+
+Each cluster member reports Group Replication health from its own point of
+view. A member cut off in a minority partition still answers queries, but it
+sees itself `ONLINE` and its peers `UNREACHABLE`, so its view has no quorum. The
+reconciler does not publish such a view while another member may still have
+quorum. It tries the other known members first and uses the first view that has
+quorum. Only if no reachable member reports quorum does it apply the cluster's
+`unreachable_quorum_allowed_traffic` policy to the view it has. This applies
+both to normal metadata reads and to the health-only fallback used while
+metadata is unavailable.
 
 ## Ownership and collisions
 
@@ -76,7 +131,8 @@ owns its five baseline rules, its three listener endpoints, and only the users
 that were successfully normalized from metadata. Ownership is recorded in the
 core plugin ledger in both memory and disk.
 
-Publication is one atomic generation across main, disk, and live runtime.
+Publication is one atomic generation across main, disk, and live runtime
+(servers, users, and query rules; listeners change only at restart).
 Unrelated operator servers, users, rules, interfaces, and attributes are not
 replaced. A collision with an operator-owned identity fails that object closed;
 the plugin reports the conflict rather than taking ownership. Explicit user

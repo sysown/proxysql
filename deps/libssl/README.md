@@ -22,6 +22,13 @@ The verifier rejects missing files, checksum mismatches, invalid gzip
 data, unsafe archive paths, and unexpected archive layouts before
 extraction.
 
+The default `DEPS_MODE=auto` may restore a verified ProxySQL-produced build of
+this exact dependency. `DEPS_MODE=source` requires source-origin outputs;
+`DEPS_MODE=prebuilt` requires a registered compatible artifact. Generated headers,
+static libraries, and the tracked `openssl` symlink retain their current paths.
+See [compiled dependency reuse](../../doc/dependency-artifacts.md) for publishing
+and registering artifacts. The source recipe is in `deps/libssl/build.mk`.
+
 OpenSSL updates stay on the 3.5 LTS series through 8 April 2030. Selecting a
 successor requires a separately reviewed design. Follow the authoritative
 [vendored OpenSSL maintenance guide](../../doc/vendored_openssl.md) to verify

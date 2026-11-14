@@ -39,6 +39,21 @@ Groups follow the pattern `<base>-g<N>` where:
 
 The system strips the `-gN` suffix to find the base group directory for `infras.lst`, `env.sh`, and hooks.
 
+### MySQL 8.4 workload partitions
+
+`mysql84-g10` runs the long prepared-statement capacity and mirror workloads
+formerly in `mysql84-g1`. `mysql84-g11` runs the complete EOF family formerly
+in `mysql84-g4`, including the permutation wrapper and its directly selectable
+helper binaries. The other tests remain in `g1` and `g4`; each original group
+member belongs to exactly one of its two resulting partitions.
+
+All four groups use the existing `mysql84` infrastructure and run across every
+selected product tier. The existing `CI-mysql84-g1` and `CI-mysql84-g4` callers
+select the two partitions through their reusable workflows’ `tap_group` matrices;
+no new caller needs to reach the default branch before a PR can use the split.
+Their test steps keep the 90-minute limit. Moving the long workloads to separate jobs leaves time for group reconciliation, coverage
+collection and failure diagnostics without reducing the test cases.
+
 ## Group directory structure
 
 Each group has a directory under `test/tap/groups/<base>/` with some or all of:

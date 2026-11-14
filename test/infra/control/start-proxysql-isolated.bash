@@ -44,8 +44,9 @@ if [ -n "${PROXYSQL_CONFIG_OVERRIDE:-}" ] && [ -f "${PROXYSQL_CONFIG_OVERRIDE}" 
     echo ">>> Using per-group ProxySQL config override: ${GENERIC_CONFIG}"
 fi
 
-# Cluster configuration
-NUM_NODES=${PROXYSQL_CLUSTER_NODES:-9}
+# Six peers plus the primary: seven processes, with explicit overrides retained.
+# Keep bootstrap journal traffic below the former ten-process startup burst.
+NUM_NODES=${PROXYSQL_CLUSTER_NODES:-6}
 if [[ "${SKIP_CLUSTER_START}" == "1" ]] || [[ "${SKIP_CLUSTER_START}" == "true" ]]; then
     NUM_NODES=0
 fi
@@ -284,6 +285,7 @@ docker run -d \
     ${PGSQL_SOCKET_MOUNT} \
     -e GCOV_PREFIX="/gcov" \
     -e GCOV_PREFIX_STRIP="2" \
+    -e PROXYSQL_CLUSTER_NODES="${NUM_NODES}" \
     "${PROXYSQL_SANITIZER_ENV[@]}" \
     proxysql-ci-base:latest \
     /bin/bash -c "${STARTUP_CMD}"

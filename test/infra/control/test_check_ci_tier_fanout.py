@@ -1,7 +1,192 @@
-import copy,unittest
+import copy,unittest,re
+from pathlib import Path
+import yaml
 from check_ci_tier_fanout import validate_routes, version
-from ci_tier_conditions import condition_allows
+from ci_tier_conditions import condition_allows, condition_value
 class RouteTests(unittest.TestCase):
+ def test_legacy_g8_split_retains_both_lower_tier_routes(self):
+  rows,callers,engines=self.fixture()
+  groups={'mysql57-core-g1','legacy-g6'}
+  rows[0]['groups']=sorted(groups)
+  step=engines['ci-g1.yml']['jobs']['tests']['steps'][-1]
+  step['run']='TAP_GROUP=mysql57-core-g1 test/infra/control/run-tests-isolated.bash\nTAP_GROUP=legacy-g6 test/infra/control/run-tests-isolated.bash'
+  self.assertEqual(validate_routes(rows,callers,engines,groups,{'legacy-g8'}),[])
+  for missing in groups:
+   with self.subTest(missing=missing):
+    rows[0]['groups']=sorted(groups-{missing})
+    errors=validate_routes(rows,callers,engines,groups,{'legacy-g8'})
+    for tier in ('v30','v31'):
+     self.assertIn('lower-tier coverage lost: '+tier+'/'+missing,errors)
+ def test_retired_legacy_g3_keeps_mysql84_lower_tier_coverage(self):
+  rows,callers,engines=self.fixture()
+  rows[0]['groups']=['mysql84-g3']
+  engines['ci-g1.yml']['jobs']['tests']['steps'][-1]['run']='TAP_GROUP=mysql84-g3 test/infra/control/run-tests-isolated.bash'
+  self.assertEqual(validate_routes(rows,callers,engines,{'mysql84-g3'},{'legacy-g3'}),[])
+  rows[0]['tiers']=['v40']
+  errors=validate_routes(rows,callers,engines,{'mysql84-g3'},{'legacy-g3'})
+  for tier in ('v30','v31'):
+   self.assertIn('lower-tier coverage lost: '+tier+'/mysql84-g3',errors)
+ def test_legacy_g7_split_keeps_mysql57_and_mariadb_coverage(self):
+  rows,callers,engines=self.fixture()
+  groups={'mysql57-core-g2','legacy-g6'}
+  rows[0]['groups']=sorted(groups)
+  engines['ci-g1.yml']['jobs']['tests']['steps'][-1]['run']='TAP_GROUP=mysql57-core-g2 test/infra/control/run-tests-isolated.bash\nTAP_GROUP=legacy-g6 test/infra/control/run-tests-isolated.bash'
+  self.assertEqual(validate_routes(rows,callers,engines,groups,{'legacy-g7'}),[])
+  for missing in groups:
+   with self.subTest(missing=missing):
+    rows[0]['groups']=sorted(groups-{missing})
+    errors=validate_routes(rows,callers,engines,groups,{'legacy-g7'})
+    for tier in ('v30','v31'):
+     self.assertIn('lower-tier coverage lost: '+tier+'/'+missing,errors)
+ def test_group_axis_requires_new_shards_only_when_product_metadata_contains_them(self):
+  rows,callers,engines=self.fixture()
+  rows[0].update(group_axis='tap_group',axes={'tap_group':['g1','g10']})
+  self.assertEqual(validate_routes(rows,callers,engines,{'g1'},{'g1'}),[])
+  errors=validate_routes(rows,callers,engines,{'g1','g10'},{'g1'})
+  self.assertTrue(any('group not executed' in error and 'g10' in error for error in errors),errors)
+  run=engines['ci-g1.yml']['jobs']['tests']['steps'][-1]
+  run['run']='export TAP_GROUP=g1\nif [ -n "${{ matrix.tap_group }}" ]; then\n  export TAP_GROUP="${{ matrix.tap_group }}"\nfi\ntest/infra/control/run-tests-isolated.bash'
+  self.assertEqual(validate_routes(rows,callers,engines,{'g1','g10'},{'g1'}),[])
+ def test_group_axis_must_preserve_existing_group_and_use_literal_group_names(self):
+  for values in (None,{'var':'GROUPS'},['g10'],['g1',False]):
+   rows,callers,engines=self.fixture()
+   rows[0].update(group_axis='tap_group',axes={'tap_group':values})
+   errors=validate_routes(rows,callers,engines,{'g1','g10'},{'g1'})
+   self.assertTrue(any('group axis' in error for error in errors),errors)
+ def test_group_axis_rejects_nonmapping_axes_without_crashing(self):
+  for axes in (None,[],['tap_group'],'tap_group',1,False):
+   with self.subTest(axes=axes):
+    rows,callers,engines=self.fixture()
+    rows[0].update(group_axis='tap_group',axes=axes)
+    errors=validate_routes(rows,callers,engines,{'g1'},{'g1'})
+    self.assertTrue(any('invalid product group axis' in error for error in errors),errors)
+    self.assertIn('lower-tier coverage lost: v30/g1',errors)
+    self.assertIn('lower-tier coverage lost: v31/g1',errors)
+ def test_tap_groups_inherit_job_environment(self):
+  for value in ['g1','${{ matrix.tap_group }}']:
+   with self.subTest(value=value):
+    rows,callers,engines=self.fixture()
+    known={'g1'}
+    if value!='g1':
+     rows[0].update(group_axis='tap_group',axes={'tap_group':['g1','g10']})
+     known.add('g10')
+    job=engines['ci-g1.yml']['jobs']['tests']
+    job['env']={'TAP_GROUP':value}
+    job['steps'][-1]['run']='test/infra/control/run-tests-isolated.bash'
+    self.assertEqual(validate_routes(rows,callers,engines,known,{'g1'}),[])
+ def test_step_tap_group_overrides_inherited_job_group(self):
+  for value,missing in [('g1','g10'),('','g1, g10')]:
+   with self.subTest(value=value):
+    rows,callers,engines=self.fixture()
+    rows[0].update(group_axis='tap_group',axes={'tap_group':['g1','g10']})
+    job=engines['ci-g1.yml']['jobs']['tests']
+    job['env']={'TAP_GROUP':'${{ matrix.tap_group }}'}
+    job['steps'][-1].update(env={'TAP_GROUP':value},run='test/infra/control/run-tests-isolated.bash')
+    errors=validate_routes(rows,callers,engines,{'g1','g10'},{'g1'})
+    self.assertIn("group not executed by ('CI-g1', 'run', 'tests') on v30/normal: "+missing,errors)
+ def test_native_completion_route_preserves_automatic_coverage(self):
+  rows,callers,engines=self.fixture()
+  callers['CI-g1']['on']['workflow_run']['workflows']=['CI-trigger','CI-builds']
+  callers['CI-g1']['jobs']['run']['if']="${{ github.event.workflow_run.event != 'workflow_run' }}"
+  self.assertEqual(validate_routes(rows,callers,engines,{'g1'},{'g1'}),[])
+ def test_native_completion_callers_reject_foreign_producers(self):
+  root=Path(__file__).resolve().parents[3]
+  checked=0
+  for path in (root/'.github/workflows').glob('CI-*.yml'):
+   caller=yaml.safe_load(path.read_text())
+   events=caller.get('on',caller.get(True,{})) or {}
+   if 'CI-builds' not in (events.get('workflow_run') or {}).get('workflows',[]):continue
+   for job in caller.get('jobs',{}).values():
+    if not job.get('uses','').startswith('sysown/proxysql/.github/workflows/'):continue
+    checked+=1
+    with self.subTest(workflow=path.name):
+     self.assertFalse(condition_allows(job.get('if'),'v31','normal',event_context={
+      'github.event.workflow_run.head_repository.full_name':'outside/fork'}))
+  self.assertGreater(checked,0)
+ def test_guarded_completion_preserves_native_legacy_and_manual_routes(self):
+  root=Path(__file__).resolve().parents[3]
+  gate=yaml.safe_load((root/'.github/workflows/CI-legacy-g4.yml').read_text())['jobs']['run']['if']
+  for event in ['pull_request','push','workflow_dispatch']:
+   with self.subTest(event=event):
+    self.assertTrue(condition_allows(gate,'v31','normal',event_context={
+     'github.event.workflow_run.event':event}))
+  self.assertFalse(condition_allows(gate,'v31','normal',event_context={
+   'github.event.workflow_run.event':'workflow_run'}))
+  self.assertTrue(condition_allows(gate,'v31','normal',event_context={
+   'github.event.workflow_run':None}))
+ def concurrency_group(self, caller, **overrides):
+  context={
+   'github.workflow':caller['name'], 'github.repository':'sysown/proxysql',
+   'github.event_name':'workflow_run', 'github.run_id':'1001',
+   'github.event.pull_request':None,
+   'github.event.workflow_run':True,
+   'github.event.workflow_run.head_branch':'feature/same-name',
+   'github.event.workflow_run.head_repository.full_name':'sysown/proxysql',
+   'github.event.pull_request.head.repo.full_name':'',
+   'github.head_ref':'', 'github.ref_name':'feature/same-name',
+  }
+  context.update(overrides)
+  return re.sub(r'\$\{\{(.*?)\}\}',lambda match:str(condition_value(
+   match[1],'v31','normal',event_context=context)),caller['concurrency']['group'])
+ def test_foreign_completions_cannot_cancel_trusted_concurrency_groups(self):
+  root=Path(__file__).resolve().parents[3]
+  for path in (root/'.github/workflows').glob('CI-*.yml'):
+   caller=yaml.safe_load(path.read_text());events=caller.get('on',caller.get(True,{})) or {}
+   if 'CI-builds' not in (events.get('workflow_run') or {}).get('workflows',[]):continue
+   trusted=self.concurrency_group(caller)
+   cases=[
+    ('foreign',{'github.event.workflow_run.head_repository.full_name':'outside/fork'}),
+    ('nested',{'github.event.workflow_run.event':'workflow_run'}),
+    ('missing',{'github.event.workflow_run.head_repository.full_name':''}),
+    ('deleted',{'github.event.workflow_run.head_repository.full_name':None}),
+   ]
+   for kind,context in cases:
+    with self.subTest(workflow=path.name,case=kind):
+     isolated=self.concurrency_group(caller,**context)
+     self.assertNotEqual(trusted,isolated)
+     if kind in ['missing','deleted']:
+      self.assertNotEqual(isolated,self.concurrency_group(caller,**{
+       **context,'github.run_id':'1002'}))
+   with self.subTest(workflow=path.name,case='component-boundaries'):
+    self.assertNotEqual(self.concurrency_group(caller,**{
+     'github.event.workflow_run.head_branch':'feature-x'}),
+     self.concurrency_group(caller,**{
+      'github.event.workflow_run.head_repository.full_name':'sysown/proxysql-feature',
+      'github.event.workflow_run.head_branch':'x'}))
+   # Accepted source-event routes still supersede each other as before.
+   for event in ['pull_request','push','workflow_dispatch']:
+    with self.subTest(workflow=path.name,event=event):
+     self.assertEqual(trusted,self.concurrency_group(caller,**{
+      'github.event.workflow_run.event':event}))
+   if path.name=='CI-basictests.yml':
+    self.assertEqual(trusted,self.concurrency_group(caller,**{
+     'github.event_name':'workflow_dispatch','github.event.workflow_run':None,
+     'github.event.workflow_run.event':None,
+     'github.event.workflow_run.head_repository.full_name':''}))
+ def test_fork_native_builds_cannot_cancel_trusted_build_groups(self):
+  root=Path(__file__).resolve().parents[3]
+  caller=yaml.safe_load((root/'.github/workflows/CI-builds.yml').read_text())
+  native={'github.event_name':'pull_request', 'github.event.pull_request':True,
+   'github.event.workflow_run':None,
+   'github.event.workflow_run.head_repository.full_name':'',
+   'github.event.workflow_run.head_branch':'',
+   'github.head_ref':'feature/same-name',
+   'github.event.pull_request.head.repo.full_name':'sysown/proxysql'}
+  trusted=self.concurrency_group(caller,**native)
+  native['github.event.pull_request.head.repo.full_name']='outside/fork'
+  self.assertNotEqual(trusted,self.concurrency_group(caller,**native))
+  for event in ['pull_request','workflow_run']:
+   for missing in ['',None]:
+    unknown={**native,'github.event_name':event,
+     'github.event.pull_request':event=='pull_request',
+     'github.event.workflow_run':event=='workflow_run',
+     'github.event.workflow_run.head_branch':'feature/same-name',
+     'github.event.pull_request.head.repo.full_name':missing,
+     'github.event.workflow_run.head_repository.full_name':missing}
+    isolated=self.concurrency_group(caller,**unknown)
+    self.assertNotEqual(trusted,isolated)
+    self.assertNotEqual(isolated,self.concurrency_group(caller,**{
+     **unknown,'github.run_id':'1002'}))
  def fixture(self):
   rows=[dict(workflow='CI-g1',file='ci-g1.yml',job='tests',instance='run',automatic=True,tiers=['v40','v30','v31'],groups=['g1'],cells=[{}])]
   callers={'CI-g1':{'on':{'workflow_run':{'workflows':['CI-trigger']}},'jobs':{'run':{'uses':'sysown/proxysql/.github/workflows/ci-g1.yml@GH-Actions'}}}}
@@ -12,9 +197,96 @@ class RouteTests(unittest.TestCase):
  def test_good_and_missing(self):
   rows,c,e=self.fixture();self.assertEqual(validate_routes(rows,c,e,{'g1'},{'g1'}),[])
   self.assertIn('lower-tier coverage lost: v30/g1',validate_routes([],c,e,{'g1'},{'g1'}))
+ def test_external_only_consumer_does_not_require_local_catalogue_entry(self):
+  rows,c,e=self.fixture()
+  e['ci-external.yml']={'jobs':{'test':{'steps':[{'run':'download ci-builds-handoff-sha'}]}}}
+  self.assertEqual(validate_routes(rows,c,e,{'g1'},{'g1'}),[])
+ def test_uncatalogued_local_consumer_is_rejected_directly_and_through_wrappers(self):
+  for nested in [False,True]:
+   with self.subTest(nested=nested):
+    rows,c,e=self.fixture()
+    e['ci-new.yml']={'jobs':{'test':{'steps':[{'run':'download ci-builds-handoff-sha'}]}}}
+    c['CI-new']={'jobs':{'run':{'uses':'./.github/workflows/ci-new.yml'}}}
+    if nested:
+     c['CI-new']['jobs']['run']['uses']='./.github/workflows/wrapper.yml'
+     e['wrapper.yml']={'jobs':{'run':{'uses':'./.github/workflows/ci-new.yml'}}}
+    self.assertIn('uncatalogued consumer ci-new.yml/test',validate_routes(rows,c,e,{'g1'},{'g1'}))
  def test_manual_does_not_cover_automatic(self):
   rows,c,e=self.fixture();c['CI-g1']['on']={'workflow_dispatch':None}
   self.assertIn('automatic/manual mismatch CI-g1',validate_routes(rows,c,e,{'g1'},{'g1'}))
+ def test_external_manual_consumer_needs_no_local_caller(self):
+  """External manual consumers may omit a caller in this repository."""
+  rows,_,e=self.fixture()
+  rows[0]['automatic']=False
+  self.assertEqual(validate_routes(rows,{},e,{'g1'},set()),[])
+ def test_external_manual_consumer_still_validates_reusable_contract(self):
+  """A missing caller must not hide a broken reusable consumer."""
+  for mutation,expected in [
+   ('workflow','missing reusable ci-g1.yml'),
+   ('job','missing consumer job ci-g1.yml/tests'),
+   ('context','missing tier context ci-g1.yml'),
+   ('matrix',"consumer matrix bypasses selected tiers: ('CI-g1', 'run', 'tests')"),
+   ('execution',"group-less consumer lacks a valid execution_step: ('CI-g1', 'run', 'tests')"),
+  ]:
+   with self.subTest(mutation=mutation):
+    rows,_,e=self.fixture()
+    rows[0]['automatic']=False
+    if mutation=='workflow':
+     del e['ci-g1.yml']
+    if mutation=='job':
+     del e['ci-g1.yml']['jobs']['tests']
+    if mutation=='context':
+     del e['ci-g1.yml']['jobs']['tier-context']
+    if mutation=='matrix':
+     e['ci-g1.yml']['jobs']['tests']['strategy']['matrix']={'tier':['v40']}
+    if mutation=='execution':
+     rows[0]['groups']=[]
+    self.assertIn(expected,validate_routes(rows,{},e,{'g1'},set()))
+ def test_automatic_consumer_still_requires_local_caller(self):
+  """Automatic catalogue entries require a local trigger."""
+  rows,_,e=self.fixture()
+  self.assertIn('missing caller CI-g1',validate_routes(rows,{},e,{'g1'},set()))
+ def test_external_manual_execution_step_must_exist_and_do_work(self):
+  """A declared execution step must name an actual command or action."""
+  for content in [{'run':'run-tests'}, {'uses':'owner/action@v1'}]:
+   for mutation in ['missing','renamed','empty','whitespace']:
+    with self.subTest(content=content,mutation=mutation):
+     rows,_,e=self.fixture()
+     rows[0].update(automatic=False,groups=[],execution_step='Run suite')
+     step=dict(name='Run suite',**content)
+     e['ci-g1.yml']['jobs']['tests']['steps']=[step]
+     self.assertEqual(validate_routes(rows,{},e,{'g1'},set()),[])
+     if mutation=='missing':
+      e['ci-g1.yml']['jobs']['tests']['steps']=[]
+     if mutation=='renamed':
+      step['name']='Wrong name'
+     if mutation=='empty':
+      step.pop(next(iter(content)))
+     if mutation=='whitespace':
+      step[next(iter(content))]='   '
+     self.assertIn("consumer execution step missing or empty: ('CI-g1', 'run', 'tests')",validate_routes(rows,{},e,{'g1'},set()))
+ def test_external_manual_consumer_does_not_supply_migrated_coverage(self):
+  """External manual suites cannot replace automatic tier coverage."""
+  rows,_,e=self.fixture()
+  rows[0]['automatic']=False
+  errors=validate_routes(rows,{},e,{'g1'},{'g1'})
+  for tier in ['v30','v31']:
+   self.assertIn('lower-tier coverage lost: '+tier+'/g1',errors)
+ def test_local_manual_caller_still_validates_its_route(self):
+  """Local manual callers must reach the catalogued reusable workflow."""
+  rows,c,e=self.fixture()
+  rows[0]['automatic']=False
+  c['CI-g1']['on']={'workflow_dispatch':None}
+  self.assertEqual(validate_routes(rows,c,e,{'g1'},set()),[])
+  c['CI-g1']['jobs']['run']['uses']='./.github/workflows/missing.yml'
+  self.assertIn('missing reusable missing.yml',validate_routes(rows,c,e,{'g1'},set()))
+ def test_local_manual_caller_still_validates_execution(self):
+  """Local manual routes must execute their promised test groups."""
+  rows,c,e=self.fixture()
+  rows[0]['automatic']=False
+  c['CI-g1']['on']={'workflow_dispatch':None}
+  e['ci-g1.yml']['jobs']['tests']['steps'][1]['if']='${{ false }}'
+  self.assertTrue(any(error.startswith('group not executed by ') for error in validate_routes(rows,c,e,{'g1'},set())))
  def test_unknown_missing_nested_and_duplicate(self):
   rows,c,e=self.fixture();self.assertIn('missing reusable ci-g1.yml',validate_routes(rows,c,{}, {'g1'},{'g1'}))
   self.assertIn('unknown group g1',validate_routes(rows,c,e,{}, {'g1'}))

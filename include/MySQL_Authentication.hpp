@@ -4,6 +4,8 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#include <atomic>
+
 #define PROXYSQL_AUTH_PTHREAD_MUTEX
 
 #ifndef ACCOUNT_DETAILS_T
@@ -27,6 +29,19 @@ typedef struct _account_details_t {
 	bool active_;
 	char *attributes = nullptr;
 	char *comment = nullptr;
+	/**
+	 * @brief The configured 'attributes' text when 'add()' rejected it (nlohmann
+	 *   cannot parse it, or a value in it fails validation); 'nullptr' otherwise.
+	 * @details 'mysql_users.attributes' only has to satisfy SQLite's
+	 *   'JSON_VALID(attributes) OR attributes=''', which accepts text nlohmann
+	 *   rejects (e.g. '{"a":1e400}'). For such a row 'attributes' is '' -- the user
+	 *   works as if it had no attributes, as in v3.0.11 -- while this field keeps
+	 *   the original text so that 'runtime_mysql_users', 'SAVE MYSQL USERS FROM
+	 *   RUNTIME' and the runtime checksum round-trip it unchanged, and so that the
+	 *   backend auth policy can still fail closed when the rejected text configures
+	 *   'backend_auth' (issue #6413).
+	 */
+	char *rejected_attributes = nullptr;
 } account_details_t;
 
 /**
@@ -84,6 +99,20 @@ class MySQL_Authentication {
 	 *   cluster checksum are unaffected.
 	 */
 	creds_group_t creds_admins;
+#ifdef PROXYSQL40
+	/**
+	 * @brief True while some backend row may have a backend auth policy other
+	 *   than PASSWORD (AWS IAM, or an invalid 'backend_auth' that fails closed).
+	 * @details Set by add() before the row becomes visible; recomputed exactly
+	 *   when backend rows are removed in bulk (remove_inactives(), _reset(),
+	 *   replace_mysql_users_atomically()). del() leaves it set, which is only
+	 *   slower, never wrong. While it is false every backend user resolves to
+	 *   PASSWORD, so the per-query policy resolution can be skipped.
+	 */
+	std::atomic<bool> non_password_backend_auth_ { false };
+	/** @brief Recompute 'non_password_backend_auth_'. Caller holds creds_backends' write lock. */
+	void refresh_non_password_backend_auth_locked();
+#endif // PROXYSQL40
 	creds_group_t& creds_for(enum cred_username_type usertype);
 	bool _reset(enum cred_username_type usertype);
 	uint64_t _get_runtime_checksum(enum cred_username_type usertype);
@@ -105,6 +134,21 @@ class MySQL_Authentication {
 	bool set_clear_text_password(char* username, enum cred_username_type usertype, const char* clear_text_password, PASSWORD_TYPE::E passtype);
 	unsigned int memory_usage();
 	uint64_t get_runtime_checksum();
+	/**
+	 * @brief Whether any backend row may use a non-PASSWORD backend auth policy.
+	 * @details false guarantees that resolve_mysql_backend_auth_policy() returns
+	 *   PASSWORD for every non-null backend username. Lock-free. Always false on
+	 *   v3.0/v3.1 (no PROXYSQL40), where 'backend_auth' is ignored.
+	 */
+	bool has_non_password_backend_auth() const {
+#ifdef PROXYSQL40
+		return non_password_backend_auth_.load(std::memory_order_acquire);
+#else
+		// AWS IAM backend authentication is a v4.0 feature: v3.0/v3.1 ignore
+		// 'backend_auth' and every backend user authenticates with a password.
+		return false;
+#endif // PROXYSQL40
+	}
 #ifdef PROXYSQL40
 	/** Build replacement credential groups off-lock, then swap both groups atomically. */
 	bool replace_mysql_users_atomically(const SQLite3_result& users, std::string& error);

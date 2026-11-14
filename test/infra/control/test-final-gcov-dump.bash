@@ -22,7 +22,10 @@ expected=(
     -e
     "PROXYSQL GCOV DUMP"
 )
-mapfile -t actual < "${record_file}"
+actual=()
+while IFS= read -r argument; do
+    actual+=("${argument}")
+done < "${record_file}"
 
 if [ "${#actual[@]}" -ne "${#expected[@]}" ]; then
     echo "expected ${#expected[@]} mysql arguments, got ${#actual[@]}" >&2
@@ -38,7 +41,10 @@ done
 TAP_ADMINUSERNAME="ci-admin" TAP_ADMINPASSWORD="ci-secret" \
     TAP_ADMINHOST="proxy-under-test" TAP_ADMINPORT="16032" \
     MYSQL_CLIENT_BIN="${fake_mysql}" MYSQL_RECORD_FILE="${record_file}" "${subject}"
-mapfile -t actual < "${record_file}"
+actual=()
+while IFS= read -r argument; do
+    actual+=("${argument}")
+done < "${record_file}"
 expected=(
     -uci-admin
     -pci-secret

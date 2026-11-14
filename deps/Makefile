@@ -5,6 +5,7 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
 DEPS_PATH := $(PROXYSQL_PATH)/deps
+include $(PROXYSQL_PATH)/common_mk/tsan_dependencies.mk
 NPROCS ?= 1
 ifeq ($(UNAME_S),Linux)
 	NPROCS := $(shell nproc)
@@ -63,6 +64,7 @@ targets :=	libssl \
 			abseil \
 			re2 \
 			sqlite3 \
+			pcre \
 			pcre2 \
 			lz4 \
 			zstd \
@@ -104,26 +106,7 @@ default: $(targets)
 include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
 
 
-OPENSSL_BUILD_STAMP := libssl/openssl/.proxysql-build-complete
-
-$(OPENSSL_BUILD_STAMP): libssl/openssl-$(OPENSSL_VERSION).tar.gz \
-		libssl/openssl-$(OPENSSL_VERSION).tar.gz.sha256 \
-		libssl/verify-source.bash Makefile
-	cd libssl && ./verify-source.bash
-	rm -rf libssl/openssl-$(OPENSSL_VERSION)
-	cd libssl && tar --no-same-owner -zxf openssl-$(OPENSSL_VERSION).tar.gz
-	cd libssl/openssl && CC=$(CC) CXX=$(CXX) ./config no-shared no-tests -fPIC
-	cd libssl/openssl && CC=$(CC) CXX=$(CXX) $(MAKE)
-	test -f $(LIB_SSL_PATH)
-	test -f $(LIB_CRYPTO_PATH)
-	touch $@
-
-$(LIB_SSL_PATH) $(LIB_CRYPTO_PATH): $(OPENSSL_BUILD_STAMP)
-	@test -f $@
-
-.PHONY: libssl
-libssl: $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
-
+include $(PROXYSQL_PATH)/deps/libssl/build.mk
 
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
@@ -142,7 +125,7 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 
-libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
+libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a libhttpserver/raw_request_target.patch
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-*.tar.gz
 	cd libhttpserver/libhttpserver && patch -p1 < ../noexcept.patch
@@ -151,6 +134,7 @@ libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmi
 	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../expose_raw_url.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../replace_static_global_strings.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../raw_request_target.patch
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
@@ -186,9 +170,9 @@ curl/curl/lib/.libs/libcurl.a: $(OPENSSL_BUILD_STAMP) Makefile
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && sed -i '' 's/as_fn_error \$$? "one or more libs available at link-time are not available run-time/echo "Skipped check: one or more libs available at link-time are not available run-time/' configure
-	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
+	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
 else
-	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
+	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
 endif
 # libcurl.a is linked into the shared libtap, which on aarch64 fails with non-PIC
 # objects. -fPIC is appended to the caller's CFLAGS for configure, whose generated
@@ -274,26 +258,7 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
 
 
-duckdb/duckdb/build/release/src/libduckdb_static.a:
-	cd duckdb && ./verify-source.bash
-	cd duckdb && rm -rf duckdb-*/ duckdb || true
-	cd duckdb && tar -zxf duckdb-*.tar.gz && mv duckdb-*/ duckdb
-	# DUCKDB_EXPLICIT_VERSION: deps/duckdb/duckdb/ is a bare extraction (no
-	# .git of its own) sitting inside the ProxySQL working tree, so CMake's
-	# `git describe` walks up and picks up *ProxySQL's* tags/commit instead
-	# of failing, silently making duckdb_library_version() report ProxySQL's
-	# version (e.g. "v3.0.11-dev802") instead of DuckDB's. Force it to the
-	# pinned version explicitly. On a version bump, update this alongside
-	# duckdb-<version>.tar.gz and required_root in verify-source.bash.
-	cd duckdb/duckdb && cmake -S . -B build/release \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DBUILD_UNITTESTS=OFF \
-		-DBUILD_SHELL=OFF \
-		-DENABLE_SANITIZER=OFF \
-		-DBUILD_EXTENSIONS="" \
-		-DDUCKDB_EXPLICIT_VERSION=v1.4.5
-	cd duckdb/duckdb && CC=${CC} CXX=${CXX} cmake --build build/release -j$(shell nproc 2>/dev/null || echo 4)
-	@test -f $@ || { echo "ERROR: duckdb build did not produce $@" >&2; exit 1; }
+include $(PROXYSQL_PATH)/deps/duckdb/build.mk
 
 duckdb: duckdb/duckdb/build/release/src/libduckdb_static.a
 
@@ -351,6 +316,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_password.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mysql.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../tls_server_name.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_priv.h.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_alloc.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_charset.c.patch
@@ -469,8 +435,17 @@ re2/re2/obj/libre2.a: $(ABSL_STAMP)
 re2: re2/re2/obj/libre2.a
 
 
+pcre/pcre/.libs/libpcre.a:
+	cd pcre && rm -rf pcre-*/ || true
+	cd pcre && tar -zxf pcre-*.tar.gz
+	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
+	cd pcre/pcre && ./configure
+	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
+
+pcre: pcre/pcre/.libs/libpcre.a
+
 pcre2/pcre2/.libs/libpcre2-8.a:
-	cd pcre2 && rm -rf pcre2-*/ || true
+	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
 	cd pcre2 && tar -zxf pcre2-10.47.tar.gz
 	cd pcre2 && mv pcre2-10.47 pcre2
 	cd pcre2/pcre2 && ./configure --disable-shared --enable-static \
@@ -492,9 +467,9 @@ postgresql/postgresql/src/interfaces/libpq/libpq.a: $(OPENSSL_BUILD_STAMP) \
 	cd postgresql/postgresql && patch -p0 < ../scram_verifier_auth.patch
 	cd postgresql/postgresql && patch -p0 < ../result_formats.patch
 ifeq ($(UNAME_S),Darwin)
-	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="-L$$(brew --prefix icu4c)/lib -L$(SSL_LDIR)" CPPFLAGS="-I$$(brew --prefix icu4c)/include" PKG_CONFIG_PATH="$$(brew --prefix icu4c)/lib/pkgconfig:$$PKG_CONFIG_PATH" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline --with-icu
+	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$$(brew --prefix icu4c)/lib -L$(SSL_LDIR)" CPPFLAGS="-I$$(brew --prefix icu4c)/include" PKG_CONFIG_PATH="$$(brew --prefix icu4c)/lib/pkgconfig:$$PKG_CONFIG_PATH" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline --with-icu
 else
-	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="-L$(SSL_LDIR)" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline
+	cd postgresql/postgresql && LIBS="$(OPENSSL_STATIC_LIBS)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" ./configure --with-ssl=openssl --with-includes="$(SSL_IDIR)" --with-libraries="$(SSL_LDIR)" --without-readline
 endif
 	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0 libpq.a
 
@@ -511,7 +486,7 @@ libusual/libusual/.libs/libusual.a: $(OPENSSL_BUILD_STAMP) libusual/tls_free_nam
 	cd libusual && tar -zxf libusual-*.tar.gz
 	cd libusual/libusual && patch -p1 < ../tls_free_namespace.patch
 	cd libusual/libusual && ./autogen.sh
-	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="-L$(SSL_LDIR)" $(LIBUSUAL_LIBS) ./configure --with-openssl="$(SSL_PATH)" --disable-shared
+	cd libusual/libusual && CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" $(LIBUSUAL_LIBS) ./configure --with-openssl="$(SSL_PATH)" --disable-shared
 	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
 
 libusual: libusual/libusual/.libs/libusual.a
@@ -555,6 +530,8 @@ cleanall:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd re2 && rm -rf re2-*/ || true
 	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
+	# deps/pcre/pcre is a TRACKED symlink (to pcre-8.45/); keep it intact.
+	cd pcre && rm -rf pcre-8.45 || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-*/ || true
 	cd duckdb && rm -rf duckdb-*/ duckdb || true
@@ -575,3 +552,12 @@ cleanall:
 	cd zstd && rm -rf zstd-*/ || true
 	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 .PHONY: cleanall
+
+# Probe and prepare inside the same Make environment as the real dependency
+# targets. The CI cache action persists only the verified compressed bundles.
+.PHONY: dependency-artifact-keys dependency-artifact-prepare
+dependency-artifact-keys:
+	@python3 "$(PROXYSQL_PATH)/deps/artifacts/ci.py" keys --root "$(PROXYSQL_PATH)"
+
+dependency-artifact-prepare:
+	+@python3 "$(PROXYSQL_PATH)/deps/artifacts/ci.py" prepare --root "$(PROXYSQL_PATH)"

@@ -72,7 +72,7 @@ bool uri_throws(const char* uri, const char* needle) {
 } // namespace
 
 int main() {
-	plan(53);
+	plan(59);
 
 	OptionFixture registry_fixture;
 	auto registry = registry_fixture.registry();
@@ -156,6 +156,17 @@ int main() {
 	OptionFixture skip_tcp;
 	skip_tcp.values = {{"--conf-skip-tcp", ""}};
 	ok(throws_with(skip_tcp, "not supported"), "unsupported TCP suppression is rejected explicitly");
+	OptionFixture verify_without_ca;
+	verify_without_ca.values = {{"--ssl-mode", "VERIFY_CA"}};
+	ok(throws_with(verify_without_ca, "requires a CA certificate"),
+	   "VERIFY_CA without --ssl-ca or --ssl-capath is rejected instead of trusting the system store");
+	OptionFixture verify_with_capath;
+	verify_with_capath.values = {{"--ssl-mode", "VERIFY_IDENTITY"}, {"--ssl-capath", "/certs"}};
+	ok(!throws_with(verify_with_capath, ""), "VERIFY_IDENTITY accepts a CA directory");
+	OptionFixture cert_without_key;
+	cert_without_key.values = {{"--ssl-cert", "/cert.pem"}};
+	ok(throws_with(cert_without_key, "configured together"),
+	   "a client certificate without its key is rejected");
 	OptionFixture bad_policy;
 	bad_policy.values = {{"--account-create", "sometimes"}};
 	ok(throws_with(bad_policy, "account-create"), "invalid account creation policy is rejected");
@@ -211,7 +222,10 @@ int main() {
 	   "the Router config table fixture is created");
 	ok(db.execute("INSERT INTO mysql_router_config VALUES"
 		"('refresh_interval_ms','2500'),('bind_address','127.0.0.2'),"
-		"('rw_port','7446'),('metadata_ssl_mode','REQUIRED')"),
+		"('rw_port','7446'),('metadata_ssl_mode','VERIFY_CA'),('metadata_ssl_ca','/ca.pem'),"
+		"('metadata_ssl_capath',''),('metadata_ssl_cert','/cert.pem'),('metadata_ssl_key','/key.pem'),"
+		"('metadata_ssl_cipher','ECDHE-RSA-AES256-GCM-SHA384'),('metadata_ssl_crl','/ic.crl'),"
+		"('metadata_ssl_crlpath','')"),
 	   "valid Router configuration is seeded");
 	MysqlRouterConfigStore store;
 	std::string error;
@@ -222,8 +236,19 @@ int main() {
 	ok(snapshot.bind_address == "127.0.0.2" && snapshot.rw_port == 7446 &&
 	   snapshot.ro_port == 6447 && snapshot.rw_split_port == 6450,
 	   "configured and default listener values coexist");
-	ok(snapshot.metadata_ssl_mode == MetadataTlsMode::required,
-	   "typed metadata TLS configuration is installed");
+	ok(snapshot.metadata_tls.mode == MetadataTlsMode::verify_ca &&
+	   snapshot.metadata_tls.ca == "/ca.pem" && snapshot.metadata_tls.capath.empty() &&
+	   snapshot.metadata_tls.cert == "/cert.pem" && snapshot.metadata_tls.key == "/key.pem" &&
+	   snapshot.metadata_tls.cipher == "ECDHE-RSA-AES256-GCM-SHA384" &&
+	   snapshot.metadata_tls.crl == "/ic.crl" && snapshot.metadata_tls.crlpath.empty(),
+	   "the complete persisted metadata TLS configuration is installed (issue #6352)");
+	ok(db.execute("UPDATE mysql_router_config SET config_value='' WHERE config_key='metadata_ssl_ca'"),
+	   "the CA of a verifying TLS configuration is cleared");
+	ok(!store.load(db, error) && error.find("requires a CA certificate") != std::string::npos &&
+	   store.snapshot().metadata_tls.ca == "/ca.pem",
+	   "a verifying TLS mode without a CA fails closed and keeps the prior snapshot");
+	ok(db.execute("UPDATE mysql_router_config SET config_value='/ca.pem' WHERE config_key='metadata_ssl_ca'"),
+	   "the CA fixture is restored");
 	ok(db.execute("INSERT INTO mysql_router_config VALUES('unknown_key','value')"),
 	   "an undeclared config key is staged");
 	ok(!store.load(db, error) && error.find("unknown_key") != std::string::npos,

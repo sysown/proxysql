@@ -976,13 +976,10 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	memcpy(okpack+14,&stmt_info->warning_count,sizeof(uint16_t));
 	(*myds)->PSarrayOUT->add((void *)okpack,16);
 	sid++;
-	int setStatus = SERVER_STATUS_AUTOCOMMIT;
-	if (myds) {
-		setStatus = 0;
-		unsigned int Trx_id = (*myds)->sess->FindOneActiveTransaction();
-		setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0 );
-		if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-	}
+	int setStatus = 0;
+	unsigned int Trx_id = (*myds)->sess->FindOneActiveTransaction();
+	setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0 );
+	if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 	bool deprecate_eof_active = false;
 	if (*myds && (*myds)->myconn) {
 		if ((*myds)->myconn->options.client_flag & CLIENT_DEPRECATE_EOF) {
@@ -1768,6 +1765,20 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		cleanse_and_free_auth_response(pass, pass_len + 1);
 		return false;
 	}
+	uint16_t charset = 0;
+	memcpy(&charset, pkt + cur, sizeof(charset));
+	if (charset == 0) {
+		const MARIADB_CHARSET_INFO* default_charset =
+			proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+		assert(default_charset);
+		charset = default_charset->nr;
+	}
+	if (!proxysql_find_charset_nr(charset)) {
+		proxy_error("Client %s:%d is trying to use unknown charset %u. Disconnecting\n",
+			(*myds)->addr.addr, (*myds)->addr.port, charset);
+		cleanse_and_free_auth_response(pass, pass_len + 1);
+		return false;
+	}
 	cur += 2;
 	// Check and get 'Client Auth Plugin' if capability is supported
 	char* client_auth_plugin = nullptr;
@@ -2009,7 +2020,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 
 		userinfo->username=strdup((const char *)user);
 		userinfo->password=strdup((const char *)password);
-		if (db) userinfo->set_schemaname(db,strlen(db));
+		if (db) userinfo->set_schemaname(db,strlen(db), charset);
 	} else {
 		// we always duplicate username and password, or crashes happen
 		userinfo->username=strdup((const char *)user);
@@ -2017,40 +2028,15 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	}
 	cleanse_and_free_password(password);
 	free_account_details(account_details);
+	if ((*myds)->sess->change_user_auth_switch) {
+		// Auth Switch Response has no charset field. Retain the CHANGE_USER
+		// packet's charset and the selected schema's independent encoding.
+		(*myds)->tmp_charset = charset;
+		userinfo->set_schemaname(db, db_len, charset);
+	}
 	userinfo->set(NULL,NULL,NULL,NULL); // just to call compute_hash()
 	if (ret) {
-		// we need to process charset if present in CHANGE_USER
-		uint16_t charset=0;
-		int bytes_processed = (db-(char *)pkt);
-		bytes_processed += strlen(db) + 1;
-		int bytes_left = len - bytes_processed;
-		if (bytes_left > 2) {
-			char *p = db;
-			p += strlen(db);
-			p++; // null byte
-			memcpy(&charset, p, sizeof(charset));
-		}
-		// see bug #810
-		if (charset==0) {
-			const MARIADB_CHARSET_INFO *ci = NULL;
-			ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
-			if (!ci) {
-				// LCOV_EXCL_START
-				proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
-				assert(0);
-				// LCOV_EXCL_STOP
-			}
-			charset=ci->nr;
-		}
-		// reject connections from unknown charsets
-		const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(charset);
-		if (!c) {
-			proxy_error("Client %s:%d is trying to use unknown charset %u. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port, charset);
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client %s:%d is trying to use unknown charset %u. Disconnecting\n", (*myds), (*myds)->sess, user, (*myds)->addr.addr, (*myds)->addr.port, charset);
-			ret = false;
-			return ret;
-		}
-		// set the default charset for this session
+		// The database field may be empty, selecting the configured UTF-8 schema.
 		(*myds)->sess->default_charset = charset;
 		if ((*myds)->sess->user_attributes) {
 #ifndef PROXYSQL31
@@ -2328,7 +2314,7 @@ static bool mysql_decode_length_ll_checked(unsigned char* ptr, const unsigned ch
 		return false;
 	}
 
-	const int decoded_len = mysql_decode_length_ll(ptr, len);
+	const int decoded_len = mysql_decode_length_ll(ptr, static_cast<size_t>(end - ptr), len);
 	if (decoded_len <= 0) {
 		return false;
 	}
@@ -2427,9 +2413,9 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . missing auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
 			return false;
 		}
-		uint64_t passlen64;
-		int pass_len_enc=mysql_decode_length_ll(pkt,&passlen64);
-		if (pass_len_enc <= 0 || static_cast<size_t>(packet_end - pkt) < static_cast<size_t>(pass_len_enc)) {
+		uint64_t passlen64 = 0;
+		int pass_len_enc = 0;
+		if (!mysql_decode_length_ll_checked(pkt, packet_end, &passlen64, &pass_len_enc)) {
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . malformed auth response length in handshake response\n", (*myds), (*myds)->sess, vars1.user);
 			return false;
@@ -2484,7 +2470,7 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		if (vars1.db) {
 			// TODO: Not ideal, but the flow is currently complex. Resource management should be simplified in
 			// a future rework, so we can 'centralize' the update to the session state with auth results.
-			userinfo->set_schemaname(vars1.db, strlen(vars1.db));
+			userinfo->set_schemaname(vars1.db, strlen(vars1.db), vars1.charset);
 		}
 	} else {
 		vars1.db = NULL;
@@ -4115,7 +4101,11 @@ __exit_do_auth:
 			userinfo->username=strdup((const char *)vars1.user);
 		userinfo->clear_password();
 		userinfo->password=strdup((const char *)vars1.password);
-		if (vars1.db) userinfo->set_schemaname(vars1.db,strlen(vars1.db));
+		if (vars1.db) {
+			const uint32_t schema_charset = (*myds)->sess->change_user_auth_switch
+				? userinfo->schemaname_charset : vars1.charset;
+			userinfo->set_schemaname(vars1.db, strlen(vars1.db), schema_charset);
+		}
 		userinfo->passtype = vars1.passtype;
 	} else {
 		// we always duplicate username and password, or crashes happen
@@ -4298,6 +4288,47 @@ void * MySQL_Protocol::Query_String_to_packet(uint8_t sid, std::string *s, unsig
 //
 // returns stmt_meta, or a new one
 // See https://dev.mysql.com/doc/internals/en/com-stmt-execute.html for reference
+/**
+ * @brief Tells whether the server accepts a COM_STMT_SEND_LONG_DATA value for a
+ *   parameter of the given declared type.
+ * @details MySQL and MariaDB accept long data only for string and blob
+ *   parameters, and reject the execution for any other type (VARCHAR is
+ *   accepted by MariaDB, rejected by MySQL; it is forwarded by length, so it is
+ *   allowed).
+ */
+static bool is_long_data_param_type(enum enum_field_types buffer_type) {
+	switch (buffer_type) {
+		case MYSQL_TYPE_STRING:
+		case MYSQL_TYPE_VAR_STRING:
+		case MYSQL_TYPE_VARCHAR:
+		case MYSQL_TYPE_TINY_BLOB:
+		case MYSQL_TYPE_MEDIUM_BLOB:
+		case MYSQL_TYPE_LONG_BLOB:
+		case MYSQL_TYPE_BLOB:
+			return true;
+		default:
+			return false;
+	}
+}
+
+/** @brief Detects unsupported long-data parameters, including empty entries. */
+static bool has_invalid_long_data(StmtLongDataHandler* handler, uint32_t stmt_id,
+	const MYSQL_BIND* binds, uint16_t num_params) {
+#ifdef PROXYSQL31
+	if (!handler->has_data(stmt_id)) return false;
+#endif
+	for (uint16_t i = 0; i < num_params; ++i) {
+		if (is_long_data_param_type(binds[i].buffer_type)) continue;
+		unsigned long* length = nullptr;
+		my_bool* is_null = nullptr;
+		handler->get(stmt_id, i, &length, &is_null);
+		// get() fills length for an existing entry even when realloc(ptr, 0)
+		// has freed its buffer. A null data pointer does not mean no long data.
+		if (length) return true;
+	}
+	return false;
+}
+
 stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta,
 	const unsigned char *effective_types
@@ -4343,9 +4374,20 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			return NULL;
 		}
 		memcpy(&new_params_bound_flag,p+null_bitmap_length,1);
-		uint8_t *null_bitmap=NULL;
-		null_bitmap=(uint8_t *)malloc(null_bitmap_length);
-		memcpy(null_bitmap,p,null_bitmap_length);
+		// With new_params_bound_flag set, 2 type bytes per parameter follow the flag,
+		// and the loop below reads them from the packet (GHSA-p5xc-69qx-m4q5).
+		if (new_params_bound_flag &&
+			pkt.size - (14+1+null_bitmap_length) < static_cast<size_t>(num_params) * 2) {
+			proxy_warning("Malformed COM_STMT_EXECUTE packet: %u parameter types exceed packet size %lu\n",
+				num_params, static_cast<unsigned long>(pkt.size));
+			// Same ownership rules as the NULL bitmap check above.
+			ret->pkt = NULL;
+			if (!*stmt_meta) { delete ret; }
+			return NULL;
+		}
+		// Read in place: the size check above covers the whole bitmap, and the
+		// packet outlives this function (see ret->pkt).
+		const uint8_t *null_bitmap=(const uint8_t *)p;
 		p+=null_bitmap_length;
 		p+=1; // new_params_bound_flag
 
@@ -4394,7 +4436,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			// initalized. See #3546.
 			binds[i].buffer = NULL;
 		}
-		free(null_bitmap); // we are done with it
 
 		if (new_params_bound_flag || effective_types) {
 			// the client is rebinding the parameters
@@ -4420,22 +4461,55 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			}
 		}
 
-		for (i=0;i<num_params;i++) {
-			if (p > static_cast<char*>(pkt.ptr) + pkt.size) {
-				// Required to prevent double-free in dtor
-				if (ret->pkt) { ret->pkt = NULL; }
-				// Only free when metadata not obtained from cache (i.e. first execute)
-				if (!*stmt_meta) { delete ret; }
+		// Reject long data sent for a parameter that is not a string or a blob,
+		// as the server does. Forwarding it with the declared type would make the
+		// client library read sizeof(type) bytes from the long data buffer and
+		// send them as a binary value of that type (e.g. a whole MYSQL_TIME read
+		// from a shorter buffer). Checked before any bind buffer is allocated.
+		if (has_invalid_long_data((*myds)->sess->SLDH, ret->stmt_id, binds, num_params)) {
+			// Required to prevent double-free in dtor
+			ret->pkt = NULL;
+			// Only free when metadata not obtained from cache (i.e. first execute)
+			if (!*stmt_meta) { delete ret; }
+			return NULL;
+		}
 
-				return NULL;
+		// Every read below must stay within the packet: values are forwarded to the backend,
+		// so an over-read would disclose ProxySQL's heap (GHSA-r23x-jg5r-jmcc).
+		const char * const end = static_cast<char*>(pkt.ptr) + pkt.size;
+		auto avail = [&](size_t n) -> bool { return p <= end && static_cast<size_t>(end - p) >= n; };
+		auto malformed = [&](uint16_t processed) -> stmt_execute_metadata_t* {
+			proxy_warning("Malformed COM_STMT_EXECUTE packet: parameter %u exceeds packet size %lu\n",
+				processed, static_cast<unsigned long>(pkt.size));
+			// Free the temporal buffers allocated so far, not the ones owned by SLDH
+			for (uint16_t j = 0; j < processed; j++) {
+				const enum enum_field_types t = binds[j].buffer_type;
+				if (t == MYSQL_TYPE_TIME || t == MYSQL_TYPE_DATE || t == MYSQL_TYPE_TIMESTAMP || t == MYSQL_TYPE_DATETIME) {
+					unsigned long *_l = NULL;
+					my_bool *_is_null = NULL;
+					if (binds[j].buffer && binds[j].buffer != (*myds)->sess->SLDH->get(ret->stmt_id, j, &_l, &_is_null)) {
+						free(binds[j].buffer);
+					}
+				}
+				binds[j].buffer = NULL;
 			}
+			// Required to prevent double-free in dtor
+			if (ret->pkt) { ret->pkt = NULL; }
+			// Only free when metadata not obtained from cache (i.e. first execute)
+			if (!*stmt_meta) { delete ret; }
+			return NULL;
+		};
+		for (i=0;i<num_params;i++) {
 			unsigned long *_l = 0;
-			my_bool * _is_null;
+			my_bool * _is_null = NULL;
 			void *_data = (*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
-			if (_data) {
+			if (_l) {
 				// Data was sent via STMT_SEND_LONG_DATA so no data in the packet.
 				binds[i].length = _l;
-				binds[i].buffer = _data;
+				// libmariadb treats a null bind buffer as SQL NULL, even at length
+				// zero. Supply a non-null buffer for an empty string/blob value.
+				static char empty_long_data = 0;
+				binds[i].buffer = _data ? _data : &empty_long_data;
 				binds[i].is_null = _is_null;
 				continue;
 			} else if (is_nulls[i]==true) {
@@ -4446,27 +4520,35 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 			enum enum_field_types buffer_type=binds[i].buffer_type;
 			switch (buffer_type) {
 				case MYSQL_TYPE_TINY:
+					if (!avail(1)) return malformed(i);
 					binds[i].buffer=p;
 					p+=1;
 					break;
 				case MYSQL_TYPE_SHORT:
 				case MYSQL_TYPE_YEAR:
+					if (!avail(2)) return malformed(i);
 					binds[i].buffer=p;
 					p+=2;
 					break;
 				case MYSQL_TYPE_FLOAT:
 				case MYSQL_TYPE_LONG:
 				case MYSQL_TYPE_INT24:
+					if (!avail(4)) return malformed(i);
 					binds[i].buffer=p;
 					p+=4;
 					break;
 				case MYSQL_TYPE_DOUBLE:
 				case MYSQL_TYPE_LONGLONG:
+					if (!avail(8)) return malformed(i);
 					binds[i].buffer=p;
 					p+=8;
 					break;
 				case MYSQL_TYPE_TIME:
 					{
+						// The decoding below reads fixed offsets: only the lengths defined by the protocol are valid
+						if (!avail(1)) return malformed(i);
+						const uint8_t tlen = static_cast<uint8_t>(p[0]);
+						if ((tlen != 0 && tlen != 8 && tlen != 12) || !avail(1 + tlen)) return malformed(i);
 						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
 						uint8_t l;
 						memcpy(&l,p,1);
@@ -4491,6 +4573,10 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				case MYSQL_TYPE_TIMESTAMP:
 				case MYSQL_TYPE_DATETIME:
 					{
+						// The decoding below reads fixed offsets: only the lengths defined by the protocol are valid
+						if (!avail(1)) return malformed(i);
+						const uint8_t dlen = static_cast<uint8_t>(p[0]);
+						if ((dlen != 0 && dlen != 4 && dlen != 7 && dlen != 11) || !avail(1 + dlen)) return malformed(i);
 						binds[i].buffer=malloc(sizeof(MYSQL_TIME)); // NOTE: remember to free() this
 						uint8_t l;
 						memcpy(&l,p,1);
@@ -4531,18 +4617,11 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 					{
 						uint8_t l=0;
 						uint32_t len { 0 };
-						l=mysql_decode_length((unsigned char *)p, &len);
+						if (!avail(1)) return malformed(i);
+						l=mysql_decode_length((unsigned char *)p, end - p, &len);
+						if (l == 0 || !avail(l) || static_cast<size_t>(end - (p + l)) < len) return malformed(i);
 						if (l>1) {
 							PROXY_TRACE();
-						}
-
-						if (p + l > static_cast<char*>(pkt.ptr) + pkt.size || len > pkt.size) {
-							// Required to prevent double-free in dtor
-							if (ret->pkt) { ret->pkt = NULL; }
-							// Only free when metadata not obtained from cache (i.e. first execute)
-							if (!*stmt_meta) { delete ret; }
-
-							return NULL;
 						}
 
 						p+=l;
@@ -4552,13 +4631,10 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 					}
 					break;
 				default:
-					// LCOV_EXCL_START
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
 							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
+					return malformed(i);
 			}
 		}
 	}

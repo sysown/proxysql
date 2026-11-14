@@ -102,6 +102,9 @@ class MySQL_Data_Stream
 	struct {
 		PtrSize_t pkt;
 		unsigned int partial;
+		// Bytes of an inner packet header split across compressed frames
+		unsigned char hdr[sizeof(mysql_hdr)];
+		unsigned int hdr_len;
 	} CompPktIN;
 	struct {
 		PtrSize_t pkt;

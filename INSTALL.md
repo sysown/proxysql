@@ -20,7 +20,7 @@ The list of currently supported operating systems for native packaging is:
   - Debian 12 (bookworm), 13 (trixie)
   - Fedora 40, 41, 42
   - OpenSUSE Leap 16
-  - Ubuntu 22.04 (jammy), 24.04 (noble)
+  - Ubuntu 22.04 (jammy), 24.04 (noble), 26.04 (resolute)
 - ARM64
   - AlmaLinux 8, 9, 10
   - Amazon Linux 2
@@ -28,7 +28,11 @@ The list of currently supported operating systems for native packaging is:
   - Debian 12, 13
   - Fedora 40, 41, 42
   - OpenSUSE Leap 16
-  - Ubuntu 22.04, 24.04
+  - Ubuntu 22.04, 24.04, 26.04
+
+Ubuntu 26.04 (resolute) support starts with ProxySQL **3.0.12**, **3.1.12**,
+and **4.0.12**. Ubuntu 26.04 packages are available only for ProxySQL 3.0 and
+later; they are not provided for the 2.x series.
 
 Download a __deb__ or __rpm__ installer file for your OS and architecture from:
 
@@ -150,6 +154,27 @@ The __executable__ file will be located in ./src, the __rpm__ or __deb__ install
 Install the package as usual on the target system.
 
 For valid target distros see above or inspect the Makefile.
+
+For Ubuntu 26.04, check out the `v3.0` branch or a release tag for 3.0.12 or
+later, then choose the ProxySQL tier:
+
+```bash
+make ubuntu26                 # ProxySQL 3.0.x
+PROXYSQL31=1 make ubuntu26     # ProxySQL 3.1.x
+PROXYSQL40=1 make ubuntu26     # ProxySQL 4.0.x
+```
+
+The `ubuntu26-clang` and `ubuntu26-dbg` targets build Clang and debug packages
+on AMD64. ARM64 release packages use `ubuntu26` on an ARM64 host. Packages
+are named `proxysql_<version>-ubuntu26_<architecture>.deb` (with `-clang` or
+`-dbg` for the corresponding variants).
+
+The Ubuntu 26.04 builders come from the
+[ProxySQL Docker images repository](https://github.com/ProxySQL/docker-images).
+The `build-ubuntu26-v4.0.0` and `build-clang-ubuntu26-v4.0.0` tags must be
+published to `proxysql/packaging` for the appropriate architectures before
+running these package builds. The image tag identifies the build environment;
+the tier flags above select the ProxySQL version.
 
 
 Building and installing from source
