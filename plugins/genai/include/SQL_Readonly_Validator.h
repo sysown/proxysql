@@ -77,18 +77,35 @@ inline bool readonly_sql(const std::string& sql, bool select_only = false) {
             for (const char* denied : {"SCRIPT", "SLEEP", "BENCHMARK", "WAITFOR", "DELAY",
                                        "PG_SLEEP", "PG_SLEEP_FOR", "PG_SLEEP_UNTIL"})
                 if (word == denied) return false;
+            if constexpr (D == sql_parser::Dialect::MySQL) {
+                for (const char* denied : {"GET_LOCK", "RELEASE_LOCK", "RELEASE_ALL_LOCKS",
+                        "MASTER_POS_WAIT", "SOURCE_POS_WAIT", "WAIT_FOR_EXECUTED_GTID_SET"})
+                    if (word == denied) return false;
+                if (word == "LAST_INSERT_ID") {
+                    // Copy the lexer so comments and quoting cannot hide
+                    // the opening parenthesis or a mutating argument.
+                    auto arguments = lexer;
+                    arguments.next_token(); // opening parenthesis
+                    if (arguments.peek().type != T::TK_RPAREN) return false;
+                }
+            }
             if constexpr (D == sql_parser::Dialect::PostgreSQL) {
                 for (const char* denied : {"SET_CONFIG", "SETVAL", "NEXTVAL", "LO_IMPORT", "LO_EXPORT",
                         "PG_ADVISORY_LOCK", "PG_ADVISORY_LOCK_SHARED", "PG_TRY_ADVISORY_LOCK",
                         "PG_TRY_ADVISORY_LOCK_SHARED", "PG_ADVISORY_XACT_LOCK",
                         "PG_ADVISORY_XACT_LOCK_SHARED", "PG_TRY_ADVISORY_XACT_LOCK",
                         "PG_TRY_ADVISORY_XACT_LOCK_SHARED", "PG_TERMINATE_BACKEND",
-                        "PG_CANCEL_BACKEND", "DBLINK_EXEC"})
+                        "PG_CANCEL_BACKEND", "DBLINK", "DBLINK_EXEC", "DBLINK_SEND_QUERY",
+                        "DBLINK_OPEN", "DBLINK_CONNECT", "DBLINK_CONNECT_U"})
                     if (word == denied) return false;
             }
         }
         // MySQL double quotes may name functions under ANSI_QUOTES. Check
         // calls before skipping literals, regardless of the backend SQL mode.
+        if constexpr (D == sql_parser::Dialect::MySQL) {
+            if (token.type == T::TK_USER_VARIABLE &&
+                lexer.peek().type == T::TK_COLON_EQUAL) return false;
+        }
         if (token.type == T::TK_STRING) continue;
         if (quoted) continue;
         // INTO creates tables on PostgreSQL, writes files on MySQL, or assigns

@@ -25,16 +25,28 @@ public:
         ready_ = command_("BEGIN TRANSACTION READ ONLY");
         if (!ready_) finish();
     }
-    ~PgSQL_Readonly_Transaction() { finish(); }
+    ~PgSQL_Readonly_Transaction() noexcept { finish(); }
     PgSQL_Readonly_Transaction(const PgSQL_Readonly_Transaction&) = delete;
     PgSQL_Readonly_Transaction& operator=(const PgSQL_Readonly_Transaction&) = delete;
 
     bool ready() const { return ready_; }
-    bool finish() {
+    bool finish() noexcept {
         if (!finished_) {
             finished_ = true;
-            reusable_ = command_("ROLLBACK") && idle_();
-            release_(reusable_);
+            try {
+                reusable_ = command_("ROLLBACK") && idle_();
+            } catch (...) {
+                // Failed cleanup must still attempt to discard the connection,
+                // including when this runs during exception unwinding.
+                reusable_ = false;
+            }
+            try {
+                release_(reusable_);
+            } catch (...) {
+                // A release callback may already have released the connection.
+                // Do not retry it or let an exception escape the destructor.
+                reusable_ = false;
+            }
         }
         return reusable_;
     }

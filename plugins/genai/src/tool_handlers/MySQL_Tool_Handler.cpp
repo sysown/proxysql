@@ -1,4 +1,5 @@
 #include "SQL_Readonly_Validator.h"
+#include "MySQL_Query_Limit.h"
 #ifdef PROXYSQL40
 
 
@@ -480,19 +481,10 @@ std::string MySQL_Tool_Handler::sanitize_query(const std::string& query) {
 
 bool MySQL_Tool_Handler::validate_readonly_query(const std::string& query) {
 	if (!genai::readonly_sql<sql_parser::Dialect::MySQL>(query, true)) return false;
-	std::string upper = query;
-	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-
-	// Check for SELECT * without LIMIT
-	if (!allow_select_star) {
-		std::regex select_star_regex("\\bSELECT\\s+\\*\\s+FROM", std::regex_constants::icase);
-		if (std::regex_search(upper, select_star_regex)) {
-			// Allow if there's a LIMIT clause
-			if (upper.find("LIMIT ") == std::string::npos) {
-				proxy_debug(PROXY_DEBUG_GENERIC, 3, "SELECT * without LIMIT rejected\n");
-				return false;
-			}
-		}
+	const genai::MySQL_Query_Limit limits(query);
+	if (!allow_select_star && limits.select_star && !limits.has_limit) {
+		proxy_debug(PROXY_DEBUG_GENERIC, 3, "SELECT * without LIMIT rejected\n");
+		return false;
 	}
 
 	return true;
@@ -1099,28 +1091,17 @@ std::string MySQL_Tool_Handler::run_sql_readonly(
 	json result;
 	result["success"] = false;
 
-	// Strip leading comments from the query
-	std::string query = strip_leading_comments(sql);
-
-	// Validate query is read-only
-	if (!validate_readonly_query(query)) {
+	// Validate the original query (including comments) is read-only.
+	if (!validate_readonly_query(sql)) {
 		result["error"] = "Query validation failed: not SELECT-only or contains dangerous keywords";
 		return result.dump();
 	}
 
-	// Add LIMIT if not present and not an aggregate query
-	std::string upper = sql;
-	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-
-	bool has_limit = upper.find("LIMIT ") != std::string::npos;
-	bool is_aggregate = upper.find("GROUP BY") != std::string::npos ||
-	                     upper.find("COUNT(") != std::string::npos ||
-                         upper.find("SUM(") != std::string::npos ||
-                         upper.find("AVG(") != std::string::npos;
-
-	if (!has_limit && !is_aggregate && !allow_select_star) {
-		query += " LIMIT " + std::to_string(std::min(max_rows, 200));
-	}
+	// Preserve SQL text and insert the cap before a terminal semicolon or
+	// trailing comment. Only outer SQL tokens can provide a limit exemption.
+	const genai::MySQL_Query_Limit limits(sql);
+	std::string query = allow_select_star ? sql
+		: limits.apply(sql, std::min(max_rows, 200));
 
 	// Execute the query
 	std::string response = execute_query(query);

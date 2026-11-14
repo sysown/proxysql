@@ -1793,7 +1793,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 				sql << " LIKE '" << escape_string_literal(name_filter) << "'";
 			}
 		}
-		std::string query_result = execute_query_with_schema(sql.str(), schema, target->target_id);
+		std::string query_result = execute_query_with_schema(sql.str(), schema, target->target_id, true);
 		result = create_success_response(json::parse(query_result));
 	}
 
@@ -2747,9 +2747,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			}
 
 			std::string explain_query = "EXPLAIN " + sql;
-			std::string query_result = schema.empty()
-				? execute_query(explain_query, target->target_id)
-				: execute_query_with_schema(explain_query, schema, target->target_id);
+			std::string query_result = execute_query_with_schema(explain_query, schema, target->target_id, true);
 			try {
 				result = create_success_response(json::parse(query_result));
 			} catch (...) {

@@ -82,7 +82,7 @@
   "genai_plugin_load_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "genai_query_handler_unit-t" : [ "ai-g2","@proxysql_min_version:4.0" ],
   "genai_rag_fetch_from_source_unit-t" : [ "ai-g2","@proxysql_min_version:4.0" ],
-  "genai_sql_readonly_unit-t" : [ "unit-tests-g1" ],
+  "genai_sql_readonly_unit-t" : [ "unit-tests-g1","@proxysql_min_version:4.0" ],
   "genai_stats_parsing_unit-t" : [ "ai-g2","@proxysql_min_version:4.0" ],
   "genai_thread_unit-t" : [ "ai-g2","@proxysql_min_version:4.0" ],
   "glovars_unit-t" : [ "unit-tests-g1" ],

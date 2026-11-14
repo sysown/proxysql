@@ -181,7 +181,7 @@ private:
 		const std::string& query,
 		const std::string& schema,
 		const std::string& target_id,
-		bool readonly_transaction = false
+		bool readonly_transaction
 	);
 
 	/**

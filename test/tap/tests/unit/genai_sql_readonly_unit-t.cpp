@@ -1,5 +1,7 @@
 #include "SQL_Readonly_Validator.h"
 #include "PgSQL_Readonly_Transaction.h"
+#include "MySQL_Query_Limit.h"
+#include <stdexcept>
 #include <vector>
 #include "tap.h"
 #include <string>
@@ -41,7 +43,8 @@ static const char* pg_effect_functions[] = {
     "pg_try_advisory_lock_shared", "pg_advisory_xact_lock",
     "pg_advisory_xact_lock_shared", "pg_try_advisory_xact_lock",
     "pg_try_advisory_xact_lock_shared", "pg_terminate_backend",
-    "pg_cancel_backend", "dblink_exec"
+    "pg_cancel_backend", "dblink", "dblink_exec", "dblink_send_query",
+    "dblink_open", "dblink_connect", "dblink_connect_u"
 };
 static const char* pg_unicode_cases[] = {
     R"(SELECT U&"pg\005fsleep"(1))",
@@ -139,6 +142,66 @@ static void test_transaction_cleanup() {
     ok(!unknown.reusable && unknown.releases == 1, "non-idle rollback result discards connection");
 }
 
+static void test_query_limits() {
+    const struct { const char* sql; const char* expected; } cases[] = {
+        {"/* LIMIT */ SELECT id FROM t", "/* LIMIT */ SELECT id FROM t LIMIT 17"},
+        {"SELECT 'LIMIT ', 'COUNT(' FROM t", "SELECT 'LIMIT ', 'COUNT(' FROM t LIMIT 17"},
+        {"SELECT id /* COUNT( */ FROM t", "SELECT id /* COUNT( */ FROM t LIMIT 17"},
+        {"SELECT id FROM (SELECT id FROM t LIMIT 1) x", "SELECT id FROM (SELECT id FROM t LIMIT 1) x LIMIT 17"},
+        {"SELECT id FROM t; -- trailing", "SELECT id FROM t LIMIT 17; -- trailing"},
+        {"SELECT id FROM t # LIMIT", "SELECT id FROM t LIMIT 17 # LIMIT"},
+        {"SELECT `LIMIT`, `COUNT` FROM t", "SELECT `LIMIT`, `COUNT` FROM t LIMIT 17"},
+        {"SELECT id FROM t LIMIT\n3", "SELECT id FROM t LIMIT\n3"},
+        {"SELECT COUNT(*) FROM t", "SELECT COUNT(*) FROM t"},
+        {"SELECT id FROM t GROUP /**/ BY id", "SELECT id FROM t GROUP /**/ BY id"}
+    };
+    for (const auto& c : cases)
+        ok(genai::MySQL_Query_Limit(c.sql).apply(c.sql, 17) == c.expected,
+           "MySQL row cap uses outer SQL tokens: %s", tap_sql(c.sql).c_str());
+    ok(genai::MySQL_Query_Limit("/* LIMIT */ SELECT /**/ * /**/ FROM t").select_star,
+       "SELECT-star guard sees through comments");
+    ok(!genai::MySQL_Query_Limit("SELECT 'SELECT * FROM t' FROM t").select_star,
+       "SELECT-star text in a literal does not trigger the guard");
+}
+
+static void test_cleanup_exceptions() {
+    bool released = false, reusable = true;
+    {
+        genai::PgSQL_Readonly_Transaction guard(
+            [](const char* sql) { if (sql[0] == 'R') throw std::runtime_error("rollback"); return true; },
+            [] { return true; }, [&](bool clean) { released = true; reusable = clean; });
+    }
+    ok(released && !reusable, "throwing rollback discards connection from destructor");
+    unsigned idle_calls = 0;
+    released = false;
+    {
+        genai::PgSQL_Readonly_Transaction guard([](const char*) { return true; },
+            [&] { if (++idle_calls == 2) throw std::runtime_error("idle"); return true; },
+            [&](bool clean) { released = true; reusable = clean; });
+    }
+    ok(released && !reusable, "throwing idle check still discards connection");
+    unsigned releases = 0;
+    {
+        genai::PgSQL_Readonly_Transaction guard([](const char*) { return true; },
+            [] { return true; }, [&](bool) { ++releases; throw std::runtime_error("release"); });
+        ok(!guard.finish(), "throwing release reports failed cleanup");
+        ok(!guard.finish(), "throwing release remains failed on repeated cleanup");
+    }
+    ok(releases == 1, "throwing release is attempted only once");
+    released = false;
+    bool propagated = false;
+    try {
+        genai::PgSQL_Readonly_Transaction guard(
+            [](const char* sql) { if (sql[0] == 'R') throw std::runtime_error("rollback"); return true; },
+            [] { return true; }, [&](bool clean) { released = true; reusable = clean; });
+        throw std::runtime_error("query");
+    } catch (const std::runtime_error& error) {
+        propagated = std::string(error.what()) == "query";
+    }
+    ok(propagated, "cleanup preserves the original exception during unwinding");
+    ok(released && !reusable, "cleanup discards connection during exception unwinding");
+}
+
 int main() {
     const char* allowed[] = {
         "SELECT date_created FROM t LIMIT 1", "SELECT date_updated FROM t LIMIT 1",
@@ -149,7 +212,8 @@ int main() {
         "SELECT 1 /* UPDATE t */; -- trailing comment\n",
         "SELECT 1 AS `DROP`", "SELECT '/*! DROP TABLE t */'",
         "SELECT 1 # update\n", "SELECT 1; # trailing comment\n",
-        "SELECT 1 AS added_at, 2 AS modified_at", "SELECT * FROM t LIMIT 1"
+        "SELECT 1 AS added_at, 2 AS modified_at", "SELECT * FROM t LIMIT 1",
+        "SELECT LAST_INSERT_ID()", "SELECT LAST_INSERT_ID /* comment */ (/**/)", "SELECT @mcp_value"
     };
     const char* denied[] = {
         "SELECT 1; DELETE FROM t", "SELECT 1; RENAME TABLE t TO x",
@@ -161,12 +225,19 @@ int main() {
         "DESCRIBE ANALYZE SELECT 1", "EXPLAIN (VERBOSE, ANALYZE) SELECT 1",
         "SELECT 1 /*! INTO OUTFILE '/tmp/x' */", "SELECT 1 /*M! ; DELETE FROM t */",
         "SELECT 1; --not_a_mysql_comment\nDELETE FROM t", "SELECT 'unterminated",
-        "SELECT 1 /* unterminated", "SELECTED 1", "", "UPDATE t SET x=1"
+        "SELECT 1 /* unterminated", "SELECTED 1", "", "UPDATE t SET x=1",
+        "SELECT GET_LOCK('production-job', 0)", "SELECT RELEASE_LOCK('x')",
+        "SELECT RELEASE_ALL_LOCKS()", "SELECT LAST_INSERT_ID(1)",
+        "SELECT SOURCE_POS_WAIT('mysql-bin.000001', 4)",
+        "SELECT MASTER_POS_WAIT('mysql-bin.000001', 4)",
+        "SELECT WAIT_FOR_EXECUTED_GTID_SET('3E11FA47-71CA-11E1-9E33-C80AA9429562:1')",
+        "SELECT @mcp_value := 1", "SELECT @mcp_value /**/ := 1",
+        "SELECT LAST_INSERT_ID /**/ (1)", "SELECT `LAST_INSERT_ID` /* x */ (1)"
     };
     plan(2 * (sizeof(allowed)/sizeof(*allowed) + sizeof(denied)/sizeof(*denied)) + 5 + 24
          + 4 * (sizeof(boundary_cases)/sizeof(*boundary_cases))
          + 2 * (sizeof(pg_effect_functions)/sizeof(*pg_effect_functions)
-                + sizeof(pg_unicode_cases)/sizeof(*pg_unicode_cases)) + 4 + 23);
+                + sizeof(pg_unicode_cases)/sizeof(*pg_unicode_cases)) + 4 + 23 + 10 + 12 + 7);
     for (bool select_only : {false, true}) {
         for (auto sql : allowed)
             ok(genai::readonly_sql<sql_parser::Dialect::MySQL>(sql, select_only),
@@ -203,7 +274,23 @@ int main() {
     ok(genai::readonly_sql<sql_parser::Dialect::PostgreSQL>("EXPLAIN SELECT 1 AS \"analyze\""), "quoted alias outside EXPLAIN options");
     ok(genai::readonly_sql<sql_parser::Dialect::MySQL>("SELECT 1 AS load_file"), "LOAD_FILE alias is not function invocation");
     ok(genai::readonly_sql<sql_parser::Dialect::PostgreSQL>("SELECT share FROM t"), "SHARE identifier is not locking clause");
+    const char* malformed_utf8[] = {
+        "SELECT \x80 FROM t",
+        "SELECT \xc0\xaf FROM t",
+        "SELECT \xed\xa0\x80 FROM t",
+        "SELECT \xf4\x90\x80\x80 FROM t",
+        "SELECT a\xe2\x82 FROM t"
+    };
+    for (bool pgsql : {false, true})
+        for (auto sql : malformed_utf8) {
+            bool actual = pgsql
+                ? genai::readonly_sql<sql_parser::Dialect::PostgreSQL>(sql)
+                : genai::readonly_sql<sql_parser::Dialect::MySQL>(sql);
+            ok(!actual, "reject malformed UTF-8 (pgsql=%d): %s", pgsql, tap_sql(sql).c_str());
+        }
     test_boundaries();
     test_transaction_cleanup();
+    test_query_limits();
+    test_cleanup_exceptions();
     return exit_status();
 }
