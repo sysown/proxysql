@@ -250,7 +250,8 @@ void Base_Thread::check_timing_out_session(unsigned int n) {
  * @brief Checks for an invalid file descriptor (FD) and raises an error if found.
  * 
  * This function checks if the file descriptor (FD) at the specified index in the `mypolls.fds` array is invalid (`POLLNVAL`).
- * If an invalid FD is found, it raises an error and asserts to ensure that the program does not proceed with an invalid FD.
+ * Invalid waiter frontends are left for terminal cleanup. Other invalid FDs raise
+ * an error and assert so the worker does not continue using them.
  * 
  * @param n The index of the file descriptor in the `mypolls.fds` array.
  */
@@ -259,8 +260,14 @@ void Base_Thread::check_for_invalid_fd(unsigned int n) {
 	// check if the FD is valid
 	T* thr = static_cast<T*>(this);
 	if (thr->mypolls.fds[n].revents==POLLNVAL) {
-		// debugging output before assert
+		// A retained waiter watch may report an already closed frontend.
+		// Let the terminal-event path remove its session and poll entry.
 		auto *_myds=thr->mypolls.myds[n];
+#ifdef PROXYSQL31
+		if (_myds && _myds->myds_type == MYDS_FRONTEND && _myds->sess &&
+			_myds->sess->waiter_node.session) return;
+#endif
+		// debugging output before assert
 		if (_myds) {
 			if (_myds->myconn) {
 				proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d, MyConnFD=%d\n", thr->mypolls.fds[n].fd, thr->mypolls.fds[n].events, _myds->fd, _myds->myconn->fd);

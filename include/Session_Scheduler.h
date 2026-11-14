@@ -19,7 +19,7 @@ constexpr short waiter_client_poll_events() {
 }
 
 inline bool waiter_client_terminal(short revents) {
-    return revents & (POLLHUP | POLLERR | waiter_client_poll_events());
+    return revents & (POLLHUP | POLLERR | POLLNVAL | waiter_client_poll_events());
 }
 #endif
 #endif

@@ -9,6 +9,7 @@
 #include <any>
 #include <sstream>
 #include <type_traits>
+#include <memory>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -253,7 +254,7 @@ void test_protocol(const char *name) {
 }
 
 template<class Worker, class Session, class Stream>
-void test_waiter_disconnect_poll(const char *name) {
+void test_waiter_disconnect_poll_unix(const char *name) {
 	for (bool buffered : {false, true}) {
 		Worker worker;
 		if (!worker.init()) BAIL_OUT("worker init failed");
@@ -291,12 +292,15 @@ void test_waiter_disconnect_poll(const char *name) {
 		ok(idx >= 0 && (worker.mypolls.fds[idx].events & POLLIN),
 			"%s: leaving the waiter queue restores readable polling (buffered=%d)", name, buffered);
 		while (worker.mysql_sessions->len) {
-			auto *s = static_cast<Session*>(worker.mysql_sessions->index(0));
+			std::unique_ptr<Session> s(static_cast<Session*>(worker.mysql_sessions->index(0)));
 			worker.unregister_session(0);
-			delete s;
 		}
 		close(head_peer);
 	}
+}
+
+template<class Worker, class Session, class Stream>
+void test_waiter_disconnect_poll_tcp(const char *name) {
 	for (bool reset : {false, true}) {
 		Worker worker;
 		if (!worker.init()) BAIL_OUT("worker init failed");
@@ -323,12 +327,33 @@ void test_waiter_disconnect_poll(const char *name) {
 		ok(worker.mysql_sessions->len == 0 && worker.waiter_lists.empty() && worker.mypolls.len == baseline,
 			"%s: a TCP %s removes the paused waiter and its poll entry", name, reset ? "reset" : "half-close");
 		while (worker.mysql_sessions->len) {
-			auto *s = static_cast<Session*>(worker.mysql_sessions->index(0));
+			std::unique_ptr<Session> s(static_cast<Session*>(worker.mysql_sessions->index(0)));
 			worker.unregister_session(0);
-			delete s;
 		}
 		if (!reset) close(peer);
 	}
+}
+
+template<class Worker, class Session, class Stream>
+void test_waiter_invalid_fd(const char *name) {
+	Worker worker;
+	if (!worker.init()) BAIL_OUT("worker init failed");
+	worker.maintenance_loop = false;
+	worker.curtime = 1000000;
+	const unsigned baseline = worker.mypolls.len;
+	int peer;
+	auto *sess = new_waiter<Worker, Session, Stream>(worker, peer);
+	sess->pause_until = worker.curtime + 10000000;
+	close(sess->client_myds->fd);
+	ok(poll(worker.mypolls.fds, worker.mypolls.len, 0) > 0,
+		"%s: an invalid waiter descriptor wakes poll", name);
+	worker.template run_SetAllSession_ToProcess0<Worker, Session>();
+	if constexpr (std::is_same_v<Worker, PgSQL_Thread>) worker.ProcessAllMyDS_AfterPoll();
+	else worker.template ProcessAllMyDS_AfterPoll<Worker>();
+	worker.process_all_sessions();
+	ok(worker.mysql_sessions->len == 0 && worker.waiter_lists.empty() && worker.mypolls.len == baseline,
+		"%s: an invalid descriptor removes the paused waiter and its poll entry", name);
+	close(peer);
 }
 
 static void test_mysql_deadline_hint() {
@@ -672,6 +697,11 @@ void test_frontend_pollerr(const char *name) {
 	int peer;
 	auto *sess = new_waiter<Worker, Session, Stream>(worker, peer);
 	auto *stream = sess->client_myds;
+	stream->pkts_recv = 1;
+	if (send(peer, "x", 1, 0) != 1) BAIL_OUT("readable error input failed");
+	stream->revents = POLLERR | POLLIN;
+	ok(stream->read_from_net() == 1 && stream->active && !stream->net_failure,
+		"%s: readable frontend bytes are consumed before a poll error", name);
 	stream->revents = POLLERR;
 	ok(stream->read_from_net() == -1, "%s: frontend POLLERR without POLLIN is terminal", name);
 	ok(!stream->active && stream->net_failure, "%s: frontend POLLERR deactivates the stream rather than only setting a flag", name);
@@ -681,16 +711,16 @@ void test_frontend_pollerr(const char *name) {
 	ok(stream->read_from_net() == 0 && stream->active && !stream->net_failure,
 		"%s: backend POLLERR remains owned by its connection state machine", name);
 	stream->myds_type = MYDS_FRONTEND;
+	std::unique_ptr<Session> cleanup(sess);
 	worker.unregister_session(0);
-	delete sess;
 	close(peer);
 }
 
 int main() {
 #ifdef PROXYSQL31
-	plan(118);
+	plan(124);
 #else
-	plan(25);
+	plan(27);
 #endif
 	if (test_init_minimal() || test_init_query_processor() || test_init_hostgroups()) BAIL_OUT("init failed");
 	GloMyLogger = new MySQL_Logger();
@@ -698,8 +728,12 @@ int main() {
 #ifdef PROXYSQL31
 	test_protocol<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
 	test_protocol<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
-	test_waiter_disconnect_poll<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
-	test_waiter_disconnect_poll<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
+	test_waiter_invalid_fd<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
+	test_waiter_invalid_fd<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
+	test_waiter_disconnect_poll_unix<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
+	test_waiter_disconnect_poll_tcp<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
+	test_waiter_disconnect_poll_unix<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
+	test_waiter_disconnect_poll_tcp<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
 #endif
 	test_frontend_pollerr<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
 	test_frontend_pollerr<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");

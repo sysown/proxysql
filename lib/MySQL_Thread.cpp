@@ -4792,8 +4792,13 @@ void MySQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 
 bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 #ifdef PROXYSQL31
-	if (myds->myds_type == MYDS_FRONTEND && myds->sess && myds->sess->waiter_node.session &&
+	assert(myds->sess);
+	if (myds->myds_type == MYDS_FRONTEND && myds->sess->waiter_node.session &&
 		waiter_client_terminal(mypolls.fds[n].revents)) {
+		if (mypolls.fds[n].revents & POLLNVAL) {
+			myds->fd = -1; // Already closed; destruction must not close it again.
+			if (myds->myconn) myds->myconn->fd = -1;
+		}
 		myds->shut_soft();
 		myds->sess->set_unhealthy();
 		return true;
