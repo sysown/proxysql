@@ -1715,6 +1715,10 @@ void MysqlxSession::handler_waiting_server_msg() {
 void MysqlxSession::handler_session_reset_waiting() {
 	if (server_ds().get_fd() < 0) {
 		if (backend_conn_) backend_conn_->set_reusable(false);
+		// Complete the pending reset with an error before releasing the backend.
+		flush_compression_batch();
+		send_error(2013, "Lost connection to backend during session reset");
+		client_ds_.write_to_net();
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
@@ -1726,6 +1730,10 @@ void MysqlxSession::handler_session_reset_waiting() {
 		// Backend died while waiting for the SESS_RESET response — treat
 		// the connection as dead, don't recycle it.
 		if (backend_conn_) backend_conn_->set_reusable(false);
+		// Preserve queued notices ahead of the terminal reset error.
+		flush_compression_batch();
+		send_error(2013, "Lost connection to backend during session reset");
+		client_ds_.write_to_net();
 		return_backend_to_pool();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
