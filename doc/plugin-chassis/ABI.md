@@ -13,9 +13,10 @@ The chassis exposes two ABI surfaces:
 1. **Descriptor surface** — what a plugin's `.so` exports. Defined in `include/ProxySQL_Plugin.h`. Stable across feature tiers. Tail-extensible.
 2. **Services surface** — what the chassis injects into the plugin (function pointers the plugin calls back through). Also defined in `include/ProxySQL_Plugin.h`. Also tail-extensible.
 
-A plugin compiled against ABI layout version N is loadable by a chassis that
-supports `PROXYSQL_PLUGIN_ABI_VERSION_MAX >= N` and was built with the same
-`-DDEBUG` setting. The reverse — a future plugin against an older chassis — is
+A plugin compiled against an accepted ABI layout version N is loadable by a
+chassis that supports `PROXYSQL_PLUGIN_ABI_VERSION_MAX >= N` and was built with
+the same `-DDEBUG` setting. Reserved and incompatible layouts are rejected as
+described below. The reverse — a future plugin against an older chassis — is
 rejected at load time.
 
 ---
@@ -62,7 +63,7 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 - The function returns non-null. Else: load fails.
 - `descriptor->name` is non-null and non-empty. Else: load fails.
 - `descriptor->abi_version` has its `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` masked.
-  An ABI-16 core accepts generic plugin layouts 1–10, 13, and 16. Layouts 11
+  An ABI-18 core accepts generic plugin layouts 1–10, 13, 16, 17, and 18. Layouts 11
   and 12 are reserved and rejected. Layouts 14 and 15 are rejected because
   their by-value discovery payload is incompatible with ABI 16. Otherwise,
   loading fails with "unsupported plugin ABI version".
@@ -78,8 +79,8 @@ The chassis (`lib/ProxySQL_PluginManager.cpp:324–383`) enforces:
 
 ```cpp
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 16u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 16u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 18u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 18u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION =
@@ -92,8 +93,8 @@ constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX =
     PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
 ```
 
-`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `16` in a release build and
-`0x40000010` in a DEBUG build. Plugins must use that constant rather than a
+`PROXYSQL_PLUGIN_ABI_VERSION` is therefore `18` in a release build and
+`0x40000012` in a DEBUG build. Plugins must use that constant rather than a
 literal so the loader can validate both the layout and build mode.
 
 ABI evolution so far:
@@ -156,6 +157,22 @@ ABI evolution so far:
   permit old-layout rows to cross the ABI boundary. ABI-13 and older plugins
   do not expose that callback and retain their compatible prefix.
 
+- **ABI 16 → ABI 17:** appends `validate_listener_interfaces`, a read-only numeric
+  listener conflict validator against the core reservation snapshot. The owner
+  string is diagnostic only; it never exempts conflicts. Empty interfaces mean
+  zero listeners. Phase B rejects calls; init/start and Admin LOAD use the live
+  callback. It performs no SQL, DNS, bind, or core listener mutation.
+- **ABI 17 → ABI 18:** appends `get_raw_backend_service` after the listener
+  validator without changing any earlier offset. Phase B returns `nullptr`;
+  init/start and later borrow the process-resident raw backend V2 service table
+  (`version == 2`). The plugin owns sockets and one handle per acquired actual
+  HGM connection, reports connect outcomes and wire bytes, and destroys each
+  handle exactly once. Only acquire may throw. Calls on one handle are serialized.
+  OFFLINE_HARD is sticky; destroy returns the final HARD latch, which forbids
+  retry of that accepted stream. Join callers and destroy handles before stop
+  returns. See [the raw service contract](../PLUGIN_API.md#raw-tcp-backend-service-abi-18)
+  and `include/ProxySQL_PluginRawBackend.h` for the full frozen V2 signatures.
+
 Future ABI versions append fields. The chassis bumps the layout/version
 constants and gates each new field's read on the masked layout version being
 at least N.
@@ -187,6 +204,8 @@ The services struct is the **same shape** in every phase, but some function poin
 | `apply_mysql_config` (ABI 8+) | rejecting stub | live | live | live |
 | `apply_mysql_config_v2` (ABI 9+) | rejecting stub | live | live | live |
 | `with_admin_db_lock` (ABI 10+) | rejecting stub (returns false) | live | live | live |
+| `validate_listener_interfaces` (ABI 17+) | rejecting stub | live | live | live |
+| `get_raw_backend_service` (ABI 18+) | returns nullptr | V2 table | V2 table | V2 table |
 
 Reasons:
 
@@ -371,7 +390,7 @@ static bool my_stop(const ProxySQL_PluginServices* services) {
 
 static const ProxySQL_PluginDescriptor descriptor = {
     "my_plugin",                          // name
-    PROXYSQL_PLUGIN_ABI_VERSION,          // 16 release, 0x40000010 DEBUG
+    PROXYSQL_PLUGIN_ABI_VERSION,          // 18 release, 0x40000012 DEBUG
     my_init,                              // init   (Phase D)
     my_start,                             // start  (Phase E)
     my_stop,                              // stop

@@ -1,0 +1,100 @@
+# Integration targets for the production TCP relay and real-daemon fixtures.
+# Engine sources are selected from the validated source manifest.
+
+SHELL := /bin/bash
+PYTHON ?= python3
+CXX ?= g++
+CXXFLAGS ?= -O2 -g -std=c++17 -pthread -Wall -Wextra
+CPPFLAGS += -I../include -I$(abspath ../../../deps/json)
+HEADER_SHA256 := $(shell sha256sum ../include/tcp_proxy.h | cut -d' ' -f1)
+CPPFLAGS += -DTCP_PROXY_HEADER_SHA256='"$(HEADER_SHA256)"'
+
+DEFAULT_ENGINE_SRCS := ../src/config.cpp ../src/engine.cpp
+ENGINE_SRCS ?= $(DEFAULT_ENGINE_SRCS)
+
+HARNESS := engine_harness
+SCENARIOS := test_engine_adversarial.py
+SELFCHECK := test_fixtures_selfcheck.py
+MAPPED_SMOKE := daemon_mapped_smoke.py
+MAPPED_FIXTURES := mapped_monitor_fixtures.py
+MAPPED_SELFCHECK := mapped_fixture_selfcheck.py
+MAPPED_RESULTS_DIR ?= /tmp/native-tcp-proxy/mapped-results
+MAPPED_CASES ?= all
+PROXYSQL ?=
+PLUGIN ?=
+MYSQL ?= $(shell command -v mysql 2>/dev/null || echo /usr/bin/mysql)
+RESULTS_DIR ?= /tmp/native-tcp-proxy/test-results
+
+.PHONY: help syntax harness pycompile selfcheck \
+        test test-selfcheck clean \
+        daemon-admin-help daemon-admin-smoke \
+        daemon-mapped-help daemon-mapped-selfcheck daemon-mapped-smoke
+
+help:
+	@echo "TCP proxy integration targets"
+	@echo "  make -f Makefile.integration syntax          # header-only syntax check (no marker)"
+	@echo "  make -f Makefile.integration pycompile       # byte-compile Python fixtures"
+	@echo "  make -f Makefile.integration selfcheck       # fixture self-checks (no Engine)"
+	@echo "  make -f Makefile.integration harness         # builds standalone Engine harness"
+	@echo "  make -f Makefile.integration test            # harness + adversarial suite"
+	@echo "  make -f Makefile.integration daemon-mapped-help    # mapped smoke --help"
+	@echo "  make -f Makefile.integration daemon-mapped-selfcheck # psql/mysqld fixture checks"
+	@echo "  make -f Makefile.integration daemon-mapped-smoke   # requires PROXYSQL/PLUGIN"
+	@echo "  make -f Makefile.integration daemon-admin-help    # admin smoke --help"
+	@echo "  make -f Makefile.integration daemon-admin-smoke   # four-table admin lifecycle smoke"
+	@echo "  make -f Makefile.integration clean"
+	@echo ""
+	@echo "Override explicit sources only with a reviewed list:"
+	@echo "  make -f Makefile.integration harness ENGINE_SRCS='../src/config.cpp ...'"
+
+syntax:
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -fsyntax-only engine_harness.cpp
+
+pycompile:
+	$(PYTHON) -m py_compile tcp_proxy_testlib.py $(SELFCHECK) $(SCENARIOS) \
+		daemon_admin_smoke.py $(MAPPED_SMOKE) \
+		$(MAPPED_FIXTURES) $(MAPPED_SELFCHECK)
+
+selfcheck: pycompile
+	$(PYTHON) $(SELFCHECK)
+
+harness:
+	@for source in $(ENGINE_SRCS); do \
+		test -f "$$source" || { echo "missing approved Engine source: $$source" >&2; exit 1; }; \
+	done
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $(HARNESS) engine_harness.cpp $(ENGINE_SRCS)
+
+test: harness
+	mkdir -p $(RESULTS_DIR)
+	$(PYTHON) $(SCENARIOS) --harness ./$(HARNESS) --results-dir $(RESULTS_DIR)
+
+test-selfcheck: selfcheck
+
+daemon-admin-help: pycompile
+	$(PYTHON) daemon_admin_smoke.py --help
+
+daemon-mapped-help: pycompile
+	$(PYTHON) $(MAPPED_SMOKE) --help
+
+daemon-mapped-selfcheck: pycompile
+	$(PYTHON) $(MAPPED_SELFCHECK) --mysql "$(MYSQL)"
+
+daemon-admin-smoke: pycompile
+	@test -n "$(PROXYSQL)" || { echo "set PROXYSQL=/path/to/proxysql" >&2; exit 2; }
+	@test -n "$(PLUGIN)" || { echo "set PLUGIN=/path/to/proxysql_tcp_proxy.so" >&2; exit 2; }
+	mkdir -p $(MAPPED_RESULTS_DIR)
+	$(PYTHON) daemon_admin_smoke.py --proxysql "$(PROXYSQL)" --plugin "$(PLUGIN)" \
+		--mysql "$(MYSQL)" --case all \
+		--output-json $(MAPPED_RESULTS_DIR)/admin-smoke.json
+
+daemon-mapped-smoke: pycompile
+	@test -n "$(PROXYSQL)" || { echo "set PROXYSQL=/path/to/proxysql" >&2; exit 2; }
+	@test -n "$(PLUGIN)" || { echo "set PLUGIN=/path/to/proxysql_tcp_proxy.so" >&2; exit 2; }
+	mkdir -p $(MAPPED_RESULTS_DIR)
+	$(PYTHON) $(MAPPED_SMOKE) --proxysql "$(PROXYSQL)" --plugin "$(PLUGIN)" \
+		--mysql "$(MYSQL)" --case "$(MAPPED_CASES)" \
+		--output-json $(MAPPED_RESULTS_DIR)/mapped-smoke.json
+
+clean:
+	rm -f $(HARNESS)
+	rm -rf __pycache__

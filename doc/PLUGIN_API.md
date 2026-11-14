@@ -121,7 +121,7 @@ struct ProxySQL_PluginDescriptor {
 | Field              | Type          | Description                                               |
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
-| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. An ABI-16 core accepts generic plugin layouts 1–10, 13, and 16. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15 are rejected because their by-value discovery payload is incompatible with ABI 16. The plugin's DEBUG tag must also match the core. See the ABI reference for the per-version matrix. |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. An ABI-18 core accepts generic plugin layouts 1–10, 13, 16, 17, and 18. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15 are rejected because their by-value discovery payload is incompatible with ABI 16. The plugin's DEBUG tag must also match the core. See the ABI reference for the per-version matrix. |
 | `init`             | callback      | Phase E — called with live services; register commands, hooks, and non-persistent tables here. Persistent `config_db` tables must have been declared through `register_schemas` in Phase B. |
 | `start`            | callback      | Phase F — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
@@ -142,20 +142,20 @@ ProxySQL to exit.
 
 `include/ProxySQL_Plugin.h` exposes a layout version and a build-mode tag:
 
-- `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION` is currently `16`.
+- `PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION` is currently `18`.
 - `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` is bit 30. It is set when the plugin is
   compiled with `-DDEBUG` and clear otherwise.
 - `PROXYSQL_PLUGIN_ABI_VERSION` combines those values. Its raw value is
-therefore `16` in a release build and `0x40000010` in a DEBUG build.
+therefore `18` in a release build and `0x40000012` in a DEBUG build.
 
 Plugins MUST assign `abi_version` from `PROXYSQL_PLUGIN_ABI_VERSION` rather
 than hard-coding either raw value. The loader first requires the DEBUG bit to
 match the running core exactly, because DEBUG-only fields change core object
-layouts. It then masks that bit. An ABI-16 core accepts generic plugin layouts
-1–10, 13, and 16. Layouts 11 and 12 are reserved and rejected. Layouts 14 and
+layouts. It then masks that bit. An ABI-18 core accepts generic plugin layouts
+1–10, 13, 16, 17, and 18. Layouts 11 and 12 are reserved and rejected. Layouts 14 and
 15 are rejected because their by-value discovery payload is incompatible with
 ABI 16. A release plugin cannot load into a DEBUG core, or
-vice versa, even when both use layout version 16.
+vice versa, even when both use layout version 18.
 
 The plugin named `aws` requires layout 16 or newer. Pre-integration AWS
 binaries used conflicting layouts 10, 11, and 12, and ABI-14/15 builds use an
@@ -228,6 +228,12 @@ struct ProxySQL_PluginServices {
     proxysql_plugin_install_server_discovery_controller_cb install_server_discovery_controller;
     proxysql_plugin_uninstall_server_discovery_controller_cb uninstall_server_discovery_controller;
     proxysql_plugin_post_server_desired_set_cb post_server_desired_set;
+    // ABI 15 managed-configuration callbacks omitted here; see the header.
+    // ABI 17 tail extension:
+    bool (*validate_listener_interfaces)(const char* owner, const char* interfaces,
+        std::string& error);
+    // ABI 18 tail extension (raw table version is independently 2):
+    const ProxySQL_RawBackendServiceV2* (*get_raw_backend_service)();
 };
 ```
 
@@ -269,8 +275,41 @@ all active claims. This convergence changes runtime only; it does not remove
 rows from Admin MEMORY or disk.
 
 These structures changed layout, so core accepts server-discovery controller
-registration only from ABI-16 plugins. Build the controller and core from
+registration only from compatible plugins with layout 16 or newer. Build the controller and core from
 matching headers and with the same DEBUG setting.
+
+#### Listener validation (ABI 17)
+
+`validate_listener_interfaces(owner, interfaces, error)` validates a semicolon-
+separated list of numeric IPv4/IPv6 listener interfaces against the core-owned
+snapshot of enabled core listeners and against other candidates in the list.
+The owner is diagnostic only and never exempts a conflict. Empty interfaces
+mean zero listeners. The service performs no SQL, DNS, bind, or listener mutation.
+Phase B exposes a rejecting stub; normal init/start and Admin LOAD use the live
+callback. Validation does not reserve ports or replace the final bind check.
+
+#### Raw TCP backend service (ABI 18)
+
+`get_raw_backend_service()` appends one service slot after the ABI-17 listener
+validator, preserving every earlier offset. The getter is callable when present;
+Phase B returns `nullptr`, while normal init/start and later return a borrowed,
+process-resident `ProxySQL_RawBackendServiceV2` table with `version == 2`.
+The raw table is independently versioned; chassis ABI 18 does not mean raw
+service version 18. See `include/ProxySQL_PluginRawBackend.h` for the frozen V2
+signatures.
+
+`acquire` selects an actual MySQL/PgSQL HGM connection and returns one owned
+handle plus a numeric endpoint from the existing DNS cache. The plugin owns the
+socket; the core wrapper has no connected fd and remains in ConnectionsUsed
+until `destroy`. Report exactly one connect outcome per attempt with
+`connect_result` (zero for success, otherwise socket errno), and successful
+backend wire bytes with `account_io`. `offline_hard` tests the sticky HARD latch;
+other status changes do not terminate established streams. `destroy` retires and
+destroys the handle exactly once and returns its final HARD latch; true forbids
+retrying that accepted stream on another backend. Connections are never reused.
+Only `acquire` may throw; callers must contain exceptions. Serialize calls for
+one handle; different handles may run concurrently. Stop/join callers and
+destroy all handles before the plugin's `stop()` returns.
 
 #### `apply_mysql_config_v2` (ABI 9)
 
@@ -717,8 +756,8 @@ void register_stats_table(ProxySQL_PluginServices& services,
 - **No dependency resolution**: Plugins are loaded in the order listed in
   `proxysql.cnf`. If one plugin depends on another, the dependency must be
   listed first.
-- **ABI compatibility**: An ABI-16 core accepts generic plugin layouts 1–10,
-  13, and 16. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15
+- **ABI compatibility**: An ABI-18 core accepts generic plugin layouts 1–10,
+  13, 16, 17, and 18. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15
   are rejected because their by-value discovery payload is incompatible with
   ABI 16. The core also requires the `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` setting to
   match exactly. Newly built plugins must set

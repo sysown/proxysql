@@ -89,6 +89,10 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
     if [[ -f plugins/genai/ProxySQL_GenAI_Plugin.so ]]; then
         cp plugins/genai/ProxySQL_GenAI_Plugin.so proxysql/usr/lib/proxysql/
     fi
+    # tcp_proxy plugin
+    if [[ -f plugins/tcp_proxy/proxysql_tcp_proxy.so ]]; then
+        cp plugins/tcp_proxy/proxysql_tcp_proxy.so proxysql/usr/lib/proxysql/
+    fi
 fi
 
 # Belt-and-braces: the spec gates `/usr/lib/proxysql/*.so` under
@@ -126,7 +130,7 @@ popd
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     echo "==> Verifying plugin .so files in package"
     PKG_PATH="/root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm"
-    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
+    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so proxysql_tcp_proxy.so; do
         if rpm -qpl "${PKG_PATH}" 2>/dev/null | grep -q "/usr/lib/proxysql/${plugin}"; then
             echo "  OK   ${plugin}"
         else
@@ -144,7 +148,7 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
     pushd "${SMOKE_DIR}" >/dev/null
     rpm2cpio /root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm | cpio -idm 2>/dev/null
     ALL_OK=0
-    for plugin in usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so usr/lib/proxysql/ProxySQL_GenAI_Plugin.so; do
+    for plugin in usr/lib/proxysql/ProxySQL_MySQLX_Plugin.so usr/lib/proxysql/ProxySQL_GenAI_Plugin.so usr/lib/proxysql/proxysql_tcp_proxy.so; do
         if [[ -f "${plugin}" ]]; then
             if file "${plugin}" | grep -q 'ELF 64-bit.*shared object'; then
                 echo "  OK   ${plugin} (valid ELF shared library)"

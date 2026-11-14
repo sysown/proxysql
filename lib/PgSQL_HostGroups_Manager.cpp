@@ -3,6 +3,7 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "PgSQL_HostGroups_Manager.h"
+#include "ProxySQL_PluginRawBackend.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "ConnectionPoolDecision.h"
 #include "proxysql.h"
@@ -1632,6 +1633,9 @@ bool PgSQL_HostGroups_Manager::commit_locked(
 			proxy_warning("Removed server at address %lld, hostgroup %s, address %s port %s. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", ptr, r->fields[1], r->fields[2], r->fields[3]);
 			PgSQL_SrvC *mysrvc=(PgSQL_SrvC *)ptr;
 			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
+#ifdef PROXYSQL40
+			proxysql_raw_backend_mark_offline_hard(mysrvc);
+#endif
 			mysrvc->ConnectionsFree->drop_all_connections();
 			char *q1=(char *)"DELETE FROM pgsql_servers WHERE mem_pointer=%lld";
 			const size_t q2_size = static_cast<size_t>(snprintf(NULL, 0, q1, ptr)) + 1;
@@ -1709,6 +1713,11 @@ bool PgSQL_HostGroups_Manager::commit_locked(
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 						mysrvc->shunned_automatic=false;
 					}
+#ifdef PROXYSQL40
+					if (mysrvc->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+						proxysql_raw_backend_mark_offline_hard(mysrvc);
+					}
+#endif
 				}
 				if (atoi(r->fields[5])!=atoi(r->fields[14])) {
 					if (GloPTH->variables.hostgroup_manager_verbose)
@@ -2498,9 +2507,22 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
-		if (sess && sess->thread->variables.min_num_servers_lantency_awareness) {
-			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
+		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY.
+		// Raw TCP selection has no SQL session; use the operation-scoped native
+		// handler snapshot installed by the core raw service.
+		int latency_awareness_min_servers = 0;
+		if (sess != nullptr) {
+			latency_awareness_min_servers =
+				sess->thread->variables.min_num_servers_lantency_awareness;
+		}
+#ifdef PROXYSQL40
+		else {
+			latency_awareness_min_servers =
+				proxysql_raw_backend_latency_awareness_min_servers();
+		}
+#endif
+		if (latency_awareness_min_servers) {
+			if ((int) num_candidates >= latency_awareness_min_servers) {
 				unsigned int servers_with_latency = 0;
 				unsigned int total_latency_us = 0;
 				// scan and verify that all servers have some latency
@@ -2532,7 +2554,9 @@ PgSQL_SrvC *PgSQL_HGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, 
 						}
 					}
 					if (filtered_sum) {
-						sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+						if (sess != nullptr) {
+							sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+						}
 						for (j=0; j<num_candidates; j++) {
 							mysrvc = mysrvcCandidates[j];
 							if (mysrvc->current_latency_us > avg_latency_us) {
@@ -4136,15 +4160,23 @@ void PgSQL_HostGroups_Manager::add_pgsql_errors(int hostgroup, const char *hostn
 	myhash.Final(&hash1,&hash2);
 
 	pthread_mutex_lock(&pgsql_errors_mutex);
+	struct ErrorsMutexUnlock {
+		pthread_mutex_t* mutex;
+		~ErrorsMutexUnlock() { pthread_mutex_unlock(mutex); }
+	} errors_mutex_unlock { &pgsql_errors_mutex };
 	if (auto it = pgsql_errors_umap.find(hash1); it != pgsql_errors_umap.end()) {
 		// found
 		auto& err_stats = it->second;
 		err_stats->add_time(tn, errmsg);
 	} else {
-		PgSQL_Errors_stats* err_stats = new PgSQL_Errors_stats(hostgroup, hostname, port, username, address, dbname, sqlstate, errmsg, tn);
-		pgsql_errors_umap.insert(std::make_pair(hash1, err_stats));
+		// Keep the stats node uniquely owned until the map insertion commits;
+		// allocation failure must unlock the mutex and leave no orphan row.
+		std::unique_ptr<PgSQL_Errors_stats> err_stats(
+			new PgSQL_Errors_stats(hostgroup, hostname, port, username, address,
+				dbname, sqlstate, errmsg, tn));
+		const auto inserted = pgsql_errors_umap.insert(
+			std::make_pair(hash1, std::move(err_stats)));
 	}
-	pthread_mutex_unlock(&pgsql_errors_mutex);
 }
 
 std::unique_ptr<SQLite3_result> PgSQL_HostGroups_Manager::get_pgsql_errors(bool reset) {
@@ -4564,6 +4596,9 @@ int PgSQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& ad
 
 	// Set the server status
 	mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
+#ifdef PROXYSQL40
+	proxysql_raw_backend_mark_offline_hard(mysrvc);
+#endif
 	mysrvc->ConnectionsFree->drop_all_connections();
 
 	// TODO-NOTE: This is only required in case the caller isn't going to perform:
@@ -4753,6 +4788,9 @@ PgSQL_SrvC* PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsig
 void PgSQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(PgSQL_SrvC* srv) {
 	proxy_warning("Removed server at address %p, hostgroup %d, address %s port %d. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", (void*)srv, srv->myhgc->hid, srv->address, srv->port);
 	srv->status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
+#ifdef PROXYSQL40
+	proxysql_raw_backend_mark_offline_hard(srv);
+#endif
 	srv->ConnectionsFree->drop_all_connections();
 }
 

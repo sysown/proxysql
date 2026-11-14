@@ -69,6 +69,11 @@ public:
 	bool start_all(std::string &err);
 	bool runtime_ready_all(ProxySQL_PluginRuntimeContext& context, std::string& err);
 	bool stop_all();
+	// Borrowed through stop callbacks and dlclose, including std::exit after
+	// the global registry owner has already been destroyed.
+	prometheus::Registry* prometheus_registry() const noexcept {
+		return prometheus_registry_.get();
+	}
 	/** @brief Require exactly one managed configuration provider before startup. */
 	bool check_managed_configuration_provider(std::string& error) const;
 	/** @brief Borrow the initialized provider service until plugin shutdown. */
@@ -170,6 +175,10 @@ public:
 	size_t size() const;
 
 private:
+	// Keep the registry alive until the destructor body has stopped plugins
+	// and released every DSO. Declared first so this lease is released last.
+	std::shared_ptr<prometheus::Registry> prometheus_registry_;
+
 	struct plugin_handle_t {
 		void *handle{nullptr};
 		const ProxySQL_PluginDescriptor *descriptor{nullptr};
