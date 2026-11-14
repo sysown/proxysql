@@ -1232,8 +1232,10 @@ void execute_settings_edge_test(PGconn* admin_conn, PGconn*) {
     // A SET undone by ROLLBACK or ROLLBACK TO SAVEPOINT takes the key back with it.
     executeQueries(c.get(), { "BEGIN", "SET TimeZone TO 'Asia/Kolkata'", "ROLLBACK" });
     check_value_hits(admin_conn, c.get(), q3, utc, 1, "SET then ROLLBACK");
+    check_value_hits(admin_conn, c.get(), "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS rollback_uncached", utc, 0, "backend after ROLLBACK");
     executeQueries(c.get(), { "BEGIN", "SAVEPOINT s", "SET TimeZone TO 'Asia/Kolkata'", "ROLLBACK TO SAVEPOINT s" });
     check_value_hits(admin_conn, c.get(), q3, utc, 1, "SET then ROLLBACK TO SAVEPOINT, inside the transaction");
+    check_value_hits(admin_conn, c.get(), "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS savepoint_uncached", utc, 0, "backend after ROLLBACK TO SAVEPOINT");
     executeQueries(c.get(), { "COMMIT" });
 
     // Other spellings of a tracked SET change the key too.
@@ -1542,9 +1544,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
 	if (cl.use_noise) {
-		plan(347*2 + 3);
+		plan(351*2 + 3);
 	} else {
-		plan(347*2);
+		plan(351*2);
 	}
 
     execute_tests(false, false);
