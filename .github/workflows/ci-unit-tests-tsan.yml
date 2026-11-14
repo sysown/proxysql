@@ -41,7 +41,7 @@ jobs:
       checks: write
       contents: read
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
     - name: Checkout repository
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -61,6 +61,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Start selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -121,6 +122,7 @@ jobs:
         name: ${{ github.workflow }}-${{ env.SHA }}-logs-${{ matrix.check_key }}-attempt${{ github.run_attempt }}
         path: proxysql/ci_*_logs/
     - name: Complete selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

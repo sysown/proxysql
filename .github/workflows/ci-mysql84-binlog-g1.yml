@@ -39,7 +39,7 @@ jobs:
   tests:
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 200
+    timeout-minutes: 258
     # Codecov's OIDC token and the checks update both require write permission.
     # The v3.0 caller grants the same permission because caller and callee
     # permissions are intersected for reusable workflows.
@@ -70,7 +70,7 @@ jobs:
         phase: setup
 
     - name: Start selected product test check
-      timeout-minutes: 2
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -221,6 +221,7 @@ jobs:
         verbose: true
 
     - name: Complete selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

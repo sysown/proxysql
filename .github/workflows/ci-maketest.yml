@@ -30,7 +30,7 @@ jobs:
     secrets: inherit
   builds:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -54,6 +54,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Start selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -96,6 +97,7 @@ jobs:
         path: |
           ./build-*.log
     - name: Complete selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

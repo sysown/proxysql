@@ -39,7 +39,7 @@ jobs:
     - tier-context
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['unit-tests'][0] != null }}
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     permissions:
       actions: read
       checks: write
@@ -64,6 +64,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Start selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -183,6 +184,7 @@ jobs:
         path: proxysql/unit-test-logs/
         if-no-files-found: warn
     - name: Complete selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

@@ -116,6 +116,7 @@ class ArtifactLocation:
                 delay=retry_delay(headers,limited,attempt)
                 if delay>MAX_WAIT_SECONDS-waited or delay>=remaining:
                     raise RuntimeError(diagnostic+': retry wait budget exceeded') from None
+                print(f'Artifact redirect interrupted ({reason}); retrying in {delay:.0f}s',flush=True)
                 if cancelled.wait(delay):raise RuntimeError('artifact download cancelled') from None
                 waited+=delay
 

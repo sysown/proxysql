@@ -19,7 +19,7 @@ jobs:
     # failure mode this is meant to prevent.
     # Cancellation must not wait behind the old CI jobs in the self-hosted pool.
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 35
     steps:
     - name: Checkout trusted CI control
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -29,6 +29,7 @@ jobs:
         sparse-checkout: .github
         persist-credentials: false
     - name: Cancel superseded runs
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: python3 .github/scripts/ci_cancel_superseded.py

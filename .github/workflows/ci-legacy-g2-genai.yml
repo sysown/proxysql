@@ -37,7 +37,7 @@ jobs:
   tests:
     runs-on: ubuntu-22.04
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 200
+    timeout-minutes: 258
     # `write-all` grants every default GITHUB_TOKEN scope plus the
     # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
     # token for `use_oidc: true`. We arrived at this after a tight
@@ -88,7 +88,7 @@ jobs:
         phase: setup
 
     - name: Start selected product test check
-      timeout-minutes: 2
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -359,6 +359,7 @@ jobs:
       run: |-
         echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
     - name: Complete selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

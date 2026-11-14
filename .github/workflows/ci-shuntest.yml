@@ -38,7 +38,7 @@ jobs:
     # ProxySQL runs directly on this host. The handoff is built on Ubuntu 24
     # and needs GLIBC_2.38 / GLIBCXX_3.4.32, unavailable on the Jammy pool.
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 135
     permissions:
       actions: read
       checks: write
@@ -88,6 +88,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Start selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -129,6 +130,7 @@ jobs:
           test/repl
 
     - name: Restore selected product handoff
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -199,6 +201,7 @@ jobs:
           proxysql/libs/
 #          proxysql/deps/
     - name: Complete selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

@@ -120,7 +120,7 @@ jobs:
       contents: read
     runs-on: ubuntu-22.04
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 200
+    timeout-minutes: 258
     strategy:
       fail-fast: false
       matrix:
@@ -151,7 +151,7 @@ jobs:
         phase: setup
 
     - name: Start selected product test check
-      timeout-minutes: 2
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
@@ -330,6 +330,7 @@ jobs:
         artifact-key: ${{ matrix.check_key || strategy.job-index }}
 
     - name: Complete selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}

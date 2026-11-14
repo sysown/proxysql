@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import subprocess
 import sys
 import time
@@ -310,7 +311,8 @@ def producer_lookup():
     gh=json.loads(os.environ['GITHUB_JSON'])
     ctx=dict(repository=gh['repository'],sha=gh.get('event',{}).get('pull_request',{}).get('head',{}).get('sha') or gh['sha'],
              trigger_id=int(gh['run_id']),trigger_attempt=int(gh['run_attempt']))
-    api=api_for(ctx);deadline=time.monotonic()+14400;errors_since=None
+    api=api_for(ctx);deadline=time.monotonic()+14400
+    # The API client owns retries; do not restart an exhausted wait budget here.
     while time.monotonic()<deadline:
         try:
             producer=resolve_producer(ctx,api);break
@@ -322,11 +324,6 @@ def producer_lookup():
             candidates=[r for r in runs if r.get('display_title','').endswith(suffix)]
             if any(r['status']=='completed' and r['conclusion']!='success' for r in candidates):
                 raise RuntimeError('producer failed before publishing a build registration')
-            errors_since=None
-            time.sleep(15)
-        except RuntimeError:
-            if errors_since is None:errors_since=time.monotonic()
-            if time.monotonic()-errors_since>300:raise
             time.sleep(15)
     else:raise RuntimeError('timed out waiting for producer registration')
     while time.monotonic()<deadline:
@@ -335,7 +332,11 @@ def producer_lookup():
             if run['conclusion']!='success':raise RuntimeError('producer failed: '+str(run['conclusion']))
             Path('producer.json').write_text(json.dumps(producer))
             return
-        time.sleep(30)
+        remaining=deadline-time.monotonic()
+        if remaining<=0:break
+        delay=min(random.uniform(120,240),remaining)
+        print(f'Producer build still running; checking again in {delay:.0f}s',flush=True)
+        time.sleep(delay)
     raise RuntimeError('timed out waiting for producer completion')
 
 if __name__=='__main__':

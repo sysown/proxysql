@@ -31,7 +31,7 @@ jobs:
 
   plan:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     outputs:
       plan: ${{ steps.plan.outputs.plan }}
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -47,6 +47,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Resolve selected product configurations
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -72,7 +73,7 @@ jobs:
     # Builds additionally require the proxysql-build label, carried only by the
     # dedicated build runners; tests keep using the shared proxysql-ci pool.
     runs-on: ${{ inputs.trusted && ((contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) || (inputs.trigger && contains(fromJson('["renecannao","rahim-kanji"]'), fromJson(inputs.trigger).event.workflow_run.actor.login))) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci","proxysql-build"]')) || 'ubuntu-24.04' }}
-    timeout-minutes: 120
+    timeout-minutes: 240
 #    needs: [ lock ]
 #    outputs:
 #      matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -139,6 +140,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Check immutable artifacts retained by a partial rerun
+      timeout-minutes: 30
       id: artifacts
       if: ${{ inputs.trusted && success() }}
       env:
@@ -147,6 +149,7 @@ jobs:
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py artifact-status
     - name: Start product build check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -504,6 +507,7 @@ jobs:
         ls -la "${runtime_dir}/"
 
     - name: Record built product metadata
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -624,6 +628,7 @@ jobs:
         if-no-files-found: warn
 
     - name: Complete product build check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -649,6 +654,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Finalize build manifest
+      timeout-minutes: 30
       id: finalize
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

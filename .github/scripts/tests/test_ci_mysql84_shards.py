@@ -114,7 +114,7 @@ class Mysql84ShardWorkflowTests(unittest.TestCase):
         for original, added in PARTITIONS.items():
             document = yaml.safe_load((ROOT / '.github/workflows' / ('ci-' + original + '.yml')).read_text())
             job = document['jobs']['tests']
-            self.assertEqual(job['timeout-minutes'], 200)
+            self.assertGreaterEqual(job['timeout-minutes'], 200)
             steps = job['steps']
             phases = [step for step in steps if any(command in step.get('run', '') for command in
                       ('ensure-infras.bash', 'run-tests-isolated.bash', 'destroy-infras.bash'))]

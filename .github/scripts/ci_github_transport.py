@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 
 MAX_ATTEMPTS = 6
-MAX_WAIT_SECONDS = 300
+MAX_WAIT_SECONDS = 1200
 _QUOTA_HEADERS = ('x-ratelimit-limit', 'x-ratelimit-remaining',
                   'x-ratelimit-used', 'x-ratelimit-reset')
 _TRANSIENT = ('connection reset', 'i/o timeout', 'tls handshake timeout',
@@ -130,6 +130,8 @@ def request(path, method='GET', payload=None, raw=False, *, token=None,
         delay = retry_delay(headers, limited, attempt)
         if delay > MAX_WAIT_SECONDS - waited:
             raise RuntimeError(diagnostic + ': retry wait budget exceeded') from None
+        print(f'GitHub API {method} {endpoint}: retrying in {delay:g}s',
+              file=sys.stderr, flush=True)
         time.sleep(delay)
         waited += delay
 

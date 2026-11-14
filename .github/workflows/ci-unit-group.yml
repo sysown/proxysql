@@ -38,7 +38,7 @@ jobs:
     secrets: inherit
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 210
     permissions:
       actions: read
       checks: write
@@ -54,6 +54,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Start selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -70,6 +71,7 @@ jobs:
         persist-credentials: false
 
     - name: Restore selected product handoff
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -162,6 +164,7 @@ jobs:
         if-no-files-found: ignore
 
     - name: Complete selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

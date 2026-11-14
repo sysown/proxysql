@@ -60,7 +60,7 @@ on:
 jobs:
   context:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 35
     outputs:
       matrices: ${{ steps.context.outputs.matrices }}
       binding: ${{ steps.context.outputs.binding }}
@@ -78,6 +78,7 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Bind this workflow to its producer
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}

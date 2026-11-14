@@ -41,7 +41,7 @@ jobs:
     - tier-context
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 200
+    timeout-minutes: 258
     # `write-all` grants every default GITHUB_TOKEN scope plus the
     # id-token:write scope codecov-action@v4 needs to mint a GitHub OIDC
     # token for `use_oidc: true`. Caller workflow on v3.0 must also
@@ -79,7 +79,7 @@ jobs:
         phase: setup
 
     - name: Start selected product test check
-      timeout-minutes: 2
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
@@ -344,6 +344,7 @@ jobs:
       run: |-
         echo "::warning::Codecov upload failed after 3 attempts; tests were unaffected."
     - name: Complete selected product test check
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
