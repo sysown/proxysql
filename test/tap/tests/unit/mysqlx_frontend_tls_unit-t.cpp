@@ -53,6 +53,13 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
+#if defined(TCP_CORK)
+static constexpr int TLS_COALESCE_OPTION = TCP_CORK;
+#elif defined(TCP_NOPUSH)
+static constexpr int TLS_COALESCE_OPTION = TCP_NOPUSH;
+#endif
+
+
 // Exact CapabilitiesSet(tls=true) frame from issue #6553.
 static const uint8_t CAPSET_TLS_EXACT[] = {
 	0x14, 0x00, 0x00, 0x00, 0x02, 0x0a, 0x11, 0x0a, 0x0f, 0x0a, 0x03,
@@ -1134,10 +1141,10 @@ static void backend_probe_thread(int listen_fd, SSL_CTX* server_ctx, BackendProb
 		    type == Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE) {
 			probe->saw_execute = true;
 			if (partial) {
-#ifdef TCP_CORK
+#if defined(TCP_CORK) || defined(TCP_NOPUSH)
 				int cork = 1;
-				if (setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)))
-					BAIL_OUT("TCP cork failed");
+				if (setsockopt(fd, IPPROTO_TCP, TLS_COALESCE_OPTION, &cork, sizeof(cork)))
+					BAIL_OUT("TCP coalescing failed");
 #endif
 				const uint8_t header[] = {1, 0, 0, 0}; // Incomplete X frame.
 				ok = SSL_write(ssl, header, sizeof(header)) == sizeof(header);
@@ -1158,10 +1165,10 @@ static void backend_probe_thread(int listen_fd, SSL_CTX* server_ctx, BackendProb
 	// Keep TCP open until the client observes the TLS EOF, so a later FIN
 	// cannot supply the missing worker wakeup.
 	if (partial) {
-#ifdef TCP_CORK
+#if defined(TCP_CORK) || defined(TCP_NOPUSH)
 		int cork = 0;
-		if (setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)))
-			BAIL_OUT("TCP uncork failed");
+		if (setsockopt(fd, IPPROTO_TCP, TLS_COALESCE_OPTION, &cork, sizeof(cork)))
+			BAIL_OUT("TCP coalescing release failed");
 #endif
 		for (int i = 0; i < 7000 && !client_finished->load(); ++i) usleep(1000);
 	} else {
@@ -1444,7 +1451,7 @@ int main() {
 	test_mapped_plain_empty_secret_selection();
 	test_worker_progress_without_frontend_wakeups(true);
 	test_worker_progress_without_frontend_wakeups(false);
-#ifdef TCP_CORK
+#if defined(TCP_CORK) || defined(TCP_NOPUSH)
 	test_worker_progress_without_frontend_wakeups(false, true);
 #endif
 
