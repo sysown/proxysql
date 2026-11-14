@@ -94,6 +94,8 @@ CLICKHOUSE_CPP_LDIR := $(CLICKHOUSE_CPP_PATH)/clickhouse
 DUCKDB_PATH := $(DEPS_PATH)/duckdb/duckdb
 DUCKDB_IDIR := $(DUCKDB_PATH)/src/include
 DUCKDB_LDIR := $(DUCKDB_PATH)/build/release/src
+# DuckDB 2.0 static consumers register configured extensions before main.
+DUCKDB_STATIC_LOADER_SRCS = $(DUCKDB_PATH)/build/release/src/duckdb_static_extension_loader.c $(DUCKDB_PATH)/extension/loader/static_extension_autoregister.cpp
 
 LIBINJECTION_PATH := $(DEPS_PATH)/libinjection/libinjection
 LIBINJECTION_IDIR := $(LIBINJECTION_PATH)/src

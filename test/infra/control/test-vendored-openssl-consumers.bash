@@ -38,7 +38,7 @@ ensure_stub "${repo_root}/deps/libusual/libusual-f8d49e2"
 # GNU Make executes recipe lines containing $(MAKE) even with -n. Provide the
 # symlink target so the OpenSSL recursive-make line can be printed from a clean
 # checkout without requiring an actual dependency build.
-ensure_stub "${repo_root}/deps/libssl/openssl-3.5.7"
+ensure_stub "${repo_root}/deps/libssl/openssl-3.5.9"
 ensure_stub "${repo_root}/test/deps/mariadb-connector-c/mariadb-connector-c-3.1.9"
 ensure_stub "${repo_root}/test/deps/mysql-connector-c/mysql-5.7.44"
 ensure_stub "${repo_root}/test/deps/mysql-connector-c-8.4.0/mysql-8.4.0"

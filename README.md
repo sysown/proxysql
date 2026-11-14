@@ -67,7 +67,7 @@ dpkg -i proxysql_3.0.4-ubuntu24_amd64.deb
 Distribution-agnostic `.tar.gz` builds are also published on the
 [releases page](https://github.com/sysown/proxysql/releases) — handy for hosts
 where a `.deb`/`.rpm` is inconvenient (any glibc 2.34+ Linux, `amd64` or
-`arm64`). ProxySQL embeds the pinned OpenSSL 3.5.7 libraries and does not need
+`arm64`). ProxySQL embeds the pinned OpenSSL 3.5.9 libraries and does not need
 host OpenSSL shared libraries; GnuTLS remains a dynamic runtime dependency.
 This vendoring is not a FIPS compliance claim—future FIPS module support is
 tracked separately in [issue #6116](https://github.com/sysown/proxysql/issues/6116).

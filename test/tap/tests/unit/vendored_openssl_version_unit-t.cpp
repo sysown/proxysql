@@ -17,7 +17,7 @@ int main() {
 	const unsigned long runtime_version_num { OpenSSL_version_num() };
 
 	plan(6);
-	ok(expected_version == "3.5.7", "build pin is OpenSSL 3.5.7");
+	ok(expected_version == "3.5.9", "build pin is OpenSSL 3.5.9");
 	ok(header_version == expected_version,
 		"vendored headers report OpenSSL %s", expected_version.c_str());
 	ok(runtime_version.rfind(expected_runtime_prefix, 0) == 0,
@@ -25,8 +25,8 @@ int main() {
 	ok((runtime_version_num >> 28) == 3, "embedded runtime major version is 3");
 	ok(((runtime_version_num & 0x0FF00000L) >> 20) == 5,
 		"embedded runtime minor version is 5");
-	ok(((runtime_version_num & 0x00000FF0L) >> 4) == 7,
-		"embedded runtime patch version is 7");
+	ok(((runtime_version_num & 0x00000FF0L) >> 4) == 9,
+		"embedded runtime patch version is 9");
 
 	return exit_status();
 }

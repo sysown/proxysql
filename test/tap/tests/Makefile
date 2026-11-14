@@ -351,7 +351,7 @@ $(DUCKDB_BRIDGE_TESTS): duckdb-bridge-tests
 
 # test_duckdb_bench-t links the DuckDB C API (native baseline) plus the
 # existing TAP mysql/libpq clients. The generic %-t recipe cannot find
-# duckdb.h or the 16-archive DuckDB link set. libduckdb_static.a alone
+# duckdb.h or the configured DuckDB static link set. libduckdb_static.a alone
 # does not satisfy DuckDB's symbols -- copy the DUCKDB_ARS pattern from
 # test/tap/tests/unit/Makefile and plugins/duckdb/Makefile.
 DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
@@ -367,6 +367,9 @@ $(DUCKDB_AR):
 	$(MAKE) -C $(PROXYSQL_PATH)/deps PROXYSQL40=1 duckdb
 	@test -f $@ || { echo "ERROR: deps duckdb build did not produce $@" >&2; exit 1; }
 
+$(DUCKDB_STATIC_LOADER_SRCS): $(DUCKDB_AR)
+	@test -s $@ || { echo "ERROR: missing DuckDB static extension loader: $@; rebuild deps/duckdb" >&2; exit 1; }
+
 ifeq ($(PROXYSQL40),1)
 USE_DUCKDB_BENCH := 1
 endif
@@ -375,9 +378,9 @@ USE_DUCKDB_BENCH := 1
 endif
 
 ifeq ($(USE_DUCKDB_BENCH),1)
-test_duckdb_bench-t: test_duckdb_bench-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(DUCKDB_AR)
+test_duckdb_bench-t: test_duckdb_bench-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(DUCKDB_AR) $(DUCKDB_STATIC_LOADER_SRCS)
 	$(CXX) $< $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
-		$(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
+		$(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \
 		$(MARIADB_LDIR)/libmariadbclient.a $(CUSTOMARGS) -lm -o $@
 else
 test_duckdb_bench-t:

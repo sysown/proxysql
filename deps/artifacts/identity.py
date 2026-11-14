@@ -73,7 +73,7 @@ def configuration(dependency, root):
         raise ValueError('invalid dependency version')
     base = root / 'deps' / directory
     return {'directory': directory, 'version': version, 'setting': setting,
-            'archive': base / (dependency + '-' + version + '.tar.gz'),
+            'archive': base / (dependency + '-' + version + ('.tar.xz' if dependency == 'duckdb' else '.tar.gz')),
             'recipe': base / 'build.mk',
             'tree': base / ('duckdb' if dependency == 'duckdb' else 'openssl-' + version)}
 
@@ -172,7 +172,7 @@ def build_identity(dependency, root, environ):
         helper[policy.name] = digest_file(policy)
     setting = environ.get(conf['setting'], assignment(conf['recipe'], conf['setting']))
     if dependency == 'duckdb' and environ.get('WITHTSAN') == '1':
-        required = ['-DENABLE_THREAD_SANITIZER=ON', '-DSKIP_EXTENSIONS=jemalloc']
+        required = ['-DENABLE_THREAD_SANITIZER=ON', '-DENABLE_JEMALLOC=OFF']
         # Match the source Make recipe's final overrides. Checking membership
         # alone misses an earlier ON followed by a later conflicting OFF.
         if shlex.split(setting)[-2:] != required:

@@ -1,15 +1,15 @@
 # These settings are shared by source compilation and artifact identity.
-DUCKDB_VERSION := 1.4.5
-DUCKDB_CMAKE_FLAGS ?= -DCMAKE_BUILD_TYPE=Release -DBUILD_UNITTESTS=OFF -DBUILD_SHELL=OFF -DENABLE_SANITIZER=OFF -DBUILD_EXTENSIONS="" -DDUCKDB_EXPLICIT_VERSION=v1.4.5
+DUCKDB_VERSION := 2.0.0
+DUCKDB_CMAKE_FLAGS ?= -DCMAKE_BUILD_TYPE=Release -DDUCKDB_OPTIMIZATION_PROFILE=NONE -DDUCKDB_CAPABILITIES="httplib;loadable_extensions" -DBUILD_UNITTESTS=OFF -DBUILD_SHELL=OFF -DENABLE_SANITIZER=OFF -DBUILD_EXTENSIONS="" -DDUCKDB_EXPLICIT_VERSION=v2.0.0
 DUCKDB_TSAN_CMAKE_FLAGS :=
 ifeq ($(WITHTSAN),1)
 override DEPS_MODE := source
 # This option also selects DuckDB's TSAN-aware code paths, rather than merely
 # linking its uninstrumented release archive into an instrumented executable.
-# DuckDB's Linux default extension set independently enables bundled jemalloc.
+# DuckDB 2.0 enables bundled jemalloc as a third-party library on Linux.
 # CMake uses the last definition. Append both requirements after caller flags,
 # including conflicting values and strings containing option-like substrings.
-DUCKDB_TSAN_CMAKE_FLAGS := -DENABLE_THREAD_SANITIZER=ON -DSKIP_EXTENSIONS=jemalloc
+DUCKDB_TSAN_CMAKE_FLAGS := -DENABLE_THREAD_SANITIZER=ON -DENABLE_JEMALLOC=OFF
 endif
 export DUCKDB_CMAKE_FLAGS CC CXX
 DEPS_MODE ?= auto
@@ -20,10 +20,10 @@ force-prepare-duckdb:
 duckdb/duckdb/build/release/src/libduckdb_static.a: force-prepare-duckdb
 	+@bash $(PROXYSQL_PATH)/deps/artifacts/prepare.bash duckdb "$(PROXYSQL_PATH)" "$(DEPS_MODE)"
 
-duckdb/duckdb/.proxysql-source-complete: duckdb/duckdb-$(DUCKDB_VERSION).tar.gz duckdb/build.mk duckdb/verify-source.bash
+duckdb/duckdb/.proxysql-source-complete: duckdb/duckdb-$(DUCKDB_VERSION).tar.xz duckdb/build.mk duckdb/verify-source.bash
 	cd duckdb && ./verify-source.bash
 	cd duckdb && rm -rf duckdb-*/ duckdb || true
-	cd duckdb && tar -zxf duckdb-$(DUCKDB_VERSION).tar.gz && mv duckdb-$(DUCKDB_VERSION)/ duckdb
+	cd duckdb && tar -xf duckdb-$(DUCKDB_VERSION).tar.xz && mv duckdb-$(DUCKDB_VERSION)/ duckdb
 	# Force DuckDB's version: git describe in this bare extraction finds ProxySQL's tags.
 	cd duckdb/duckdb && cmake -S . -B build/release $(DUCKDB_CMAKE_FLAGS) $(DUCKDB_TSAN_CMAKE_FLAGS)
 	cd duckdb/duckdb && CC=${CC} CXX=${CXX} cmake --build build/release -j$(NPROCS)

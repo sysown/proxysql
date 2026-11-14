@@ -98,7 +98,7 @@ WHERE m.variable_name LIKE 'duckdb-%'
 ORDER BY m.variable_name;
 ```
 
-Runtime memory units are DuckDB's canonical readback; DuckDB 1.4.5 reports an
+Runtime memory units are DuckDB's canonical readback; DuckDB 2.0.0 reports an
 input of `512MB` as `488.2 MiB`.
 
 ## Failure contract

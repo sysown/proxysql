@@ -69,6 +69,8 @@ run_check "Check ClickHouse feature propagation and platform linker flags" \
 	python3 test/infra/control/test_clickhouse_build.py
 run_check "Check configured DuckDB static archives" \
 	python3 test/infra/control/test_duckdb_archives.py
+run_check "Check DuckDB portable CPU profile" \
+	python3 test/infra/control/test_duckdb_build_profile.py
 run_check "Check Router vendored OpenSSL headers" \
 	python3 test/infra/control/test_router_openssl_build.py
 run_check "Check MariaDB TLS option patch portability" \
