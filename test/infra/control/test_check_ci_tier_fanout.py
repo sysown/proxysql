@@ -4,6 +4,40 @@ import yaml
 from check_ci_tier_fanout import validate_routes, version
 from ci_tier_conditions import condition_allows, condition_value
 class RouteTests(unittest.TestCase):
+ def test_legacy_g8_split_retains_both_lower_tier_routes(self):
+  rows,callers,engines=self.fixture()
+  groups={'mysql57-core-g1','legacy-g6'}
+  rows[0]['groups']=sorted(groups)
+  step=engines['ci-g1.yml']['jobs']['tests']['steps'][-1]
+  step['run']='TAP_GROUP=mysql57-core-g1 test/infra/control/run-tests-isolated.bash\nTAP_GROUP=legacy-g6 test/infra/control/run-tests-isolated.bash'
+  self.assertEqual(validate_routes(rows,callers,engines,groups,{'legacy-g8'}),[])
+  for missing in groups:
+   with self.subTest(missing=missing):
+    rows[0]['groups']=sorted(groups-{missing})
+    errors=validate_routes(rows,callers,engines,groups,{'legacy-g8'})
+    for tier in ('v30','v31'):
+     self.assertIn('lower-tier coverage lost: '+tier+'/'+missing,errors)
+ def test_retired_legacy_g3_keeps_mysql84_lower_tier_coverage(self):
+  rows,callers,engines=self.fixture()
+  rows[0]['groups']=['mysql84-g3']
+  engines['ci-g1.yml']['jobs']['tests']['steps'][-1]['run']='TAP_GROUP=mysql84-g3 test/infra/control/run-tests-isolated.bash'
+  self.assertEqual(validate_routes(rows,callers,engines,{'mysql84-g3'},{'legacy-g3'}),[])
+  rows[0]['tiers']=['v40']
+  errors=validate_routes(rows,callers,engines,{'mysql84-g3'},{'legacy-g3'})
+  for tier in ('v30','v31'):
+   self.assertIn('lower-tier coverage lost: '+tier+'/mysql84-g3',errors)
+ def test_legacy_g7_split_keeps_mysql57_and_mariadb_coverage(self):
+  rows,callers,engines=self.fixture()
+  groups={'mysql57-core-g2','legacy-g6'}
+  rows[0]['groups']=sorted(groups)
+  engines['ci-g1.yml']['jobs']['tests']['steps'][-1]['run']='TAP_GROUP=mysql57-core-g2 test/infra/control/run-tests-isolated.bash\nTAP_GROUP=legacy-g6 test/infra/control/run-tests-isolated.bash'
+  self.assertEqual(validate_routes(rows,callers,engines,groups,{'legacy-g7'}),[])
+  for missing in groups:
+   with self.subTest(missing=missing):
+    rows[0]['groups']=sorted(groups-{missing})
+    errors=validate_routes(rows,callers,engines,groups,{'legacy-g7'})
+    for tier in ('v30','v31'):
+     self.assertIn('lower-tier coverage lost: '+tier+'/'+missing,errors)
  def test_group_axis_requires_new_shards_only_when_product_metadata_contains_them(self):
   rows,callers,engines=self.fixture()
   rows[0].update(group_axis='tap_group',axes={'tap_group':['g1','g10']})

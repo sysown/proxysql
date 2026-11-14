@@ -402,6 +402,17 @@ bool pgsql_variable_validate_client_encoding(const char* value, const params_t* 
 	return true;
 }
 
+/**
+ * @brief Tells whether a byte is an ASCII control character (0x00-0x1F or 0x7F).
+ *
+ * Tracked variable values travel to the backend inside the startup 'options' string,
+ * where whitespace control characters separate "-c name=value" tokens. Real time zone
+ * names and schema names never contain one.
+ */
+static inline bool pgsql_is_control_char(unsigned char c) {
+	return c < 0x20 || c == 0x7f;
+}
+
 // A zone name, a POSIX rule or a number of hours. PostgreSQL decides whether the zone
 // exists; this only refuses what can never be one (quotes, spaces, ';' ...), so the
 // mistake fails where the client makes it, not on a later query when ProxySQL applies it.
@@ -478,6 +489,14 @@ bool pgsql_variable_validate_search_path(const char* value, const params_t* para
 					} else {
 						break;
 					}
+				}
+				// A quoted part is copied verbatim into the value ProxySQL later sends in
+				// the backend's startup 'options', so it must not carry control bytes:
+				// a tab, newline or similar would be a token separator there. PostgreSQL
+				// tolerates them in a quoted identifier, but no real schema name uses one,
+				// so the value is rejected outright.
+				if (pgsql_is_control_char((unsigned char)*search)) {
+					break;
 				}
 				search++;
 				effective_len++;

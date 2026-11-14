@@ -811,9 +811,9 @@ int PgSQL_Data_Stream::write_to_net() {
 					shut_soft();
 					return 0;
 				}
-				else {
-					return -1;
-				}
+				// SSL_write may already have consumed plaintext. EAGAIN/EINTR
+				// defer only the ciphertext flush; account for that plaintext
+				// below so a retry cannot encrypt and send it a second time.
 			}
 		}
 	}
@@ -1386,7 +1386,11 @@ void PgSQL_Data_Stream::unplug_backend() {
 	DSS = STATE_NOT_INITIALIZED;
 	myconn = NULL;
 	myds_type = MYDS_BACKEND_NOT_CONNECTED;
-	mypolls->remove_index_fast(poll_fds_idx);
+	// Idle-backend pings can complete or fail before poll registration,
+	// leaving mypolls == NULL with no poll entry to remove. Calling a member
+	// through NULL is undefined even when poll_fds_idx == -1; this caused
+	// crashes in v3.0.12. See https://github.com/sysown/proxysql/pull/6626.
+	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 	mypolls = NULL;
 	fd = 0;
 }
