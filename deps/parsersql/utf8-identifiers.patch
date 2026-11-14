@@ -1,9 +1,6 @@
 --- a/include/sql_parser/tokenizer.h
 +++ b/include/sql_parser/tokenizer.h
-@@ -236,10 +236,39 @@
-                      static_cast<uint32_t>(source_start - start_)};
-     }
- 
+@@ -238,0 +239,19 @@
 +    // Validate one UTF-8 scalar without reading past the input. High bytes
 +    // participate in identifiers; do not split a name into ASCII keyword tokens.
 +    size_t utf8_identifier_char_length(const char* p) const {
@@ -23,10 +20,7 @@
 +        return n;
 +    }
 +
-     Token scan_identifier_or_keyword() {
-         const char* start = cursor_;
-         while (cursor_ < end_) {
-             char c = *cursor_;
+@@ -242,0 +262,10 @@
 +            if (static_cast<unsigned char>(c) >= 0x80) {
 +                const size_t n = utf8_identifier_char_length(cursor_);
 +                if (n == 0) {
@@ -37,25 +31,13 @@
 +                cursor_ += n;
 +                continue;
 +            }
-             bool is_cont = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                            (c >= '0' && c <= '9') || c == '_';
-             // PostgreSQL allows `$` as an identifier continuation char (but
-@@ -613,7 +642,8 @@
-         }
- 
-         // Identifiers and keywords
+@@ -616 +645,2 @@
 -        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
 +        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
 +            static_cast<unsigned char>(c) >= 0x80) {
-             return scan_identifier_or_keyword();
-         }
- 
 --- a/tests/test_tokenizer.cpp
 +++ b/tests/test_tokenizer.cpp
-@@ -353,3 +353,26 @@
-     tok.reset(sql, strlen(sql));
-     EXPECT_EQ(tok.next_token().type, TokenType::TK_PG_OPERATOR);
- }
+@@ -355,0 +356,23 @@
 +
 +// ProxySQL #6630: UTF-8 identifiers must be single tokens, including when
 +// adjacent ASCII bytes spell a SQL operation.
