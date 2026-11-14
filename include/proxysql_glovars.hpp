@@ -1,7 +1,7 @@
 #ifndef __CLASS_PROXYSQL_GLOVARS_H
 #define __CLASS_PROXYSQL_GLOVARS_H
 
-#define CLUSTER_SYNC_INTERFACES_ADMIN "('admin-mysql_ifaces','admin-restapi_port','admin-telnet_admin_ifaces','admin-telnet_stats_ifaces','admin-web_port','admin-pgsql_ifaces')"
+#define CLUSTER_SYNC_INTERFACES_ADMIN "('admin-mysql_ifaces','admin-restapi_port','admin-restapi_interface','admin-telnet_admin_ifaces','admin-telnet_stats_ifaces','admin-web_port','admin-pgsql_ifaces')"
 #define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
 #define CLUSTER_SYNC_INTERFACES_PGSQL "('pgsql-interfaces')"
 
@@ -113,6 +113,15 @@ class ProxySQL_GlobalVariables {
 	SSL_CTX *get_SSL_ctx();
 	SSL *get_SSL_new();
 	void get_SSL_pem_mem(char **key, char **cert);
+	/**
+	 * @brief Duplicate ProxySQL's configured CA certificate PEM.
+	 *
+	 * On success, sets *ca to a malloc()-allocated NUL-terminated copy of the
+	 * configured TLS CA file. Sets *ca to nullptr when no CA file is
+	 * configured or the file cannot be read. The caller owns *ca and must
+	 * free() it.
+	 */
+	void get_SSL_ca_pem_mem(char **ca);
 	std::shared_ptr<prometheus::Registry> prometheus_registry { nullptr };
 	struct  {
 		unsigned long long start_time;
