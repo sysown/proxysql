@@ -174,3 +174,5 @@ The operation is not advertised as atomic across Admin SQLite and DuckDB. If
 an error occurs after a setting changed, the error identifies that fact. The
 next Runtime query reconstructs effective state from the engine rather than
 repeating cached intent.
+
+Changing the active replicated table set after a snapshot requires `RESET DUCKDB REPLICA` and a fresh snapshot. START rejects a table set that differs from the durable snapshot manifest, so skipped tables cannot silently resume after their changes have been discarded. RESET retains ownership of every snapshotted table until it removes the snapshot.

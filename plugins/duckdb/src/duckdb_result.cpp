@@ -58,6 +58,14 @@ std::string format_double(double v, int precision = std::numeric_limits<double>:
 	return buf;
 }
 
+std::string format_float_for(double v, int precision, DuckDBResultProtocol protocol) {
+	if (protocol == DuckDBResultProtocol::pgsql) {
+		if (std::isnan(v)) return "NaN";
+		if (std::isinf(v)) return v > 0 ? "Infinity" : "-Infinity";
+	}
+	return format_double(v, precision);
+}
+
 bool render_native_value(duckdb_value raw, std::string& out, std::string& error) {
 	const auto destroy_value = [](duckdb_value value) { duckdb_destroy_value(&value); };
 	std::unique_ptr<std::remove_pointer_t<duckdb_value>, decltype(destroy_value)> value(raw, destroy_value);
@@ -209,10 +217,10 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		out = std::to_string(static_cast<uint64_t*>(data)[row]);
 		return true;
 	case DUCKDB_TYPE_FLOAT:
-		out = format_double(static_cast<float*>(data)[row], std::numeric_limits<float>::max_digits10);
+		out = format_float_for(static_cast<float*>(data)[row], std::numeric_limits<float>::max_digits10, protocol);
 		return true;
 	case DUCKDB_TYPE_DOUBLE:
-		out = format_double(static_cast<double*>(data)[row]);
+		out = format_float_for(static_cast<double*>(data)[row], std::numeric_limits<double>::max_digits10, protocol);
 		return true;
 	// Native value conversion does not prepare or execute another statement.
 	case DUCKDB_TYPE_TIME_NS:

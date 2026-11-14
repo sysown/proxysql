@@ -5,7 +5,7 @@
 > new SQL recognition to use currently vendored ParserSQL; missing grammar is
 > deferred upstream. See the [current handoff](../specs/2026-11-05-duckdb-mysql-replica-design.md)
 > and #6284. The design below does not describe supported functionality.
-
+>
 > **For agentic workers:** Use superpowers:executing-plans to implement this plan inline. Preserve the existing isolated worktree.
 
 **Goal:** Provide an opt-in, tested core of MySQL analytical SELECT syntax.

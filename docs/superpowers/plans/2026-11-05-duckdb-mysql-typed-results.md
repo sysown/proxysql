@@ -7,7 +7,7 @@
 > on that foundation. The custom compatibility mode is removed. Prepared
 > frontend protocol belongs to #6298; #6282 implements only the DuckDB adapter.
 > See [current handoff](../specs/2026-11-05-duckdb-mysql-replica-design.md).
-
+>
 > **For agentic workers:** Use superpowers:executing-plans inline in the existing feature worktree.
 
 **Goal:** Deliver typed scalar MySQL results as the next client-compatibility feature.
@@ -42,9 +42,9 @@
 
 ## Completed validation
 
-- Observed RED native integer field type253 before implementation.
-- Typed live driver checks31, through direct and ordinary routed sessions, plus opt-in translation; includes binary/NUL, 16MiB rows, 300 columns, exact numeric boundaries and DML RETURNING.
-- Nine units379 (result44 and session101); existing compatibility39, replica31, Admin22 and MySQL listener17 pass.
-- PostgreSQL retains exactly the six previously reproduced extended-query baseline failures19..24.
+- Observed RED native integer field type 253 before implementation.
+- Typed live driver checks: 31, through direct and ordinary routed sessions, plus opt-in translation; includes binary/NUL, 16MiB rows, 300 columns, exact numeric boundaries and DML RETURNING.
+- Nine units, 379 assertions (result: 44 and session: 101); existing compatibility: 39, replica: 31, Admin: 22, and MySQL listener: 17 pass.
+- PostgreSQL retains exactly the six previously reproduced extended-query baseline failures, 19..24.
 - Read-only review cleared material findings; stale comments corrected and DuckDB allocated column names freed.
 - Prepared-statement protocol is the next separate feature. No benchmarks or throughput optimization performed.

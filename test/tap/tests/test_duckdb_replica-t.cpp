@@ -213,6 +213,9 @@ bool run(Fixture& f) {
 	if (!check(execute(f.source, "CREATE DATABASE " + f.schema + " CHARACTER SET utf8mb4") &&
 	        execute(f.source, "CREATE TABLE " + f.schema + ".events (id INT PRIMARY KEY, amount DECIMAL(18,4),"
 	                          "note VARCHAR(100), created DATETIME(6), ts TIMESTAMP(6) NULL, payload BLOB, u INT UNSIGNED) ENGINE=InnoDB") &&
+	        execute(f.source, "CREATE TABLE " + f.schema + ".time_keys (k TIME(3) PRIMARY KEY,v INT) ENGINE=InnoDB") &&
+	        execute(f.source, "INSERT INTO " + f.schema + ".time_keys VALUES ('12:34:56.123',1),('12:34:56',2),('-12:34:56.123',3),('123:45:56.789',4)") &&
+	        execute(f.source, "SET SESSION binlog_rows_query_log_events=ON") &&
 	        execute(f.source, "CREATE TABLE " + f.schema + ".guard (id INT,part INT,PRIMARY KEY(id,part)) ENGINE=InnoDB") &&
 	        execute(f.source, "INSERT INTO " + f.schema + ".guard VALUES(1,2)") &&
 	        execute(f.source, "CREATE TABLE " + f.schema + ".ignored (id INT PRIMARY KEY,doc JSON) ENGINE=InnoDB") &&
@@ -226,9 +229,24 @@ bool run(Fixture& f) {
 	                         std::to_string(f.cl.mysql_port) + "," + quote(f.cl.mysql_username) + "," + quote(f.cl.mysql_password) + ",424242,1)") &&
 	        execute(f.admin, "INSERT INTO duckdb_replica_tables VALUES('e2e'," + quote(f.schema) + ",'events',1)") &&
 	        execute(f.admin, "INSERT INTO duckdb_replica_tables VALUES('e2e'," + quote(f.schema) + ",'guard',1)") &&
+	        execute(f.admin, "INSERT INTO duckdb_replica_tables VALUES('e2e'," + quote(f.schema) + ",'time_keys',1)") &&
 	        execute(f.admin, "SAVE DUCKDB REPLICA TO DISK") && execute(f.admin, "START DUCKDB REPLICA"),
 	        "configure and start the replica")) return false;
 	if (!check(f.state("applying") && f.matches(), "consistent snapshot matches source typed rows")) return false;
+
+	auto time_matches = [&] {
+		Rows expected;
+		if (!query(f.source, "SELECT TIME_FORMAT(k,'%H:%i:%s.%f'),v FROM " + f.schema + ".time_keys ORDER BY v", expected)) return false;
+		return wait_for([&] {
+			Rows actual;
+			return query(f.duck, "SELECT k,v FROM " + f.schema + "." + f.schema + ".time_keys ORDER BY v", actual) && actual == expected;
+		});
+	};
+	if (!check(time_matches(), "snapshot canonicalizes fractional, whole, negative and long-hour TIME primary keys")) return false;
+	if (!check(execute(f.source, "UPDATE " + f.schema + ".time_keys SET v=v+10") && time_matches(),
+	           "annotated row events update snapshot TIME primary keys without losing matches")) return false;
+	if (!check(execute(f.source, "DELETE FROM " + f.schema + ".time_keys") && time_matches(),
+	           "annotated DELETE events remove snapshot TIME primary keys")) return false;
 	if (!check(execute(f.source, "INSERT INTO " + f.schema + ".events VALUES"
 	                         "(-3,987.6543,'O''Reilly','2026-11-05 01:02:03.000004','2026-11-05 01:02:03.000005',X'0100FE',3000000000)") &&
 	        f.matches(), "INSERT decodes decimal, text, DATETIME2, TIMESTAMP2, blob and unsigned values")) return false;

@@ -1,3 +1,4 @@
+#include "duckdb_replica_snapshot.h"
 #include "duckdb_replica.h"
 #include "duckdb_replica_catalog.h"
 
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -160,7 +162,9 @@ bool append_integer(duckdb_appender appender, const DuckDBReplicaMappedColumn& c
 	return false;
 }
 
-bool parse_decimal(const char* text, unsigned long length, uint8_t width, uint8_t scale,
+} // namespace
+
+bool duckdb_replica_parse_decimal(const char* text, unsigned long length, uint8_t width, uint8_t scale,
                    duckdb_decimal& out, std::string& err) {
 	if (text == nullptr) {
 		err = "empty decimal";
@@ -177,6 +181,7 @@ bool parse_decimal(const char* text, unsigned long length, uint8_t width, uint8_
 	int seen_frac = -1;
 	int digits = 0;
 	bool any = false;
+	bool seen_nonzero = false;
 	for (; i < s.size(); ++i) {
 		if (s[i] == '.') {
 			if (seen_frac >= 0) {
@@ -195,6 +200,12 @@ bool parse_decimal(const char* text, unsigned long length, uint8_t width, uint8_
 			if (seen_frac == scale) continue;
 			++seen_frac;
 		}
+		// Ignore insignificant leading zeros in the integer part so that
+		// DECIMAL(p,p) accepts values such as 0.12, 0.00 and -0.01.
+		if (seen_frac < 0 && s[i] == '0' && !seen_nonzero) {
+			continue;
+		}
+		seen_nonzero = seen_nonzero || (s[i] != '0');
 		if (++digits > width) {
 			err = "decimal exceeds DECIMAL(" + std::to_string(width) + "," + std::to_string(scale) + ")";
 			return false;
@@ -207,6 +218,18 @@ bool parse_decimal(const char* text, unsigned long length, uint8_t width, uint8_
 	}
 	const int frac = seen_frac < 0 ? 0 : seen_frac;
 	for (int pad = frac; pad < scale; ++pad) value *= 10;
+	{
+		int final_digits = 0;
+		unsigned __int128 t = value;
+		do {
+			++final_digits;
+			t /= 10;
+		} while (t != 0);
+		if (final_digits > width) {
+			err = "decimal exceeds DECIMAL(" + std::to_string(width) + "," + std::to_string(scale) + ")";
+			return false;
+		}
+	}
 	if (neg) value = -value;
 	out.width = width;
 	out.scale = scale;
@@ -214,6 +237,8 @@ bool parse_decimal(const char* text, unsigned long length, uint8_t width, uint8_
 	out.value.upper = static_cast<int64_t>(static_cast<uint64_t>(value >> 64));
 	return true;
 }
+
+namespace {
 
 bool parse_date(const char* text, unsigned long length, int& year, unsigned& month, unsigned& day, size_t& used) {
 	if (text == nullptr || length < 10) return false;
@@ -306,7 +331,7 @@ bool append_value(duckdb_appender appender, const DuckDBReplicaMappedColumn& col
 	}
 	case DuckDBReplicaTypeKind::decimal: {
 		duckdb_decimal decimal {};
-		if (!parse_decimal(text, length, column.width, column.scale, decimal, err)) return false;
+		if (!duckdb_replica_parse_decimal(text, length, column.width, column.scale, decimal, err)) return false;
 		duckdb_value value = duckdb_create_decimal(decimal);
 		const duckdb_state rc = duckdb_append_value(appender, value);
 		duckdb_destroy_value(&value);
@@ -371,6 +396,7 @@ std::string select_expr(const std::string& data_type, const std::string& name) {
 	std::string type = data_type;
 	for (char& c : type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 	if (type == "bit") return "CAST(" + quoted + " AS UNSIGNED)";
+	if (type == "time") return "TIME_FORMAT(" + quoted + ", '%H:%i:%s.%f')";
 	return quoted;
 }
 
@@ -616,6 +642,44 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 				if (!probed.server_uuid.empty() && !out.position.server_uuid.empty() &&
 				    probed.server_uuid != out.position.server_uuid) {
 					return failed("source server_uuid changed since the snapshot; RESET DUCKDB REPLICA and snapshot again");
+				}
+
+				// Reject any change to the active table set against the durable
+				// snapshot manifest. Skipping or reactivating a table after the
+				// checkpoint has advanced would silently diverge, so the operator
+				// must RESET DUCKDB REPLICA and resnapshot. No manifest mutation is
+				// performed on this path.
+				std::set<std::pair<std::string, std::string>> active_keys;
+				for (const auto& table : tables) {
+					if (table.active && table.source_id == source.source_id) {
+						active_keys.insert({table.schema_name, table.table_name});
+					}
+				}
+				duckdb_result manifest_result;
+				const std::string manifest_sql =
+					"SELECT schema_name, table_name FROM " + tables_table +
+					" WHERE source_id = " + sql_literal(source.source_id);
+				if (duckdb_query(conn, manifest_sql.c_str(), &manifest_result) != DuckDBSuccess) {
+					const char* message = duckdb_result_error(&manifest_result);
+					err = message != nullptr ? message : "cannot read proxysql_replica.tables";
+					duckdb_destroy_result(&manifest_result);
+					return failed(err);
+				}
+				std::set<std::pair<std::string, std::string>> manifest_keys;
+				for (idx_t row = 0; row < duckdb_row_count(&manifest_result); ++row) {
+					char* schema = duckdb_value_varchar(&manifest_result, 0, row);
+					char* table = duckdb_value_varchar(&manifest_result, 1, row);
+					manifest_keys.insert({schema != nullptr ? schema : "",
+					                     table != nullptr ? table : ""});
+					if (schema) duckdb_free(schema);
+					if (table) duckdb_free(table);
+				}
+				duckdb_destroy_result(&manifest_result);
+
+				if (active_keys != manifest_keys) {
+					return failed("active table set differs from the durable snapshot "
+					              "manifest; RESET DUCKDB REPLICA and snapshot again "
+					              "before changing replicated tables");
 				}
 				return out;
 			}

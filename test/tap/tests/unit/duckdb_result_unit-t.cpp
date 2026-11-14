@@ -42,7 +42,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(111);
+	plan(112);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -548,8 +548,15 @@ int main() {
 		duckdb_destroy_result(&res);
 		duckdb_query(conn,"SELECT 'NaN'::DOUBLE",&res);
 		r.reset(duckdb_result_to_sqlite3(&res,nullptr,&columns,DuckDBResultProtocol::pgsql,conn));
-		ok(r && columns.size()==1 && columns[0].type==DUCKDB_TYPE_DOUBLE,
-		   "PostgreSQL keeps its native floating type for a supported nonfinite value");
+		ok(r && columns.size()==1 && columns[0].type==DUCKDB_TYPE_DOUBLE &&
+		   field_equals(r.get(), 0, 0, "NaN"),
+		   "PostgreSQL keeps its native floating type and NaN spelling for a supported nonfinite value");
+		duckdb_destroy_result(&res);
+		duckdb_query(conn,"SELECT 'Infinity'::DOUBLE, '-Infinity'::DOUBLE",&res);
+		r.reset(duckdb_result_to_sqlite3(&res,nullptr,&columns,DuckDBResultProtocol::pgsql,conn));
+		ok(r && columns.size()==2 && columns[0].type==DUCKDB_TYPE_DOUBLE && columns[1].type==DUCKDB_TYPE_DOUBLE &&
+		   field_equals(r.get(), 0, 0, "Infinity") && field_equals(r.get(), 0, 1, "-Infinity"),
+		   "PostgreSQL renders Infinity and -Infinity with native float metadata");
 		duckdb_destroy_result(&res);
 	}
 

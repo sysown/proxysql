@@ -100,14 +100,9 @@ std::string epoch_text(uint64_t seconds, uint32_t micros) {
 
 std::string time_text(const MYSQL_TIME& tm) {
 	char buf[48];
-	if (tm.second_part != 0) {
-		std::snprintf(buf, sizeof(buf), "%s%02u:%02u:%02u.%06lu", tm.neg ? "-" : "",
-		              tm.hour, tm.minute, tm.second,
-		              static_cast<unsigned long>(tm.second_part));
-	} else {
-		std::snprintf(buf, sizeof(buf), "%s%02u:%02u:%02u", tm.neg ? "-" : "",
-		              tm.hour, tm.minute, tm.second);
-	}
+	std::snprintf(buf, sizeof(buf), "%s%02u:%02u:%02u.%06lu", tm.neg ? "-" : "",
+	              tm.hour, tm.minute, tm.second,
+	              static_cast<unsigned long>(tm.second_part));
 	return buf;
 }
 
@@ -898,6 +893,7 @@ DuckDBReplicaApplyResult Applier::run() {
 			case HEARTBEAT_LOG_EVENT:
 			case HEARTBEAT_LOG_EVENT_V2:
 			case ANNOTATE_ROWS_EVENT:
+			case ROWS_QUERY_LOG_EVENT:
 			case INTVAR_EVENT:
 			case RAND_EVENT:
 			case USER_VAR_EVENT:

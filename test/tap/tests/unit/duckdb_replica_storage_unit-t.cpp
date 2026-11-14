@@ -2,6 +2,8 @@
 #include "duckdb_config.h"
 #include "duckdb_engine.h"
 #include "duckdb.h"
+
+#include "duckdb_replica_snapshot.h"
 #include "tap.h"
 #include <cstdio>
 #include <cstdlib>
@@ -38,7 +40,7 @@ struct Store {
 	DuckDBEngine engine;
 	duckdb_connection conn = nullptr;
 	explicit Store(const std::string& name) : catalog(name) {
-		char pattern[] = "/tmp/proxysql-replica-storage-XXXXXX";
+		char pattern[] = "/data/rene/proxysql/.worktrees/proxysql-replica-storage-XXXXXX";
 		char* created = mkdtemp(pattern);
 		if (!created)
 			BAIL_OUT("mkdtemp failed");
@@ -100,6 +102,47 @@ struct Store {
 } // namespace
 int main() {
 	plan(NO_PLAN);
+	{
+		Store s("active_set");
+		s.must("CREATE SCHEMA active_set.app");
+		s.must("CREATE TABLE active_set.app.a(id INT)");
+		s.must("CREATE TABLE active_set.app.b(id INT)");
+		s.metadata({{"app", "a"}, {"app", "b"}});
+		s.must("ALTER TABLE active_set.proxysql_replica.position ADD COLUMN gtid_executed VARCHAR DEFAULT ''");
+		s.must("ALTER TABLE active_set.proxysql_replica.position ADD COLUMN binlog_file VARCHAR DEFAULT 'binlog.000001'");
+		s.must("ALTER TABLE active_set.proxysql_replica.position ADD COLUMN server_uuid VARCHAR DEFAULT 'uuid'");
+		DuckDBReplicaSource source; source.source_id = "s";
+		DuckDBReplicaTable a, b;
+		a.source_id = b.source_id = "s";
+		a.schema_name = b.schema_name = "app";
+		a.table_name = "a"; b.table_name = "b";
+		a.active = b.active = true;
+		auto load = [&](const std::vector<DuckDBReplicaTable>& tables) {
+			return duckdb_replica_load_snapshot(s.engine, source, tables, {}, {}, {}, {});
+		};
+		ok(load({a,b}).code == DuckDBReplicaLoadResult::Code::already_loaded,
+		   "unchanged active set resumes the durable checkpoint");
+		a.active = false;
+		const auto refused = load({a,b});
+		ok(refused.code == DuckDBReplicaLoadResult::Code::failed && refused.error.find("RESET") != std::string::npos,
+		   "deactivating a snapshotted table is refused before replay can skip its changes");
+		ok(load({b}).code == DuckDBReplicaLoadResult::Code::failed,
+		   "removing a snapshotted table is also refused");
+		s.engine.disconnect(&s.conn);
+		s.engine.close();
+		DuckDBConfigStore reopened;
+		reopened.set("database_path", s.path, s.error);
+		if (!s.engine.open(reopened, s.error) || !s.engine.connect(&s.conn, s.error))
+			BAIL_OUT("reopen storage fixture failed: %s", s.error.c_str());
+		ok(load({b}).code == DuckDBReplicaLoadResult::Code::failed,
+		   "changed active set remains rejected after reopening durable storage");
+		a.active = true;
+		ok(load({a,b}).code == DuckDBReplicaLoadResult::Code::already_loaded,
+		   "failed active-set changes preserve the original checkpoint and manifest");
+		ok(duckdb_replica_drop_snapshot(s.engine).empty() && s.count("app", "a") == 0 && s.count("app", "b") == 0,
+		   "RESET still owns and removes every snapshotted table after refused configuration changes");
+	}
+
 	{
 		DuckDBEngine closed_engine;
 		DuckDBReplicaTable table;
@@ -200,6 +243,22 @@ int main() {
 		s.must("CREATE TABLE unowned.main.local_table(id INT)");
 		ok(duckdb_replica_drop_snapshot(s.engine).empty() && s.count("main", "local_table") == 1,
 		   "RESET before snapshot preserves tables absent from the ownership manifest");
+	}
+	{
+		duckdb_decimal out {};
+		std::string err;
+		ok(duckdb_replica_parse_decimal("0.12", 4, 2, 2, out, err) && out.value.lower == 12,
+		   "DECIMAL(2,2) accepts a positive value with a leading zero");
+		ok(duckdb_replica_parse_decimal("0.00", 4, 2, 2, out, err) && out.value.lower == 0,
+		   "DECIMAL(2,2) accepts zero");
+		ok(duckdb_replica_parse_decimal("-0.01", 5, 2, 2, out, err) && out.value.lower == static_cast<uint64_t>(-1),
+		   "DECIMAL(2,2) accepts a negative value with a leading zero");
+		ok(duckdb_replica_parse_decimal("0.99", 4, 2, 2, out, err) && out.value.lower == 99,
+		   "DECIMAL(2,2) accepts its positive boundary");
+		ok(!duckdb_replica_parse_decimal("1.23", 4, 2, 2, out, err),
+		   "DECIMAL(2,2) rejects an overflowed value");
+		ok(!duckdb_replica_parse_decimal("1.2", 3, 2, 2, out, err),
+		   "DECIMAL(2,2) rejects a value needing more than two scaled digits");
 	}
 	return exit_status();
 }
