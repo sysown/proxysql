@@ -63,6 +63,7 @@
   "eof_conn_options_check-t" : [ "legacy-g10","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g11","mysql90-g4","mysql95-g4" ],
   "eof_fast_forward-t" : [ "legacy-g10","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g11","mysql90-g4","mysql95-g4" ],
   "eof_mixed_flags_queries-t" : [ "legacy-g10","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g11","mysql90-g4","mysql95-g4" ],
+  "ok_mixed_flags_queries-t" : [ "legacy-g10","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g11","mysql90-g4","mysql95-g4" ],
   "eof_packet_mixed_queries-t" : [ "legacy-g10","mysql-auto_increment_delay_multiplex=0-g4","mysql-multiplexing=false-g4","mysql-query_digests=0-g4","mysql-query_digests_keep_comment=1-g4","mysql84-g11","mysql90-g4","mysql95-g4" ],
   "ezoption_parser_unit-t" : [ "unit-tests-g1" ],
   "fast_forward_grace_close_libmysql-t" : [ "mysql-auto_increment_delay_multiplex=0-g3","mysql-multiplexing=false-g3","mysql-query_digests=0-g3","mysql-query_digests_keep_comment=1-g3","mysql84-g3","mysql90-g3","mysql95-g3" ],

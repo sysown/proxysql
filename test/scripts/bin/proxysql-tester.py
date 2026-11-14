@@ -96,6 +96,7 @@ internal_tap_tests_versions = [
     ('ok_packet_mixed_queries-t', "2.1.0"),
     ('ok_test_ps_async-t', "2.1.0"),
     ('eof_mixed_flags_queries-t', "2.4.0"),
+    ('ok_mixed_flags_queries-t', "2.4.0"),
 ]
 
 ##
