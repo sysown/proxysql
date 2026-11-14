@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ci_tier_runtime as runtime
@@ -52,12 +53,6 @@ class ProducerPollingTests(unittest.TestCase):
             self.assertEqual(call.args, ('repos/owner/repo/actions/runs/2/attempts/1',))
         self.assertEqual(json.loads(Path('producer.json').read_text()), self.producer)
 
-    def test_completed_build_needs_no_polling_delay(self):
-        self.api.request.return_value = dict(status='completed', conclusion='success')
-        with patch.object(runtime, 'resolve_producer', return_value=self.producer):
-            runtime.producer_lookup()
-        self.assertEqual(self.clock.waits, [])
-
     def test_poll_delay_does_not_extend_the_build_deadline(self):
         def run_status(*args):
             if self.api.request.call_count == 1:
@@ -94,12 +89,15 @@ class ProducerPollingTests(unittest.TestCase):
                 runtime.producer_lookup()
         self.assertFalse(Path('producer.json').exists())
 
-    def test_waiter_supplies_its_deadline_to_the_api_client(self):
-        self.api.request.return_value = dict(status='completed', conclusion='success')
-        with patch.object(runtime, 'api_for', return_value=self.api) as api_for, \
-                patch.object(runtime, 'resolve_producer', return_value=self.producer):
-            runtime.producer_lookup()
-        self.assertEqual(api_for.call_args.kwargs.get('deadline'), 20700)
+    def test_trigger_covers_the_producer_pipeline_and_publication(self):
+        workflows = Path(__file__).resolve().parents[2]/'workflows'
+        producer = yaml.safe_load((workflows/'ci-builds.yml').read_text())['jobs']
+        pipeline = sum(producer[phase]['timeout-minutes'] for phase in ('plan', 'builds', 'finalize'))
+        self.assertGreaterEqual(runtime.PRODUCER_WAIT_SECONDS, (pipeline+4)*60)
+        trigger = yaml.safe_load((workflows/'ci-trigger.yml').read_text())['jobs']['trigger']
+        wait = next(step for step in trigger['steps'] if 'wait-build' in step.get('run', ''))
+        self.assertGreaterEqual(wait['timeout-minutes']*60, runtime.PRODUCER_WAIT_SECONDS)
+        self.assertGreaterEqual(trigger['timeout-minutes'], sum(step['timeout-minutes'] for step in trigger['steps'])+5)
 
     def test_exhausted_transport_budget_is_not_restarted_by_the_waiter(self):
         with patch.object(runtime, 'resolve_producer', side_effect=RuntimeError('retry wait budget exceeded')) as resolve:

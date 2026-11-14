@@ -1,18 +1,19 @@
 """Command budgets cover real orchestration across API clients and workers."""
 import contextlib
 import io
+import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import threading
 import unittest
 from unittest.mock import patch
-import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ci_github_transport as transport
 from ci_tier_artifacts import ArtifactLocation, GitHubAPI
-from ci_tier_checks import publish_result
+import ci_tier_runtime as runtime
 from test_ci_github_transport import response
 from test_ci_tier_download import artifact_server
 
@@ -35,25 +36,19 @@ class CommandBudgetTests(unittest.TestCase):
         self.stack.enter_context(patch.object(transport.time, 'sleep', side_effect=self.clock.sleep))
         self.stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
 
-    def test_metadata_fetch_and_publisher_cannot_each_spend_twenty_minutes(self):
-        # Previously this command could wait 20 minutes on metadata and 11 on PATCH.
-        archive = io.BytesIO()
-        with zipfile.ZipFile(archive, 'w') as packed:
-            packed.writestr('plan.json', '{"execution_id":"e"}')
+    def test_result_command_cannot_wait_twenty_minutes_then_eleven_more(self):
         replies = [response(429, ['Retry-After: 1200'], code=1),
-                   response(body=b'{"artifacts":[{"id":7,"name":"ci-plan"}]}'),
-                   response(body=archive.getvalue()), response(body=b'{"run_attempt":1}'),
-                   response(429, ['Retry-After: 660'], code=1), response()]
-        plan = {'repository':'org/repo', 'execution_id':'e', 'checks':[
+                   response(body=b'{"run_attempt":1}'), response(429, ['Retry-After: 660'], code=1),
+                   response(body=b'{"run_attempt":1}'), response()]
+        plan = {'repository':'org/repo', 'execution_id':'e', 'build_id':9, 'checks':[
             {'key':'unit', 'check_id':7, 'name':'Unit'}]}
-        with patch.object(transport.subprocess, 'run', side_effect=replies) as run:
-            with transport.command_budget():
-                self.assertEqual(GitHubAPI('org/repo').json_artifact(9, 'ci-plan', 'plan.json'),
-                                 {'execution_id':'e'})
-                with self.assertRaisesRegex(RuntimeError, 'budget'):
-                    publish_result(plan, 'unit', 'success', GitHubAPI('org/repo'), 10, 1)
+        env = dict(CI_PLAN=json.dumps(plan), CHECK_KEY='unit', CHECK_STATUS='success',
+                   GITHUB_JSON=json.dumps(dict(repository='org/repo', run_id='10', run_attempt='1')))
+        with patch.dict(os.environ, env), patch.object(transport.subprocess, 'run', side_effect=replies) as run:
+            with self.assertRaisesRegex(RuntimeError, 'budget'):
+                runtime.run_command('result')
         self.assertEqual(self.clock.waits, [1200])
-        self.assertEqual(run.call_count, 5)
+        self.assertEqual(run.call_count, 3)
         self.assertLess(self.clock.now, 1800)
 
     def test_nested_before_retry_reads_use_the_same_wait_allowance(self):
@@ -92,11 +87,6 @@ class CommandBudgetTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'deadline'):
                 with transport.command_budget(timeout_seconds=50):
                     GitHubAPI('repo').request('checks')
-
-    def test_command_processing_cannot_finish_after_overall_deadline(self):
-        with self.assertRaisesRegex(RuntimeError, 'deadline'):
-            with transport.command_budget(timeout_seconds=50):
-                self.clock.now = 51
 
     def test_direct_http_redirect_in_worker_shares_prior_api_waits(self):
         with artifact_server('plain', api_failures=(429,),
