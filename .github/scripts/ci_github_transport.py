@@ -199,7 +199,10 @@ def request(path, method='GET', payload=None, raw=False, *, token=None,
         delay = retry_delay(headers, limited, attempt)
         print(f'GitHub API {method} {endpoint}: retrying in {delay:g}s',
               file=sys.stderr, flush=True)
-        budget.wait(delay, deadline=deadline)
+        try:
+            budget.wait(delay, deadline=deadline)
+        except RuntimeError as failure:
+            raise RuntimeError(diagnostic + ': ' + str(failure)) from None
 
 
 def record_response(method, path, status, headers, *, token=None):

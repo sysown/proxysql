@@ -196,6 +196,7 @@ jobs:
         exit "$rc"
 
     - name: Fix artifact permissions
+      continue-on-error: true
       if: ${{ failure() && !cancelled() }}
       timeout-minutes: 1
       run: |

@@ -6,6 +6,7 @@ import re
 import time
 
 from ci_tier_artifacts import GitHubAPI
+from ci_github_transport import current_budget
 
 ACTIVE = ('queued', 'in_progress', 'pending', 'waiting', 'requested')
 TRIGGER = re.compile(r' trigger=([1-9][0-9]*)/([1-9][0-9]*)$')
@@ -44,7 +45,11 @@ def cancel_run(api, run_id, still_current=lambda: True):
                 return False
             if attempt == CANCEL_ATTEMPTS - 1:
                 raise
-            sleep(5 * 2 ** attempt)
+            budget = current_budget()
+            if budget is None:
+                sleep(5 * 2 ** attempt)
+            else:
+                budget.wait(5 * 2 ** attempt)
     print(f'Cancellation requested: {api.repository}/actions/runs/{run_id}')
     return True
 

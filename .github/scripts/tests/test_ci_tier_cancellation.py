@@ -2,6 +2,7 @@
 import copy
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -254,6 +255,16 @@ class CancelRetryTests(unittest.TestCase):
         self.assertEqual(cancel_superseded(api, 42, CURRENT, 99), [1])
         self.assertEqual(api.cancelled, [1])
         self.assertEqual(len(self.sleeps), 2)
+
+    def test_cancel_backoff_cannot_restart_an_exhausted_command_budget(self):
+        from ci_github_transport import command_budget
+        api = API([run(1)])
+        api.failing_cancels = 1
+        with patch('ci_github_transport.time.sleep'), command_budget() as budget:
+            budget.wait(1200)
+            with self.assertRaisesRegex(RuntimeError, 'budget'):
+                cancel_superseded(api, 42, CURRENT, 99)
+        self.assertEqual(api.cancelled, [])
 
     def test_state_change_during_retry_stops_the_sweep(self):
         api = closed_api([run(1), run(2)])

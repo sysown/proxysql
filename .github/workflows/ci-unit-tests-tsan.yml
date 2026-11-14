@@ -113,6 +113,7 @@ jobs:
                      SKIP_PROXYSQL=1 TSAN_OPTIONS="halt_on_error=0:abort_on_error=0:exitcode=0:second_deadlock_stack=1:history_size=7" TAP_GROUP=unit-tests-g1 TEST_PY_TAP_EXCL="${tsan_excl}" test/infra/control/run-tests-isolated.bash; unit_status=$?
                      test "${mysqlx_status}" -eq 0 && test "${unit_status}" -eq 0; }'
     - name: Fix artifact permissions
+      continue-on-error: true
       timeout-minutes: 2
       if: ${{ failure() && !cancelled() }}
       run: |

@@ -97,6 +97,7 @@ jobs:
           ubuntu24_dbg_build \
           -lc 'cd /opt/proxysql && test/infra/control/run-unit-tests-asan-coverage.bash'
     - name: Fix artifact permissions
+      continue-on-error: true
       timeout-minutes: 2
       if: always()
       run: |

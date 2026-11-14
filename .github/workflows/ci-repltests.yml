@@ -150,6 +150,7 @@ jobs:
         exit $RCS
 
     - name: Fix artifact permissions
+      continue-on-error: true
       timeout-minutes: 2
       if: ${{ failure() && !cancelled() }}
       run: |

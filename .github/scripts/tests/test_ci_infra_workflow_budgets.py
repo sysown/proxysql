@@ -80,9 +80,10 @@ class InfrastructureWorkflowBudgetTests(unittest.TestCase):
     def test_uploads_leave_time_for_final_check_publication(self):
         for workflow, name, job in infrastructure_jobs():
             steps = job['steps']
-            if not any(step.get('name') == 'Complete selected product test check' for step in steps):
+            if not any('ci_tier_runtime.py result' in step.get('run', '') for step in steps):
                 continue
             with self.subTest(workflow=workflow, job=name):
+                self.assertTrue(any(step.get('name') == 'Complete selected product test check' for step in steps))
                 self.assertTrue(all(step.get('timeout-minutes', 0) > 0 for step in steps))
                 self.assertGreaterEqual(job['timeout-minutes'], sum(step['timeout-minutes'] for step in steps)+5)
 
