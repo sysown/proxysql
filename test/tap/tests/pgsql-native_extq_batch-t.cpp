@@ -211,6 +211,51 @@ static void dropRules(PGconn* admin) {
 	exec(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 }
 
+struct PgsqlVariableSnapshots {
+	PGconn* admin;
+	std::string memory;
+	std::string runtime;
+	bool memory_created = false;
+	bool runtime_created = false;
+	bool state_restored = false;
+
+	bool capture() {
+		memory_created = exec(admin, "CREATE TEMP TABLE temp." + memory +
+			" AS SELECT * FROM global_variables WHERE variable_name LIKE 'pgsql-%'");
+		if (!memory_created) return false;
+		runtime_created = exec(admin, "CREATE TEMP TABLE temp." + runtime +
+			" AS SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'");
+		return runtime_created;
+	}
+
+	bool drop_owned() {
+		bool cleaned = true;
+		if (memory_created) {
+			if (exec(admin, "DROP TABLE IF EXISTS temp." + memory)) memory_created = false;
+			else cleaned = false;
+		}
+		if (runtime_created) {
+			if (exec(admin, "DROP TABLE IF EXISTS temp." + runtime)) runtime_created = false;
+			else cleaned = false;
+		}
+		return cleaned;
+	}
+
+	bool restore() {
+		if (!state_restored) {
+			if (!memory_created || !runtime_created) return false;
+			const bool staged = exec(admin, "UPDATE global_variables SET variable_value=(SELECT variable_value FROM temp." + runtime +
+				" WHERE variable_name=global_variables.variable_name) WHERE variable_name LIKE 'pgsql-%'");
+			const bool loaded = staged && exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+			const bool memory_restored = exec(admin, "UPDATE global_variables SET variable_value=(SELECT variable_value FROM temp." + memory +
+				" WHERE variable_name=global_variables.variable_name) WHERE variable_name LIKE 'pgsql-%'");
+			if (!staged || !loaded || !memory_restored) return false;
+			state_restored = true;
+		}
+		return drop_owned();
+	}
+};
+
 int main(int, char**) {
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -223,11 +268,11 @@ int main(int, char**) {
 	PGConnPtr be = openConn(cl.pgsql_server_host, cl.pgsql_server_port, cl.pgsql_server_username, cl.pgsql_server_password, cl.pgsql_username);
 	if (PQstatus(admin.get()) != CONNECTION_OK || PQstatus(be.get()) != CONNECTION_OK)
 		BAIL_OUT("cannot reach the admin interface or the backend");
-	const std::string memory_snapshot = "batch_pg_memory_" + tag;
-	const std::string runtime_snapshot = "batch_pg_runtime_" + tag;
-	if (!exec(admin.get(), "CREATE TEMP TABLE " + memory_snapshot + " AS SELECT * FROM global_variables WHERE variable_name LIKE 'pgsql-%'") ||
-	    !exec(admin.get(), "CREATE TEMP TABLE " + runtime_snapshot + " AS SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'"))
-		BAIL_OUT("cannot snapshot PGSQL memory/runtime variables");
+	PgsqlVariableSnapshots snapshots {admin.get(), "batch_pg_memory_" + tag, "batch_pg_runtime_" + tag};
+	if (!snapshots.capture()) {
+		const bool cleaned = snapshots.drop_owned();
+		BAIL_OUT("cannot snapshot PGSQL memory/runtime variables%s", cleaned ? "" : "; owned TEMP cleanup failed");
+	}
 	dropRules(admin.get());
 	const char* mode_name[2] = { "libpq", "native" };
 	std::string r[2];
@@ -1044,12 +1089,8 @@ int main(int, char**) {
 
 	dropRules(admin.get());
 	setNativeMode(admin.get(), false);
-	const bool restored = exec(admin.get(), "UPDATE global_variables SET variable_value=(SELECT variable_value FROM " + runtime_snapshot +
-		" WHERE variable_name=global_variables.variable_name) WHERE variable_name LIKE 'pgsql-%'") &&
-		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME") &&
-		exec(admin.get(), "UPDATE global_variables SET variable_value=(SELECT variable_value FROM " + memory_snapshot +
-		" WHERE variable_name=global_variables.variable_name) WHERE variable_name LIKE 'pgsql-%'") &&
-		exec(admin.get(), "DROP TABLE " + memory_snapshot) && exec(admin.get(), "DROP TABLE " + runtime_snapshot);
-	ok(restored, "PGSQL memory and runtime variables restored separately");
+	// Qualify every snapshot reference and DROP with temp. so an absent temp table can never resolve to a
+	// persistent table of the same name; short-circuiting retains the backups when restoration fails.
+	ok(snapshots.restore(), "PGSQL memory and runtime variables restored separately");
 	return exit_status();
 }
