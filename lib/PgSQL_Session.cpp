@@ -5079,7 +5079,8 @@ PgSQL_Apply_Result PgSQL_Session::apply_tracked_variable(int idx, std::string va
 	const char* name = pgsql_tracked_variables[idx].set_variable_name;
 	// An INTERVAL time zone cannot be applied again on another backend connection, so the statement
 	// goes to the backend as written and the client keeps that connection.
-	if (idx == PGSQL_TIMEZONE && strncasecmp(value.c_str(), "INTERVAL", 8) == 0) {
+	if (idx == PGSQL_TIMEZONE && strncasecmp(value.c_str(), "INTERVAL", 8) == 0 &&
+	    (value.size() == 8 || (!isalnum((unsigned char)value[8]) && value[8] != '_'))) {
 		return PgSQL_Apply_Result::LOCK;
 	}
 
@@ -5867,6 +5868,16 @@ PgSQL_Local_Reply PgSQL_Session::handle_set_config(const char* dig, bool* lock_h
 
 	std::string value = call.value;
 	if (call.value_null) {
+		// Over the extended protocol a NULL value is not tracked: PostgreSQL resets the backend
+		// to its own default, which ProxySQL cannot reconcile here. Refuse it as unsupported.
+		if (extended_query_phase != EXTQ_PHASE_IDLE) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_error_packet(true, extq_flush_segment == false,
+				"set_config with a NULL value is not supported over the extended protocol",
+				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, txn_state_for_local_error());
+			RequestEnd(NULL, true);
+			return PgSQL_Local_Reply::SENT_ERROR;
+		}
 		// Back to the default, as SET ... TO DEFAULT: the client's connect-time value. Without
 		// one PostgreSQL resets to the default of whichever client opened this backend.
 		auto [startup_value, startup_hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
@@ -5874,6 +5885,7 @@ PgSQL_Local_Reply PgSQL_Session::handle_set_config(const char* dig, bool* lock_h
 			unable_to_parse_set_statement(lock_hostgroup, true);
 			return PgSQL_Local_Reply::NONE;
 		}
+
 		value = startup_value;
 	} else if (idx == PGSQL_SEARCH_PATH) {
 		std::string list;
@@ -5893,6 +5905,14 @@ PgSQL_Local_Reply PgSQL_Session::handle_set_config(const char* dig, bool* lock_h
 				value = list;
 				break;
 		}
+	}
+
+	// A TimeZone set_config() cannot be recorded safely: ProxySQL cannot prove a zone name
+	// exists, and an invalid one would otherwise poison a pooled backend connection. Forward
+	// the statement and pin the session on its hostgroup, as for an untracked call.
+	if (idx == PGSQL_TIMEZONE) {
+		unable_to_parse_set_statement(lock_hostgroup, true);
+		return PgSQL_Local_Reply::NONE;
 	}
 
 	std::vector<std::pair<std::string, std::string>> param_status;
@@ -6175,6 +6195,16 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	// backend, which refuses it.
 	if (txn_failed_on_backend()) {
 		goto __exit_set_destination_hostgroup;
+	}
+
+	// Handle set_config() tracking even when there is no digest (query digests and commands_stats
+	// both off): the classifier works from the query text, not the digest.
+	if (!mirror && locked_on_hostgroup == -1 && CurrentQuery.QueryParserArgs.digest_text == nullptr) {
+		const PgSQL_Local_Reply sc = handle_set_config(nullptr, lock_hostgroup);
+		if (sc != PgSQL_Local_Reply::NONE) {
+			l_free(pkt->size, pkt->ptr);
+			return sc;
+		}
 	}
 
 	// Handle special commands
@@ -8984,23 +9014,31 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 		}
 
 		assert(previous_hostgroup != -1); // previous_hostgroup should be set before 
-		if (CurrentQuery.QueryParserArgs.digest_text && txn_failed == false) {
-			const char* dig = CurrentQuery.QueryParserArgs.digest_text;
-			const PgSQL_Local_Reply reply = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(dig, &lock_hostgroup);
-			if (reply != PgSQL_Local_Reply::NONE) {
-				// if we are here, it means we have handled the special command
-				return reply == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
-			}
+		if (txn_failed == false) {
+			if (CurrentQuery.QueryParserArgs.digest_text) {
+				const char* dig = CurrentQuery.QueryParserArgs.digest_text;
+				const PgSQL_Local_Reply reply = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(dig, &lock_hostgroup);
+				if (reply != PgSQL_Local_Reply::NONE) {
+					// if we are here, it means we have handled the special command
+					return reply == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
+				}
 
-			PGSQL_QUERY_command pg_query_cmd = extended_query_info.stmt_info->PgQueryCmd;
-			if (pg_query_cmd == PGSQL_QUERY_CANCEL_BACKEND ||
-				pg_query_cmd == PGSQL_QUERY_TERMINATE_BACKEND) {
-				CurrentQuery.PgQueryCmd = pg_query_cmd;
-				auto execute_pkt = execute_msg->get_raw_pkt(); // detach the packet from the describe message
-				const PgSQL_Local_Reply kill_reply = handle_command_query_kill(&execute_pkt);
-				if (kill_reply != PgSQL_Local_Reply::NONE) {
-					execute_msg->detach(); // detach the packet from the execute message
-					return kill_reply == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
+				PGSQL_QUERY_command pg_query_cmd = extended_query_info.stmt_info->PgQueryCmd;
+				if (pg_query_cmd == PGSQL_QUERY_CANCEL_BACKEND ||
+					pg_query_cmd == PGSQL_QUERY_TERMINATE_BACKEND) {
+					CurrentQuery.PgQueryCmd = pg_query_cmd;
+					auto execute_pkt = execute_msg->get_raw_pkt(); // detach the packet from the describe message
+					const PgSQL_Local_Reply kill_reply = handle_command_query_kill(&execute_pkt);
+					if (kill_reply != PgSQL_Local_Reply::NONE) {
+						execute_msg->detach(); // detach the packet from the execute message
+						return kill_reply == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
+					}
+				}
+			} else if (!mirror && locked_on_hostgroup == -1) {
+				// Classify set_config() from the query text even without a digest.
+				const PgSQL_Local_Reply sc = handle_set_config(nullptr, &lock_hostgroup);
+				if (sc != PgSQL_Local_Reply::NONE) {
+					return sc == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
 				}
 			}
 		}

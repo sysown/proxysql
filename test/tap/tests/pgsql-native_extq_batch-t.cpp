@@ -494,6 +494,10 @@ int main(int, char**) {
 		setNativeMode(admin.get(), true);
 		const std::string saved = execScalar(admin.get(),
 			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
+		const std::string saved_parser = execScalar(admin.get(),
+			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-query_processor_parser'");
+		exec(admin.get(), "SET pgsql-query_processor_parser=0");
+		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 		const char* algo[2] = { "2", "3" };
 		for (int k = 0; k < 2; k++) {
 			exec(admin.get(), std::string("SET pgsql-set_parser_algorithm=") + algo[k]);
@@ -515,11 +519,12 @@ int main(int, char**) {
 			if (k == 0) {
 				ok(command == "Execute batch", "set_config tracking off: a set_config() statement is batched [%s]", command.c_str());
 			} else {
-				ok(command != "Execute batch" && command != "no backend found",
+				ok(command == "Execute",
 					"set_config tracking on: a set_config() statement runs on its own [%s]", command.c_str());
 			}
 		}
 		exec(admin.get(), "SET pgsql-set_parser_algorithm=" + saved);
+		exec(admin.get(), "SET pgsql-query_processor_parser=" + saved_parser);
 		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 	}
 

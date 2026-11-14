@@ -17,17 +17,19 @@ UPDATE global_variables SET variable_value = '3' WHERE variable_name = 'pgsql-se
 LOAD PGSQL VARIABLES TO RUNTIME;
 ```
 
-It also needs query digests (`pgsql-query_digests=true`, the default). With the default
-settings (`pgsql-set_parser_algorithm=2`, `pgsql-query_processor_parser=0`) `set_config()`
-is forwarded as an ordinary query, untracked and without a lock, as in earlier versions.
+It no longer needs query digests: the classifier runs on the query text, so `set_config()`
+is tracked even with `pgsql-query_digests=false` and `pgsql-commands_stats=false`. With the
+default settings (`pgsql-set_parser_algorithm=2`, `pgsql-query_processor_parser=0`)
+`set_config()` is forwarded as an ordinary query, untracked and without a lock, as in
+earlier versions.
 
 ## What is recorded
 
 The bare call, with literal arguments and a session-level `is_local`:
 
 ```sql
-SELECT set_config('TimeZone', 'UTC', false)
-SELECT pg_catalog.set_config('TimeZone', 'UTC', false) AS tz   -- schema prefix, alias
+SELECT set_config('DateStyle', 'ISO, DMY', false)
+SELECT pg_catalog.set_config('search_path', 'app, public', false) AS sp   -- schema prefix, alias
 SELECT set_config('search_path', 'app, public', 'off');         -- any spelling of false, or NULL
 ```
 
@@ -41,6 +43,10 @@ SELECT set_config('search_path', 'app, public', 'off');         -- any spelling 
 - `search_path` is read as PostgreSQL reads a `set_config()` value: a raw list where only
   double quotes are special, so `'a, b'` is two schemas. ProxySQL records it as `SET` would
   write it, every name double-quoted.
+- A `set_config('TimeZone', ...)` call with a non-NULL value is forwarded to PostgreSQL and pins the session on
+  its hostgroup instead of being recorded: ProxySQL cannot prove a zone name exists, so it
+  never records its value locally. This includes `INTERVAL` values, which are forwarded
+  and locked instead of being replayed on another pooled connection.
 
 Over the simple protocol ProxySQL answers the call itself: one text column (`set_config`, or
 the alias), whose value is the value ProxySQL recorded, then ParameterStatus when a reported
@@ -59,6 +65,8 @@ undone by `ROLLBACK` and `ROLLBACK TO SAVEPOINT`, as for `SET`.
 - `UPDATE pg_settings` anywhere in a statement, and a `DO` block whose body mentions
   `set_config` or `pg_settings`.
 - A NULL value when the client has no connect-time value for the setting.
+- A `set_config('TimeZone', ...)` call with a non-NULL value: ProxySQL cannot prove a zone name exists, so it
+  forwards the statement and pins the session instead of recording the value.
 - Any `set_config()` in a query that holds a backslash, from a client whose
   `standard_conforming_strings` is `off`. A backslash is the only thing that setting changes, so
   the same client's other calls are recorded as usual.
@@ -66,6 +74,9 @@ undone by `ROLLBACK` and `ROLLBACK TO SAVEPOINT`, as for `SET`.
 A session that is already locked forwards `set_config()` untracked.
 
 ## Errors answered by ProxySQL
+
+A bare tracked call with a NULL value over the extended protocol is refused with
+`0A000 feature_not_supported` before its value is recorded or sent to the backend.
 
 PostgreSQL's own error is returned without a backend round trip, with its SQLSTATE and
 primary message: a wrong argument type (`42883 function set_config(...) does not exist`),
@@ -82,7 +93,6 @@ differs for some settings (`parameter "enable_sort" requires a Boolean value`,
 
 | input | PostgreSQL returns | ProxySQL returns |
 | --- | --- | --- |
-| TimeZone `'asia/tokyo'` | `Asia/Tokyo` | `asia/tokyo` (as typed) |
 | search_path `'A,   b'` | `A,   b` | `"a", "b"` |
 
 ## Limits
@@ -93,8 +103,6 @@ inside functions, triggers or dynamic SQL in PL/pgSQL.
 An unqualified `set_config()` is taken to be PostgreSQL's own. A function of the same name and
 argument types, in a schema that `search_path` lists before `pg_catalog`, is not run.
 
-Over the extended protocol a NULL value is recorded as the client's connect-time value, but
-the call is forwarded and the backend resets to its own default: the server default for the
-settings a backend connection is not opened with, otherwise the value of the client that
-opened it. The client then gets that value instead of its own, and so can the next client
-on that connection. `SET ... TO DEFAULT` and `RESET` over the extended protocol do the same.
+Over the extended protocol a NULL value is not tracked and is refused with 0A000. Simple-protocol
+NULL still records the client's connect-time value. `SET ... TO DEFAULT` and `RESET` over
+the extended protocol behave as before.

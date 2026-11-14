@@ -466,7 +466,7 @@ static OpRecord runDifferential(const std::string& label, const std::string& kin
 // Inside a transaction a named portal outlives the Sync. Its first Execute, in the next round
 // trip, comes after a Parse of another statement. The set_config() call it runs must be recorded
 // from the statement being executed: read from the last Parse, it went to the backend untracked,
-// which kept a TimeZone ProxySQL did not know about (P2-93).
+// which kept a DateStyle ProxySQL did not know about (P2-93).
 static bool set_config_portal_executed_later(PGconn* admin, std::string& got) {
 	const std::string saved = adminScalar(admin,
 		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
@@ -476,7 +476,7 @@ static bool set_config_portal_executed_later(PGconn* admin, std::string& got) {
 		auto c = connectProxy();
 		c->execute("BEGIN");
 		collectUntilReady(*c);
-		c->prepareStatement("zz_sc_s1", "SELECT set_config('TimeZone','Asia/Tokyo',false)", false);
+		c->prepareStatement("zz_sc_s1", "SELECT set_config('DateStyle','SQL,DMY',false)", false);
 		c->bindStatement("zz_sc_s1", "zz_sc_p1", {}, {}, false);
 		c->prepareStatement("zz_sc_s2", "SELECT 1", false);
 		c->sendSync();
@@ -487,7 +487,7 @@ static bool set_config_portal_executed_later(PGconn* admin, std::string& got) {
 		c->execute("PROXYSQL INTERNAL SESSION");
 		auto res = c->readResult();
 		const nlohmann::json j = nlohmann::json::parse(std::get<std::string>(res->getValue(0, 0)));
-		got = j.at("client").at("conn").at("TimeZone").get<std::string>();
+		got = j.at("client").at("conn").at("DateStyle").get<std::string>();
 		c->execute("ROLLBACK");  // PostgreSQL and ProxySQL both undo the change
 		collectUntilReady(*c);
 		c->disconnect();
@@ -496,7 +496,7 @@ static bool set_config_portal_executed_later(PGconn* admin, std::string& got) {
 	}
 	execAdmin(admin, "SET pgsql-set_parser_algorithm=" + saved);
 	execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
-	return got == "Asia/Tokyo";
+	return got == "SQL, DMY";
 }
 
 int main(int /*argc*/, char** /*argv*/) {
@@ -590,7 +590,7 @@ int main(int /*argc*/, char** /*argv*/) {
 			std::string got;
 			ok(set_config_portal_executed_later(admin.get(), got),
 				"set_config() run by a named portal's first Execute in a later round trip, after another "
-				"Parse, is recorded (client TimeZone '%s', expected 'Asia/Tokyo')", got.c_str());
+				"Parse, is recorded (client DateStyle '%s', expected 'SQL, DMY')", got.c_str());
 		}
 
 		// ---- Case 10: statement closed while its portal lives (last-owner teardown

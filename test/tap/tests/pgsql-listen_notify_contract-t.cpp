@@ -94,7 +94,10 @@ static std::string run_pipeline(PGConnPtr& c, const char* q) {
 	std::string st = "<no result>";
 	for (int i = 0; i < 3; i++) {
 		for (PGresult* r = PQgetResult(c.get()); r != NULL; r = PQgetResult(c.get())) {
-			if (i == 1 && st == "<no result>") st = sqlstate_of(r);
+			if (i == 1 && st == "<no result>") {
+				if (PQresultStatus(r) == PGRES_PIPELINE_ABORTED) st = "<aborted>";
+				else st = sqlstate_of(r);
+			}
 			PQclear(r);
 		}
 	}
@@ -244,7 +247,7 @@ int main(int, char**) {
 	for (size_t i = 0; i < N_NOT_REFUSED; i++) {
 		std::string st = run_pipeline(c, NOT_REFUSED[i].sql);
 		// The pipeline must have run and answered the statement: the sentinels are not results.
-		ok(st != "0A000" && st != "<no result>" && st != "<no pipeline>",
+		ok(st != "0A000" && st != "<no result>" && st != "<no pipeline>" && st != "<aborted>",
 		   "pipelined statement not refused as LISTEN -- %s (got '%s')",
 		   NOT_REFUSED[i].label, st.c_str());
 	}

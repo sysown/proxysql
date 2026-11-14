@@ -152,6 +152,7 @@ std::vector<SetTestCase> test_cases = {
         {"SET timezone = 'PST8PDT'", true, "PST8PDT"},
         // Invalid values
         {"SET timezone = 'Invalid/Zone'", false, ""},
+        {"SET timezone = 'INTERVALfoo'", false, ""},
         {"SET timezone = 1234", false, ""},
         {"SET timezone = 'NOW'", false, ""}  // 'NOW' is only valid for time zone
     }},
@@ -982,13 +983,13 @@ struct ScReplyCase {
 };
 
 static const ScReplyCase sc_reply_cases[] = {
-    // As typed: PostgreSQL itself would answer 'Asia/Tokyo'.
-    { "", "", "SELECT set_config('TimeZone','asia/tokyo',false)", "set_config", "asia/tokyo", "TimeZone", "" },
+    // Equivalent memory units are recorded in PostgreSQL's canonical form.
+    { "", "", "SELECT set_config('maintenance_work_mem','1024MB',false)", "set_config", "1GB", "maintenance_work_mem", "1GB" },
     { "", "", "SELECT set_config('DateStyle','iso',false) AS tz", "tz", "ISO, MDY", "DateStyle", "ISO, MDY" },
     { "", "", "SELECT pg_catalog.set_config('maintenance_work_mem','1024MB',false) AS \"MyCol\"", "MyCol", "1GB",
         "maintenance_work_mem", "1GB" },
     { "", "SET DateStyle = 'SQL, DMY'", "SELECT set_config('DateStyle','',false)", "set_config", "SQL, DMY", "DateStyle", "SQL, DMY" },
-    { "", "", "/* c */ SELECT set_config('TimeZone','UTC',false) -- t", "set_config", "UTC", "TimeZone", "UTC" },
+    { "", "", "/* c */ SELECT set_config('bytea_output','escape',false) -- t", "set_config", "escape", "bytea_output", "escape" },
     // search_path is a raw list to set_config: rewritten as SET writes it.
     { "", "", "SELECT set_config('search_path','a-b;c, \"X y\", B',false)", "set_config", "\"a-b;c\", \"X y\", \"b\"",
         "search_path", "\"a-b;c\", \"X y\", b" },
@@ -997,11 +998,11 @@ static const ScReplyCase sc_reply_cases[] = {
     { "", "", "SELECT set_config('search_path','',false)", "set_config", "", "search_path", "\"\"" },
     { "", "", "SELECT set_config('search_path','DEFAULT',false)", "set_config", "\"default\"", "search_path", "\"default\"" },
     // NULL: back to the client's connect-time value.
-    { "-c TimeZone=Asia/Tokyo", "SET TimeZone = 'UTC'", "SELECT set_config('TimeZone',NULL,false)", "set_config", "Asia/Tokyo",
-        "TimeZone", "Asia/Tokyo" },
+    { "-c DateStyle=ISO,DMY", "SET DateStyle = 'SQL, MDY'", "SELECT set_config('DateStyle',NULL,false)", "set_config", "ISO, DMY",
+        "DateStyle", "ISO, DMY" },
     // standard_conforming_strings off changes only what a '\' means: without one, tracked as usual.
-    { "-c standard_conforming_strings=off", "", "SELECT set_config('TimeZone','asia/tokyo',false)", "set_config", "asia/tokyo",
-        "TimeZone", "" },
+    { "-c standard_conforming_strings=off", "", "SELECT set_config('DateStyle','SQL,DMY',false)", "set_config", "SQL, DMY",
+        "DateStyle", "SQL, DMY" },
 };
 
 struct ScErrorCase { const char* query; const char* sqlstate; const char* message; };
@@ -1011,8 +1012,6 @@ static const ScErrorCase sc_error_cases[] = {
     { "SELECT set_config('TimeZone','UTC','maybe')", "22P02", "invalid input syntax for type boolean: \"maybe\"" },
     { "SELECT set_config(NULL,'UTC',false)", "22004", "SET requires parameter name" },
     { "SELECT set_config('','UTC',false)", "42704", "unrecognized configuration parameter \"\"" },
-    { "SELECT set_config('TimeZone','Invalid Zone!',false)", "22023", "invalid value for parameter \"TimeZone\": \"Invalid Zone!\"" },
-    { "SELECT set_config('TimeZone','DEFAULT',false)", "22023", "invalid value for parameter \"TimeZone\": \"DEFAULT\"" },
     { "SELECT set_config('search_path','a b',false)", "22023", "invalid value for parameter \"search_path\": \"a b\"" },
     { "SELECT set_config('bytea_output','base64',false)", "22023", "invalid value for parameter \"bytea_output\": \"base64\"" },
 };
@@ -1020,6 +1019,12 @@ static const ScErrorCase sc_error_cases[] = {
 struct ScLockCase { const char* options; const char* query; bool succeeds; };
 
 static const ScLockCase sc_lock_cases[] = {
+    { "", "SELECT set_config('TimeZone','UTC',false)", true },
+    { "", "SELECT set_config('TimeZone','asia/tokyo',false)", true },
+    { "", "SELECT set_config('TimeZone','Mars/Olympus',false)", false },
+    { "", "SELECT set_config('TimeZone','Invalid Zone!',false)", false },
+    { "", "SELECT set_config('TimeZone','DEFAULT',false)", false },
+    { "", "SELECT WHERE set_config('search_path','public',false) IS NOT NULL", true },
     { "", "SELECT set_config('TimeZone','UTC',true)", true },
     { "", "SELECT set_config('TimeZone','UTC',false), 1", true },
     { "", "SELECT * FROM set_config('TimeZone','UTC',false)", true },
@@ -1102,7 +1107,7 @@ static void sc_phase(PGconn* admin, int hg, const std::vector<std::string>& serv
     const bool capped = !servers.empty() && reloadServers(admin, hg, servers, true);
     if (capped) {
         sc_leak_case("-c search_path=zz_a", "search_path", "zz_b", "zz_a");
-        sc_leak_case("-c TimeZone=UTC", "TimeZone", "Asia/Tokyo", "UTC");
+        sc_leak_case("-c maintenance_work_mem=64MB", "maintenance_work_mem", "128MB", "64MB");
     } else {
         skip(SC_LEAK_TESTS, "cannot limit hostgroup %d to one backend connection", hg);
     }
@@ -1167,6 +1172,11 @@ static void sc_phase(PGconn* admin, int hg, const std::vector<std::string>& serv
         std::string err = conn ? "" : "no connection";
         if (conn) {
             PGResPtr r = run(conn.get(), c.query);
+            if (strstr(c.query, "Mars/Olympus")) {
+                if (resultField(r.get(), PG_DIAG_SQLSTATE) != "22023") err += " wrong SQLSTATE";
+                if (stored(conn.get(), "TimeZone") == "Mars/Olympus") err += " invalid zone recorded";
+                if (oneValue(conn.get(), "SELECT 1") != "1") err += " connection unusable after invalid zone";
+            }
             const bool good = PQresultStatus(r.get()) != PGRES_FATAL_ERROR;
             if (good != c.succeeds) err = std::string(good ? "succeeded" : "failed: ") + (good ? "" : PQerrorMessage(conn.get()));
             const int locked = lockedOnHostgroup(conn.get());
@@ -1194,12 +1204,12 @@ static void sc_phase(PGconn* admin, int hg, const std::vector<std::string>& serv
         const char* with_backslash = "SELECT set_config('search_path','zz\\\\q',false)";
         if (a) {
             run(a.get(), "SET standard_conforming_strings = 'no'");
-            run(a.get(), "SELECT set_config('TimeZone','UTC',false)"); la = lockedOnHostgroup(a.get());
+            run(a.get(), "SELECT set_config('DateStyle','SQL,DMY',false)"); la = lockedOnHostgroup(a.get());
             run(a.get(), with_backslash); la2 = lockedOnHostgroup(a.get());
         }
         if (b) {
             run(b.get(), "SELECT set_config('standard_conforming_strings','off',false)");
-            run(b.get(), "SELECT set_config('TimeZone','UTC',false)"); lb = lockedOnHostgroup(b.get());
+            run(b.get(), "SELECT set_config('DateStyle','SQL,DMY',false)"); lb = lockedOnHostgroup(b.get());
             run(b.get(), with_backslash); lb2 = lockedOnHostgroup(b.get());
         }
         ok(la == -1, "set_config %s: tracked after SET standard_conforming_strings = 'no' (%d)", mode, la);
@@ -1255,28 +1265,42 @@ static void sc_phase(PGconn* admin, int hg, const std::vector<std::string>& serv
         ok(err.empty(), "set_config %s: a locked session forwards it untracked %s", mode, err.c_str());
     }
 
-    // The gates. Only the ParserSQL paths track set_config, and only with digests.
+    // The gates. Only the ParserSQL paths track set_config; tracking no longer needs digests.
     const std::string algo = adminGet(admin, "pgsql-set_parser_algorithm");
     const std::string qpp = adminGet(admin, "pgsql-query_processor_parser");
     struct Gate { const char* what; const char* var; const char* value; const char* algo; bool tracked; };
     const Gate gates[] = {
-        { "query digests off", "pgsql-query_digests", "false", "3", false },
+        { "query digests off", "pgsql-query_digests", "false", "3", true },
         { "legacy SET parser", "pgsql-query_processor_parser", "0", "2", false },
         { "query_processor_parser=1", "pgsql-query_processor_parser", "1", "2", true },
     };
     for (const auto& g : gates) {
         const std::string saved = adminGet(admin, g.var);
+        const bool both_digest_gates = (std::string(g.var) == "pgsql-query_digests");
+        const std::string saved_cs = both_digest_gates ? adminGet(admin, "pgsql-commands_stats") : std::string();
         adminSet(admin, "pgsql-set_parser_algorithm", g.algo);
         adminSet(admin, g.var, g.value);
+        if (both_digest_gates) adminSet(admin, "pgsql-commands_stats", "false");
         PGConnPtr c = createNewConnection(ConnType::BACKEND);
-        const std::string v = c ? oneValue(c.get(), "SELECT set_config('TimeZone','asia/tokyo',false)") : "<no connection>";
-        const std::string st = c ? stored(c.get(), "TimeZone") : "";
+        const std::string v = c ? oneValue(c.get(), "SELECT set_config('maintenance_work_mem','1024MB',false)") : "<no connection>";
+        const std::string st = c ? stored(c.get(), "maintenance_work_mem") : "";
         const int locked = c ? lockedOnHostgroup(c.get()) : -2;
-        const bool good = g.tracked ? (v == "asia/tokyo" && st == "asia/tokyo" && locked == -1)
-                                    : (v == "Asia/Tokyo" && st != "asia/tokyo" && locked == -1);
+        bool good = g.tracked ? (v == "1GB" && st == "1GB" && locked == -1)
+                              : (v == "1GB" && st != "1GB" && locked == -1);
+        if (both_digest_gates) {
+            PGConnPtr e = createNewConnection(ConnType::BACKEND);
+            if (!e) good = false;
+            else {
+                PGResPtr r(PQexecParams(e.get(), "SELECT set_config('maintenance_work_mem','1024MB',false)",
+                    0, nullptr, nullptr, nullptr, nullptr, 0), &PQclear);
+                good = good && PQresultStatus(r.get()) == PGRES_TUPLES_OK &&
+                    stored(e.get(), "maintenance_work_mem") == "1GB" && lockedOnHostgroup(e.get()) == -1;
+            }
+        }
         ok(good, "set_config %s, %s: %s (row '%s', stored '%s', locked %d)", mode, g.what,
             g.tracked ? "tracked" : "forwarded untracked, no lock", v.c_str(), st.c_str(), locked);
         adminSet(admin, g.var, saved);
+        if (both_digest_gates) adminSet(admin, "pgsql-commands_stats", saved_cs);
     }
     adminSet(admin, "pgsql-set_parser_algorithm", algo);
     adminSet(admin, "pgsql-query_processor_parser", qpp);
@@ -1320,9 +1344,9 @@ static std::string checkExtTracked(PGconn* c, PGresult* r, const char* row, cons
     if (PQresultStatus(r) != PGRES_TUPLES_OK) return std::string("failed: ") + PQerrorMessage(c);
     std::string err;
     if (PQntuples(r) != 1 || std::string(PQgetvalue(r, 0, 0)) != row) err += std::string(" row '") + (PQntuples(r) ? PQgetvalue(r, 0, 0) : "") + "'";
-    const std::string st = stored(c, "TimeZone");
+    const std::string st = stored(c, "DateStyle");
     if (st != stored_tz) err += " stored '" + st + "'";
-    const char* ps = PQparameterStatus(c, "TimeZone");
+    const char* ps = PQparameterStatus(c, "DateStyle");
     if (!ps || std::string(ps) != stored_tz) err += std::string(" ParameterStatus '") + (ps ? ps : "<none>") + "'";
     const int locked = lockedOnHostgroup(c);
     if (locked != -1) err += " locked " + std::to_string(locked);
@@ -1335,13 +1359,13 @@ static void sc_ext_phase(bool native) {
         PGConnPtr c = createNewConnection(ConnType::BACKEND);
         std::string err1 = c ? "" : "no connection", err2 = err1;
         if (c) {
-            PGResPtr p(PQprepare(c.get(), "zz_sc1", "SELECT set_config('TimeZone','Asia/Tokyo',false)", 0, nullptr), &PQclear);
+            PGResPtr p(PQprepare(c.get(), "zz_sc1", "SELECT set_config('DateStyle','SQL, DMY',false)", 0, nullptr), &PQclear);
             if (PQresultStatus(p.get()) != PGRES_COMMAND_OK) err1 = std::string("prepare failed: ") + PQerrorMessage(c.get());
             PGResPtr r1(PQexecPrepared(c.get(), "zz_sc1", 0, nullptr, nullptr, nullptr, 0), &PQclear);
-            err1 += checkExtTracked(c.get(), r1.get(), "Asia/Tokyo", "Asia/Tokyo");
-            run(c.get(), "SET TimeZone = 'UTC'");
+            err1 += checkExtTracked(c.get(), r1.get(), "SQL, DMY", "SQL, DMY");
+            run(c.get(), "SET DateStyle = 'ISO, MDY'");
             PGResPtr r2(PQexecPrepared(c.get(), "zz_sc1", 0, nullptr, nullptr, nullptr, 0), &PQclear);
-            err2 += checkExtTracked(c.get(), r2.get(), "Asia/Tokyo", "Asia/Tokyo");
+            err2 += checkExtTracked(c.get(), r2.get(), "SQL, DMY", "SQL, DMY");
         }
         ok(err1.empty(), "set_config %s, extended: named statement tracked and forwarded %s", mode, err1.c_str());
         ok(err2.empty(), "set_config %s, extended: tracked again on its second Execute %s", mode, err2.c_str());
@@ -1350,8 +1374,8 @@ static void sc_ext_phase(bool native) {
         PGConnPtr c = createNewConnection(ConnType::BACKEND);
         std::string err = c ? "" : "no connection";
         if (c) {
-            PGResPtr r = runParams(c.get(), "SELECT set_config('TimeZone','Asia/Tokyo',false)");
-            err = checkExtTracked(c.get(), r.get(), "Asia/Tokyo", "Asia/Tokyo");
+            PGResPtr r = runParams(c.get(), "SELECT set_config('DateStyle','SQL, DMY',false)");
+            err = checkExtTracked(c.get(), r.get(), "SQL, DMY", "SQL, DMY");
         }
         ok(err.empty(), "set_config %s, extended: unnamed statement tracked and forwarded %s", mode, err.c_str());
     }
@@ -1360,37 +1384,40 @@ static void sc_ext_phase(bool native) {
         int locked = -2;
         std::string row;
         if (c) {
-            const char* values[2] = { "TimeZone", "Asia/Tokyo" };
+            const char* values[2] = { "DateStyle", "SQL, DMY" };
             PGResPtr r = runParams(c.get(), "SELECT set_config($1,$2,false)", 2, values);
             row = PQresultStatus(r.get()) == PGRES_TUPLES_OK ? PQgetvalue(r.get(), 0, 0) : PQerrorMessage(c.get());
             locked = lockedOnHostgroup(c.get());
         }
-        ok(locked >= 0 && row == "Asia/Tokyo", "set_config %s, extended: $1 arguments lock (row '%s', locked %d)", mode, row.c_str(), locked);
+        ok(locked >= 0 && row == "SQL, DMY", "set_config %s, extended: $1 arguments lock (row '%s', locked %d)", mode, row.c_str(), locked);
     }
     {
         // Batched: the batching gate must send the call down the one-message path.
         PGConnPtr c = createNewConnection(ConnType::BACKEND);
         std::string err = c ? "" : "no connection";
         if (c) {
-            run(c.get(), "SET TimeZone = 'Asia/Tokyo'");
+            run(c.get(), "SET DateStyle = 'SQL, DMY'");
             if (!PQenterPipelineMode(c.get())) err = "no pipeline mode";
-            const char* qs[] = { "SELECT 1", "SELECT set_config('TimeZone','UTC',false)", "SHOW TimeZone" };
+            const char* qs[] = { "SELECT 1", "SELECT set_config('DateStyle','ISO, MDY',false)", "SHOW DateStyle" };
             for (const char* q : qs) PQsendQueryParams(c.get(), q, 0, nullptr, nullptr, nullptr, nullptr, 0);
-            PQpipelineSync(c.get());
-            std::string shown;
-            int results = 0;
-            for (;;) {
-                PGresult* r = PQgetResult(c.get());
-                if (r == nullptr) { if (results >= 4) break; continue; }
-                const ExecStatusType st = PQresultStatus(r);
-                if (st == PGRES_PIPELINE_SYNC) { PQclear(r); results++; break; }
-                if (st == PGRES_TUPLES_OK) { results++; if (results == 3) shown = PQgetvalue(r, 0, 0); }
-                else if (st == PGRES_FATAL_ERROR || st == PGRES_PIPELINE_ABORTED) { err += std::string(" error: ") + PQresultErrorMessage(r); results++; }
-                PQclear(r);
+            if (PQpipelineSync(c.get()) != 1) {
+                err += " pipeline sync failed";
+            } else {
+                std::string shown;
+                int results = 0;
+                for (;;) {
+                    PGresult* r = PQgetResult(c.get());
+                    if (r == nullptr) { if (results >= 4) break; continue; }
+                    const ExecStatusType st = PQresultStatus(r);
+                    if (st == PGRES_PIPELINE_SYNC) { PQclear(r); results++; break; }
+                    if (st == PGRES_TUPLES_OK) { results++; if (results == 3) shown = PQgetvalue(r, 0, 0); }
+                    else if (st == PGRES_FATAL_ERROR || st == PGRES_PIPELINE_ABORTED) { err += std::string(" error: ") + PQresultErrorMessage(r); results++; }
+                    PQclear(r);
+                }
+                if (shown != "ISO, MDY") err += " SHOW '" + shown + "'";
             }
             PQexitPipelineMode(c.get());
-            if (shown != "UTC") err += " SHOW '" + shown + "'";
-            if (stored(c.get(), "TimeZone") != "UTC") err += " stored '" + stored(c.get(), "TimeZone") + "'";
+            if (stored(c.get(), "DateStyle") != "ISO, MDY") err += " stored '" + stored(c.get(), "DateStyle") + "'";
         }
         ok(err.empty(), "set_config %s, extended: in a pipeline, the next statement sees the value %s", mode, err.c_str());
     }
@@ -1398,43 +1425,54 @@ static void sc_ext_phase(bool native) {
         PGConnPtr c = createNewConnection(ConnType::BACKEND);
         std::string state;
         if (c) {
-            PGResPtr p(PQprepare(c.get(), "zz_sc2", "SELECT set_config('TimeZone',42,false)", 0, nullptr), &PQclear);
+            PGResPtr p(PQprepare(c.get(), "zz_sc2", "SELECT set_config('DateStyle',42,false)", 0, nullptr), &PQclear);
             state = resultField(p.get(), PG_DIAG_SQLSTATE);
         }
         ok(state == "42883", "set_config %s, extended: a wrong argument type fails at Parse, from PostgreSQL (got '%s')", mode, state.c_str());
     }
     const struct { const char* query; const char* sqlstate; const char* message; } errs[] = {
-        { "SELECT set_config('TimeZone','Invalid Zone!',false)", "22023", "invalid value for parameter \"TimeZone\": \"Invalid Zone!\"" },
-        { "SELECT set_config(NULL,'UTC',false)", "22004", "SET requires parameter name" },
+        { "SELECT set_config('DateStyle','Invalid Zone!',false)", "22023", "invalid value for parameter \"DateStyle\": \"Invalid Zone!\"" },
+        { "SELECT set_config(NULL,'ISO, MDY',false)", "22004", "SET requires parameter name" },
     };
     for (const auto& e : errs) {
         PGConnPtr c = createNewConnection(ConnType::BACKEND);
         std::string err = c ? "" : "no connection";
         if (c) {
-            const std::string before = stored(c.get(), "TimeZone");
+            const std::string before = stored(c.get(), "DateStyle");
             PGResPtr r = runParams(c.get(), e.query);
             const std::string state = resultField(r.get(), PG_DIAG_SQLSTATE), msg = resultField(r.get(), PG_DIAG_MESSAGE_PRIMARY);
             if (state != e.sqlstate || msg != e.message) err = "got " + state + " '" + msg + "'";
-            if (stored(c.get(), "TimeZone") != before) err += " stored '" + stored(c.get(), "TimeZone") + "'";
+            if (stored(c.get(), "DateStyle") != before) err += " stored '" + stored(c.get(), "DateStyle") + "'";
             if (lockedOnHostgroup(c.get()) != -1) err += " locked";
             if (oneValue(c.get(), "SELECT 1") != "1") err += " connection unusable";
         }
         ok(err.empty(), "set_config %s, extended: %s at Execute: %s %s", mode, e.sqlstate, e.query, err.c_str());
     }
     {
-        // NULL follows extended SET ... TO DEFAULT: the client's default is recorded (the reset
-        // PostgreSQL itself runs is P2-42's, deferred).
-        PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c TimeZone=Asia/Tokyo");
-        std::string st = "<no connection>";
+        // NULL over the extended protocol is unsupported: PostgreSQL would reset the backend to
+        // its own default, so ProxySQL refuses it without mutating the client value.
+        PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c DateStyle=SQL,DMY");
+        std::string state = "<no connection>";
+        std::string before = "<no connection>";
+        std::string after = "<no connection>";
         int locked = -2;
+        bool usable = false;
         if (c) {
-            run(c.get(), "SET TimeZone = 'UTC'");
-            runParams(c.get(), "SELECT set_config('TimeZone',NULL,false)");
-            st = stored(c.get(), "TimeZone");
+            run(c.get(), "SET DateStyle = 'ISO, MDY'");
+            before = stored(c.get(), "DateStyle");
+            PGResPtr r = runParams(c.get(), "SELECT set_config('DateStyle',NULL,false)");
+            state = resultField(r.get(), PG_DIAG_SQLSTATE);
+            after = stored(c.get(), "DateStyle");
             locked = lockedOnHostgroup(c.get());
+            usable = (oneValue(c.get(), "SELECT 1") == "1");
+            const std::string bytea_before = stored(c.get(), "bytea_output");
+            PGResPtr no_startup = runParams(c.get(), "SELECT set_config('bytea_output',NULL,false)");
+            usable = usable && resultField(no_startup.get(), PG_DIAG_SQLSTATE) == "0A000" &&
+                stored(c.get(), "bytea_output") == bytea_before && oneValue(c.get(), "SELECT 1") == "1";
         }
-        ok(st == "Asia/Tokyo" && locked == -1, "set_config %s, extended: NULL records the connect-time value (stored '%s', locked %d)",
-            mode, st.c_str(), locked);
+        ok(state == "0A000" && before == after && locked == -1 && usable,
+            "set_config %s, extended: NULL is unsupported (state '%s', stored '%s'->'%s', locked %d, usable %d)",
+            mode, state.c_str(), before.c_str(), after.c_str(), locked, usable);
     }
 }
 
@@ -1467,24 +1505,24 @@ static void sc_pipe_phase(PGconn* admin, int hg, const std::vector<std::string>&
     g_mode = std::string(native ? "native" : "libpq") + " pipeline";
     const char* m = g_mode.c_str();
     {
-        PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c TimeZone=UTC");
+        PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c DateStyle=ISO,MDY");
         std::string row = "<no connection>", st = "<no connection>", shown = "<no connection>";
         int locked = -2;
         if (c) {
-            PGresult* r = execMode(c.get(), "SELECT set_config('TimeZone','Asia/Tokyo',false)");
+            PGresult* r = execMode(c.get(), "SELECT set_config('DateStyle','SQL, DMY',false)");
             row = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : PQerrorMessage(c.get());
             PQclear(r);
-            st = stored(c.get(), "TimeZone");
+            st = stored(c.get(), "DateStyle");
             locked = lockedOnHostgroup(c.get());
-            shown = oneValue(c.get(), "SHOW TimeZone");
+            shown = oneValue(c.get(), "SHOW DateStyle");
         }
-        ok(row == "Asia/Tokyo", "[%s] set_config: the call returns 'Asia/Tokyo' (got '%s')", m, row.c_str());
-        ok(st == "Asia/Tokyo" && locked == -1, "[%s] set_config: recorded, no lock (stored '%s', locked %d)", m, st.c_str(), locked);
-        ok(shown == "Asia/Tokyo", "[%s] set_config: the backend agrees (SHOW TimeZone '%s')", m, shown.c_str());
+        ok(row == "SQL, DMY", "[%s] set_config: the call returns 'SQL, DMY' (got '%s')", m, row.c_str());
+        ok(st == "SQL, DMY" && locked == -1, "[%s] set_config: recorded, no lock (stored '%s', locked %d)", m, st.c_str(), locked);
+        ok(shown == "SQL, DMY", "[%s] set_config: the backend agrees (SHOW DateStyle '%s')", m, shown.c_str());
     }
     const bool capped = !servers.empty() && reloadServers(admin, hg, servers, true);
     if (capped) {
-        sc_leak_case("-c TimeZone=UTC", "TimeZone", "Asia/Tokyo", "UTC");
+        sc_leak_case("-c maintenance_work_mem=64MB", "maintenance_work_mem", "128MB", "64MB");
         reloadServers(admin, hg, servers, false);
     } else {
         skip(3, "cannot limit hostgroup %d to one backend connection", hg);
@@ -1493,7 +1531,7 @@ static void sc_pipe_phase(PGconn* admin, int hg, const std::vector<std::string>&
         PGConnPtr c = createNewConnection(ConnType::BACKEND);
         int locked = -2;
         if (c) {
-            PQclear(execMode(c.get(), "SELECT set_config('TimeZone','UTC',false), 1"));
+            PQclear(execMode(c.get(), "SELECT set_config('DateStyle','ISO, MDY',false), 1"));
             locked = lockedOnHostgroup(c.get());
         }
         ok(locked >= 0, "[%s] set_config: a form it cannot follow locks (locked %d)", m, locked);
@@ -1566,19 +1604,19 @@ static void test_set_phases_in_every_mode() {
 // a rewritten call went untracked.
 struct ScRwRule { int id; const char* match; const char* replace; };
 static const ScRwRule sc_rw_rules[] = {
-    { 9071, "Asia/Kolkata", "Asia/Tokyo" },
-    { 9072, "'zz_rw_into'", "set_config('TimeZone','Asia/Tokyo',false)" },
-    { 9073, "set_config\\W+TimeZone\\W+Asia/Seoul\\W+false\\W", "'zz_rw_out'" },
+    { 9071, "128MB", "256MB" },
+    { 9072, "'zz_rw_into'", "set_config('maintenance_work_mem','256MB',false)" },
+    { 9073, "set_config\\W+maintenance_work_mem\\W+512MB\\W+false\\W", "'zz_rw_out'" },
     { 9074, " AS zz_rw_lock", ", 1 AS zz_rw_lock" },
 };
 // `stored` is what is recorded while tracking is on; nullptr: the session locks instead.
 struct ScRwCase { const char* label; const char* sql; const char* row; const char* stored; };
 static const ScRwCase sc_rw_cases[] = {
-    { "the value rewritten", "SELECT set_config('TimeZone','Asia/Kolkata',false)", "Asia/Tokyo", "Asia/Tokyo" },
-    { "a query rewritten into a call", "SELECT 'zz_rw_into'", "Asia/Tokyo", "Asia/Tokyo" },
-    { "a call rewritten into a query", "SELECT set_config('TimeZone','Asia/Seoul',false)", "zz_rw_out", "UTC" },
-    { "a call rewritten into a form that locks", "SELECT set_config('TimeZone','Asia/Dubai',false) AS zz_rw_lock",
-        "Asia/Dubai", nullptr },
+    { "the value rewritten", "SELECT set_config('maintenance_work_mem','128MB',false)", "256MB", "256MB" },
+    { "a query rewritten into a call", "SELECT 'zz_rw_into'", "256MB", "256MB" },
+    { "a call rewritten into a query", "SELECT set_config('maintenance_work_mem','512MB',false)", "zz_rw_out", "64MB" },
+    { "a call rewritten into a form that locks", "SELECT set_config('maintenance_work_mem','768MB',false) AS zz_rw_lock",
+        "768MB", nullptr },
 };
 // Tracking by pgsql-set_parser_algorithm=3, by pgsql-query_processor_parser=1, and off.
 struct ScRwConfig { const char* name; const char* algo; const char* qpp; bool tracks; };
@@ -1597,41 +1635,41 @@ static std::string sc_rw_unique(const char* sql) {
 }
 
 static void sc_rw_case(const ScRwConfig& cfg, const ScRwCase& k) {
-    PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c TimeZone=UTC");
+    PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c maintenance_work_mem=64MB");
     std::string row = "<no connection>", st = "<no connection>", shown = "<no connection>";
     int locked = -2;
     if (c) {
         PGresult* r = execMode(c.get(), sc_rw_unique(k.sql));
         row = (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1) ? PQgetvalue(r, 0, 0) : PQerrorMessage(c.get());
         PQclear(r);
-        st = stored(c.get(), "TimeZone");
+        st = stored(c.get(), "maintenance_work_mem");
         locked = lockedOnHostgroup(c.get());
-        shown = oneValue(c.get(), "SHOW TimeZone");
+        shown = oneValue(c.get(), "SHOW maintenance_work_mem");
     }
     bool good = row == k.row;
-    if (!cfg.tracks) good = good && st == "UTC" && locked == -1;  // forwarded untracked, as documented
+    if (!cfg.tracks) good = good && st == "64MB" && locked == -1;  // forwarded untracked, as documented
     else if (k.stored == nullptr) good = good && locked >= 0;
     else good = good && st == k.stored && locked == -1 && shown == k.stored;
     ok(good, "[%s] set_config rewrite, %s: %s (row '%s', stored '%s', locked %d, SHOW '%s')", g_mode.c_str(), cfg.name,
         k.label, row.c_str(), st.c_str(), locked, shown.c_str());
 }
 
-// One statement executed twice, the second time after a SET put TimeZone back: the second Execute
+// One statement executed twice, the second time after a SET put maintenance_work_mem back: the second Execute
 // must be recorded as well. By an unnamed statement parsed again (a cache hit) and a named one.
 static void sc_rw_reuse_case(bool named) {
-    PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c TimeZone=UTC");
+    PGConnPtr c = createNewConnection(ConnType::BACKEND, "-c maintenance_work_mem=64MB");
     std::string st1 = "<no connection>", st2 = "<no connection>";
     if (c) {
-        const std::string q = sc_rw_unique("SELECT set_config('TimeZone','Asia/Kolkata',false)");
+        const std::string q = sc_rw_unique("SELECT set_config('maintenance_work_mem','128MB',false)");
         if (named) PQclear(PQprepare(c.get(), "zz_rw_named", q.c_str(), 0, nullptr));
         for (int i = 0; i < 2; i++) {
             PQclear(named ? PQexecPrepared(c.get(), "zz_rw_named", 0, nullptr, nullptr, nullptr, 0) :
                 PQexecParams(c.get(), q.c_str(), 0, nullptr, nullptr, nullptr, nullptr, 0));
-            (i == 0 ? st1 : st2) = stored(c.get(), "TimeZone");
-            if (i == 0) PQclear(PQexec(c.get(), "SET TimeZone TO 'UTC'"));
+            (i == 0 ? st1 : st2) = stored(c.get(), "maintenance_work_mem");
+            if (i == 0) PQclear(PQexec(c.get(), "SET maintenance_work_mem TO '64MB'"));
         }
     }
-    ok(st1 == "Asia/Tokyo" && st2 == "Asia/Tokyo", "[%s] set_config rewrite: %s executed twice is recorded both times "
+    ok(st1 == "256MB" && st2 == "256MB", "[%s] set_config rewrite: %s executed twice is recorded both times "
         "(stored '%s', then '%s')", g_mode.c_str(), named ? "a named statement" : "an unnamed statement parsed again",
         st1.c_str(), st2.c_str());
 }

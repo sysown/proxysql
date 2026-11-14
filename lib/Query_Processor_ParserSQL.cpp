@@ -1777,7 +1777,7 @@ PgSetConfigCall sc_classify_tree(const AstNode* root, const char* q, size_t len)
     const AstNode* alias = call ? call->next_sibling : nullptr;
     const bool bare = root->type == NodeType::NODE_SELECT_STMT && w.calls == 1 &&
         list && list->type == NodeType::NODE_SELECT_ITEM_LIST && !list->next_sibling &&
-        item->type == NodeType::NODE_SELECT_ITEM && !item->next_sibling &&
+        item && item->type == NodeType::NODE_SELECT_ITEM && !item->next_sibling &&
         call == w.call && (call->flags & ~8u) == 0 && // 8: qualified name; others: DISTINCT, ...
         (!alias || (alias->type == NodeType::NODE_ALIAS && !alias->next_sibling));
     if (!bare) return sc_verdict(PgSetConfigVerdict::LOCK);

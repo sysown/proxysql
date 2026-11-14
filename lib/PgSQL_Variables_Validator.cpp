@@ -343,8 +343,8 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 	(void)session;
 	if (transformed_value) *transformed_value = nullptr;
 
-	// PostgreSQL's memory units in kB, largest first. Matched in any case, as ProxySQL always
-	// did (PostgreSQL wants the exact case); the stored value carries PostgreSQL's spelling.
+	// PostgreSQL's memory units in kB, largest first. Matched case-sensitively, as PostgreSQL
+	// requires; the stored value carries PostgreSQL's spelling.
 	static const struct { const char* name; double kb; } units[] = {
 		{ "TB", 1024.0 * 1024 * 1024 }, { "GB", 1024.0 * 1024 }, { "MB", 1024.0 }, { "kB", 1.0 }, { "B", 1.0 / 1024 },
 	};
@@ -360,7 +360,7 @@ bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const pa
 		while (fast_isspace((unsigned char)*tail)) tail++;
 		if (*tail != '\0') return false;
 		size_t u = 0;
-		while (u < n_units && (strlen(units[u].name) != len || strncasecmp(rest, units[u].name, len) != 0)) u++;
+		while (u < n_units && (strlen(units[u].name) != len || strncmp(rest, units[u].name, len) != 0)) u++;
 		if (u == n_units) return false;
 		kb *= units[u].kb;
 		// As PostgreSQL: a fraction ('1.5GB') is rounded to a whole number of the next smaller unit.
