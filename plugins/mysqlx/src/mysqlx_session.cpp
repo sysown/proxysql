@@ -1574,18 +1574,15 @@ void MysqlxSession::handler_waiting_server_msg() {
 	}
 
 	ssize_t r = server_ds().read_from_net();
-	if (r == 0) {
-		send_error(2013, "Lost connection to backend during query");
-		// Mark non-reusable so return_backend_to_pool deletes the
-		// connection instead of caching a dead socket. Without this,
-		// the next session that pulls from the pool gets a backend
-		// whose fd is closed / EOF.
-		if (backend_conn_) backend_conn_->set_reusable(false);
-		return_backend_to_pool();
-		healthy = false;
-		return;
-	}
+	// A TLS peer can put its final response record(s) and close_notify in
+	// the same read. read_from_net() then returns 0 (clean shutdown) even
+	// though complete frames are already buffered. Do not turn that valid
+	// response into a 2013 before draining it: mark the backend dead now,
+	// drain below, and only report the EOF if no terminal frame arrived.
+	const bool backend_eof = (r == 0);
+	if (backend_eof && backend_conn_) backend_conn_->set_reusable(false);
 	if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+		flush_compression_batch();
 		send_error(2013, "Backend read error during query");
 		if (backend_conn_) backend_conn_->set_reusable(false);
 		return_backend_to_pool();
@@ -1665,6 +1662,19 @@ void MysqlxSession::handler_waiting_server_msg() {
 		if (is_terminal_frame(msg_type)) {
 			got_terminal = true;
 		}
+	}
+
+	if (backend_eof && !got_terminal) {
+		// Flush buffered non-terminal frames before the terminal ERROR so
+		// combined compression preserves the response order on EOF.
+		flush_compression_batch();
+		send_error(2013, "Lost connection to backend during query");
+		client_ds_.write_to_net();
+		// backend_eof already marked the connection non-reusable, so
+		// return_backend_to_pool() evicts it instead of caching a dead fd.
+		return_backend_to_pool();
+		healthy = false;
+		return;
 	}
 
 	if (got_terminal) {
