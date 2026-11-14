@@ -446,7 +446,7 @@ pcre/pcre/.libs/libpcre.a:
 pcre: pcre/pcre/.libs/libpcre.a
 
 pcre2/pcre2/.libs/libpcre2-8.a:
-	cd pcre2 && rm -rf pcre2-*/ || true
+	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
 	cd pcre2 && tar -zxf pcre2-10.47.tar.gz
 	cd pcre2 && mv pcre2-10.47 pcre2
 	cd pcre2/pcre2 && ./configure --disable-shared --enable-static \

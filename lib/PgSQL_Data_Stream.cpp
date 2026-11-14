@@ -811,9 +811,9 @@ int PgSQL_Data_Stream::write_to_net() {
 					shut_soft();
 					return 0;
 				}
-				else {
-					return -1;
-				}
+				// SSL_write may already have consumed plaintext. EAGAIN/EINTR
+				// defer only the ciphertext flush; account for that plaintext
+				// below so a retry cannot encrypt and send it a second time.
 			}
 		}
 	}
@@ -1386,7 +1386,11 @@ void PgSQL_Data_Stream::unplug_backend() {
 	DSS = STATE_NOT_INITIALIZED;
 	myconn = NULL;
 	myds_type = MYDS_BACKEND_NOT_CONNECTED;
-	mypolls->remove_index_fast(poll_fds_idx);
+	// Idle-backend pings can complete or fail before poll registration,
+	// leaving mypolls == NULL with no poll entry to remove. Calling a member
+	// through NULL is undefined even when poll_fds_idx == -1; this caused
+	// crashes in v3.0.12. See https://github.com/sysown/proxysql/pull/6626.
+	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 	mypolls = NULL;
 	fd = 0;
 }
@@ -1457,7 +1461,9 @@ void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	// This arm ends in PgSQL_Connection::reset(), which clears 'reusable' and pools the
 	// connection. An unhealthy one must not take it: the transport is fine and
 	// PQtransactionStatus() reports idle, so no other condition here can reject it.
-	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE &&
+	// Nor may a connection still holding a group's unsynced work (a client gone after a Flush): the
+	// reset would end that work with a Sync, committing it. It is closed, which rolls it back.
+	if (sq && mysrvc->status == MYSQL_SERVER_STATUS_ONLINE && mc->is_pipeline_active() == false &&
 		mc->healthy == true &&
 		mc->is_expired(sess->thread->curtime) == false &&
 		mc->async_state_machine == ASYNC_IDLE &&
@@ -1465,6 +1471,11 @@ void PgSQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset PgSQL_Connection %p, server %s:%d\n", mc, mysrvc->address, mysrvc->port);
 		sess->create_new_session_and_reset_connection(this);
 	} else {
+		if (sq && mc->is_pipeline_active()) {
+			// The expected way out for a client gone after a Flush, so not a warning; traced for debugging.
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Closing PgSQL_Connection %p, server %s:%d: it holds unsynced extended-query work, which closing rolls back\n",
+				mc, mysrvc->address, mysrvc->port);
+		}
 		mc->last_time_used = sess->thread->curtime;
 		mc->send_quit = sq;
 		detach_connection();

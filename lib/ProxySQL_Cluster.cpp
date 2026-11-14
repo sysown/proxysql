@@ -4221,6 +4221,11 @@ bool ProxySQL_Cluster_Nodes::Update_Global_Checksum(char * _h, uint16_t _p, MYSQ
 	bool ret = true;
 	uint64_t hash_ = generate_hash(_h, _p);
 	pthread_mutex_lock(&mutex);
+	// Apply a reset requested by Reset_Global_Checksums(true) before comparing,
+	// so the comparison below sees the reset values for every peer.
+	if (global_checksums_reset_pending.exchange(false)) {
+		Reset_Global_Checksums(false);
+	}
 	std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator ite = umap_proxy_nodes.find(hash_);
 	if (ite != umap_proxy_nodes.end()) {
 		ProxySQL_Node_Entry * node = ite->second;
@@ -4243,17 +4248,29 @@ bool ProxySQL_Cluster_Nodes::Update_Global_Checksum(char * _h, uint16_t _p, MYSQ
 	return ret;
 }
 
+// 'lock' is false only when the caller already holds 'mutex' (the Cluster's
+// own admin variables pull); the reset is then applied immediately.
+//
+// With 'lock' true the caller is an Admin session running LOAD ADMIN
+// VARIABLES TO RUNTIME: it holds 'sql_query_global_mutex' and the Admin
+// rwlock. It must not wait for 'mutex' here: a Cluster peer thread holds
+// 'mutex' across ProxySQL_Node_Entry::set_checksums(), whose query rules pulls
+// (and, on v4.0, servers pulls) take 'sql_query_global_mutex' after the peer
+// fetch, so waiting would close an ABBA cycle. Releasing the global mutex around the wait is not
+// an option either, since the Admin rwlock would stay held and other Admin
+// sessions take it after the global mutex. Instead the request is recorded
+// and applied by the next Update_Global_Checksum(), under 'mutex', before it
+// compares the peer's global checksum. 'global_checksum' is only read there,
+// so the observable effect (the next check of every peer fetches the full
+// checksums) is unchanged.
 void ProxySQL_Cluster_Nodes::Reset_Global_Checksums(bool lock) {
 	if (lock) {
-		pthread_mutex_lock(&mutex);
+		global_checksums_reset_pending.store(true);
+		return;
 	}
 
 	for (auto& proxy_node_entry : umap_proxy_nodes) {
 		proxy_node_entry.second->global_checksum = 0;
-	}
-
-	if (lock) {
-		pthread_mutex_unlock(&mutex);
 	}
 }
 
@@ -4854,7 +4871,22 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 	using dyn_gauge = p_cluster_nodes_dyn_gauge;
 	using dyn_counter = p_cluster_nodes_dyn_counter;
 
-	pthread_mutex_lock(&mutex);
+	// Lock order: a Cluster peer thread holds 'mutex' across
+	// ProxySQL_Node_Entry::set_checksums(), and the query rules pulls (and, on
+	// v4.0, the servers pulls) started from there take 'sql_query_global_mutex'.
+	// So a thread that holds the global SQL mutex must never wait for 'mutex':
+	// that is the case of SHOW PROMETHEUS METRICS, which collects the metrics
+	// from within an Admin statement. Such a caller only tries the lock and, if a peer thread
+	// holds it, skips this refresh; the node gauges keep their previous values
+	// until the next scrape. Callers that do not hold the global SQL mutex
+	// (REST /metrics, the TSDB sampler) still wait for it as before.
+	if (proxysql_admin_global_sql_lock_depth() > 0) {
+		if (pthread_mutex_trylock(&mutex) != 0) {
+			return;
+		}
+	} else {
+		pthread_mutex_lock(&mutex);
+	}
 
 	vector<string> cur_node_metrics {};
 	vector<string> cur_node_checksums {};

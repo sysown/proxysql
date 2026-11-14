@@ -69,6 +69,12 @@ public:
 	void pop_frame();
 
 	void enqueue_frame(uint8_t msg_type, const uint8_t* body, size_t body_len);
+	// Mark the currently queued write buffer as containing a PLAIN
+	// AuthenticateStart secret. It is cleansed when fully drained, on
+	// discard, reset, and destruction; ordinary data-plane writes are not
+	// affected.
+	void mark_write_sensitive() { sensitive_write_ = true; }
+	void discard_sensitive_write();
 	size_t write_buffer_size() const { return write_buf_.size(); }
 	const std::vector<uint8_t>& write_buffer_raw() const { return write_buf_; }
 
@@ -121,6 +127,7 @@ private:
 	std::deque<MysqlxFrame> complete_frames_;
 	bool parse_error_;
 	bool encrypted_;
+	bool sensitive_write_ { false };
 
 	SSL *ssl_;
 	BIO *rbio_ssl_;

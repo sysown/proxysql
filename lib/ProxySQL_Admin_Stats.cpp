@@ -197,31 +197,31 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 	// ===============================================================
 
 	// proxysql_auth_memory metric
-	unsigned long mu = GloMyAuth->memory_usage();
+	unsigned long mu = GloMyAuth ? GloMyAuth->memory_usage() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::auth_memory_bytes]->Set(mu);
 
 	// proxysql_query_digest_memory metric
-	const auto& query_digest_t_size = GloMyQPro->get_query_digests_total_size();
+	const auto& query_digest_t_size = GloMyQPro ? GloMyQPro->get_query_digests_total_size() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::query_digest_memory_bytes]->Set(query_digest_t_size);
 
 	// mysql_query_rules_memory metric
-	const auto& rules_mem_used = GloMyQPro->get_rules_mem_used();
+	const auto& rules_mem_used = GloMyQPro ? GloMyQPro->get_rules_mem_used() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_query_rules_memory_bytes]->Set(rules_mem_used);
 
 	// mysql_firewall_users_table metric
-	const auto& firewall_users_table = GloMyQPro->get_firewall_memory_users_table();
+	const auto& firewall_users_table = GloMyQPro ? GloMyQPro->get_firewall_memory_users_table() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_table]->Set(firewall_users_table);
 
 	// mysql_firewall_users_config metric
-	const auto& firewall_users_config = GloMyQPro->get_firewall_memory_users_config();
+	const auto& firewall_users_config = GloMyQPro ? GloMyQPro->get_firewall_memory_users_config() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_config]->Set(firewall_users_config);
 
 	// mysql_firewall_rules_table metric
-	const auto& firewall_rules_table = GloMyQPro->get_firewall_memory_rules_table();
+	const auto& firewall_rules_table = GloMyQPro ? GloMyQPro->get_firewall_memory_rules_table() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_table]->Set(firewall_rules_table);
 
 	// mysql_firewall_rules_table metric
-	const auto& firewall_rules_config = GloMyQPro->get_firewall_memory_rules_config();
+	const auto& firewall_rules_config = GloMyQPro ? GloMyQPro->get_firewall_memory_rules_config() : 0;
 	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_config]->Set(firewall_rules_config);
 
 	// proxysql_stack_memory_mysql_threads

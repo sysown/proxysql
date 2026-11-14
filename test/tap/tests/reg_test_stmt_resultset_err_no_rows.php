@@ -48,6 +48,9 @@ $admin_pass = $admin_pass == false ? "admin" : $admin_pass;
 $admin_port = getenv("TAP_ADMINPORT");
 $admin_port = $admin_port == false ? 6032 : $admin_port;
 
+$admin_host = getenv("TAP_ADMINHOST") ?: getenv("TAP_HOST") ?: "127.0.0.1";
+$host = getenv("TAP_HOST") ?: "127.0.0.1";
+
 $username = getenv("TAP_USERNAME");
 $username = $username == false ? "root" : $username;
 
@@ -58,16 +61,18 @@ $port = getenv("TAP_PORT");
 $port = $port == false ? "6033" : $port;
 
 echo ":: Creating ProxySQL Admin connection...".PHP_EOL;
-$proxy_admin = new mysqli("127.0.0.1", $admin_user, $admin_pass, "", $admin_port);
+$proxy_admin = new mysqli($admin_host, $admin_user, $admin_pass, "", $admin_port);
 if ($proxy_admin->connect_errno) {
-    die("PorxySQL connect failed: " . $proxy->connect_error);
+    diag("ProxySQL Admin connect failed: " . $proxy_admin->connect_error);
+    exit(1);
 }
 echo ":: ProxySQL Admin connection completed".PHP_EOL;
 
 echo ":: Creating ProxySQL connection...".PHP_EOL;
-$proxy = new mysqli("127.0.0.1", $username, $password, "", $port);
+$proxy = new mysqli($host, $username, $password, "", $port);
 if ($proxy->connect_errno) {
-    die("PorxySQL connect failed: " . $proxy->connect_error);
+    diag("ProxySQL connect failed: " . $proxy->connect_error);
+    exit(1);
 }
 echo ":: ProxySQL connection completed".PHP_EOL;
 

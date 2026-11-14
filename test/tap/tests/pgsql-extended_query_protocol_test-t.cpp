@@ -2414,8 +2414,12 @@ void test_bind_named_portal(bool native_backend) {
 	}
 }
 
-void test_describe_portal() {
-	diag("Test %d: Describe portal", test_count++);
+// PostgreSQL keeps the unnamed portal after its Execute, until the next unnamed Bind, a simple Query,
+// a Close or the end of the transaction: a Describe later in the same unit still returns its columns.
+// The native backend protocol does the same. libpq mode keeps no portal between messages (by design),
+// so ProxySQL answers that Describe with 34000 there.
+void test_describe_portal(bool native_backend) {
+	diag("Test %d: Describe portal (%s backend)", test_count++, native_backend ? "native" : "libpq");
 	auto conn = create_connection();
 	if (!conn) return;
 
@@ -2474,25 +2478,40 @@ void test_describe_portal() {
 
 
 		conn->readMessage(type, buffer);
-		ok(type == PgConnection::ERROR_RESPONSE,
-			"Received error response for describe portal");
-		std::string errormsg;
-		std::string errorcode;
-
-		if (type == PgConnection::ERROR_RESPONSE) {
-			BufferReader reader(buffer);
-			char field;
-			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
-				if (field == 'M') errormsg = reader.readString();
-				else if (field == 'C') errorcode = reader.readString();
-				else reader.readString();
+		if (native_backend) {
+			ok(type == PgConnection::ROW_DESCRIPTION,
+				"Received row description for describe portal after execute");
+			int16_t desc_fields = -1;
+			std::string desc_name;
+			if (type == PgConnection::ROW_DESCRIPTION) {
+				BufferReader desc_reader(buffer);
+				desc_fields = desc_reader.readInt16();
+				if (desc_fields == 1) desc_name = desc_reader.readString();
 			}
+			ok(desc_fields == 1 && desc_name == "test",
+				"Describe after execute still describes the portal (%d field(s), name '%s')",
+				desc_fields, desc_name.c_str());
+		} else {
+			ok(type == PgConnection::ERROR_RESPONSE,
+				"Received error response for describe portal");
+			std::string errormsg;
+			std::string errorcode;
+
+			if (type == PgConnection::ERROR_RESPONSE) {
+				BufferReader reader(buffer);
+				char field;
+				while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
+					if (field == 'M') errormsg = reader.readString();
+					else if (field == 'C') errorcode = reader.readString();
+					else reader.readString();
+				}
+			}
+
+			ok(errorcode == "34000",
+				"Received ERRCODE_UNDEFINED_CURSOR for describe portal: %s",
+				errormsg.c_str());
 		}
 
-		ok(errorcode == "34000",
-			"Received ERRCODE_UNDEFINED_CURSOR for describe portal: %s",
-			errormsg.c_str());
-		
 		conn->readMessage(type, buffer);
 		ok(type == PgConnection::READY_FOR_QUERY,
 			"Received ready for query after describe portal");
@@ -2876,8 +2895,11 @@ void test_libpq_style_execute() {
 	}
 }
 
-void test_multiple_execute_on_single_bind() {
-	diag("Test %d: Multiple Execute On Single Bind", test_count++);
+// As in test_describe_portal(): with the native backend protocol, as in PostgreSQL, the portal outlives
+// its Execute, so the second Describe returns its columns and the second Execute finds it exhausted
+// and returns no rows. libpq mode answers the second Describe with 34000.
+void test_multiple_execute_on_single_bind(bool native_backend) {
+	diag("Test %d: Multiple Execute On Single Bind (%s backend)", test_count++, native_backend ? "native" : "libpq");
 	auto conn = create_connection();
 	if (!conn) return;
 
@@ -2959,23 +2981,39 @@ void test_multiple_execute_on_single_bind() {
 		conn->readMessage(type, buffer);
 		ok(type == PgConnection::COMMAND_COMPLETE, "Received CommandComplete");
 
-		conn->readMessage(type, buffer);
-		ok(type == PgConnection::ERROR_RESPONSE, "Received error response for malformed packet");
+		if (native_backend) {
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::ROW_DESCRIPTION,
+				"Received row description for describe portal after execute");
 
-		std::string errormsg;
-		std::string errorcode;
-
-		if (type == PgConnection::ERROR_RESPONSE) {
-			BufferReader reader(buffer);
-			char field;
-			while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
-				if (field == 'M') errormsg = reader.readString();
-				else if (field == 'C') errorcode = reader.readString();
-				else reader.readString();
+			conn->readMessage(type, buffer);
+			std::string tag;
+			if (type == PgConnection::COMMAND_COMPLETE) {
+				BufferReader tag_reader(buffer);
+				tag = tag_reader.readString();
 			}
-		}
+			ok(type == PgConnection::COMMAND_COMPLETE && tag == "SELECT 0",
+				"Second execute on the exhausted portal returns no rows (message '%c', tag '%s')",
+				type, tag.c_str());
+		} else {
+			conn->readMessage(type, buffer);
+			ok(type == PgConnection::ERROR_RESPONSE, "Received error response for malformed packet");
 
-		ok(errorcode == "34000", "Received ERRCODE_UNDEFINED_CURSOR Error:%s", errormsg.c_str());
+			std::string errormsg;
+			std::string errorcode;
+
+			if (type == PgConnection::ERROR_RESPONSE) {
+				BufferReader reader(buffer);
+				char field;
+				while (reader.remaining() > 0 && (field = static_cast<char>(reader.readByte())) != 0) {
+					if (field == 'M') errormsg = reader.readString();
+					else if (field == 'C') errorcode = reader.readString();
+					else reader.readString();
+				}
+			}
+
+			ok(errorcode == "34000", "Received ERRCODE_UNDEFINED_CURSOR Error:%s", errormsg.c_str());
+		}
 
 		conn->readMessage(type, buffer);
 		ok(type == PgConnection::READY_FOR_QUERY,
@@ -5323,7 +5361,7 @@ int main(int argc, char** argv) {
 
 		// Portals
 		test_bind_named_portal(native_backend);
-		test_describe_portal(); 
+		test_describe_portal(native_backend);
 		test_close_portal();   
 		test_portal_lifecycle(); 
 		test_describe_closed_portal();    
@@ -5331,7 +5369,7 @@ int main(int argc, char** argv) {
 
 		// random tests
 		test_libpq_style_execute();       
-		test_multiple_execute_on_single_bind(); 
+		test_multiple_execute_on_single_bind(native_backend);
 		test_multiple_parse_bind_describe_execute_fail();
 		test_insert_command_complete();
 		test_parse_with_param_type();
