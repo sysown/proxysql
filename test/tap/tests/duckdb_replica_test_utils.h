@@ -133,7 +133,8 @@ struct Fixture {
 		return ntohs(addr.sin_port);
 	}
 	explicit Fixture(CommandLine& c) : cl(c) {
-		std::string pattern = (std::filesystem::temp_directory_path() / "proxysql-replica-recovery-XXXXXX").string();
+		// Keep fixture data in the test workspace; mkdtemp creates a private directory.
+		std::string pattern = (std::filesystem::current_path() / "proxysql-replica-recovery-XXXXXX").string();
 		char* created = mkdtemp(pattern.data());
 		if (!created)
 			BAIL_OUT("mkdtemp failed");

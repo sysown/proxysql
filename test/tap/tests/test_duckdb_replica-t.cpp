@@ -107,7 +107,8 @@ struct Fixture {
 	int duck_port = 6031;
 
 	explicit Fixture(CommandLine& c) : cl(c) {
-		std::string pattern = (std::filesystem::temp_directory_path() / "proxysql-replica-live-XXXXXX").string();
+		// Keep fixture data in the test workspace; mkdtemp creates a private directory.
+		std::string pattern = (std::filesystem::current_path() / "proxysql-replica-live-XXXXXX").string();
 		char* created = mkdtemp(pattern.data());
 		if (!created) BAIL_OUT("cannot create private replica directory");
 		data_dir = created;

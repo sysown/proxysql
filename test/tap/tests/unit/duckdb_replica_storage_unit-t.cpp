@@ -41,7 +41,8 @@ struct Store {
 	DuckDBEngine engine;
 	duckdb_connection conn = nullptr;
 	explicit Store(const std::string& name) : catalog(name) {
-		std::string pattern = (std::filesystem::temp_directory_path() / "proxysql-replica-storage-XXXXXX").string();
+		// Keep fixture data in the test workspace; mkdtemp creates a private directory.
+		std::string pattern = (std::filesystem::current_path() / "proxysql-replica-storage-XXXXXX").string();
 		char* created = mkdtemp(pattern.data());
 		if (!created)
 			BAIL_OUT("mkdtemp failed");
