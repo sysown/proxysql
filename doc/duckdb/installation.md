@@ -10,7 +10,8 @@ PROXYSQL40=1
 
 The current vendored engine is DuckDB 2.0.0. Its source archive is vendored
 directly in git, so a source build only needs the usual ProxySQL C/C++
-build toolchain (C++17), CMake, and XZ-capable tar (GNU tar needs `xz` / `xz-utils`).
+build toolchain (C++17), CMake 3.14 or newer, and XZ-capable tar (GNU tar
+needs `xz` / `xz-utils`).
 
 DuckDB 2.0 creates new persistent database files in a format that DuckDB 1.x
 cannot read. Existing 1.x files keep their storage format when opened by 2.0.

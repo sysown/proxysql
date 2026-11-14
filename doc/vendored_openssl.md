@@ -112,10 +112,11 @@ Make all version-dependent changes in one commit:
 7. Update the current version and digest in this guide,
    `deps/libssl/README.md`, and the top-level `README.md`.
 
-Search for stale references before committing:
+Search for stale references before committing. Set `old_version` to the pin
+being replaced (for example, `3.5.7` when upgrading to `3.5.9`):
 
 ```bash
-old_version=3.5.9
+old_version=3.5.7
 rg -n "$old_version|openssl-$old_version" \
   README.md common_mk deps doc test
 deps/libssl/verify-source.bash

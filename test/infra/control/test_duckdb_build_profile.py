@@ -12,6 +12,16 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class DuckDBBuildProfile(unittest.TestCase):
+    def test_capability_list_is_one_shell_argument(self):
+        make = shutil.which('gmake') or 'make'
+        probe = ("flags:\n\t@python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "
+                 "$(DUCKDB_CMAKE_FLAGS)\n")
+        result = subprocess.run(
+            [make, '-s', '-f', str(ROOT / 'deps/duckdb/build.mk'), '-f', '-', 'flags'],
+            input=probe, text=True, capture_output=True, check=True)
+        self.assertIn('-DDUCKDB_CAPABILITIES=httplib;loadable_extensions',
+                      json.loads(result.stdout))
+
     def test_default_release_preserves_compiler_cpu_baseline(self):
         make = shutil.which('gmake') or 'make'
         probe = "flags:\n\t@printf '%s\\n' '$(DUCKDB_CMAKE_FLAGS)'\n"
