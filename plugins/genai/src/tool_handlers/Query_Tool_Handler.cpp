@@ -1,3 +1,5 @@
+#include "SQL_Readonly_Validator.h"
+#include "PgSQL_Readonly_Transaction.h"
 #ifdef PROXYSQL40
 
 #include "proxysql.h"
@@ -881,6 +883,22 @@ Query_Tool_Handler::PgSQLConnection* Query_Tool_Handler::find_pgsql_connection(v
 	return nullptr;
 }
 
+// A connection whose transaction state cannot be reset must leave the pool.
+void Query_Tool_Handler::discard_pgsql_connection(void* pgconn_ptr) {
+	bool removed = false;
+	pthread_mutex_lock(&pool_lock);
+	for (auto it = pgsql_connection_pool.begin(); it != pgsql_connection_pool.end(); ++it) {
+		if (it->pgconn == pgconn_ptr) {
+			pgsql_connection_pool.erase(it);
+			--pg_pool_size;
+			removed = true;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&pool_lock);
+	if (removed) PQfinish(static_cast<PGconn*>(pgconn_ptr));
+}
+
 std::string Query_Tool_Handler::execute_query(const std::string& query, const std::string& target_id) {
 	const QueryTarget* target = resolve_target(target_id);
 	if (target == NULL) {
@@ -1024,7 +1042,8 @@ std::string Query_Tool_Handler::execute_query(const std::string& query, const st
 std::string Query_Tool_Handler::execute_query_with_schema(
 	const std::string& query,
 	const std::string& schema,
-	const std::string& target_id
+	const std::string& target_id,
+	bool readonly_transaction
 ) {
 	const QueryTarget* target = resolve_target(target_id);
 	if (target == NULL) {
@@ -1047,10 +1066,17 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 		PGconn* pgconn = static_cast<PGconn*>(pgconn_v);
 		PgSQLConnection* conn_wrapper = find_pgsql_connection(pgconn_v);
 
+		if (readonly_transaction && PQtransactionStatus(pgconn) != PQTRANS_IDLE) {
+			discard_pgsql_connection(pgconn_v);
+			return json({{"success", false}, {"error", "PostgreSQL connection is not idle"}}).dump();
+		}
+
 		if (!schema.empty() && conn_wrapper && conn_wrapper->current_schema != schema) {
 			std::string validated_schema = validate_sql_identifier_sqlite(schema);
 			if (validated_schema.empty()) {
-				return_connection(pgconn_v);
+				if (readonly_transaction && PQtransactionStatus(pgconn) != PQTRANS_IDLE)
+					discard_pgsql_connection(pgconn_v);
+				else return_connection(pgconn_v);
 				json j;
 				j["success"] = false;
 				j["error"] = "Invalid schema name: contains unsafe characters";
@@ -1067,7 +1093,9 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 				if (set_res) {
 					PQclear(set_res);
 				}
-				return_connection(pgconn_v);
+				if (readonly_transaction && PQtransactionStatus(pgconn) != PQTRANS_IDLE)
+					discard_pgsql_connection(pgconn_v);
+				else return_connection(pgconn_v);
 				json j;
 				j["success"] = false;
 				j["error"] = err;
@@ -1077,13 +1105,40 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 			conn_wrapper->current_schema = validated_schema;
 		}
 
+		std::string transaction_error;
+		std::unique_ptr<genai::PgSQL_Readonly_Transaction> transaction;
+		if (readonly_transaction) {
+			transaction.reset(new genai::PgSQL_Readonly_Transaction(
+				[&](const char* command) {
+					PGresult* result = PQexec(pgconn, command);
+					bool success = result && PQresultStatus(result) == PGRES_COMMAND_OK;
+					if (!success && transaction_error.empty())
+						transaction_error = result ? PQresultErrorMessage(result) : PQerrorMessage(pgconn);
+					if (result) PQclear(result);
+					return success;
+				},
+				[&]() { return PQtransactionStatus(pgconn) == PQTRANS_IDLE; },
+				[&](bool reusable) {
+					if (reusable) return_connection(pgconn_v);
+					else discard_pgsql_connection(pgconn_v);
+				}));
+			if (!transaction->ready())
+				return json({{"success", false}, {"error", transaction_error.empty()
+					? "Unable to start read-only PostgreSQL transaction" : transaction_error}}).dump();
+		}
+		auto release_connection = [&]() {
+			if (transaction) return transaction->finish();
+			return_connection(pgconn_v);
+			return true;
+		};
+
 		PGresult* res = PQexec(pgconn, query.c_str());
 		if (res == NULL) {
 			proxy_error(
 				"Query_Tool_Handler: PQexec returned null result for target='%s' query='%s'\n",
 				target->target_id.c_str(), query.c_str()
 			);
-			return_connection(pgconn_v);
+			release_connection();
 			json j;
 			j["success"] = false;
 			j["error"] = std::string("PQexec returned null result");
@@ -1098,7 +1153,7 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 				target->target_id.c_str(), err.c_str(), schema.c_str(), query.c_str()
 			);
 			PQclear(res);
-			return_connection(pgconn_v);
+			release_connection();
 			json j;
 			j["success"] = false;
 			j["error"] = err;
@@ -1112,7 +1167,8 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 				affected = atol(tuples);
 			}
 			PQclear(res);
-			return_connection(pgconn_v);
+			if (!release_connection())
+				return json({{"success", false}, {"error", "Failed to reset PostgreSQL transaction"}}).dump();
 			json j;
 			j["success"] = true;
 			j["affected_rows"] = affected;
@@ -1131,7 +1187,8 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 		}
 
 		PQclear(res);
-		return_connection(pgconn_v);
+		if (!release_connection())
+			return json({{"success", false}, {"error", "Failed to reset PostgreSQL transaction"}}).dump();
 
 		json j;
 		j["success"] = true;
@@ -1215,144 +1272,10 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 	return j.dump();
 }
 
-bool Query_Tool_Handler::contains_multi_statement(const std::string& query) {
-	// Track a small lexical state so a ';' inside a string literal, an
-	// identifier-quoted name, or a comment does not produce false positives.
-	enum class S { Code, SingleStr, DoubleStr, BacktickIdent, LineComment, BlockComment };
-	S state = S::Code;
-	bool seen_separator = false;
-	const size_t n = query.size();
-	for (size_t i = 0; i < n; ++i) {
-		const char c = query[i];
-		const char next = (i + 1 < n) ? query[i + 1] : '\0';
-		switch (state) {
-			case S::Code:
-				if (c == '\'') { state = S::SingleStr; seen_separator = false; }
-				else if (c == '"') { state = S::DoubleStr; seen_separator = false; }
-				else if (c == '`') { state = S::BacktickIdent; seen_separator = false; }
-				else if (c == '-' && next == '-') { state = S::LineComment; ++i; }
-				else if (c == '/' && next == '*') { state = S::BlockComment; ++i; }
-				else if (c == ';') { seen_separator = true; }
-				else if (seen_separator && !std::isspace(static_cast<unsigned char>(c))) {
-					return true;
-				}
-				break;
-			case S::SingleStr:
-				if (c == '\\' && next != '\0') { ++i; }
-				else if (c == '\'') { state = S::Code; }
-				break;
-			case S::DoubleStr:
-				if (c == '\\' && next != '\0') { ++i; }
-				else if (c == '"') { state = S::Code; }
-				break;
-			case S::BacktickIdent:
-				if (c == '`') { state = S::Code; }
-				break;
-			case S::LineComment:
-				if (c == '\n') { state = S::Code; }
-				break;
-			case S::BlockComment:
-				if (c == '*' && next == '/') { state = S::Code; ++i; }
-				break;
-		}
-	}
-	return false;
-}
-
-bool Query_Tool_Handler::validate_readonly_query(const std::string& query) {
-	// GHSA-7wh6-2vcc-gcm4: reject multi-statement payloads up front.  A
-	// payload like "SELECT 1; RENAME TABLE x TO y" must not pass validation
-	// just because the first keyword is SELECT.
-	if (contains_multi_statement(query)) {
-		return false;
-	}
-
-	std::string upper = query;
-	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-
-	// Substring blacklist of keywords that always indicate a side-effecting
-	// statement (or admin operation) regardless of where they appear.  The
-	// pre-fix list missed several MySQL keywords that could slip past the
-	// first-token whitelist; the additional entries cover them.
-	std::vector<std::string> dangerous = {
-		"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-		"TRUNCATE", "REPLACE", "LOAD", "CALL", "EXECUTE",
-		"RENAME", "GRANT", "REVOKE", "FLUSH", "RESET", "LOCK",
-		"UNLOCK", "KILL", "OPTIMIZE", "REPAIR", "HANDLER",
-		"INSTALL", "UNINSTALL", "CHANGE", "PURGE", "SAVEPOINT",
-		"RELEASE", "ROLLBACK", "COMMIT", "BEGIN", "START", "XA",
-		"SHUTDOWN", "INTO OUTFILE", "INTO DUMPFILE",
-		// GHSA-7wh6-2vcc-gcm4: ANALYZE has two side-effecting forms that
-		// the prior literal "EXPLAIN ANALYZE" check below cannot cover:
-		//   * standalone "ANALYZE TABLE x" (MySQL) / "ANALYZE foo" (PG)
-		//     — collects stats, is a write-side-effect on system tables.
-		//   * "EXPLAIN ANALYZE ..." with any obfuscation in between,
-		//     including comments, multiple whitespace, newlines, and the
-		//     PostgreSQL parenthesized option form "EXPLAIN (ANALYZE)" or
-		//     "EXPLAIN (VERBOSE, ANALYZE)" — these execute the wrapped
-		//     statement on PG.
-		// Putting ANALYZE in the substring blacklist catches all of these
-		// regardless of whitespace/comment shape.
-		"ANALYZE"
-	};
-
-	for (const auto& word : dangerous) {
-		if (upper.find(word) != std::string::npos) {
-			return false;
-		}
-	}
-
-	// `SET` is dangerous (SET GLOBAL/SESSION) but appears legitimately as a
-	// substring inside SELECT (e.g. INTERSECT, RESULTSET).  Reject only when
-	// it appears as a standalone token at the start.
-	if (upper.substr(0, 4) == "SET ") {
-		return false;
-	}
-
-	// `USE` changes the current schema as a side effect and must not be
-	// reachable through a read-only tool.
-	if (upper.substr(0, 4) == "USE ") {
-		return false;
-	}
-
-	// Whitelist validation: query must start with an allowed read-only keyword.
-	if (upper.find("SELECT") == 0) {
-		return true;
-	}
-	if (upper.find("WITH") == 0) {
-		return true;
-	}
-	if (upper.find("EXPLAIN") == 0) {
-		return true;
-	}
-	if (upper.find("SHOW") == 0) {
-		return true;
-	}
-	if (upper.find("DESCRIBE") == 0 || upper.find("DESC") == 0) {
-		return true;
-	}
-
-	return false;
-}
-
-bool Query_Tool_Handler::is_dangerous_query(const std::string& query) {
-	std::string upper = query;
-	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-
-	// Extremely dangerous operations
-	std::vector<std::string> critical = {
-		"DROP DATABASE", "DROP TABLE", "TRUNCATE", "DELETE FROM", "DELETE FROM",
-		"GRANT", "REVOKE", "CREATE USER", "ALTER USER", "SET PASSWORD",
-		"INTO OUTFILE", "INTO DUMPFILE"
-	};
-
-	for (const auto& phrase : critical) {
-		if (upper.find(phrase) != std::string::npos) {
-			return true;
-		}
-	}
-
-	return false;
+bool Query_Tool_Handler::validate_readonly_query(const std::string& query, bool pgsql) {
+	return pgsql
+		? genai::readonly_sql<sql_parser::Dialect::PostgreSQL>(query)
+		: genai::readonly_sql<sql_parser::Dialect::MySQL>(query);
 }
 
 std::string Query_Tool_Handler::strip_leading_comments(const std::string& sql) {
@@ -1870,7 +1793,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 				sql << " LIKE '" << escape_string_literal(name_filter) << "'";
 			}
 		}
-		std::string query_result = execute_query_with_schema(sql.str(), schema, target->target_id);
+		std::string query_result = execute_query_with_schema(sql.str(), schema, target->target_id, true);
 		result = create_success_response(json::parse(query_result));
 	}
 
@@ -2718,12 +2641,10 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			sql = strip_leading_comments(sql);
 
 			// Continue with validation and execution
-			if (!validate_readonly_query(sql)) {
+			if (!validate_readonly_query(sql, is_pgsql_protocol(target->protocol))) {
 				result = create_error_response("SQL is not read-only");
-			} else if (is_dangerous_query(sql)) {
-				result = create_error_response("SQL contains dangerous operations");
 			} else {
-				std::string query_result = execute_query_with_schema(sql, schema, target->target_id);
+				std::string query_result = execute_query_with_schema(sql, schema, target->target_id, true);
 				try {
 					json result_json = json::parse(query_result);
 					// Check if query actually failed
@@ -2820,19 +2741,13 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			// "EXPLAIN <stmt>" with a trailing ";<stmt2>" appended.  Apply
 			// the same read-only validation here.
 			sql = strip_leading_comments(sql);
-			if (!validate_readonly_query(sql)) {
+			if (!validate_readonly_query(sql, is_pgsql_protocol(target->protocol))) {
 				result = create_error_response("SQL is not read-only");
-				return result;
-			}
-			if (is_dangerous_query(sql)) {
-				result = create_error_response("SQL contains dangerous operations");
 				return result;
 			}
 
 			std::string explain_query = "EXPLAIN " + sql;
-			std::string query_result = schema.empty()
-				? execute_query(explain_query, target->target_id)
-				: execute_query_with_schema(explain_query, schema, target->target_id);
+			std::string query_result = execute_query_with_schema(explain_query, schema, target->target_id, true);
 			try {
 				result = create_success_response(json::parse(query_result));
 			} catch (...) {

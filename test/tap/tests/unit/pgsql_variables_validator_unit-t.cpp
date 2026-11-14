@@ -122,9 +122,11 @@ static void test_work_mem_basic_units() {
     assert_validates(pgsql_variable_validator_maintenance_work_mem, "1048576kB", true, nullptr, "work_mem");
 }
 
-static void test_work_mem_case_insensitive() {
-    assert_validates(pgsql_variable_validator_maintenance_work_mem, "1gb", true, nullptr, "work_mem_case");
-    assert_validates(pgsql_variable_validator_maintenance_work_mem, "1Gb", true, nullptr, "work_mem_case");
+static void test_work_mem_case_sensitive() {
+    assert_validates(pgsql_variable_validator_maintenance_work_mem, "1gb", false, nullptr, "work_mem_case");
+    assert_validates(pgsql_variable_validator_maintenance_work_mem, "1Gb", false, nullptr, "work_mem_case");
+    assert_validates(pgsql_variable_validator_maintenance_work_mem, "1mb", false, nullptr, "work_mem_case");
+    assert_validates(pgsql_variable_validator_maintenance_work_mem, "1Kb", false, nullptr, "work_mem_case");
 }
 
 static void test_work_mem_invalid() {
@@ -236,6 +238,8 @@ static void test_timezone_invalid() {
         // or as pgsql-default_timezone it cannot be applied again on another backend connection
         "INTERVAL '+02:30'", "interval '1' hour", "INTERVAL ''+02:30''", "INTERVAL'1'", "INTERVAL '2 hours'",
         "INTERVAL '1''2'", "INTERVAL '+02:30' DAY", "INTERVAL+3",
+        // Word-like suffixes must be refused after the SET handler skips its INTERVAL lock.
+        "INTERVALfoo", "INTERVAL_foo",
         // LOCAL: SET TIME ZONE LOCAL is handled as DEFAULT, and as a value PostgreSQL refuses it
         "LOCAL", "local",
         // PostgreSQL accepts these two, but no real client sends them
@@ -257,8 +261,8 @@ int main() {
     if (encodings == 0) {
         BAIL_OUT("pg_encoding_to_char() returned no encodings");
     }
-    // Include the 71 TimeZone checks alongside the dynamic encoding checks.
-    plan(160 + 4 * encodings);
+    // Include the 73 TimeZone checks alongside the dynamic encoding checks.
+    plan(164 + 4 * encodings);
     test_init_minimal();
 
     test_bool_true_values();                // 12 (6 inputs x 2 assertions each)
@@ -272,7 +276,7 @@ int main() {
     test_string_synchronous_commit();       // 8 (4 inputs x 2)
     test_string_bytea_output();             // 4 (2 inputs x 2)
     test_work_mem_basic_units();            // 4 (validate only)
-    test_work_mem_case_insensitive();       // 2 (validate only)
+    test_work_mem_case_sensitive();         // 4 (validate only)
     test_work_mem_invalid();                // 3
     test_search_path_valid();               // 4 (2 inputs x 2)
     test_search_path_quoted();              // 2

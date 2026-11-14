@@ -222,6 +222,59 @@ static void test_ssl_handshake_and_io() {
 		}
 	}
 
+	// Frontend EOF stays terminal even with final request frames queued.
+	uint8_t final_frame[] = {0x01, 0x00, 0x00, 0x00, 0x11};
+	if (SSL_write(client_ssl, final_frame, sizeof(final_frame)) != sizeof(final_frame))
+		BAIL_OUT("final TLS frame write failed");
+	if (SSL_write(client_ssl, final_frame, sizeof(final_frame)) != sizeof(final_frame))
+		BAIL_OUT("second final TLS frame write failed");
+	SSL_shutdown(client_ssl);
+	// Drain every pending encrypted byte from the client BIO, handling short
+	// sends and EINTR, so split records cannot be left behind.
+	while (BIO_ctrl_pending(client_wbio) > 0) {
+		int bio_bytes = BIO_read(client_wbio, shuttle, sizeof(shuttle));
+		if (bio_bytes > 0) {
+			size_t bio_sent = 0;
+			while (bio_sent < static_cast<size_t>(bio_bytes)) {
+				ssize_t sent = send(fds[1], shuttle + bio_sent,
+					static_cast<size_t>(bio_bytes) - bio_sent, 0);
+				if (sent < 0 && errno == EINTR)
+					continue;
+				if (sent <= 0)
+					BAIL_OUT("final TLS records send failed");
+				bio_sent += static_cast<size_t>(sent);
+			}
+		} else {
+			BAIL_OUT("final TLS records read from BIO failed");
+		}
+	}
+	// Read until the server observes close_notify, tolerating EAGAIN and split
+	// records instead of treating the first zero as EOF.
+	bool close_notify_seen = false;
+	for (int round = 0; round < 1000 && !close_notify_seen; ++round) {
+		ssize_t read_rc = server_ds.read_from_net();
+		if (read_rc < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				usleep(1000);
+				continue;
+			}
+			BAIL_OUT("final TLS records read failed");
+		}
+		if (server_ds.get_ssl() != nullptr &&
+			(SSL_get_shutdown(server_ds.get_ssl()) & SSL_RECEIVED_SHUTDOWN))
+			close_notify_seen = true;
+	}
+	if (!close_notify_seen)
+		BAIL_OUT("final TLS close_notify was not observed");
+	ok(server_ds.read_from_net() == 0 && server_ds.has_complete_frame(),
+	   "frontend TLS EOF prevents dispatch of a coalesced final request");
+	if (server_ds.has_complete_frame()) server_ds.pop_frame();
+	ok(server_ds.read_from_net() == 0 && server_ds.has_complete_frame(),
+	   "frontend TLS EOF remains terminal with queued request frames");
+	if (server_ds.has_complete_frame()) server_ds.pop_frame();
+	ok(server_ds.read_from_net() == 0, "TLS EOF is reported after the final frame");
+	shutdown(fds[1], SHUT_WR);
+
 	SSL_free(client_ssl);
 	SSL_CTX_free(server_ctx);
 	SSL_CTX_free(client_ctx);

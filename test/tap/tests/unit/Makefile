@@ -691,10 +691,12 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	connection_unhealthy_unit-t \
 	connection_max_age_unit-t latency_awareness_selection_unit-t \
 	cluster_sync_unit-t cluster_admin_lock_order_unit-t \
+	genai_sql_readonly_unit-t \
 	parsersql_unit-t parsersql_v30_flow_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
 	query_digest_parser_parity_unit-t \
+	mysql_set_parser_jdbc_unit-t \
 	mysql_set_transaction_characteristics_unit-t \
 	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
@@ -707,6 +709,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
+	restapi_tls_config_unit-t \
 	mcp_client_unit-t \
 	pgsql_waiter_list_unit-t
 
@@ -743,6 +746,7 @@ UNIT_TESTS += \
 	managed_configuration_contract_unit-t \
 	managed_configuration_lifecycle_unit-t \
 	managed_configuration_database_unit-t \
+	managed_discovery_reload_unit-t \
 	managed_discovery_unit-t \
 	managed_runtime_mysql_unit-t \
 	managed_runtime_pgsql_unit-t \
@@ -850,6 +854,7 @@ ifneq ($(UNAME_S),Darwin)
 endif
 
 ifeq ($(UNAME_S),Linux)
+restapi_tls_config_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=listen -Wl,--wrap=lstat -Wl,--wrap=fstatat
 ifneq ($(PROXYSQL31),1)
 parsersql_v30_flow_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_query_digest_and_first_comment -Wl,--wrap=pgsql_query_digest_and_first_comment -Wl,--wrap=_Z28parsersql_command_type_mysqlPKci -Wl,--wrap=_Z28parsersql_command_type_pgsqlPKci
 endif
@@ -1490,7 +1495,7 @@ STATIC_LIBPROXYSQL_TESTS := genai_thread_unit-t pgsql_result_flush_allocation_un
 	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
-STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t
+STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t restapi_tls_config_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive
 
@@ -1586,6 +1591,12 @@ managed_discovery_unit-t: managed_discovery_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
 
+managed_discovery_reload_unit-t: managed_discovery_reload_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_FAKE_PLUGIN_PATH=\"$(FAKE_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -o $@
+
 # Exercise the real TLS reload operation, replacing only its generic unit stub.
 $(ODIR)/managed_runtime_globals.o: $(TEST_HELPERS_DIR)/test_globals.cpp $(PROXYSQL_TEST_HEADERS) | $(ODIR)
 	$(CXX) -c -o $@ $< $(OPT) $(IDIRS) -I$(PROXYSQL_PATH)/test -Wall -DProxySQL_create_or_load_TLS=unused_managed_tls_stub
@@ -1599,3 +1610,9 @@ managed_runtime_pgsql_unit-t: managed_runtime_pgsql_unit-t.cpp $(ODIR)/tap.o $(O
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/managed_runtime_globals.o $(ODIR)/test_init.o $(PROXYSQL_PATH)/src/obj/proxy_tls.o \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+# Header-only ParserSQL policy needs no GenAI runtime or database fixtures.
+genai_sql_readonly_unit-t: genai_sql_readonly_unit-t.cpp $(PROXYSQL_PATH)/plugins/genai/include/SQL_Readonly_Validator.h $(PROXYSQL_PATH)/plugins/genai/include/PgSQL_Readonly_Transaction.h $(PARSERSQL_IDIR)/sql_parser/tokenizer.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/genai/include -I$(PARSERSQL_IDIR) \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@

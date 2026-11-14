@@ -358,7 +358,7 @@ std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Manager::find_prepared_
 
 std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Manager::add_prepared_statement(uint64_t hash, const char* user, const char* database, const char* query,
 	unsigned int query_len, Parse_Param_Types&& ppt, const char* first_comment, const char* digest_text, uint64_t digest, 
-	PGSQL_QUERY_command PgQueryCmd, bool lock) {
+	PGSQL_QUERY_command PgQueryCmd, uint32_t scan_found, bool lock) {
 	std::shared_ptr<const PgSQL_STMT_Global_info> ret = nullptr;
 
 	if (lock) {
@@ -379,6 +379,7 @@ std::shared_ptr<const PgSQL_STMT_Global_info> PgSQL_STMT_Manager::add_prepared_s
 		}
 
 		auto stmt_info = std::make_shared<PgSQL_STMT_Global_info>(next_id, user, database, query, query_len, std::move(ppt), first_comment, hash);
+		stmt_info->scan_found = scan_found;
 
 		if (digest_text) {
 			stmt_info->digest_text = strdup(digest_text);

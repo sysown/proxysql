@@ -1,3 +1,5 @@
+#include "SQL_Readonly_Validator.h"
+#include "MySQL_Query_Limit.h"
 #ifdef PROXYSQL40
 
 
@@ -477,118 +479,12 @@ std::string MySQL_Tool_Handler::sanitize_query(const std::string& query) {
 	return sanitized;
 }
 
-bool MySQL_Tool_Handler::is_dangerous_query(const std::string& query) {
-	std::string upper = query;
-	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-
-	// GHSA-7wh6-2vcc-gcm4: expanded to match the keyword list in
-	// Query_Tool_Handler::validate_readonly_query.  The pre-fix list
-	// missed several MySQL/PostgreSQL keywords (RENAME, FLUSH, RESET,
-	// LOCK/UNLOCK, KILL, REPAIR, OPTIMIZE, HANDLER, INSTALL/UNINSTALL,
-	// PURGE, BEGIN/START/COMMIT/ROLLBACK, XA, SHUTDOWN, INTO DUMPFILE,
-	// ANALYZE) and the original list could be bypassed by simply using
-	// one of those side-effecting verbs.  ANALYZE is included to catch
-	// EXPLAIN ANALYZE in any obfuscated form ("EXPLAIN/**/ANALYZE",
-	// "EXPLAIN (ANALYZE)", etc.) and the standalone "ANALYZE TABLE" /
-	// PostgreSQL "ANALYZE foo" statements.
-	static const char* dangerous[] = {
-		"DROP", "DELETE", "INSERT", "UPDATE", "TRUNCATE",
-		"ALTER", "CREATE", "GRANT", "REVOKE", "EXECUTE",
-		"SCRIPT", "INTO OUTFILE", "INTO DUMPFILE", "LOAD_FILE",
-		"LOAD DATA", "SLEEP", "BENCHMARK", "WAITFOR", "DELAY",
-		"RENAME", "FLUSH", "RESET", "LOCK", "UNLOCK", "KILL",
-		"OPTIMIZE", "REPAIR", "HANDLER", "INSTALL", "UNINSTALL",
-		"CHANGE", "PURGE", "SAVEPOINT", "RELEASE", "ROLLBACK",
-		"COMMIT", "BEGIN", "START", "XA", "SHUTDOWN",
-		"ANALYZE", "CALL", "REPLACE"
-	};
-
-	for (const char* word : dangerous) {
-		if (upper.find(word) != std::string::npos) {
-			proxy_debug(PROXY_DEBUG_GENERIC, 3, "Dangerous keyword found: %s\n", word);
-			return true;
-		}
-	}
-
-	return false;
-}
-
-bool MySQL_Tool_Handler::contains_multi_statement(const std::string& query) {
-	// GHSA-7wh6-2vcc-gcm4: lexer-style scan tolerant of ';' inside
-	// string literals, identifier-quoted names, and comments.  Mirrors
-	// the implementation in Query_Tool_Handler — the two should stay
-	// in sync, since both classes accept SQL from MCP tool callers.
-	enum class S { Code, SingleStr, DoubleStr, BacktickIdent, LineComment, BlockComment };
-	S state = S::Code;
-	bool seen_separator = false;
-	const size_t n = query.size();
-	for (size_t i = 0; i < n; ++i) {
-		const char c = query[i];
-		const char next = (i + 1 < n) ? query[i + 1] : '\0';
-		switch (state) {
-			case S::Code:
-				if (c == '\'') { state = S::SingleStr; seen_separator = false; }
-				else if (c == '"') { state = S::DoubleStr; seen_separator = false; }
-				else if (c == '`') { state = S::BacktickIdent; seen_separator = false; }
-				else if (c == '-' && next == '-') { state = S::LineComment; ++i; }
-				else if (c == '/' && next == '*') { state = S::BlockComment; ++i; }
-				else if (c == ';') { seen_separator = true; }
-				else if (seen_separator && !std::isspace(static_cast<unsigned char>(c))) {
-					return true;
-				}
-				break;
-			case S::SingleStr:
-				if (c == '\\' && next != '\0') { ++i; }
-				else if (c == '\'') { state = S::Code; }
-				break;
-			case S::DoubleStr:
-				if (c == '\\' && next != '\0') { ++i; }
-				else if (c == '"') { state = S::Code; }
-				break;
-			case S::BacktickIdent:
-				if (c == '`') { state = S::Code; }
-				break;
-			case S::LineComment:
-				if (c == '\n') { state = S::Code; }
-				break;
-			case S::BlockComment:
-				if (c == '*' && next == '/') { state = S::Code; ++i; }
-				break;
-		}
-	}
-	return false;
-}
-
 bool MySQL_Tool_Handler::validate_readonly_query(const std::string& query) {
-	// GHSA-7wh6-2vcc-gcm4: reject multi-statement payloads up front,
-	// before any substring/regex inspection looks at the first keyword.
-	if (contains_multi_statement(query)) {
+	if (!genai::readonly_sql<sql_parser::Dialect::MySQL>(query, true)) return false;
+	const genai::MySQL_Query_Limit limits(query);
+	if (!allow_select_star && limits.select_star && !limits.has_limit) {
+		proxy_debug(PROXY_DEBUG_GENERIC, 3, "SELECT * without LIMIT rejected\n");
 		return false;
-	}
-
-	std::string upper = query;
-	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-
-	// Must start with SELECT
-	if (upper.substr(0, 6) != "SELECT") {
-		return false;
-	}
-
-	// Check for dangerous keywords
-	if (is_dangerous_query(query)) {
-		return false;
-	}
-
-	// Check for SELECT * without LIMIT
-	if (!allow_select_star) {
-		std::regex select_star_regex("\\bSELECT\\s+\\*\\s+FROM", std::regex_constants::icase);
-		if (std::regex_search(upper, select_star_regex)) {
-			// Allow if there's a LIMIT clause
-			if (upper.find("LIMIT ") == std::string::npos) {
-				proxy_debug(PROXY_DEBUG_GENERIC, 3, "SELECT * without LIMIT rejected\n");
-				return false;
-			}
-		}
 	}
 
 	return true;
@@ -1195,28 +1091,17 @@ std::string MySQL_Tool_Handler::run_sql_readonly(
 	json result;
 	result["success"] = false;
 
-	// Strip leading comments from the query
-	std::string query = strip_leading_comments(sql);
-
-	// Validate query is read-only
-	if (!validate_readonly_query(query)) {
+	// Validate the original query (including comments) is read-only.
+	if (!validate_readonly_query(sql)) {
 		result["error"] = "Query validation failed: not SELECT-only or contains dangerous keywords";
 		return result.dump();
 	}
 
-	// Add LIMIT if not present and not an aggregate query
-	std::string upper = sql;
-	std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-
-	bool has_limit = upper.find("LIMIT ") != std::string::npos;
-	bool is_aggregate = upper.find("GROUP BY") != std::string::npos ||
-	                     upper.find("COUNT(") != std::string::npos ||
-                         upper.find("SUM(") != std::string::npos ||
-                         upper.find("AVG(") != std::string::npos;
-
-	if (!has_limit && !is_aggregate && !allow_select_star) {
-		query += " LIMIT " + std::to_string(std::min(max_rows, 200));
-	}
+	// Preserve SQL text and insert the cap before a terminal semicolon or
+	// trailing comment. Only outer SQL tokens can provide a limit exemption.
+	const genai::MySQL_Query_Limit limits(sql);
+	std::string query = allow_select_star ? sql
+		: limits.apply(sql, std::min(max_rows, 200));
 
 	// Execute the query
 	std::string response = execute_query(query);

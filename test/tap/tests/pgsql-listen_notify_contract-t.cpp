@@ -84,6 +84,28 @@ static std::string run_extended(PGConnPtr& c, const char* q) {
 	return st;
 }
 
+// The statement between SELECT 1 and SELECT 2 in one pipeline, all before one Sync: its SQLSTATE.
+static std::string run_pipeline(PGConnPtr& c, const char* q) {
+	ensure_usable(c);
+	if (PQenterPipelineMode(c.get()) != 1) return "<no pipeline>";
+	const char* qs[3] = { "SELECT 1", q, "SELECT 2" };
+	for (const char* one : qs) PQsendQueryParams(c.get(), one, 0, NULL, NULL, NULL, NULL, 0);
+	PQpipelineSync(c.get());
+	std::string st = "<no result>";
+	for (int i = 0; i < 3; i++) {
+		for (PGresult* r = PQgetResult(c.get()); r != NULL; r = PQgetResult(c.get())) {
+			if (i == 1 && st == "<no result>") {
+				if (PQresultStatus(r) == PGRES_PIPELINE_ABORTED) st = "<aborted>";
+				else st = sqlstate_of(r);
+			}
+			PQclear(r);
+		}
+	}
+	for (PGresult* r = PQgetResult(c.get()); r != NULL; r = PQgetResult(c.get())) PQclear(r); // the Sync's
+	PQexitPipelineMode(c.get());
+	return st;
+}
+
 struct Case { const char* sql; const char* label; };
 
 // Every spelling PostgreSQL accepts as "LISTEN <channel>".
@@ -174,7 +196,7 @@ static std::string admin_scalar(PGconn* admin, const char* q) {
 
 int main(int, char**) {
 	if (cl.getEnv()) return exit_status();
-	plan(1 + (int)(N_REFUSED * 2) + (int)(N_NOT_REFUSED * 2) +
+	plan(1 + (int)(N_REFUSED * 3) + (int)(N_NOT_REFUSED * 3) +
 	     (int)N_MULTI_REFUSED + (int)N_MULTI_NOT_REFUSED + 1 +
 	     1 + (int)(KEEP_REFUSED.size() * 2) + (int)KEEP_MULTI_REFUSED.size() + (int)KEEP_NOT_REFUSED.size() + 1 +
 	     1 + (int)NODIGEST_MULTI_REFUSED.size() + (int)NODIGEST_NOT_REFUSED.size() + 1 + 1);
@@ -207,6 +229,11 @@ int main(int, char**) {
 		ok(st == "0A000", "extended LISTEN refused with 0A000 -- %s (got '%s')",
 		   REFUSED[i].label, st.c_str());
 	}
+	for (size_t i = 0; i < N_REFUSED; i++) {
+		std::string st = run_pipeline(c, REFUSED[i].sql);
+		ok(st == "0A000", "pipelined LISTEN refused with 0A000 -- %s (got '%s')",
+		   REFUSED[i].label, st.c_str());
+	}
 	for (size_t i = 0; i < N_NOT_REFUSED; i++) {
 		std::string st = run_simple(c, NOT_REFUSED[i].sql);
 		ok(st != "0A000", "simple statement not refused as LISTEN -- %s (got '%s')",
@@ -215,6 +242,13 @@ int main(int, char**) {
 	for (size_t i = 0; i < N_NOT_REFUSED; i++) {
 		std::string st = run_extended(c, NOT_REFUSED[i].sql);
 		ok(st != "0A000", "extended statement not refused as LISTEN -- %s (got '%s')",
+		   NOT_REFUSED[i].label, st.c_str());
+	}
+	for (size_t i = 0; i < N_NOT_REFUSED; i++) {
+		std::string st = run_pipeline(c, NOT_REFUSED[i].sql);
+		// The pipeline must have run and answered the statement: the sentinels are not results.
+		ok(st != "0A000" && st != "<no result>" && st != "<no pipeline>" && st != "<aborted>",
+		   "pipelined statement not refused as LISTEN -- %s (got '%s')",
 		   NOT_REFUSED[i].label, st.c_str());
 	}
 	for (size_t i = 0; i < N_MULTI_REFUSED; i++) {

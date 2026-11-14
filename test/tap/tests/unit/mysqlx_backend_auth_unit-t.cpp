@@ -896,7 +896,7 @@ static void test_backend_auth_tls_fatal_read_with_stale_eagain() {
 	SSL_CTX_free(peer_ctx);
 }
 
-static void test_backend_auth_tls_notice_ok_then_eof() {
+static void test_backend_auth_tls_notice_ok_then_eof(bool close_notify = false, bool leading_notice = true) {
 	diag(">>> %s", __func__);
 	TestCa ca;
 	SSL_CTX* shared_ctx = nullptr;
@@ -968,14 +968,17 @@ static void test_backend_auth_tls_notice_ok_then_eof() {
 	const std::vector<uint8_t> ok_frame = build_x_frame(
 		Mysqlx::ServerMessages_Type_SESS_AUTHENTICATE_OK,
 		reinterpret_cast<const uint8_t*>(ok_str.data()), ok_str.size());
-	const bool sent_notice = server_write_plain(
+	const bool sent_notice = !leading_notice || server_write_plain(
 		server_ssl, swbio, fds[1], notice_frame.data(), notice_frame.size());
 	const bool sent_ok = server_write_plain(
 		server_ssl, swbio, fds[1], ok_frame.data(), ok_frame.size());
 	ok(sent_notice && sent_ok, "tls-notice-ok-eof: NOTICE and OK queued");
-	// Deliberately close without a TLS close_notify: data and FIN can arrive
-	// in the same read batch. The peer is gone either way, so there is no
-	// usable authenticated connection to preserve.
+	if (close_notify) {
+		SSL_shutdown(server_ssl);
+		if (drain_wbio_to_fd(swbio, fds[1]) <= 0) BAIL_OUT("TLS close_notify send failed");
+	}
+	// The final response and EOF can arrive in one read. Neither graceful
+	// nor abrupt closure leaves a usable authenticated connection.
 	close(fds[1]);
 
 	int rc = 1;
@@ -2001,6 +2004,8 @@ int main() {
 	test_send_authenticate_start_requires_verified_peer_gate();
 	test_backend_auth_tls_fatal_read_with_stale_eagain();
 	test_backend_auth_tls_notice_ok_then_eof();
+	test_backend_auth_tls_notice_ok_then_eof(true, false);
+	test_backend_auth_tls_notice_ok_then_eof(true, true);
 	test_start_connect_persists_configured_host();
 
 	// Auth-phase NOTICE per-state policy (#5695 part 2).

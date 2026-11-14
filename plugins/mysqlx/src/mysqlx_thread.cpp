@@ -473,6 +473,7 @@ const char* session_status_to_string(MysqlxSession::Status s) {
 		case MysqlxSession::X_TLS_CONNECT_DONE:    return "X_TLS_CONNECT_DONE";
 		case MysqlxSession::X_SESSION_CLOSING:     return "X_SESSION_CLOSING";
 		case MysqlxSession::X_SESSION_CLOSED:      return "X_SESSION_CLOSED";
+		case MysqlxSession::X_SESSION_DRAINING:    return "X_SESSION_DRAINING";
 		case MysqlxSession::X_SESSION_RESET_WAITING: return "X_SESSION_RESET_WAITING";
 		case MysqlxSession::X_PASSTHROUGH_FORWARD: return "X_PASSTHROUGH_FORWARD";
 	}
@@ -489,6 +490,12 @@ const char* backend_auth_mode_to_string(MysqlxBackendAuthMode m) {
 }
 
 } // namespace
+
+#ifdef MYSQLX_TEST_BUILD
+const char* mysqlx_session_status_string_for_test(int status) {
+	return session_status_to_string(static_cast<MysqlxSession::Status>(status));
+}
+#endif
 
 void Mysqlx_Thread::snapshot_sessions_for_stats(
 		std::vector<MysqlxSessionSnapshot>& out, uint64_t now_ms) const {

@@ -1037,6 +1037,49 @@ static void scenario_extended_protocol_listen(PGconn* admin, const std::vector<S
 	   "and its notification is delivered (got %zu)", got.size());
 }
 
+// LISTEN in a pipeline, between two other statements before one Sync: the native backend
+// batches such a unit, and the LISTEN has to leave the batch for the gate to see it and pin.
+static void scenario_pipelined_listen(PGconn* admin, const std::vector<ServerRow>& saved) {
+	if (!setVar(admin, "pgsql-multiplexing", "true") || !flushBackendPool(admin, BACKEND_HG, saved)) {
+		ok(false, "pipelined LISTEN setup failed");
+		ok(false, "pipelined LISTEN setup failed");
+		return;
+	}
+	const std::string ch = chan("pipe");
+	PGConnPtr listener = open_client_conn();
+	PGConnPtr notifier = open_client_conn();
+	if (!listener || PQstatus(listener.get()) != CONNECTION_OK ||
+	    !notifier || PQstatus(notifier.get()) != CONNECTION_OK) {
+		ok(false, "pipelined LISTEN could not connect");
+		ok(false, "pipelined LISTEN could not connect");
+		return;
+	}
+	PGconn* c = listener.get();
+	const std::string listen = "LISTEN " + ch;
+	const char* q[3] = { "SELECT 1", listen.c_str(), "SELECT 2" };
+	bool accepted = PQenterPipelineMode(c) == 1;
+	for (const char* one : q) accepted = accepted && PQsendQueryParams(c, one, 0, NULL, NULL, NULL, NULL, 0) == 1;
+	accepted = accepted && PQpipelineSync(c) == 1;
+	for (int i = 0; i < 3 && accepted; i++) {
+		bool good = false;
+		for (PGresult* r = PQgetResult(c); r != NULL; r = PQgetResult(c)) {
+			good = good || PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
+			PQclear(r);
+		}
+		accepted = good;
+	}
+	for (PGresult* r = PQgetResult(c); r != NULL; r = PQgetResult(c)) PQclear(r); // the Sync's
+	PQexitPipelineMode(c);
+	const long held = waitConnUsed(admin, 1, 5000);
+	ok(accepted && held == 1, "a LISTEN inside a pipeline is accepted and pins the connection (accepted=%s, ConnUsed=%ld)",
+	   accepted ? "yes" : "no", held);
+
+	notifyChannel(notifier.get(), ch, "via-pipeline");
+	std::vector<Notification> got = drain_notifications(c, 3000);
+	ok(got.size() == 1 && got[0].channel == ch && got[0].payload == "via-pipeline",
+	   "and its notification is delivered (got %zu)", got.size());
+}
+
 // The one path where a LISTEN is refused after the gate allowed it: the session held no
 // backend connection when the statement arrived, so the answer depended on a connection it
 // did not have yet, and the pool then handed it a libpq one. That refusal happens mid-flight
@@ -1314,9 +1357,9 @@ int main(int, char**) {
 	// delivery: scenario A 2 x 2 modes, scenario B 1 x 2 modes plus cached 2 x 2 modes.
 	const int DELIVERY_ASSERTIONS = 4 + 2 + 4;
 	// pin lifecycle, buffered, disconnect, backend killed, TLS, many listeners, COPY,
-	// multi-statement LISTEN, UNLISTEN without digests, notification during a query, second
-	// hostgroup, mock backend
-	const int LIFECYCLE_ASSERTIONS = 6 + 2 + 4 + 2 + 2 + 2 + 1 + 5 + 4 + 2 + 2 + 2 + 3 + 3;
+	// multi-statement LISTEN, UNLISTEN without digests, notification during a query, extended
+	// protocol, pipelined LISTEN, second hostgroup, mock backend
+	const int LIFECYCLE_ASSERTIONS = 6 + 2 + 4 + 2 + 2 + 2 + 1 + 5 + 4 + 2 + 2 + 2 + 2 + 3 + 3;
 	plan(DELIVERY_ASSERTIONS + LIFECYCLE_ASSERTIONS);
 	if (cl.getEnv()) return exit_status();
 	// The proxy closes the client socket when a backend is killed under a pinned
@@ -1370,6 +1413,7 @@ int main(int, char**) {
 		scenario_unlisten_without_digests(admin.get(), saved);
 		scenario_notification_during_query(admin.get(), saved);
 		scenario_extended_protocol_listen(admin.get(), saved);
+		scenario_pipelined_listen(admin.get(), saved);
 		scenario_listen_on_pooled_libpq_conn(admin.get(), saved);
 		scenario_second_hostgroup(admin.get(), be.get(), saved);
 		// Last: it turns the monitor off, which cannot be turned back on.

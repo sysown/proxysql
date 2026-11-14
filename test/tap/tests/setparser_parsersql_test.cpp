@@ -17,6 +17,7 @@
 
 #include "setparser_test_common.h"
 #include "Query_Processor_ParserSQL.h"
+#include "PgSQL_Set_Stmt_Parser.h"
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
@@ -818,6 +819,352 @@ void TestEmptyOnParseFail(const EmptyOnParseFailCase* cases, int n) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// set_config() classifier (parsersql_classify_set_config_pgsql). Pure: query text and
+// standard_conforming_strings in, verdict out. Every message below was measured on PG16.
+// ---------------------------------------------------------------------------
+
+using V = PgSetConfigVerdict;
+using E = PgSetConfigError;
+
+struct SetConfigCase {
+	const char* query;
+	bool scs;               // client's standard_conforming_strings
+	V verdict;
+	E error;
+	const char* text;       // TRACK: name as written; LOCAL_ERROR: message
+	bool value_null;        // TRACK
+	const char* value;      // TRACK: decoded value
+	const char* column;     // TRACK: result column name
+};
+
+#define SC_TRACK(q, name, value, column) { q, true, V::TRACK, E::NONE, name, false, value, column }
+#define SC_TRACK_NULL(q, name, column) { q, true, V::TRACK, E::NONE, name, true, "", column }
+#define SC_LOCK(q) { q, true, V::LOCK, E::NONE, "", false, "", "" }
+#define SC_NOT(q) { q, true, V::NOT_SET_CONFIG, E::NONE, "", false, "", "" }
+#define SC_ERR(q, e, msg) { q, true, V::LOCAL_ERROR, e, msg, false, "", "" }
+#define SC_42883(q, types) SC_ERR(q, E::UNDEFINED_FUNCTION, "function set_config(" types ") does not exist")
+#define SC_22P02(q, raw) SC_ERR(q, E::INVALID_BOOLEAN, "invalid input syntax for type boolean: \"" raw "\"")
+
+static const SetConfigCase set_config_cases[] = {
+	// The bare form, every spelling.
+	SC_TRACK("SELECT set_config('TimeZone','UTC',false)", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC',false)", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("select SET_CONFIG('TimeZone','UTC',false)", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT PG_CATALOG.SET_CONFIG('TimeZone','UTC',false)", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT \"set_config\"('TimeZone','UTC',false)", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT \"pg_catalog\".\"set_config\"('TimeZone','UTC',false)", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT set_config('TimeZone','UTC',false) AS tz", "TimeZone", "UTC", "tz"),
+	SC_TRACK("SELECT set_config('TimeZone','UTC',false) AS TZ", "TimeZone", "UTC", "tz"),
+	SC_TRACK("SELECT set_config('TimeZone','UTC',false) AS \"MyCol\"", "TimeZone", "UTC", "MyCol"),
+	SC_TRACK("SELECT set_config('TimeZone','UTC',false) AS \"a\"\"b\"", "TimeZone", "UTC", "a\"b"),
+	SC_TRACK("SELECT set_config('TimeZone','UTC',false) tz", "TimeZone", "UTC", "tz"),
+	SC_TRACK("SELECT set_config('TimeZone','UTC',false);", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("/* c */ SELECT set_config('TimeZone','UTC',false) -- t", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT set_config('TimeZone','UTC',false) /* t */ ; -- u", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT set_config( 'timezone' , 'UTC' , false )\n", "timezone", "UTC", "set_config"),
+	// is_local spellings PostgreSQL reads as false, and NULL.
+	SC_TRACK("SELECT set_config('TimeZone','UTC',FALSE)", "TimeZone", "UTC", "set_config"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','f')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','fa')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','fals')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','False')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','no')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','n')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','off')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','of')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','0')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','  OFF  ')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',NULL)"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','f')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','fa')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','fals')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','False')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','no')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','n')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','off')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','of')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','0')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC','  OFF  ')", "TimeZone", "UTC", "set_config"),
+	SC_TRACK("SELECT pg_catalog.set_config('TimeZone','UTC',NULL)", "TimeZone", "UTC", "set_config"),
+	SC_TRACK_NULL("SELECT set_config('TimeZone',NULL,false)", "TimeZone", "set_config"),
+	// Values decoded the way PostgreSQL reads them.
+	SC_TRACK("SELECT set_config('search_path','it''s',false)", "search_path", "it's", "set_config"),
+	SC_TRACK("SELECT set_config('search_path',E'x\\'z',false)", "search_path", "x'z", "set_config"),
+	SC_TRACK("SELECT set_config('search_path',e'it''s',false)", "search_path", "it's", "set_config"),
+	SC_TRACK("SELECT set_config('search_path',E'a\\tb\\\\c',false)", "search_path", "a\tb\\c", "set_config"),
+	SC_TRACK("SELECT set_config('search_path',E'\\101\\x42\\q',false)", "search_path", "ABq", "set_config"),
+	SC_TRACK("SELECT set_config('search_path',E'\\v\\x',false)", "search_path", "vx", "set_config"),
+	SC_TRACK("SELECT set_config('TimeZone',E'\\u0041sia/Tokyo',false)", "TimeZone", "Asia/Tokyo", "set_config"),
+	SC_TRACK("SELECT set_config('search_path',E'\\u00e9',false)", "search_path", "\xc3\xa9", "set_config"),
+	SC_TRACK("SELECT set_config('TimeZone',$$UT'C$$,false)", "TimeZone", "UT'C", "set_config"),
+	SC_TRACK("SELECT set_config('TimeZone',$q$v$q$,false)", "TimeZone", "v", "set_config"),
+	SC_TRACK("SELECT set_config('search_path', 'a\\', false) --', false)", "search_path", "a\\", "set_config"),
+	SC_TRACK("SELECT set_config('search_path', '\xd1\x81\xd1\x85\xd0\xb5\xd0\xbc\xd0\xb0, public', false)",
+		"search_path", "\xd1\x81\xd1\x85\xd0\xb5\xd0\xbc\xd0\xb0, public", "set_config"),
+
+	// is_local spellings PostgreSQL reads as true: transaction-scoped, not tracked.
+	SC_LOCK("SELECT set_config('TimeZone','UTC',true)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',TRUE)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','t')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','tr')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','yes')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','y')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','on')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','1')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',' True ')"),
+	// Arguments that are not plain literals.
+	SC_LOCK("SELECT set_config($1,'UTC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone',$1,false)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',$1)"),
+	SC_LOCK("SELECT set_config('TimeZone'::text,'UTC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC'::text,false)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false::boolean)"),
+	SC_LOCK("SELECT set_config('TimeZone',text 'UTC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone',NULL::text,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',current_setting('x'),false)"),
+	SC_LOCK("SELECT set_config('TimeZone','U' || 'TC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone',U&'UT\\0043',false)"),
+	SC_LOCK("SELECT set_config('TimeZone',E'\\u0000',false)"),
+	SC_LOCK("SELECT set_config('TimeZone',E'\\xff',false)"),
+	SC_LOCK("SELECT set_config('TimeZone',E'\\ud800',false)"),
+	SC_LOCK("SELECT set_config('Time'\n'Zone','UTC',false)"),
+	SC_LOCK("SELECT set_config(setting_name => 'TimeZone', new_value => 'UTC', is_local => false)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',-true)"),
+	SC_LOCK("SELECT set_config(DISTINCT 'TimeZone','UTC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false ORDER BY 1)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false) FILTER (WHERE true)"),
+	// The call is not alone, or not the whole statement.
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false), 1"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false) FROM t"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false) WHERE true"),
+	SC_LOCK("SELECT 1 WHERE set_config('TimeZone','UTC',false) IS NOT NULL"),
+	SC_LOCK("SELECT CASE WHEN true THEN set_config('TimeZone','UTC',false) END"),
+	SC_LOCK("WITH x AS (SELECT set_config('TimeZone','UTC',false)) SELECT * FROM x"),
+	SC_LOCK("SELECT (SELECT set_config('TimeZone','UTC',false))"),
+	// Clauses after the call: LIMIT 0 or HAVING false mean PostgreSQL never runs it.
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false) LIMIT 0"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false) OFFSET 1"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false) ORDER BY 1"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false) HAVING false"),
+	// A subquery as an argument: its value is not a literal.
+	SC_LOCK("SELECT set_config((SELECT 'TimeZone'),'UTC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone',(SELECT 'UTC'),false)"),
+	SC_LOCK("SELECT * FROM set_config('TimeZone','UTC',false)"),
+	SC_LOCK("SELECT * FROM pg_catalog.set_config('TimeZone','UTC',false)"),
+	SC_LOCK("EXPLAIN ANALYZE SELECT set_config('TimeZone','UTC',false)"),
+	SC_LOCK("PREPARE p AS SELECT set_config('TimeZone','UTC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false), set_config('DateStyle','ISO',false)"),
+	SC_LOCK("SELECT (set_config('TimeZone','UTC',false))"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false)::text"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false) || 'x'"),
+	SC_LOCK("SELECT DISTINCT set_config('TimeZone','UTC',false)"),
+	SC_LOCK("SELECT 1; SELECT set_config('TimeZone','UTC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false); SELECT 1"),
+	SC_LOCK("CALL set_config('TimeZone','UTC',false)"),
+	SC_LOCK("SELECT public.set_config('TimeZone','UTC',false)"),
+	SC_LOCK("SELECT U&\"set\\005fconfig\"('TimeZone','UTC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',false) AS "
+		"a123456789012345678901234567890123456789012345678901234567890123"),
+	// Hidden forms that change a setting.
+	SC_LOCK("UPDATE pg_settings SET setting='UTC' WHERE name='TimeZone'"),
+	SC_LOCK("UPDATE pg_catalog.pg_settings SET setting='UTC' WHERE name='TimeZone'"),
+	SC_LOCK("WITH x AS (UPDATE pg_settings SET setting='UTC' WHERE name='TimeZone' RETURNING 1) SELECT 1"),
+	SC_LOCK("EXPLAIN ANALYZE UPDATE pg_settings SET setting='UTC' WHERE name='TimeZone'"),
+	SC_LOCK("DO $$BEGIN PERFORM set_config('TimeZone','UTC',false); END$$"),
+	SC_LOCK("DO $$BEGIN PERFORM SET_CONFIG('TimeZone','UTC',false); END$$"),
+	SC_LOCK("DO $$BEGIN UPDATE pg_settings SET setting='UTC' WHERE name='TimeZone'; END$$"),
+	// A backslash ends no string for ParserSQL, but does for a client with this off.
+	{ "SELECT set_config('TimeZone','UTC',false)", false, V::LOCK, E::NONE, "", false, "", "" },
+	{ "SELECT set_config('search_path', 'a\\', false) --', false)", false, V::LOCK, E::NONE, "", false, "", "" },
+
+	// Mentions that change nothing.
+	SC_NOT("SELECT \"SET_CONFIG\"('TimeZone','UTC',false)"),
+	SC_NOT("SELECT * FROM pg_settings"),
+	SC_NOT("SELECT setting FROM pg_settings WHERE name = 'TimeZone'"),
+	SC_NOT("UPDATE t SET x = (SELECT setting FROM pg_settings LIMIT 1)"),
+	SC_NOT("DO $$BEGIN NULL; END$$"),
+	SC_NOT("SELECT 'set_config(1)' /* set_config */"),
+	SC_NOT("SELECT set_config FROM t"),
+
+	// Unqualified overloads go to PostgreSQL; qualified calls retain exact built-in errors.
+	SC_LOCK("SELECT set_config('TimeZone',42,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',-42,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',+5,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',007,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',3000000000,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',99999999999999999999,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',1.5,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',1e3,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',2147483647,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',2147483648,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',-2147483648,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',-2147483649,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',9223372036854775807,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',-9223372036854775808,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',9223372036854775808,false)"),
+	SC_LOCK("SELECT set_config('TimeZone',-9223372036854775809,false)"),
+	SC_LOCK("SELECT set_config(NULL,42,NULL)"),
+	SC_LOCK("SELECT set_config(1,2,3)"),
+	SC_LOCK("SELECT set_config(true,'UTC',false)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',0)"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',-1)"),
+	SC_LOCK("SELECT set_config('TimeZone',42,'maybe')"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',42,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, integer, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',-42,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, integer, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',+5,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, integer, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',007,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, integer, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',3000000000,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, bigint, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',99999999999999999999,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, numeric, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',1.5,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, numeric, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',1e3,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, numeric, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',2147483647,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, integer, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',2147483648,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, bigint, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',-2147483648,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, integer, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',-2147483649,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, bigint, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',9223372036854775807,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, bigint, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',-9223372036854775808,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, bigint, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',9223372036854775808,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, numeric, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',-9223372036854775809,false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, numeric, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config(NULL,42,NULL)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, integer, unknown) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config(1,2,3)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(integer, integer, integer) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config(true,'UTC',false)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(boolean, unknown, boolean) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone','UTC',0)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, unknown, integer) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone','UTC',-1)", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, unknown, integer) does not exist"),
+	SC_ERR("SELECT pg_catalog.set_config('TimeZone',42,'maybe')", E::UNDEFINED_FUNCTION,
+		"function pg_catalog.set_config(unknown, integer, unknown) does not exist"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','maybe')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','o')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','00')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',' maybe ')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','truex')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC','onx')"),
+	// Control bytes that '|0x20' would turn into '0' and '1'.
+	SC_LOCK("SELECT set_config('TimeZone','UTC',E'\\x10')"),
+	SC_LOCK("SELECT set_config('TimeZone','UTC',E'\\x11')"),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','UTC','maybe')", "maybe"),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','UTC','o')", "o"),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','UTC','00')", "00"),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','UTC','')", ""),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','UTC',' maybe ')", " maybe "),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','UTC','truex')", "truex"),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','UTC','onx')", "onx"),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','UTC',E'\\x10')", "\x10"),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','UTC',E'\\x11')", "\x11"),
+	SC_22P02("SELECT pg_catalog.set_config('TimeZone','bogus','maybe')", "maybe"),
+	SC_22P02("SELECT pg_catalog.set_config(NULL,'UTC','maybe')", "maybe"),
+	SC_ERR("SELECT set_config(NULL,'UTC',false)", E::NULL_NAME, "SET requires parameter name"),
+	SC_LOCK("SELECT set_config(NULL,NULL,NULL)"),
+	SC_ERR("SELECT set_config('', 'UTC', false)", E::EMPTY_NAME, "unrecognized configuration parameter \"\""),
+	SC_LOCK("SELECT set_config('TimeZone','bogus','maybe')"),
+	SC_ERR("SELECT set_config(NULL,'bogus',false)", E::NULL_NAME, "SET requires parameter name"),
+	SC_ERR("SELECT set_config('','bogus',false)", E::EMPTY_NAME, "unrecognized configuration parameter \"\""),
+	SC_LOCK("SELECT set_config(NULL,'UTC','maybe')"),
+	SC_ERR("SELECT set_config(NULL,'x',true)", E::NULL_NAME, "SET requires parameter name"),
+};
+
+static const char* verdict_name(V v) {
+	switch (v) {
+		case V::NOT_SET_CONFIG: return "NOT_SET_CONFIG";
+		case V::TRACK: return "TRACK";
+		case V::LOCAL_ERROR: return "LOCAL_ERROR";
+		case V::LOCK: return "LOCK";
+	}
+	return "?";
+}
+
+void TestSetConfigClassifier() {
+	for (const auto& c : set_config_cases) {
+		const PgSetConfigCall r = parsersql_classify_set_config_pgsql(c.query, strlen(c.query), c.scs);
+		bool good = r.verdict == c.verdict && r.error == c.error;
+		std::string got = std::string(verdict_name(r.verdict)) + " err=" + std::to_string((int)r.error);
+		if (c.verdict == V::LOCAL_ERROR) {
+			good = good && r.message == c.text;
+			std::string ql(c.query);
+			for (char &ch : ql) ch = (char)tolower((unsigned char)ch);
+			bool q_expected = ql.find("pg_catalog") != std::string::npos;
+			good = good && (r.qualified == q_expected);
+			got += " msg='" + r.message + "' qualified=" + std::to_string(r.qualified);
+		} else if (c.verdict == V::TRACK) {
+			good = good && r.name == c.text && r.value_null == c.value_null && r.column == c.column &&
+				(c.value_null || r.value == c.value);
+			std::string ql(c.query);
+			for (char &ch : ql) ch = (char)tolower((unsigned char)ch);
+			bool q_expected = ql.find("pg_catalog") != std::string::npos;
+			good = good && (r.qualified == q_expected);
+			got += " name='" + r.name + "' null=" + std::to_string(r.value_null) + " value='" + r.value +
+				"' column='" + r.column + "' qualified=" + std::to_string(r.qualified);
+		}
+		ok(good, "set_config classifier [scs=%d]: %s -> %s (got %s)", c.scs, c.query, verdict_name(c.verdict), got.c_str());
+	}
+}
+
+// ---------------------------------------------------------------------------
+// set_config('search_path', ...) takes a raw GUC list, SET takes SQL: the list is rewritten as
+// SET would write it, every name double-quoted. Splitting measured on PostgreSQL 16.
+// ---------------------------------------------------------------------------
+
+using GL = PgSQL_Set_Stmt_Parser::GucListResult;
+struct GucListCase { const char* raw; GL result; const char* out; };
+
+static const GucListCase guc_list_cases[] = {
+	{ "a, b", GL::OK, "\"a\", \"b\"" },
+	{ "A,   b", GL::OK, "\"a\", \"b\"" },
+	{ "a-b;c, \"X y\", B, 'q'", GL::OK, "\"a-b;c\", \"X y\", \"b\", \"'q'\"" },
+	{ "\"$user\", public", GL::OK, "\"$user\", \"public\"" },
+	{ "$user", GL::OK, "\"$user\"" },
+	{ "\"a\"\"b\"", GL::OK, "\"a\"\"b\"" },
+	{ "A\"b", GL::OK, "\"a\"\"b\"" },
+	{ "  a  ,  \"B\"  ", GL::OK, "\"a\", \"B\"" },
+	{ "\xd1\x81\xd1\x85\xd0\xb5\xd0\xbc\xd0\xb0, public", GL::OK, "\"\xd1\x81\xd1\x85\xd0\xb5\xd0\xbc\xd0\xb0\", \"public\"" },
+	{ "", GL::OK, "" },
+	{ "  ", GL::OK, "" },
+	{ "a b", GL::INVALID, "" },
+	{ "a,,b", GL::INVALID, "" },
+	{ "\"a", GL::INVALID, "" },
+	{ "a,", GL::INVALID, "" },
+	{ ",a", GL::INVALID, "" },
+	{ "\"a\"b", GL::INVALID, "" },
+	{ "a\tb", GL::INVALID, "" },
+	// PostgreSQL takes these; SET cannot write them.
+	{ "\"\"", GL::UNSUPPORTED, "" },
+	// A list PostgreSQL refuses is INVALID even after a name SET cannot write.
+	{ "\"\", a b", GL::INVALID, "" },
+	{ "a123456789012345678901234567890123456789012345678901234567890123, ,", GL::INVALID, "" },
+	{ "a123456789012345678901234567890123456789012345678901234567890123", GL::UNSUPPORTED, "" },
+};
+
+void TestGucListToSetList() {
+	for (const auto& c : guc_list_cases) {
+		std::string out = "<untouched>";
+		const GL r = PgSQL_Set_Stmt_Parser::guc_list_to_set_list(c.raw, &out);
+		const bool good = r == c.result && (r != GL::OK || out == c.out);
+		ok(good, "guc_list_to_set_list('%s') -> %d '%s' (got %d '%s')", c.raw, (int)c.result, c.out, (int)r, out.c_str());
+	}
+}
+
 int main(int argc, char** argv) {
 	unsigned int p = 0;
 	p += std::size(sql_mode);
@@ -847,6 +1194,8 @@ int main(int argc, char** argv) {
 	p += 2;  // TestWalkerToValidatorChain184
 	p += std::size(parsersql_partial_ast_strict);  // TestPartialAstGate
 	p += 13;  // TestPgsqlProtocolTerminator
+	p += std::size(set_config_cases);  // TestSetConfigClassifier
+	p += std::size(guc_list_cases);  // TestGucListToSetList
 	plan(p);
 	TestParse(sql_mode, std::size(sql_mode), "sql_mode");
 	TestParse(time_zone, std::size(time_zone), "time_zone");
@@ -874,6 +1223,8 @@ int main(int argc, char** argv) {
 	TestWalkerToValidatorChain184();
 	TestPartialAstGate();
 	TestPgsqlProtocolTerminator();
+	TestSetConfigClassifier();
+	TestGucListToSetList();
 
 	return exit_status();
 }

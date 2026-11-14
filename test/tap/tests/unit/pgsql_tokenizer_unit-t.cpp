@@ -19,7 +19,7 @@
  *
  * And the statement scan over a digest used to find LISTEN in every statement of a
  * multi-statement Simple Query (issue #6438):
- *   - pgsql_stmt_skip_lead() / pgsql_digest_next_stmt() / pgsql_digest_has_stmt_keyword()
+ *   - pgsql_stmt_skip_lead() / pgsql_digest_next_stmt() / pgsql_digest_scan()
  *   - pgsql_text_has_word(), for the part of a digest the scan cannot follow
  *
  * And unterminated dollar-quoted strings ("SELECT $ab$ x$$"), which used to make the
@@ -667,7 +667,7 @@ static void test_digest_only_comment() {
 // ============================================================================
 
 static bool has_listen(const char* digest) {
-	return pgsql_digest_has_stmt_keyword(digest, "LISTEN");
+	return (pgsql_digest_scan(digest) & PGSQL_SCAN_LISTEN) != 0;
 }
 
 // The digests a client can produce: LISTEN behind another statement has to be found,
@@ -920,9 +920,9 @@ static void test_digest_nested_comment_tokens() {
 // there is none, and a digest of a query longer than query_digests_max_query_length can be
 // cut on a token boundary before a trailing statement. Both used to fail open: without a
 // digest only the first statement of the raw text was looked at, and a cut digest simply
-// did not hold the LISTEN. pgsql_query_has_stmt_keyword() falls back to the raw query.
+// did not hold the LISTEN. pgsql_query_scan() falls back to the raw query.
 static bool gate_listen(const char* digest, const char* query) {
-	return pgsql_query_has_stmt_keyword(digest, query, "LISTEN");
+	return (pgsql_query_scan(digest, query) & PGSQL_SCAN_LISTEN) != 0;
 }
 
 static void test_stmt_keyword_gate() {
@@ -965,6 +965,101 @@ static void test_stmt_keyword_gate() {
 	ok(gate_listen("select ?; listen ch", "SELECT 1; LISTEN ch") &&
 		!gate_listen("select ?", "SELECT 1"),
 		"gate, whole digest: the digest decides");
+}
+
+// ============================================================================
+// 19. One scan for several targets: LISTEN and DO starting a statement, set_config and
+//     pg_settings as words anywhere (set_config() tracking). Bits, not one keyword.
+// ============================================================================
+
+static void test_scan_targets() {
+	const struct { const char* digest; uint32_t bits; } rows[] = {
+		{ "SELECT set_config(?,?,?)", PGSQL_SCAN_SET_CONFIG },
+		{ "SELECT PG_CATALOG.SET_CONFIG(?,?,?)", PGSQL_SCAN_SET_CONFIG },
+		{ "SELECT \"set_config\"(?,?,?)", PGSQL_SCAN_SET_CONFIG },
+		{ "SELECT my_set_config(?)", 0 },
+		{ "SELECT set_config_x(?)", 0 },
+		{ "UPDATE pg_settings SET setting=? WHERE name=?", PGSQL_SCAN_PG_SETTINGS },
+		{ "SELECT * FROM pg_settings_backup", 0 },
+		{ "DO ?", PGSQL_SCAN_DO },
+		{ "SELECT ?; DO ?", PGSQL_SCAN_DO },
+		{ "SELECT do_thing(?)", 0 },
+		{ "LISTEN ch", PGSQL_SCAN_LISTEN },
+		{ "SELECT ?; LISTEN ch", PGSQL_SCAN_LISTEN },
+		{ "SELECT listen FROM t", 0 },
+		{ "/* set_config */ SELECT ?", 0 },
+		{ "LISTEN ch; SELECT set_config(?,?,?)", PGSQL_SCAN_LISTEN | PGSQL_SCAN_SET_CONFIG },
+		{ "", 0 },
+		{ "/*xx select set_config(?)", PGSQL_SCAN_SET_CONFIG },
+		{ "select ? as \"a; set_config\"", 0 },
+		{ "select $1_set_config, set_config$x", 0 },
+		// U&"..." spells a name with escapes, U&"set\005fconfig" is set_config: any one counts.
+		{ "select u&\"set\\005fconfig\"(?,?,?)", PGSQL_SCAN_SET_CONFIG | PGSQL_SCAN_PG_SETTINGS },
+		{ "select \"a&\"", 0 },
+	};
+	for (const auto& r : rows) {
+		const uint32_t got = pgsql_digest_scan(r.digest);
+		ok(got == r.bits, "scan: '%s' -> 0x%x (got 0x%x)", r.digest, r.bits, got);
+	}
+	ok(pgsql_digest_scan(NULL) == 0, "scan: NULL digest -> 0");
+	const uint32_t w = pgsql_text_find_words("x pg_settings y set_config(");
+	ok(w == (PGSQL_SCAN_PG_SETTINGS | PGSQL_SCAN_SET_CONFIG), "find_words: two word targets in raw text (got 0x%x)", w);
+	ok(pgsql_text_find_words("SELECT 'listen', \"do\"") == (PGSQL_SCAN_LISTEN | PGSQL_SCAN_DO) &&
+		pgsql_text_find_words(NULL) == 0, "find_words: statement keywords count as words; NULL -> 0");
+	ok(pgsql_text_find_words("SELECT U&\"set\\005fconfig\"('a','b',false)") == (PGSQL_SCAN_SET_CONFIG | PGSQL_SCAN_PG_SETTINGS),
+		"find_words: a U&\"...\" name counts as every word target");
+	// With a length the text is read in place: a query buffer has no NUL of its own.
+	const char no_nul[] = { 's', 'e', 't', '_', 'c', 'o', 'n', 'f', 'i', 'g', ' ', 'p', 'g', '_', 's' };
+	ok(pgsql_text_find_words(no_nul, 10) == PGSQL_SCAN_SET_CONFIG && pgsql_text_find_words(no_nul, 9) == 0 &&
+		pgsql_text_find_words(no_nul, sizeof(no_nul)) == PGSQL_SCAN_SET_CONFIG,
+		"find_words: reads no further than the length given");
+	const char nul_inside[] = "set_config\0pg_settings";
+	ok(pgsql_text_find_words(nul_inside, sizeof(nul_inside) - 1) == PGSQL_SCAN_SET_CONFIG,
+		"find_words: stops at a NUL inside the length (a Simple Query counts its terminator)");
+}
+
+// A digest of a query longer than query_digests_max_query_length can end before the call;
+// without a digest the raw query is read. Only a query holding a target word is digested in full.
+static void test_scan_query_fallback() {
+	const int saved_max = pgsql_thread___query_digests_max_query_length;
+	pgsql_thread___query_digests_max_query_length = 65000;
+	// Column names, not a literal or digits: those digest to '?', and the digest is what gets cut.
+	std::string pad = "abcdefghij";
+	while (pad.size() < 72000) pad += ", abcdefghij";
+	const std::string q_call = "SELECT " + pad + ", set_config('a','b',false)";
+	const std::string q_none = "SELECT " + pad + ", 1";
+	options opts {};
+	opts.lowercase = true;
+	opts.replace_null = true;
+	opts.replace_number = true;
+	opts.grouping_limit = 3;
+	opts.max_query_length = 65000;
+	char* fc = nullptr;
+	char* d_cut = pgsql_query_digest_and_first_comment(q_call.c_str(), (int)q_call.size(), &fc, NULL, &opts);
+	free(fc);
+	const size_t d_len = d_cut ? strlen(d_cut) : 0;
+	ok(d_cut != NULL && pgsql_digest_scan(d_cut) == 0, "precondition: the cut digest does not hold the call (%zu bytes, ends '%s')",
+		d_len, d_cut ? d_cut + (d_len > 30 ? d_len - 30 : 0) : "");
+	ok(pgsql_query_scan(d_cut, q_call.c_str()) == PGSQL_SCAN_SET_CONFIG,
+		"query scan, cut digest: set_config after byte 66000 is found");
+	free(d_cut);
+	ok(pgsql_query_scan("select ?, ?", q_none.c_str()) == 0, "query scan, cut digest: no call, nothing found");
+	ok(pgsql_query_scan(NULL, "SELECT 1; SELECT set_config('a','b',false)") == PGSQL_SCAN_SET_CONFIG,
+		"query scan, no digest: the raw query is read");
+	// Only the targets asked for: with set_config tracking off a Simple Query asks for LISTEN.
+	ok(pgsql_query_scan(NULL, "DO $$BEGIN PERFORM 1; END$$", PGSQL_SCAN_LISTEN) == 0,
+		"query scan, LISTEN only, no digest: a DO statement is not reported");
+	ok(pgsql_query_scan("DO ?", "DO $$BEGIN PERFORM 1; END$$", PGSQL_SCAN_LISTEN) == 0,
+		"query scan, LISTEN only, digest: a DO statement is not reported");
+	ok(pgsql_query_scan(NULL, "SELECT 'set_config'; LISTEN ch", PGSQL_SCAN_LISTEN) == PGSQL_SCAN_LISTEN,
+		"query scan, LISTEN only, no digest: a trailing LISTEN is found");
+	ok(pgsql_query_scan(NULL, "SELECT 'set_config(1)' /* pg_settings */") == 0,
+		"query scan, no digest: words only in a literal or comment are not found");
+	ok(pgsql_query_scan(NULL, "DO $$BEGIN PERFORM set_config('a','b',false); END$$") == PGSQL_SCAN_DO,
+		"query scan, no digest: DO found, the call in its body is a literal");
+	ok(pgsql_query_scan("select set_config(?,?,?)", "SELECT set_config('a','b',false)") == PGSQL_SCAN_SET_CONFIG,
+		"query scan, whole digest: the digest decides");
+	pgsql_thread___query_digests_max_query_length = saved_max;
 }
 
 // ============================================================================
@@ -1222,11 +1317,11 @@ static void test_digest_unterminated_dollar_quote() {
 	// LISTEN gate with no digest (query_digests off or the query over the length limit):
 	// the query mentions the word, so it is digested in full.
 	finished = run_time_limited([]() {
-		return std::string(pgsql_query_has_stmt_keyword(NULL, "SELECT 1 AS listen, $a$ $$", "LISTEN") ? "1" : "0");
+		return std::string(gate_listen(NULL, "SELECT 1 AS listen, $a$ $$") ? "1" : "0");
 	}, d);
 	ok(finished && d == "0", "unterminated dollar quote: LISTEN gate finishes, no LISTEN statement (got '%s')", d.c_str());
 	finished = run_time_limited([]() {
-		return std::string(pgsql_query_has_stmt_keyword(NULL, "SELECT 1; LISTEN ch; SELECT $ab$ $$", "LISTEN") ? "1" : "0");
+		return std::string(gate_listen(NULL, "SELECT 1; LISTEN ch; SELECT $ab$ $$") ? "1" : "0");
 	}, d);
 	ok(finished && d == "1", "unterminated dollar quote: LISTEN gate finishes, LISTEN statement found (got '%s')", d.c_str());
 
@@ -1249,7 +1344,7 @@ static void test_digest_unterminated_dollar_quote() {
 // ============================================================================
 
 int main() {
-	plan(131 + 14 + 18 + 13 + 6 + 14);
+	plan(131 + 14 + 18 + 13 + 6 + 34 + 3 + 14);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -1365,7 +1460,11 @@ int main() {
 	// 18. keep_comment in the stage / single-iteration helpers (6 tests, issue #6454)
 	test_stage_helpers_keep_comment_no_char_lost(); // 6
 
-	// 19. Unterminated dollar-quoted strings (14 tests)
+	// 19. One scan for several targets (34 tests)
+	test_scan_targets();                 // 27
+	test_scan_query_fallback();          // 7
+
+	// 20. Unterminated dollar-quoted strings (14 tests)
 	test_digest_unterminated_dollar_quote(); // 14
 
 	test_cleanup_minimal();

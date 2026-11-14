@@ -175,7 +175,7 @@ static inline void get_pgsql_options(options* opts) {
 /**
  * @brief Enum holding all the states responsible for value parsing using during 'stage 1' parsing.
  */
-enum p_st {
+enum pgsql_p_st {
 	st_no_mark_found = 0,
 	st_cmnt_type_1 = 1,
 	st_cmnt_type_2 = 2,
@@ -194,7 +194,7 @@ enum p_st {
  * @brief Parsing information from received query and the result buffer shared between the different
  *   processing stages.
  */
-typedef struct shared_st {
+typedef struct pgsql_shared_st {
 	/* @brief Global computed compression offset from the previous iteration. Used when uncompressed query
 		exceeds the maximum buffer side specified by `pgsql_thread___query_digests_max_query_length` */
 	int gl_c_offset;
@@ -222,19 +222,19 @@ typedef struct shared_st {
 	/* @brief Position in the return buffer prior to the start of any parsing st that isn't 'no_mark_found'. */
 	char* res_pre_pos;
 	/* @brief The current state being processed by 'stage_1'. */
-	enum p_st st;
+	enum pgsql_p_st st;
 	/* @brief Last copied char to the result buffer. */
 	char prev_char;
 	/* @brief Preserve currently imposed 'prev_char' in **on current** char processing instead of replacing it. */
 	bool keep_prev_char;
 	/* @brief Decides whether or not the next char should be copy during 'stage_1'. */
 	bool copy_next_char;
-} shared_st;
+} pgsql_shared_st;
 
 /**
  * @brief State used for parsing 'type_1' comments, i.e: /\* *\/.
  */
-typedef struct cmnt_type_1_st {
+typedef struct pgsql_cmnt_type_1_st {
 	/* @brief Counter holding the length of the 'cmd' comment currently being processed. */
 	int cur_cmd_cmnt_len;
 	/**
@@ -257,12 +257,12 @@ typedef struct cmnt_type_1_st {
 	 *   'd_max_len' (see 'digest_len_limit').
 	 */
 	int kept_sep_count;
-} cmnt_type_1_st;
+} pgsql_cmnt_type_1_st;
 
 /**
  * @brief State used for parsing 'literal strings' values, i.e: 'foo', etc..
  */
-typedef struct literal_string_st {
+typedef struct pgsql_literal_string_st {
 	/**
 	 * @brief Boolean flag showing if the first delimiter from a literal string has been found.
 	 *   '0' when hasn't yet been found, and '1' while in the processing a literal string.
@@ -272,67 +272,67 @@ typedef struct literal_string_st {
 	char delim_char;
 	const char* q_start_pos;
 	bool is_unicode;  /* set only for U&'...' */
-} literal_string_st;
+} pgsql_literal_string_st;
 
 /**
  * @brief State used for parsing 'quoted identifier' values, i.e: "foo", etc..
  */
-typedef struct quoted_identifier_st {
+typedef struct pgsql_quoted_identifier_st {
 	int delim_num;           // 0 = not started, 1 = in progress
 	char delim_char;         // Always '"' for PostgreSQL
 	const char* q_start_pos; // Start position in query
-} quoted_identifier_st;
+} pgsql_quoted_identifier_st;
 
 /**
  * @brief State used for parsing 'literal digit' values, e.g: 84, 0x100, 1E-10, etc...
  */
-typedef struct literal_digit_st {
+typedef struct pgsql_literal_digit_st {
 	bool first_digit;
 	char* start_pos;
-} literal_digit_st;
+} pgsql_literal_digit_st;
 
 /**
  * State used for parsing 'literal strings' values, i.e: 'foo', "bar", etc..
  * 
  */
-typedef struct dollar_quote_string_st {
+typedef struct pgsql_dollar_quote_string_st {
 	const char* tag_start;  // pointer to start of $tag$
 	size_t tag_len;       // length of tag (can be 0 for $$)
-} dollar_quote_string_st;
+} pgsql_dollar_quote_string_st;
 
 /**
  * @brief Created for an alternative implementation of NULL parsing.
  *   Currently unused. TODO: Remove.
  */
-typedef struct literal_null_st {
+typedef struct pgsql_literal_null_st {
 	int null_pos;
-} literal_null_st;
+} pgsql_literal_null_st;
 
 /**
  * @brief State used for parsing PostgreSQL type casts, i.e: ::typename.
  */
-typedef struct pg_typecast_st {
+typedef struct pgsql_typecast_st {
 	bool started;
-} pg_typecast_st;
+} pgsql_typecast_st;
 
 /**
  * @brief State used for parsing PostgreSQL array literals, i.e: ARRAY[...]
  */
-typedef struct array_literal_st {
+typedef struct pgsql_array_literal_st {
 	int bracket_depth;      // Track nesting depth of brackets
-} array_literal_st;
+} pgsql_array_literal_st;
 
 /**
  * @brief State used for 'stage_1' parsing.
  */
-typedef struct stage_1_st {
-	struct cmnt_type_1_st cmnt_type_1_st;
-	struct literal_string_st literal_str_st;
-	struct literal_digit_st literal_dig_st;
-	struct dollar_quote_string_st dollar_quote_str_st;
-	struct pg_typecast_st pg_tc_st;
-	struct array_literal_st array_st;
-	struct quoted_identifier_st quoted_iden_st;
+typedef struct pgsql_stage_1_st {
+	struct pgsql_cmnt_type_1_st pgsql_cmnt_type_1_st;
+	struct pgsql_literal_string_st literal_str_st;
+	struct pgsql_literal_digit_st literal_dig_st;
+	struct pgsql_dollar_quote_string_st dollar_quote_str_st;
+	struct pgsql_typecast_st pg_tc_st;
+	struct pgsql_array_literal_st array_st;
+	struct pgsql_quoted_identifier_st quoted_iden_st;
 	/* @brief Holds the previous iteration parsing ending position. */
 	char* pre_it_pos;
 	/**
@@ -344,52 +344,52 @@ typedef struct stage_1_st {
 	 *   that a later 'stage_1' iteration can resume the literal parsing.
 	 */
 	char* new_end_pos;
-} stage_1_st;
+} pgsql_stage_1_st;
 
 /**
  * @brief Holds the state used for 'stage_2' parsing.
  */
-typedef struct stage_2_st {
+typedef struct pgsql_stage_2_st {
 	/* @brief Previous iteration last parsing position in the result buffer, after the stage
 		compression has taken place. */
 	char* pre_it_pos;
 	/* @brief Last iteration computed compression offset resulted after stage processing. */
 	int c_offset;
-} stage_2_st;
+} pgsql_stage_2_st;
 
-typedef struct stage_3_st {
+typedef struct pgsql_stage_3_st {
 	/* @brief Previous iteration last parsing position in the result buffer, after the stage
 		compression has taken place. */
 	char* pre_it_pos;
 	/* @brief Last iteration computed compression offset resulted after stage processing. */
 	int c_offset;
-} stage_3_st;
+} pgsql_stage_3_st;
 
-typedef struct stage_4_st {
+typedef struct pgsql_stage_4_st {
 	/* @brief Previous iteration last parsing position in the result buffer, after the stage
 		compression has taken place. */
 	char* pre_it_pos;
 	/* @brief Last iteration computed compression offset resulted after stage processing. */
 	int c_offset;
-} stage_4_st;
+} pgsql_stage_4_st;
 
 static __attribute__((always_inline)) inline
-void init_shared_st(struct shared_st* shared_st, const char* const q, int q_len, int d_max_len, char* res) {
-	shared_st->q = q;
-	shared_st->q_len = q_len;
-	shared_st->d_max_len = d_max_len;
-	shared_st->res_max_len = d_max_len;
+void init_shared_st(struct pgsql_shared_st* pgsql_shared_st, const char* const q, int q_len, int d_max_len, char* res) {
+	pgsql_shared_st->q = q;
+	pgsql_shared_st->q_len = q_len;
+	pgsql_shared_st->d_max_len = d_max_len;
+	pgsql_shared_st->res_max_len = d_max_len;
 	// all position start with the beginning of the result buffer
-	shared_st->res_init_pos = res;
-	shared_st->res_it_init_pos = res;
-	shared_st->res_cur_pos = res;
-	shared_st->res_pre_pos = res;
+	pgsql_shared_st->res_init_pos = res;
+	pgsql_shared_st->res_it_init_pos = res;
+	pgsql_shared_st->res_cur_pos = res;
+	pgsql_shared_st->res_pre_pos = res;
 	// initial state for the first stage state machine
-	shared_st->st = st_no_mark_found;
+	pgsql_shared_st->st = st_no_mark_found;
 }
 
 static __attribute__((always_inline)) inline
-void init_stage_1_st(struct stage_1_st* fst_stage_st) {
+void init_stage_1_st(struct pgsql_stage_1_st* fst_stage_st) {
 	fst_stage_st->literal_dig_st.first_digit = 1;
 }
 
@@ -449,10 +449,10 @@ int pgsql_query_digest_buffer_size(int q_len, const options* opts) {
  *   the separators themselves. The limit never exceeds the buffer capacity 'res_max_len'.
  */
 static __attribute__((always_inline)) inline
-int digest_len_limit(const shared_st* shared_st, const cmnt_type_1_st* c_t_1_st) {
-	int limit = shared_st->d_max_len + c_t_1_st->kept_sep_count;
-	if (limit > shared_st->res_max_len) {
-		limit = shared_st->res_max_len;
+int digest_len_limit(const pgsql_shared_st* pgsql_shared_st, const pgsql_cmnt_type_1_st* c_t_1_st) {
+	int limit = pgsql_shared_st->d_max_len + c_t_1_st->kept_sep_count;
+	if (limit > pgsql_shared_st->res_max_len) {
+		limit = pgsql_shared_st->res_max_len;
 	}
 	return limit;
 }
@@ -473,33 +473,33 @@ static inline char* get_result_buffer(int len, char* buf) {
  * @brief Return the next st to be processed. State filtering based on end of query being reached is also
  *   performed here.
 *
- * @param shared_st The shared processing state used to decide which is the next 'processing state'.
+ * @param pgsql_shared_st The shared processing state used to decide which is the next 'processing state'.
  *
  * @return The next processing state.
  */
 static __attribute__((always_inline)) inline
-enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
-	char prev_char = shared_st->prev_char;
-	enum p_st st = st_no_mark_found;
+enum pgsql_p_st get_next_st(const options* opts, struct pgsql_shared_st* pgsql_shared_st) {
+	char prev_char = pgsql_shared_st->prev_char;
+	enum pgsql_p_st st = st_no_mark_found;
 
 	// cmnt type 1 - start with '/*'
 	if(
 		// v1_crashing_payload_05
-		shared_st->q_cur_pos < (shared_st->q_len - 2) &&
-		*shared_st->q == '/' && *(shared_st->q+1) == '*'
+		pgsql_shared_st->q_cur_pos < (pgsql_shared_st->q_len - 2) &&
+		*pgsql_shared_st->q == '/' && *(pgsql_shared_st->q+1) == '*'
 	) {
 		st = st_cmnt_type_1;
 	}
 	// cmnt type 2 - --... 
-	else if (*shared_st->q == '-' && shared_st->q_cur_pos < (shared_st->q_len - 1) && 
-		*(shared_st->q + 1) == '-')
+	else if (*pgsql_shared_st->q == '-' && pgsql_shared_st->q_cur_pos < (pgsql_shared_st->q_len - 1) && 
+		*(pgsql_shared_st->q + 1) == '-')
 	{
 		// PG: -- starts comment regardless of following space
 		if (prev_char != '-') { st = st_cmnt_type_2; }
-		else if (shared_st->q_cur_pos == 0) { st = st_cmnt_type_2; }
+		else if (pgsql_shared_st->q_cur_pos == 0) { st = st_cmnt_type_2; }
 	}
 	// dollar-quoted string start (Postgres: $tag$ or $$)
-	else if (*shared_st->q == '$') {
+	else if (*pgsql_shared_st->q == '$') {
 		// Check for a PostgreSQL dollar-quoted string.
 		// Format: $tag$ ... $tag$
 		//
@@ -511,40 +511,40 @@ enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
 		//   2. The tag is terminated by another '$'
 		//
 		// If so, we treat it as the start of a dollar-quoted string literal.
-		const char* p = shared_st->q + 1;
-		while (p < shared_st->q + (shared_st->q_len - shared_st->q_cur_pos) &&
+		const char* p = pgsql_shared_st->q + 1;
+		while (p < pgsql_shared_st->q + (pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos) &&
 			((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_')) {
 			p++;
 		}
-		if (p < shared_st->q + (shared_st->q_len - shared_st->q_cur_pos) && *p == '$') {
+		if (p < pgsql_shared_st->q + (pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos) && *p == '$') {
 			st = st_dollar_quote_string; // add new enum state for dollar-quoted string
 		}
 	}
 	// string - single-quote is string in both
-	else if (is_token_char(shared_st->prev_char) && *shared_st->q == '\'') {
+	else if (is_token_char(pgsql_shared_st->prev_char) && *pgsql_shared_st->q == '\'') {
 		st = st_literal_string;
 	}
 	// double-quoted identifier
-	else if (is_token_char(shared_st->prev_char) && *shared_st->q == '"') {
+	else if (is_token_char(pgsql_shared_st->prev_char) && *pgsql_shared_st->q == '"') {
 		st = st_quoted_identifier;
 	}
 	// may be digit - start with digit
-	else if (is_token_char(prev_char) && is_digit_char(*shared_st->q)) {
+	else if (is_token_char(prev_char) && is_digit_char(*pgsql_shared_st->q)) {
 		st = st_literal_number;
 	}
 	// NULL processing
 	else if (
-		is_token_char(shared_st->prev_char) &&
-		(*shared_st->q == 'n' || *shared_st->q == 'N') && opts->replace_null
+		is_token_char(pgsql_shared_st->prev_char) &&
+		(*pgsql_shared_st->q == 'n' || *pgsql_shared_st->q == 'N') && opts->replace_null
 	) {
 		st = st_replace_null;
 	} // PostgreSQL type cast ::typename
 	else if (prev_char != '"' && 
-		shared_st->q_cur_pos < shared_st->q_len - 1 &&
-		*shared_st->q == ':' && *(shared_st->q + 1) == ':') {
+		pgsql_shared_st->q_cur_pos < pgsql_shared_st->q_len - 1 &&
+		*pgsql_shared_st->q == ':' && *(pgsql_shared_st->q + 1) == ':') {
 
 		// Peek the first char after '::'
-		const char* p = shared_st->q + 2;
+		const char* p = pgsql_shared_st->q + 2;
 
 		// Valid starts for a PostgreSQL type name:
 		//   - letter or underscore
@@ -555,15 +555,15 @@ enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
 	} 
 	// ARRAY literal detection
 	else if (
-		is_token_char(shared_st->prev_char) &&
-		(tolower(*shared_st->q) == 'a')
+		is_token_char(pgsql_shared_st->prev_char) &&
+		(tolower(*pgsql_shared_st->q) == 'a')
 		) {
 		// Check for "ARRAY" keyword
-		size_t remaining = shared_st->q_len - shared_st->q_cur_pos;
+		size_t remaining = pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos;
 
 		// We need at least "ARRAY[" which is 6 characters
 		if (remaining >= 6) {
-			const char* p = shared_st->q;
+			const char* p = pgsql_shared_st->q;
 
 			// Check for "ARRAY" (case-insensitive)
 			if (tolower(p[0]) == 'a' && tolower(p[1]) == 'r' &&
@@ -587,13 +587,13 @@ enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
 	}
 	// Boolean literal detection
 	else if (
-		is_token_char(shared_st->prev_char) &&
-		(tolower(*shared_st->q) == 't' || tolower(*shared_st->q) == 'f')
+		is_token_char(pgsql_shared_st->prev_char) &&
+		(tolower(*pgsql_shared_st->q) == 't' || tolower(*pgsql_shared_st->q) == 'f')
 		) {
 			st = st_replace_boolean;
-	} else if (is_token_char(shared_st->prev_char)) {
-		const char* q = shared_st->q;
-		size_t remaining = shared_st->q_len - shared_st->q_cur_pos;
+	} else if (is_token_char(pgsql_shared_st->prev_char)) {
+		const char* q = pgsql_shared_st->q;
+		size_t remaining = pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos;
 
 		// U&' prefix
 		if (remaining >= 3 && (q[0] == 'U' || q[0] == 'u') &&
@@ -613,33 +613,33 @@ enum p_st get_next_st(const options* opts, struct shared_st* shared_st) {
 }
 
 static __attribute__((always_inline)) inline
-void inc_proc_pos(shared_st* shared_st) {
-	if (shared_st->keep_prev_char == false) {
-		shared_st->prev_char = *shared_st->q;
+void inc_proc_pos(pgsql_shared_st* pgsql_shared_st) {
+	if (pgsql_shared_st->keep_prev_char == false) {
+		pgsql_shared_st->prev_char = *pgsql_shared_st->q;
 	} else {
-		shared_st->keep_prev_char = false;
+		pgsql_shared_st->keep_prev_char = false;
 	}
 
-	shared_st->q++;
-	shared_st->q_cur_pos++;
+	pgsql_shared_st->q++;
+	pgsql_shared_st->q_cur_pos++;
 }
 
 /**
  * @brief Copy the next character and increment the current processing position.
  *
  * @param opts Options that determine how the next character is going to be copied.
- * @param shared_st The shared state to modify.
+ * @param pgsql_shared_st The shared state to modify.
  */
 static __attribute__((always_inline)) inline
-void copy_next_char(shared_st* shared_st, const options* opts) {
+void copy_next_char(pgsql_shared_st* pgsql_shared_st, const options* opts) {
 	// copy the next character; translating any space char into ' '
 	if (opts->lowercase==0) {
-		*shared_st->res_cur_pos++ = !is_space_char(*shared_st->q) ? *shared_st->q : ' ';
+		*pgsql_shared_st->res_cur_pos++ = !is_space_char(*pgsql_shared_st->q) ? *pgsql_shared_st->q : ' ';
 	} else {
-		*shared_st->res_cur_pos++ = !is_space_char(*shared_st->q) ? tolower(*shared_st->q) : ' ';
+		*pgsql_shared_st->res_cur_pos++ = !is_space_char(*pgsql_shared_st->q) ? tolower(*pgsql_shared_st->q) : ' ';
 	}
 
-	inc_proc_pos(shared_st);
+	inc_proc_pos(pgsql_shared_st);
 }
 
 static thread_local char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
@@ -647,13 +647,13 @@ static thread_local char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
 /**
  * @brief Safer version of 'is_digit_string' performing boundary checks.
  *
- * @param shared_st The shared state used for the boundary checks.
+ * @param pgsql_shared_st The shared state used for the boundary checks.
  * @param f Initial position of the string being checked.
  * @param t Final position of the string being checked.
  *
  * @return '1' if the supplied string is recognized as a 'digit_string', '0' otherwise.
  */
-static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
+static char is_digit_string_2(pgsql_shared_st* pgsql_shared_st, char *f, char *t)
 {
 	if(f == t)
 	{
@@ -671,13 +671,13 @@ static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
 	{
 		char is_float = 0;
 
-		if (f > shared_st->res_init_pos) {
+		if (f > pgsql_shared_st->res_init_pos) {
 			is_float = *f == '.' || tolower(*f) == 'e' || (tolower(*(f-1)) == 'e' && (*f == '+' || *f == '-'));
 		} else {
 			is_float = *f == '.' || tolower(*f) == 'e';
 		}
 
-		if(f > shared_st->res_init_pos && i == 1 && *(f-1) == '0' && (*f == 'x' || *f == 'X'))
+		if(f > pgsql_shared_st->res_init_pos && i == 1 && *(f-1) == '0' && (*f == 'x' || *f == 'X'))
 		{
 			is_hex = 1;
 		}
@@ -706,7 +706,7 @@ static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
  * @return True when '*fst_cmnt' points to a buffer of FIRST_COMMENT_MAX_LENGTH bytes.
  */
 static __attribute__((always_inline)) inline
-bool fst_cmnt_buf_ready(cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
+bool fst_cmnt_buf_ready(pgsql_cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
 	if (*fst_cmnt == NULL) {
 		*fst_cmnt = (char*)malloc(FIRST_COMMENT_MAX_LENGTH);
 		if (*fst_cmnt == NULL) {
@@ -724,7 +724,7 @@ bool fst_cmnt_buf_ready(cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
  *   and into the first comment while that one is still being collected. Both are bounded.
  */
 static __attribute__((always_inline)) inline
-void copy_cmnt_type_1_char(const options* opts, cmnt_type_1_st* c_t_1_st, char** fst_cmnt, char c) {
+void copy_cmnt_type_1_char(const options* opts, pgsql_cmnt_type_1_st* c_t_1_st, char** fst_cmnt, char c) {
 	if (opts->keep_comment) {
 		// copy the char into 'cur_cmd_cmnt'
 		if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
@@ -751,13 +751,13 @@ void copy_cmnt_type_1_char(const options* opts, cmnt_type_1_st* c_t_1_st, char**
  *   the query is consumed.
  *
  * @param opts Options, only 'keep_comment' is used.
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param c_t_1_st The comment parsing state.
  * @param fst_cmnt Pointer to the first-comment buffer, left unmodified when not tracked.
  */
 static __attribute__((always_inline)) inline
-void finish_unterminated_cmnt(const options* opts, shared_st* shared_st,
-	cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
+void finish_unterminated_cmnt(const options* opts, pgsql_shared_st* pgsql_shared_st,
+	pgsql_cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
 	// Finalize first comment if we were tracking it
 	if (c_t_1_st->fst_cmnt_end == 0 && *fst_cmnt != NULL) {
 		char* c_end = *fst_cmnt + c_t_1_st->fst_cmnt_len;
@@ -768,20 +768,20 @@ void finish_unterminated_cmnt(const options* opts, shared_st* shared_st,
 	// Keep the comment bytes collected so far when comments are preserved. No separator space
 	// is added: the comment ends the query, and 'final_stage' trims a trailing space anyway.
 	if (opts->keep_comment) {
-		char* res_final_pos = shared_st->res_init_pos + digest_len_limit(shared_st, c_t_1_st);
+		char* res_final_pos = pgsql_shared_st->res_init_pos + digest_len_limit(pgsql_shared_st, c_t_1_st);
 		cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
-		int res_free_space = res_final_pos - shared_st->res_cur_pos;
+		int res_free_space = res_final_pos - pgsql_shared_st->res_cur_pos;
 		int copy_length = res_free_space > c_t_1_st->cur_cmd_cmnt_len ?
 			c_t_1_st->cur_cmd_cmnt_len : res_free_space;
-		memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
-		shared_st->res_cur_pos += copy_length;
-		shared_st->prev_char = ' ';
+		memcpy(pgsql_shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
+		pgsql_shared_st->res_cur_pos += copy_length;
+		pgsql_shared_st->prev_char = ' ';
 		c_t_1_st->cur_cmd_cmnt_len = 0;
 	}
 
 	// Consume the remaining query bytes so the parser does not treat the last one as text.
-	shared_st->q += (shared_st->q_len - shared_st->q_cur_pos);
-	shared_st->q_cur_pos = shared_st->q_len;
+	pgsql_shared_st->q += (pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos);
+	pgsql_shared_st->q_cur_pos = pgsql_shared_st->q_len;
 
 	// reset nesting so parser isn't left in the middle of a comment
 	c_t_1_st->nest_level = 0;
@@ -789,12 +789,12 @@ void finish_unterminated_cmnt(const options* opts, shared_st* shared_st,
 
 /**
  * @brief Process a detected comment of type "/\* *\/". Determines when to exit the 'st_cmnt_type_1' state.
- * @details Function assumes that 'shared_st->q' is pointing to the initial mark '/' of the comment start, and
+ * @details Function assumes that 'pgsql_shared_st->q' is pointing to the initial mark '/' of the comment start, and
  *   that it's safe to look forward for '*'. State 'st_cmnt_type_1' doesn't copy any data to the result
  *   buffer, unless the comment is a 'cmd' comment, in which case the comment is copied from the query to the
  *   resulting buffer **after** the comment final delimiter '*\/' has been found.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param c_t_1_st The 'comment_type_1' parsing state, holds the found information about the comment being parsed.
  *
  * @return The next processing state, it could be either:
@@ -802,12 +802,12 @@ void finish_unterminated_cmnt(const options* opts, shared_st* shared_st,
  *   - 'st_no_mark_found' if the comment has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
-	enum p_st next_st = st_cmnt_type_1;
+enum pgsql_p_st process_cmnt_type_1(const options* opts, pgsql_shared_st* pgsql_shared_st, pgsql_cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
+	enum pgsql_p_st next_st = st_cmnt_type_1;
 
 	// initial mark "/*" detection, and a nested one right after it ("/*/*")
 	// comments are not copied by while processed, boundary checks should rely on 'q_cur_pos' and 'q_len'.
-	while (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
+	while (pgsql_shared_st->q_cur_pos <= (pgsql_shared_st->q_len-2) && *pgsql_shared_st->q == '/' && *(pgsql_shared_st->q+1) == '*') {
 
 		if (c_t_1_st->nest_level == 0) 
 			c_t_1_st->cur_cmd_cmnt_len = 0;
@@ -821,7 +821,7 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 		// bytes, leaving room for the terminator written when the comment ends.
 		if (opts->keep_comment) {
 			for (int i = 0; i < 2 && c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH - 1; i++) {
-				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q + i);
+				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(pgsql_shared_st->q + i);
 				c_t_1_st->cur_cmd_cmnt_len++;
 			}
 		}
@@ -831,25 +831,25 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 			// "/*/*" opens the nested comment before any byte of the outer one was collected
 			fst_cmnt_buf_ready(c_t_1_st, fst_cmnt)) {
 			char* next_fst_cmnt_char = *fst_cmnt + c_t_1_st->fst_cmnt_len;
-			*next_fst_cmnt_char = *(shared_st->q);
+			*next_fst_cmnt_char = *(pgsql_shared_st->q);
 			next_fst_cmnt_char++;
-			*next_fst_cmnt_char = *(shared_st->q + 1);
+			*next_fst_cmnt_char = *(pgsql_shared_st->q + 1);
 			next_fst_cmnt_char++;
 			c_t_1_st->fst_cmnt_len += 2;
 		}
 
 		// discard processed "/*"
-		shared_st->q += 2;
-		shared_st->q_cur_pos += 2;
+		pgsql_shared_st->q += 2;
+		pgsql_shared_st->q_cur_pos += 2;
 
 		// v1_crashing_payload_04
-		if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
+		if (pgsql_shared_st->q_cur_pos >= pgsql_shared_st->q_len - 1) {
 			// Record the one byte that can still follow the opener before the query ends
 			// (into the kept comment and the first comment, when they are tracked).
-			if (shared_st->q_cur_pos < shared_st->q_len) {
-				copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *shared_st->q);
+			if (pgsql_shared_st->q_cur_pos < pgsql_shared_st->q_len) {
+				copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *pgsql_shared_st->q);
 			}
-			finish_unterminated_cmnt(opts, shared_st, c_t_1_st, fst_cmnt);
+			finish_unterminated_cmnt(opts, pgsql_shared_st, c_t_1_st, fst_cmnt);
 			return st_no_mark_found;
 		}
 	}
@@ -863,15 +863,15 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	// read from left to right in tokens: a "*/" is recognized at its '*' and consumed whole, and
 	// an "/*" is consumed whole above, so the '/' of a "*/" never opens a comment ("*/*/" closes
 	// twice) and the '*' of an "/*" never closes one ("/*/" stays open).
-	const bool closing = *shared_st->q == '*' && shared_st->q_cur_pos + 1 < shared_st->q_len &&
-		*(shared_st->q + 1) == '/';
-	copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *shared_st->q);
+	const bool closing = *pgsql_shared_st->q == '*' && pgsql_shared_st->q_cur_pos + 1 < pgsql_shared_st->q_len &&
+		*(pgsql_shared_st->q + 1) == '/';
+	copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *pgsql_shared_st->q);
 
 	if (closing) {
 		// move onto the '/' of "*/"; it is consumed below, or by the caller while still nested
-		shared_st->q++;
-		shared_st->q_cur_pos++;
-		copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *shared_st->q);
+		pgsql_shared_st->q++;
+		pgsql_shared_st->q_cur_pos++;
+		copy_cmnt_type_1_char(opts, c_t_1_st, fst_cmnt, *pgsql_shared_st->q);
 
 		// Decrement nesting level when we encounter "*/"
 		if (c_t_1_st->nest_level > 0)
@@ -881,24 +881,24 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 		if (c_t_1_st->nest_level == 0) {
 			if (opts->keep_comment) {
 				const char* res_final_pos =
-					shared_st->res_init_pos + digest_len_limit(shared_st, c_t_1_st);
+					pgsql_shared_st->res_init_pos + digest_len_limit(pgsql_shared_st, c_t_1_st);
 				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
-				int res_free_space = res_final_pos - shared_st->res_cur_pos;
+				int res_free_space = res_final_pos - pgsql_shared_st->res_cur_pos;
 				int comment_size = c_t_1_st->cur_cmd_cmnt_len;
 				
 				int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
-				memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
-				shared_st->res_cur_pos += copy_length;
+				memcpy(pgsql_shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
+				pgsql_shared_st->res_cur_pos += copy_length;
 
 				// The separator space extends the digest length limit by one: count it, then
 				// write it only if the buffer has room. Counting it first keeps the separator
 				// from being taken for ordinary content.
-				if (*(shared_st->res_cur_pos - 1) != ' ') {
-					int next_limit = shared_st->d_max_len + c_t_1_st->kept_sep_count + 1;
-					if (next_limit > shared_st->res_max_len) next_limit = shared_st->res_max_len;
-					if (shared_st->res_cur_pos != shared_st->res_init_pos + next_limit) {
+				if (*(pgsql_shared_st->res_cur_pos - 1) != ' ') {
+					int next_limit = pgsql_shared_st->d_max_len + c_t_1_st->kept_sep_count + 1;
+					if (next_limit > pgsql_shared_st->res_max_len) next_limit = pgsql_shared_st->res_max_len;
+					if (pgsql_shared_st->res_cur_pos != pgsql_shared_st->res_init_pos + next_limit) {
 						c_t_1_st->kept_sep_count++;
-						*shared_st->res_cur_pos++ = ' ';
+						*pgsql_shared_st->res_cur_pos++ = ' ';
 					}
 				}
 				// Re-initialize the comment state
@@ -907,22 +907,22 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 
 			{
 				const char* res_final_pos =
-					shared_st->res_init_pos + digest_len_limit(shared_st, c_t_1_st);
-				if (shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
+					pgsql_shared_st->res_init_pos + digest_len_limit(pgsql_shared_st, c_t_1_st);
+				if (pgsql_shared_st->res_init_pos != pgsql_shared_st->res_cur_pos && pgsql_shared_st->res_cur_pos != res_final_pos &&
 				// if the prev copied char isn't a space comment wasn't space separated in the query:
 				// ```
 				// Q: `SELECT/*FOO*/1`
 				//          ^ no space char
 				// ```
 				// thus we impose an extra space in replace for the ommited comment
-				*(shared_st->res_cur_pos - 1) != ' '
+				*(pgsql_shared_st->res_cur_pos - 1) != ' '
 				) {
-					*shared_st->res_cur_pos++ = ' ';
+					*pgsql_shared_st->res_cur_pos++ = ' ';
 				}
 			}
 
-			// back to main shared_st->query parsing state
-			shared_st->prev_char = ' ';
+			// back to main pgsql_shared_st->query parsing state
+			pgsql_shared_st->prev_char = ' ';
 			next_st = st_no_mark_found;
 
 			// Finalize first comment if we were tracking it
@@ -935,8 +935,8 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 				c_t_1_st->fst_cmnt_end = 1;
 			}
 
-			shared_st->q_cur_pos += 1;
-			shared_st->q++;
+			pgsql_shared_st->q_cur_pos += 1;
+			pgsql_shared_st->q++;
 		} else {
 			// Still in nested comment - don't exit comment state yet
 			next_st = st_cmnt_type_1;
@@ -944,10 +944,10 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
 	}
 
 	// Check if we've reached the end of query
-	if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
+	if (pgsql_shared_st->q_cur_pos >= pgsql_shared_st->q_len - 1) {
 		if (next_st == st_cmnt_type_1) {
 			// Still open: the comment has no terminator and must not leak any character.
-			finish_unterminated_cmnt(opts, shared_st, c_t_1_st, fst_cmnt);
+			finish_unterminated_cmnt(opts, pgsql_shared_st, c_t_1_st, fst_cmnt);
 		}
 		// A comment that closed right at the end is handled above; the outer loop may still
 		// have to process the final character normally.
@@ -962,37 +962,37 @@ enum p_st process_cmnt_type_1(const options* opts, shared_st* shared_st, cmnt_ty
  * @details State 'st_cmnt_type_2' doesn't copy any data to the result buffer. It just skip the current char
  *   by char until finding the delimiter.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  *
  * @return The next processing state, it could be either:
  *   - 'st_cmnt_type_2' if the comment hasn't yet completed to be parsed.
  *   - 'st_no_mark_found' if the comment has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_cmnt_type_2(shared_st* shared_st) {
-	enum p_st next_state = st_cmnt_type_2;
+enum pgsql_p_st process_cmnt_type_2(pgsql_shared_st* pgsql_shared_st) {
+	enum pgsql_p_st next_state = st_cmnt_type_2;
 
 	// discard processed "-- "
 	if (
-		shared_st->q_cur_pos <= (shared_st->q_len - 3) &&
-		*shared_st->q == '-' && *(shared_st->q+1)=='-'
+		pgsql_shared_st->q_cur_pos <= (pgsql_shared_st->q_len - 3) &&
+		*pgsql_shared_st->q == '-' && *(pgsql_shared_st->q+1)=='-'
 	) {
-		shared_st->q += 2;
-		shared_st->q_cur_pos += 2;
+		pgsql_shared_st->q += 2;
+		pgsql_shared_st->q_cur_pos += 2;
 	}
 
-	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos >= shared_st->q_len - 1)) {
+	if (*pgsql_shared_st->q == '\n' || *pgsql_shared_st->q == '\r' || (pgsql_shared_st->q_cur_pos >= pgsql_shared_st->q_len - 1)) {
 		next_state = st_no_mark_found;
-		shared_st->prev_char = ' ';
+		pgsql_shared_st->prev_char = ' ';
 
-		shared_st->q++;
-		shared_st->q_cur_pos++;
+		pgsql_shared_st->q++;
+		pgsql_shared_st->q_cur_pos++;
 	}
 
 	return next_state;
 }
 
-static inline void try_consume_uescape(shared_st* s) {
+static inline void try_consume_uescape(pgsql_shared_st* s) {
 	const char* p = s->q;
 	size_t rem = s->q_len - s->q_cur_pos;
 
@@ -1058,7 +1058,7 @@ static inline void try_consume_uescape(shared_st* s) {
  *     whether to ignore the processing of chars within the string when are preceded by '\'.
  *  This is just a proposal and a future implementation may be subject to change.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param str_st The literal string parsing state, holds the information so far found about the state.
  *
  * @return The next processing state, it could be either:
@@ -1066,15 +1066,15 @@ static inline void try_consume_uescape(shared_st* s) {
  *   - 'st_no_mark_found' if the string literal has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st) {
-	enum p_st next_state = st_literal_string;
+enum pgsql_p_st process_literal_string(pgsql_shared_st* pgsql_shared_st, pgsql_literal_string_st* str_st) {
+	enum pgsql_p_st next_state = st_literal_string;
 	bool is_unicode = str_st->is_unicode;
 
 	// process the first delimiter
 	if (str_st->delim_num == 0) {
 		// store found delimiter
-		str_st->q_start_pos = shared_st->q;
-		str_st->delim_char = *shared_st->q;
+		str_st->q_start_pos = pgsql_shared_st->q;
+		str_st->delim_char = *pgsql_shared_st->q;
 		str_st->delim_num = 1;
 
 		// NOTE: Don't increment the position in query buffer, as explained in 'stage_1_parsing'.
@@ -1082,16 +1082,16 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 	}
 
 	// need to be ignored case
-	if(shared_st->q > str_st->q_start_pos + SIZECHAR)
+	if(pgsql_shared_st->q > str_st->q_start_pos + SIZECHAR)
 	{
 		if(
-			(shared_st->prev_char == '\\' && *shared_st->q == '\\') || // to process '\\\\', '\\'
-			(shared_st->prev_char == '\\' && *shared_st->q == str_st->delim_char) || // to process '\''
-			(shared_st->prev_char == str_st->delim_char && *shared_st->q == str_st->delim_char) // to process ''''
+			(pgsql_shared_st->prev_char == '\\' && *pgsql_shared_st->q == '\\') || // to process '\\\\', '\\'
+			(pgsql_shared_st->prev_char == '\\' && *pgsql_shared_st->q == str_st->delim_char) || // to process '\''
+			(pgsql_shared_st->prev_char == str_st->delim_char && *pgsql_shared_st->q == str_st->delim_char) // to process ''''
 		)
 		{
-			shared_st->keep_prev_char = true;
-			shared_st->prev_char = 'X';
+			pgsql_shared_st->keep_prev_char = true;
+			pgsql_shared_st->prev_char = 'X';
 
 			// NOTE: Don't increment the position in query buffer. See 'stage_1_parsing' doc.
 			return next_state;
@@ -1100,20 +1100,20 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 
 	// satisfied closing string - swap string to ?
 	if(
-		*shared_st->q == str_st->delim_char &&
-		(shared_st->q_len == shared_st->q_cur_pos+1 || *(shared_st->q + SIZECHAR) != str_st->delim_char)
+		*pgsql_shared_st->q == str_st->delim_char &&
+		(pgsql_shared_st->q_len == pgsql_shared_st->q_cur_pos+1 || *(pgsql_shared_st->q + SIZECHAR) != str_st->delim_char)
 	) {
 		// NOTE: may not be necessary since we don't increment 'res_cur_pos' during this state. Since all the
 		// characters are ignored.
-		shared_st->res_cur_pos = shared_st->res_pre_pos;
+		pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
 
 		// place the replacement mark
-		*shared_st->res_cur_pos++ = '?';
-		shared_st->prev_char = '?';
+		*pgsql_shared_st->res_cur_pos++ = '?';
+		pgsql_shared_st->prev_char = '?';
 
 		// don't copy this char if last
-		if (shared_st->q_len == shared_st->q_cur_pos + 1) {
-			shared_st->copy_next_char = 0;
+		if (pgsql_shared_st->q_len == pgsql_shared_st->q_cur_pos + 1) {
+			pgsql_shared_st->copy_next_char = 0;
 			// keep the same state, no token was found
 			return next_state;
 		}
@@ -1124,17 +1124,17 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 		str_st->q_start_pos = 0;
 
 		// update the shared state
-		shared_st->prev_char = str_st->delim_char;
-		if(shared_st->q_cur_pos < shared_st->q_len) {
-			shared_st->q++;
+		pgsql_shared_st->prev_char = str_st->delim_char;
+		if(pgsql_shared_st->q_cur_pos < pgsql_shared_st->q_len) {
+			pgsql_shared_st->q++;
 		}
-		shared_st->q_cur_pos++;
+		pgsql_shared_st->q_cur_pos++;
 
 		// exit the literal parsing state
 		next_state = st_no_mark_found;
 
 		if (is_unicode) {
-			try_consume_uescape(shared_st);
+			try_consume_uescape(pgsql_shared_st);
 			str_st->is_unicode = 0;
 		}
 	}
@@ -1145,7 +1145,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 /**
  * @brief Handles the processing state 'st_dollar_quote_string'.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param dq_st The dollar-quoted string parsing state, holds the information so far found about the state.
  *
  * @return The next processing state, it could be either:
@@ -1153,12 +1153,12 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
  *   - 'st_no_mark_found' if the dollar-quoted string has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_st* dq_st)
+enum pgsql_p_st process_dollar_quote_string(pgsql_shared_st* pgsql_shared_st, pgsql_dollar_quote_string_st* dq_st)
 {
-	enum p_st next_state = st_dollar_quote_string;
+	enum pgsql_p_st next_state = st_dollar_quote_string;
 
 	// Number of bytes remaining in the input buffer
-	size_t remaining = shared_st->q_len - shared_st->q_cur_pos;
+	size_t remaining = pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos;
 
 	// ============================================================
 	// PHASE 1 — Detect and initialize the opening $tag$
@@ -1171,11 +1171,11 @@ enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_
 		}
 
 		// Start scanning after the first '$' to read the tag
-		const char* p = shared_st->q + 1; // skip first $
+		const char* p = pgsql_shared_st->q + 1; // skip first $
 
 		// Read tag characters until another '$' or buffer end
 		// Valid characters: [A-Za-z0-9_]
-		while ((size_t)(p - shared_st->q) < remaining && *p != '$') {
+		while ((size_t)(p - pgsql_shared_st->q) < remaining && *p != '$') {
 			char c = *p;
 			if (!((c >= 'a' && c <= 'z') || 
 				  (c >= 'A' && c <= 'Z') || 
@@ -1189,47 +1189,47 @@ enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_
 		}
 
 		// If we reached end-of-buffer or didn't find a closing '$', it's not valid
-		if ((size_t)(p - shared_st->q) >= remaining || *p != '$') {
+		if ((size_t)(p - pgsql_shared_st->q) >= remaining || *p != '$') {
 			return st_no_mark_found;
 		}
 
 		// Store tag metadata:
 		// Example: $TAG$ -> tag_start points to 'T', tag_len = 3
-		dq_st->tag_start = shared_st->q + 1;                  // first char of tag
+		dq_st->tag_start = pgsql_shared_st->q + 1;                  // first char of tag
 		dq_st->tag_len = (int)(p - dq_st->tag_start);         // 0 for $$
 
 		// Check that skipping "$tag$" will not exceed buffer bounds
-		if (shared_st->q_cur_pos + dq_st->tag_len + 2 > (size_t)shared_st->q_len)
+		if (pgsql_shared_st->q_cur_pos + dq_st->tag_len + 2 > (size_t)pgsql_shared_st->q_len)
 			return st_no_mark_found;
 
 		// Advance input pointers past the opening delimiter
-		shared_st->q += dq_st->tag_len + 2;
-		shared_st->q_cur_pos += dq_st->tag_len + 2;
+		pgsql_shared_st->q += dq_st->tag_len + 2;
+		pgsql_shared_st->q_cur_pos += dq_st->tag_len + 2;
 	}
 
 	// ============================================================
 	// PHASE 2 — Inside the dollar-quoted string
 	// Look for the closing delimiter $tag$
 	// ============================================================
-	remaining = shared_st->q_len - shared_st->q_cur_pos;
+	remaining = pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos;
 
 	// Check if enough bytes remain to match the closing delimiter
 	if (remaining >= (size_t)(dq_st->tag_len + 2)) {
 
 		// Validate: '$' + tag + '$'
-		if (*shared_st->q == '$' &&
-			memcmp(shared_st->q + 1, dq_st->tag_start, dq_st->tag_len) == 0 &&
-			*(shared_st->q + 1 + dq_st->tag_len) == '$')
+		if (*pgsql_shared_st->q == '$' &&
+			memcmp(pgsql_shared_st->q + 1, dq_st->tag_start, dq_st->tag_len) == 0 &&
+			*(pgsql_shared_st->q + 1 + dq_st->tag_len) == '$')
 		{
 			// Found the closing delimiter
 
 			// Replace the entire dollar-quoted string with a single '?'
-			shared_st->res_cur_pos = shared_st->res_pre_pos;
-			*shared_st->res_cur_pos++ = '?';
+			pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
+			*pgsql_shared_st->res_cur_pos++ = '?';
 
 			// Skip past the closing delimiter
-			shared_st->q += dq_st->tag_len + 2;
-			shared_st->q_cur_pos += dq_st->tag_len + 2;
+			pgsql_shared_st->q += dq_st->tag_len + 2;
+			pgsql_shared_st->q_cur_pos += dq_st->tag_len + 2;
 
 			// Reset stored tag so the next string can be detected
 			dq_st->tag_start = NULL;
@@ -1245,8 +1245,8 @@ enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_
 		// get_next_st() on the same '$', which can match '$$' or '$tag$' again and bring
 		// it straight back here with no progress, looping forever (e.g. "SELECT $ab$ x$$").
 		// It would also copy the unterminated string's tail into the digest.
-		shared_st->q += remaining;
-		shared_st->q_cur_pos = shared_st->q_len;
+		pgsql_shared_st->q += remaining;
+		pgsql_shared_st->q_cur_pos = pgsql_shared_st->q_len;
 		dq_st->tag_start = NULL;
 		dq_st->tag_len = 0;
 		return st_no_mark_found;
@@ -1259,7 +1259,7 @@ enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_
 /**
  * @brief Handles the processing state 'st_literal_digit'.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param digit_st The literal digit parsing state, holds the information so far found about the state.
  * @param opts TODO: Currently unused, remove.
  *
@@ -1268,35 +1268,35 @@ enum p_st process_dollar_quote_string(shared_st* shared_st, dollar_quote_string_
  *   - 'st_no_mark_found' if the literal number has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st, const options* opts) {
-	enum p_st next_state = st_literal_number;
+enum pgsql_p_st process_literal_digit(pgsql_shared_st* pgsql_shared_st, pgsql_literal_digit_st* digit_st, const options* opts) {
+	enum pgsql_p_st next_state = st_literal_number;
 
 	// process the first digit
-	if (digit_st->first_digit == 1 && is_token_char(shared_st->prev_char) && is_digit_char(*shared_st->q)) {
+	if (digit_st->first_digit == 1 && is_token_char(pgsql_shared_st->prev_char) && is_digit_char(*pgsql_shared_st->q)) {
 		// store the start position of digit literal in the result buffer for later iterations
-		digit_st->start_pos = shared_st->res_pre_pos;
+		digit_st->start_pos = pgsql_shared_st->res_pre_pos;
 
 		// store the first digit
-		*shared_st->res_cur_pos = *shared_st->q;
+		*pgsql_shared_st->res_cur_pos = *pgsql_shared_st->q;
 		digit_st->first_digit = 0;
 
 		// NOTE: Don't increment the position in query buffer, as explained in 'stage_1_parsing'.
 	}
 
 	// token char or last char
-	char is_float_char = *shared_st->q == '.' ||
-		( tolower(shared_st->prev_char) == 'e' && ( *shared_st->q == '-' || *shared_st->q == '+' ) );
-	if ((is_token_char(*shared_st->q) && is_float_char == 0) || shared_st->q_len == shared_st->q_cur_pos + 1) {
-		if (is_digit_string_2(shared_st, digit_st->start_pos, shared_st->res_cur_pos)) {
-			shared_st->res_cur_pos = digit_st->start_pos;
+	char is_float_char = *pgsql_shared_st->q == '.' ||
+		( tolower(pgsql_shared_st->prev_char) == 'e' && ( *pgsql_shared_st->q == '-' || *pgsql_shared_st->q == '+' ) );
+	if ((is_token_char(*pgsql_shared_st->q) && is_float_char == 0) || pgsql_shared_st->q_len == pgsql_shared_st->q_cur_pos + 1) {
+		if (is_digit_string_2(pgsql_shared_st, digit_st->start_pos, pgsql_shared_st->res_cur_pos)) {
+			pgsql_shared_st->res_cur_pos = digit_st->start_pos;
 
 			// place the replacement mark
-			*shared_st->res_cur_pos++ = '?';
-			shared_st->prev_char = '?';
+			*pgsql_shared_st->res_cur_pos++ = '?';
+			pgsql_shared_st->prev_char = '?';
 
 			// don't copy this char if last and is not token
-			if (is_token_char(*shared_st->q) == 0 && shared_st->q_len == shared_st->q_cur_pos + 1) {
-				shared_st->copy_next_char = 0;
+			if (is_token_char(*pgsql_shared_st->q) == 0 && pgsql_shared_st->q_len == pgsql_shared_st->q_cur_pos + 1) {
+				pgsql_shared_st->copy_next_char = 0;
 				// keep the same state, no token was found
 				return next_state;
 			}
@@ -1314,34 +1314,34 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
  * @brief Alternative impl for 'NULL' replacement, unused right now. TODO: Remove.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_replace_null_single_chars(shared_st* shared_st, literal_null_st* null_st) {
-	enum p_st next_st = st_replace_null;
+enum pgsql_p_st process_replace_null_single_chars(pgsql_shared_st* pgsql_shared_st, pgsql_literal_null_st* null_st) {
+	enum pgsql_p_st next_st = st_replace_null;
 	const char* null_str = "null";
 
 	if (null_st->null_pos <= 3) {
-		if (tolower(*shared_st->q) == null_str[null_st->null_pos]) {
+		if (tolower(*pgsql_shared_st->q) == null_str[null_st->null_pos]) {
 			null_st->null_pos++;
 		} else {
 			next_st = st_no_mark_found;
 		}
 
-		if (shared_st->q_cur_pos == shared_st->q_len - 1 && null_st->null_pos == 4) {
+		if (pgsql_shared_st->q_cur_pos == pgsql_shared_st->q_len - 1 && null_st->null_pos == 4) {
 			// no need for changing the state it's the last char
-			shared_st->copy_next_char = 0;
-			shared_st->res_cur_pos = shared_st->res_pre_pos;
+			pgsql_shared_st->copy_next_char = 0;
+			pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
 
 			// place the replacement mark
-			*shared_st->res_cur_pos++ = '?';
-			shared_st->prev_char = '?';
+			*pgsql_shared_st->res_cur_pos++ = '?';
+			pgsql_shared_st->prev_char = '?';
 		}
 	} else if (null_st->null_pos == 4){
-		if (is_token_char(*shared_st->q)) {
-			shared_st->copy_next_char = 0;
-			shared_st->res_cur_pos = shared_st->res_pre_pos;
+		if (is_token_char(*pgsql_shared_st->q)) {
+			pgsql_shared_st->copy_next_char = 0;
+			pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
 
 			// place the replacement mark
-			*shared_st->res_cur_pos++ = '?';
-			shared_st->prev_char = '?';
+			*pgsql_shared_st->res_cur_pos++ = '?';
+			pgsql_shared_st->prev_char = '?';
 
 			// don't copy current char, go immediately back to initial state
 			next_st = st_no_mark_found;
@@ -1359,42 +1359,42 @@ enum p_st process_replace_null_single_chars(shared_st* shared_st, literal_null_s
  *   state  immediately, for this reason, this state is responsible of copying the current char before
  *   returning.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param opts Options to be used for the copying of the current char.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_replace_null(shared_st* shared_st, const options* opts) {
-	enum p_st next_st = st_no_mark_found;
+enum pgsql_p_st process_replace_null(pgsql_shared_st* pgsql_shared_st, const options* opts) {
+	enum pgsql_p_st next_st = st_no_mark_found;
 	char null_found = 0;
 
-	if ((shared_st->q_len - shared_st->q_cur_pos) > 4) {
+	if ((pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos) > 4) {
 		null_found =
-			(*shared_st->q == 'N' || *shared_st->q == 'n') &&
-			(*(shared_st->q+1) == 'U' || *(shared_st->q+1) == 'u') &&
-			(*(shared_st->q+2) == 'L' || *(shared_st->q+2) == 'l') &&
-			(*(shared_st->q+3) == 'L' || *(shared_st->q+3) == 'l') &&
-			is_token_char(*(shared_st->q+4));
-	} else if ((shared_st->q_len - shared_st->q_cur_pos) == 4) {
+			(*pgsql_shared_st->q == 'N' || *pgsql_shared_st->q == 'n') &&
+			(*(pgsql_shared_st->q+1) == 'U' || *(pgsql_shared_st->q+1) == 'u') &&
+			(*(pgsql_shared_st->q+2) == 'L' || *(pgsql_shared_st->q+2) == 'l') &&
+			(*(pgsql_shared_st->q+3) == 'L' || *(pgsql_shared_st->q+3) == 'l') &&
+			is_token_char(*(pgsql_shared_st->q+4));
+	} else if ((pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos) == 4) {
 		null_found =
-			(*shared_st->q == 'N' || *shared_st->q == 'n') &&
-			(*(shared_st->q+1) == 'U' || *(shared_st->q+1) == 'u') &&
-			(*(shared_st->q+2) == 'L' || *(shared_st->q+2) == 'l') &&
-			(*(shared_st->q+3) == 'L' || *(shared_st->q+3) == 'l');
+			(*pgsql_shared_st->q == 'N' || *pgsql_shared_st->q == 'n') &&
+			(*(pgsql_shared_st->q+1) == 'U' || *(pgsql_shared_st->q+1) == 'u') &&
+			(*(pgsql_shared_st->q+2) == 'L' || *(pgsql_shared_st->q+2) == 'l') &&
+			(*(pgsql_shared_st->q+3) == 'L' || *(pgsql_shared_st->q+3) == 'l');
 	} else {
 		null_found = 0;
 	}
 
 	if (null_found == 1) {
 		// place the replacement mark
-		shared_st->res_cur_pos = shared_st->res_pre_pos;
-		*shared_st->res_cur_pos++ = '?';
-		shared_st->prev_char = '?';
+		pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
+		*pgsql_shared_st->res_cur_pos++ = '?';
+		pgsql_shared_st->prev_char = '?';
 
-		shared_st->q += 4;
-		shared_st->q_cur_pos += 4;
+		pgsql_shared_st->q += 4;
+		pgsql_shared_st->q_cur_pos += 4;
 	} else {
 		// process the first char and continue
-		copy_next_char(shared_st, opts);
+		copy_next_char(pgsql_shared_st, opts);
 	}
 
 	return next_st;
@@ -1405,11 +1405,11 @@ enum p_st process_replace_null(shared_st* shared_st, const options* opts) {
  * @details The state 'st_pg_typecast' is responsible of
  *   skipping the typecast name and any modifiers after the initial "::" has been detected.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param tc The pg_typecast parsing state, holds the information so far found about the state.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_pg_typecast(shared_st* s, pg_typecast_st* tc)
+enum pgsql_p_st process_pg_typecast(pgsql_shared_st* s, pgsql_typecast_st* tc)
 {
 	// On entering state
 	if (!tc->started) {
@@ -1579,51 +1579,51 @@ enum p_st process_pg_typecast(shared_st* s, pg_typecast_st* tc)
  *   state  immediately, for this reason, this state is responsible of copying the current char before
  *   returning.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param opts Options to be used for the copying of the current char.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_replace_boolean(shared_st* shared_st, const options* opts) {
-	enum p_st next_st = st_no_mark_found;
+enum pgsql_p_st process_replace_boolean(pgsql_shared_st* pgsql_shared_st, const options* opts) {
+	enum pgsql_p_st next_st = st_no_mark_found;
 	char boolean_found = 0;
 
-	size_t remaining = shared_st->q_len - shared_st->q_cur_pos;
+	size_t remaining = pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos;
 
 	// Check for "TRUE"
-	if (tolower(*shared_st->q) == 't' && remaining >= 4) {
-		if ((tolower(shared_st->q[1]) == 'r' || shared_st->q[1] == 'R') &&
-			(tolower(shared_st->q[2]) == 'u' || shared_st->q[2] == 'U') &&
-			(tolower(shared_st->q[3]) == 'e' || shared_st->q[3] == 'E') &&
-			(remaining == 4 || is_token_char(shared_st->q[4]))) {
+	if (tolower(*pgsql_shared_st->q) == 't' && remaining >= 4) {
+		if ((tolower(pgsql_shared_st->q[1]) == 'r' || pgsql_shared_st->q[1] == 'R') &&
+			(tolower(pgsql_shared_st->q[2]) == 'u' || pgsql_shared_st->q[2] == 'U') &&
+			(tolower(pgsql_shared_st->q[3]) == 'e' || pgsql_shared_st->q[3] == 'E') &&
+			(remaining == 4 || is_token_char(pgsql_shared_st->q[4]))) {
 
 			// Replace with '?'
-			shared_st->res_cur_pos = shared_st->res_pre_pos;
-			*shared_st->res_cur_pos++ = '?';
-			shared_st->prev_char = '?';
+			pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
+			*pgsql_shared_st->res_cur_pos++ = '?';
+			pgsql_shared_st->prev_char = '?';
 
 			// Skip the boolean literal
-			shared_st->q += 4;
-			shared_st->q_cur_pos += 4;
+			pgsql_shared_st->q += 4;
+			pgsql_shared_st->q_cur_pos += 4;
 
 			boolean_found = 1;
 		}
 	}
 	// Check for "FALSE"
-	else if (tolower(*shared_st->q) == 'f' && remaining >= 5) {
-		if ((tolower(shared_st->q[1]) == 'a' || shared_st->q[1] == 'A') &&
-			(tolower(shared_st->q[2]) == 'l' || shared_st->q[2] == 'L') &&
-			(tolower(shared_st->q[3]) == 's' || shared_st->q[3] == 'S') &&
-			(tolower(shared_st->q[4]) == 'e' || shared_st->q[4] == 'E') &&
-			(remaining == 5 || is_token_char(shared_st->q[5]))) {
+	else if (tolower(*pgsql_shared_st->q) == 'f' && remaining >= 5) {
+		if ((tolower(pgsql_shared_st->q[1]) == 'a' || pgsql_shared_st->q[1] == 'A') &&
+			(tolower(pgsql_shared_st->q[2]) == 'l' || pgsql_shared_st->q[2] == 'L') &&
+			(tolower(pgsql_shared_st->q[3]) == 's' || pgsql_shared_st->q[3] == 'S') &&
+			(tolower(pgsql_shared_st->q[4]) == 'e' || pgsql_shared_st->q[4] == 'E') &&
+			(remaining == 5 || is_token_char(pgsql_shared_st->q[5]))) {
 
 			// Replace with '?'
-			shared_st->res_cur_pos = shared_st->res_pre_pos;
-			*shared_st->res_cur_pos++ = '?';
-			shared_st->prev_char = '?';
+			pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
+			*pgsql_shared_st->res_cur_pos++ = '?';
+			pgsql_shared_st->prev_char = '?';
 
 			// Skip the boolean literal
-			shared_st->q += 5;
-			shared_st->q_cur_pos += 5;
+			pgsql_shared_st->q += 5;
+			pgsql_shared_st->q_cur_pos += 5;
 
 			boolean_found = 1;
 		}
@@ -1631,7 +1631,7 @@ enum p_st process_replace_boolean(shared_st* shared_st, const options* opts) {
 
 	if (!boolean_found) {
 		// Not a boolean literal - copy the current char and continue
-		copy_next_char(shared_st, opts);
+		copy_next_char(pgsql_shared_st, opts);
 	}
 
 	return next_st;
@@ -1643,7 +1643,7 @@ enum p_st process_replace_boolean(shared_st* shared_st, const options* opts) {
  *   current char until the end of the array literal is found. Then replaces the previous position
  *   in the result buffer with the mark '?'.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param array_st The array literal parsing state, holds the information so far found about the state.
  *
  * @return The next processing state, it could be either:
@@ -1651,20 +1651,20 @@ enum p_st process_replace_boolean(shared_st* shared_st, const options* opts) {
  *   - 'st_no_mark_found' if the array literal has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_array_literal(shared_st* shared_st, array_literal_st* array_st) {
-	enum p_st next_state = st_array_literal;
+enum pgsql_p_st process_array_literal(pgsql_shared_st* pgsql_shared_st, pgsql_array_literal_st* array_st) {
+	enum pgsql_p_st next_state = st_array_literal;
 
 	// 1. INITIALIZATION: Check for "ARRAY" + whitespace + "["
 	if (array_st->bracket_depth == 0) {
 
 		/* Ensure enough input remains for "ARRAY" */
-		if (shared_st->q_cur_pos + 5 > shared_st->q_len)
+		if (pgsql_shared_st->q_cur_pos + 5 > pgsql_shared_st->q_len)
 			return st_no_mark_found;
 
 		// We're at the 'A' of "ARRAY"
 		// Skip "ARRAY" (5 chars)
-		const char* p = shared_st->q + 5;
-		size_t remaining = shared_st->q_len - shared_st->q_cur_pos - 5;
+		const char* p = pgsql_shared_st->q + 5;
+		size_t remaining = pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos - 5;
 
 		// Skip any whitespace
 		while (remaining > 0 && is_space_char(*p)) {
@@ -1677,75 +1677,75 @@ enum p_st process_array_literal(shared_st* shared_st, array_literal_st* array_st
 			return st_no_mark_found;
 
 		/* Move shared state to '[' */
-		size_t skip_count = (size_t)(p - shared_st->q);
-		shared_st->q += skip_count;
-		shared_st->q_cur_pos += skip_count;
+		size_t skip_count = (size_t)(p - pgsql_shared_st->q);
+		pgsql_shared_st->q += skip_count;
+		pgsql_shared_st->q_cur_pos += skip_count;
 
 		// We're now at the '[', set bracket depth to 1
 		array_st->bracket_depth = 1;
 
 		/* Skip '[' safely */
-		if (shared_st->q_cur_pos < shared_st->q_len) {
-			shared_st->q++;
-			shared_st->q_cur_pos++;
+		if (pgsql_shared_st->q_cur_pos < pgsql_shared_st->q_len) {
+			pgsql_shared_st->q++;
+			pgsql_shared_st->q_cur_pos++;
 		} else {
 			return next_state;
 		}
 	}
 
 	// 2. PROCESSING: Find the end of the array
-	if (shared_st->q_cur_pos >= shared_st->q_len) 
+	if (pgsql_shared_st->q_cur_pos >= pgsql_shared_st->q_len) 
 		return st_no_mark_found;
 
 	// Process the array content
-	char c = *shared_st->q;
+	char c = *pgsql_shared_st->q;
 
 	// If we encounter quotes inside the array, skip over the quoted literal so ']' inside quotes is ignored.
 	if (c == '\'' || c == '"') {
 		char quote_char = c;
 
 		// consume opening quote
-		shared_st->q++;
-		shared_st->q_cur_pos++;
+		pgsql_shared_st->q++;
+		pgsql_shared_st->q_cur_pos++;
 
-		while (shared_st->q_cur_pos < shared_st->q_len) {
-			char cc = *shared_st->q;
+		while (pgsql_shared_st->q_cur_pos < pgsql_shared_st->q_len) {
+			char cc = *pgsql_shared_st->q;
 
 			// backslash escape
-			if (cc == '\\' && shared_st->q_cur_pos + 1 < shared_st->q_len) {
-				shared_st->q += 2;
-				shared_st->q_cur_pos += 2;
+			if (cc == '\\' && pgsql_shared_st->q_cur_pos + 1 < pgsql_shared_st->q_len) {
+				pgsql_shared_st->q += 2;
+				pgsql_shared_st->q_cur_pos += 2;
 				continue;
 			}
 
 			// SQL doubled single-quote
 			if (quote_char == '\'' && cc == '\'' &&
-				shared_st->q_cur_pos + 1 < shared_st->q_len &&
-				*(shared_st->q + 1) == '\'') {
-				shared_st->q += 2;
-				shared_st->q_cur_pos += 2;
+				pgsql_shared_st->q_cur_pos + 1 < pgsql_shared_st->q_len &&
+				*(pgsql_shared_st->q + 1) == '\'') {
+				pgsql_shared_st->q += 2;
+				pgsql_shared_st->q_cur_pos += 2;
 				continue;
 			}
 
 			// closing quote
 			if (cc == quote_char) {
-				shared_st->q++;
-				shared_st->q_cur_pos++;
+				pgsql_shared_st->q++;
+				pgsql_shared_st->q_cur_pos++;
 				break;
 			}
 
-			shared_st->q++;
-			shared_st->q_cur_pos++;
+			pgsql_shared_st->q++;
+			pgsql_shared_st->q_cur_pos++;
 		}
 
 		// if unterminated, wait for more input
-		if (shared_st->q_cur_pos >= shared_st->q_len)
+		if (pgsql_shared_st->q_cur_pos >= pgsql_shared_st->q_len)
 			return st_no_mark_found;
 
 	} else if (c == '$') {
 		// Check if this is a dollar-quoted string
-		const char* p = shared_st->q + 1;
-		size_t remaining = shared_st->q_len - shared_st->q_cur_pos;
+		const char* p = pgsql_shared_st->q + 1;
+		size_t remaining = pgsql_shared_st->q_len - pgsql_shared_st->q_cur_pos;
 		size_t tag_len = 0;
 
 		// Read the tag (can be empty or [A-Za-z0-9_])
@@ -1767,39 +1767,39 @@ enum p_st process_array_literal(shared_st* shared_st, array_literal_st* array_st
 			const char* tag_start = p;
 
 			// Move past the opening delimiter
-			shared_st->q += tag_len + 2; // Skip $ + tag + $
-			shared_st->q_cur_pos += tag_len + 2;
+			pgsql_shared_st->q += tag_len + 2; // Skip $ + tag + $
+			pgsql_shared_st->q_cur_pos += tag_len + 2;
 
 			// Now find the closing delimiter
-			while (shared_st->q_cur_pos < shared_st->q_len) {
+			while (pgsql_shared_st->q_cur_pos < pgsql_shared_st->q_len) {
 				// Check if we have enough characters for the closing delimiter
-				if (*shared_st->q == '$' &&
-					shared_st->q_cur_pos + tag_len + 1 < (size_t)shared_st->q_len) {
+				if (*pgsql_shared_st->q == '$' &&
+					pgsql_shared_st->q_cur_pos + tag_len + 1 < (size_t)pgsql_shared_st->q_len) {
 
 					// Check if this matches our opening tag
-					if (memcmp(shared_st->q + 1, tag_start, tag_len) == 0 &&
-						*(shared_st->q + tag_len + 1) == '$') {
+					if (memcmp(pgsql_shared_st->q + 1, tag_start, tag_len) == 0 &&
+						*(pgsql_shared_st->q + tag_len + 1) == '$') {
 
 						// Found the closing delimiter
-						shared_st->q += tag_len + 2;
-						shared_st->q_cur_pos += tag_len + 2;
+						pgsql_shared_st->q += tag_len + 2;
+						pgsql_shared_st->q_cur_pos += tag_len + 2;
 						tag_start = NULL;
 						tag_len = 0;
 						break;
 					}
 				}
 
-				shared_st->q++;
-				shared_st->q_cur_pos++;
+				pgsql_shared_st->q++;
+				pgsql_shared_st->q_cur_pos++;
 			}
 
 			// If we didn't find the closing delimiter, wait for more input
-			if (shared_st->q_cur_pos >= shared_st->q_len)
+			if (pgsql_shared_st->q_cur_pos >= pgsql_shared_st->q_len)
 				return st_no_mark_found;
 		}
 	}
 
-	c = *shared_st->q;
+	c = *pgsql_shared_st->q;
 
 	// 3. BRACKET COUNTING
 	if (c == '[') {
@@ -1809,16 +1809,16 @@ enum p_st process_array_literal(shared_st* shared_st, array_literal_st* array_st
 
 		if (array_st->bracket_depth == 0) {
 			// End of array literal found
-			shared_st->res_cur_pos = shared_st->res_pre_pos;
+			pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
 
 			// Replace the whole thing with '?'
-			*shared_st->res_cur_pos++ = '?';
-			shared_st->prev_char = '?';
+			*pgsql_shared_st->res_cur_pos++ = '?';
+			pgsql_shared_st->prev_char = '?';
 
 			/* Skip closing ']' */
-			if (shared_st->q_cur_pos < shared_st->q_len) {
-				shared_st->q++;
-				shared_st->q_cur_pos++;
+			if (pgsql_shared_st->q_cur_pos < pgsql_shared_st->q_len) {
+				pgsql_shared_st->q++;
+				pgsql_shared_st->q_cur_pos++;
 			}
 
 			return st_no_mark_found;
@@ -1834,13 +1834,13 @@ enum p_st process_array_literal(shared_st* shared_st, array_literal_st* array_st
  * @details The state 'st_literal_prefix' is responsible of
  *   skipping the prefix name before the initial string delimiter has been detected.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param str_st The literal string parsing state, holds the information so far found about the state.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_literal_prefix_type(shared_st* s, literal_string_st* str_st) {
+enum pgsql_p_st process_literal_prefix_type(pgsql_shared_st* s, pgsql_literal_string_st* str_st) {
 
-	enum p_st next_state = st_no_mark_found;
+	enum pgsql_p_st next_state = st_no_mark_found;
 
 	const char* q = s->q;
 	size_t remaining = s->q_len - s->q_cur_pos;
@@ -1877,7 +1877,7 @@ enum p_st process_literal_prefix_type(shared_st* s, literal_string_st* str_st) {
  *   In PostgreSQL, double quotes are used for quoted identifiers that can contain special characters,
  *   preserve case, or use reserved words as identifiers.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param str_st The literal string parsing state, holds the information so far found about the state.
  *
  * @return The next processing state, it could be either:
@@ -1885,20 +1885,20 @@ enum p_st process_literal_prefix_type(shared_st* s, literal_string_st* str_st) {
  *   - 'st_no_mark_found' if the quoted identifier has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_quoted_identifier(shared_st* shared_st, quoted_identifier_st* str_st) {
-	enum p_st next_state = st_quoted_identifier;
+enum pgsql_p_st process_quoted_identifier(pgsql_shared_st* pgsql_shared_st, pgsql_quoted_identifier_st* str_st) {
+	enum pgsql_p_st next_state = st_quoted_identifier;
 
 	// process the first delimiter
 	if (str_st->delim_num == 0) {
 		// store found delimiter
-		str_st->q_start_pos = shared_st->q;
-		str_st->delim_char = *shared_st->q; // Should be '"'
+		str_st->q_start_pos = pgsql_shared_st->q;
+		str_st->delim_char = *pgsql_shared_st->q; // Should be '"'
 		str_st->delim_num = 1;
 		return next_state;
 	}
 
 	// Check for closing quote
-	if (*shared_st->q == '"') {
+	if (*pgsql_shared_st->q == '"') {
 		// Reset the quoted identifier state
 		str_st->delim_char = 0;
 		str_st->delim_num = 0;
@@ -1918,22 +1918,22 @@ enum p_st process_quoted_identifier(shared_st* shared_st, quoted_identifier_st* 
  *   digest for performing the compression *could be* neither the final position in which 'stage 1'
  *   finalized or the end of the buffer being used to write the digest. If 'stage 1' was parsing a number,
  *   the position used for the end of the compression stage shall be the position of the starting digit in
- *   the number being parsed marked by 'stage_1_st->literal_digit_st.start_pos'.
+ *   the number being parsed marked by 'pgsql_stage_1_st->pgsql_literal_digit_st.start_pos'.
  *
- * @param shared_st Shared state used to continue the query processing.
- * @param stage_1_st The 'stage 1' state used to decide which will be the 'digest_end' position for the
+ * @param pgsql_shared_st Shared state used to continue the query processing.
+ * @param pgsql_stage_1_st The 'stage 1' state used to decide which will be the 'digest_end' position for the
  *   current stage.
  * @return Last complete character, or nullptr when the compression range is empty.
  */
 static __attribute__((always_inline)) inline
-char* get_stage_digest_end(shared_st* shared_st, stage_1_st* stage_1_st) {
-	char* end_pos = shared_st->res_cur_pos;
-	if (shared_st->st == st_literal_number && stage_1_st->literal_dig_st.start_pos != nullptr) {
-		end_pos = stage_1_st->literal_dig_st.start_pos;
+char* get_stage_digest_end(pgsql_shared_st* pgsql_shared_st, pgsql_stage_1_st* pgsql_stage_1_st) {
+	char* end_pos = pgsql_shared_st->res_cur_pos;
+	if (pgsql_shared_st->st == st_literal_number && pgsql_stage_1_st->literal_dig_st.start_pos != nullptr) {
+		end_pos = pgsql_stage_1_st->literal_dig_st.start_pos;
 	}
 
 	// No inclusive end exists when there are no complete characters to compress.
-	return end_pos > shared_st->res_init_pos ? end_pos - 1 : nullptr;
+	return end_pos > pgsql_shared_st->res_init_pos ? end_pos - 1 : nullptr;
 }
 
 /**
@@ -1947,23 +1947,23 @@ char* get_stage_digest_end(shared_st* shared_st, stage_1_st* stage_1_st) {
  *   whole result buffer again in this iteration is pointless, since most of the buffer should have been
  *   already compressed by this stage.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param digest_end Last complete character in the current compression range.
  * @param previous_pos End position saved by this stage's previous iteration, or nullptr.
  * @param lookback Number of characters to revisit before the adjusted previous position.
  */
 static __attribute__((always_inline)) inline
-void set_stage_next_start_pos(shared_st* shared_st, char* digest_end, char* previous_pos, ptrdiff_t lookback) {
-	char* next_start_pos = shared_st->res_init_pos;
-	if (shared_st->res_init_pos != shared_st->res_it_init_pos && previous_pos && digest_end) {
-		const ptrdiff_t next_offset = (previous_pos - shared_st->res_init_pos) - lookback;
-		const ptrdiff_t end_offset = digest_end - shared_st->res_init_pos;
+void set_stage_next_start_pos(pgsql_shared_st* pgsql_shared_st, char* digest_end, char* previous_pos, ptrdiff_t lookback) {
+	char* next_start_pos = pgsql_shared_st->res_init_pos;
+	if (pgsql_shared_st->res_init_pos != pgsql_shared_st->res_it_init_pos && previous_pos && digest_end) {
+		const ptrdiff_t next_offset = (previous_pos - pgsql_shared_st->res_init_pos) - lookback;
+		const ptrdiff_t end_offset = digest_end - pgsql_shared_st->res_init_pos;
 		if (next_offset >= 0 && next_offset < end_offset) {
 			next_start_pos += next_offset;
 		}
 	}
-	shared_st->res_cur_pos = next_start_pos;
-	shared_st->res_pre_pos = next_start_pos;
+	pgsql_shared_st->res_cur_pos = next_start_pos;
+	pgsql_shared_st->res_pre_pos = next_start_pos;
 }
 
 /**
@@ -1972,32 +1972,32 @@ void set_stage_next_start_pos(shared_st* shared_st, char* digest_end, char* prev
  *   compression stage, like for example, when 'stage 1' was interrupted parsing a digit because the result
  *   buffer run out of memory.
  *
- * @param shared_st Shared state used to continue the query processing.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
  * @param digest_end The computed 'digest_end' for the stage being processed.
- * @param stage_1_st The state from the previous iteration of 'stage 1'.
+ * @param pgsql_stage_1_st The state from the previous iteration of 'stage 1'.
  * @param stage_pre_it_pos Pointer to be updated with the final position being processed for compression by
  *   the stage.
  */
 static __attribute__((always_inline)) inline
-void end_compression_stage_it(shared_st* shared_st, char* digest_end, stage_1_st* stage_1_st, char** stage_pre_it_pos) {
-	if (stage_1_st->literal_dig_st.start_pos &&
-		stage_1_st->literal_dig_st.start_pos > shared_st->res_init_pos &&
-		digest_end == stage_1_st->literal_dig_st.start_pos - 1 && stage_1_st->new_end_pos)
+void end_compression_stage_it(pgsql_shared_st* pgsql_shared_st, char* digest_end, pgsql_stage_1_st* pgsql_stage_1_st, char** stage_pre_it_pos) {
+	if (pgsql_stage_1_st->literal_dig_st.start_pos &&
+		pgsql_stage_1_st->literal_dig_st.start_pos > pgsql_shared_st->res_init_pos &&
+		digest_end == pgsql_stage_1_st->literal_dig_st.start_pos - 1 && pgsql_stage_1_st->new_end_pos)
 	{
-		char* f_digits = stage_1_st->literal_dig_st.start_pos;
-		stage_1_st->literal_dig_st.start_pos = shared_st->res_pre_pos;
-		*stage_pre_it_pos = stage_1_st->literal_dig_st.start_pos;
+		char* f_digits = pgsql_stage_1_st->literal_dig_st.start_pos;
+		pgsql_stage_1_st->literal_dig_st.start_pos = pgsql_shared_st->res_pre_pos;
+		*stage_pre_it_pos = pgsql_stage_1_st->literal_dig_st.start_pos;
 
-		while (f_digits < stage_1_st->new_end_pos) {
-			*shared_st->res_pre_pos++ = *f_digits++;
-			shared_st->res_cur_pos++;
+		while (f_digits < pgsql_stage_1_st->new_end_pos) {
+			*pgsql_shared_st->res_pre_pos++ = *f_digits++;
+			pgsql_shared_st->res_cur_pos++;
 		}
 
-		*shared_st->res_pre_pos = 0;
-		stage_1_st->new_end_pos = shared_st->res_pre_pos;
+		*pgsql_shared_st->res_pre_pos = 0;
+		pgsql_stage_1_st->new_end_pos = pgsql_shared_st->res_pre_pos;
 	} else {
-		*shared_st->res_pre_pos = 0;
-		*stage_pre_it_pos = shared_st->res_pre_pos;
+		*pgsql_shared_st->res_pre_pos = 0;
+		*stage_pre_it_pos = pgsql_shared_st->res_pre_pos;
 	}
 }
 
@@ -2028,36 +2028,36 @@ void end_compression_stage_it(shared_st* shared_st, char* digest_end, stage_1_st
  *   to neutral state 'st_no_mark_found', it's *not required* to consume the first digit. Since this will
  *   automatically takes place at the end of the current iteration.
  *
- * @param shared_st Shared state used to continue the query processing.
- * @param stage_1_st The first stage state to be updated.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
+ * @param pgsql_stage_1_st The first stage state to be updated.
  * @param opts Options used to homogenize queries via 'lowercase' or 'replace_nulls' options.
  * @param fst_cmnt Pointer to be updated with the found first comment, left unmodified otherwise.
  */
 static __attribute__((always_inline)) inline
-void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options* opts, char** fst_cmnt) {
+void stage_1_parsing(pgsql_shared_st* pgsql_shared_st, pgsql_stage_1_st* pgsql_stage_1_st, const options* opts, char** fst_cmnt) {
 	// state required between different iterations of special parsing states
-	cmnt_type_1_st* const cmnt_type_1_st = &stage_1_st->cmnt_type_1_st;
-	literal_string_st* const literal_str_st = &stage_1_st->literal_str_st;
-	literal_digit_st* const literal_dig_st = &stage_1_st->literal_dig_st;
-	dollar_quote_string_st* const dollar_quote_str_st = &stage_1_st->dollar_quote_str_st;
-	pg_typecast_st* const pg_tc_st = &stage_1_st->pg_tc_st;
-	array_literal_st* const array_st = &stage_1_st->array_st;
-	quoted_identifier_st* const quoted_identifier_str_st = &stage_1_st->quoted_iden_st;
+	pgsql_cmnt_type_1_st* const pgsql_cmnt_type_1_st = &pgsql_stage_1_st->pgsql_cmnt_type_1_st;
+	pgsql_literal_string_st* const literal_str_st = &pgsql_stage_1_st->literal_str_st;
+	pgsql_literal_digit_st* const literal_dig_st = &pgsql_stage_1_st->literal_dig_st;
+	pgsql_dollar_quote_string_st* const dollar_quote_str_st = &pgsql_stage_1_st->dollar_quote_str_st;
+	pgsql_typecast_st* const pg_tc_st = &pgsql_stage_1_st->pg_tc_st;
+	pgsql_array_literal_st* const array_st = &pgsql_stage_1_st->array_st;
+	pgsql_quoted_identifier_st* const quoted_identifier_str_st = &pgsql_stage_1_st->quoted_iden_st;
 
 	// starting state can belong to a previous iteration
-	enum p_st cur_st = shared_st->st;
+	enum pgsql_p_st cur_st = pgsql_shared_st->st;
 
 	// if the previous iteration was parsing a number
-	if (stage_1_st->new_end_pos != NULL) {
-		shared_st->res_cur_pos = stage_1_st->new_end_pos;
-		shared_st->res_pre_pos = stage_1_st->new_end_pos;
+	if (pgsql_stage_1_st->new_end_pos != NULL) {
+		pgsql_shared_st->res_cur_pos = pgsql_stage_1_st->new_end_pos;
+		pgsql_shared_st->res_pre_pos = pgsql_stage_1_st->new_end_pos;
 	}
 
 	// NOTE: Required for 'digest_corner_cases_3.hjson'
 	// Space detection can fail when comming from another iteration if 'prev_char' is not reset.
 	// This can allow to copy the null terminator due to the logic in 'double spaces' supression.
-	if (shared_st->res_init_pos != shared_st->res_it_init_pos) {
-		shared_st->prev_char = *(shared_st->res_pre_pos - 1);
+	if (pgsql_shared_st->res_init_pos != pgsql_shared_st->res_it_init_pos) {
+		pgsql_shared_st->prev_char = *(pgsql_shared_st->res_pre_pos - 1);
 	}
 
 	// Stop when either:
@@ -2066,14 +2066,14 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 	//     still processed up to 'd_max_len' (see digest_len_limit()).
 	//  2. The final position of the received query has been reached.
 	for (;;) {
-		if (shared_st->q_cur_pos >= shared_st->q_len ||
-			(shared_st->res_cur_pos - shared_st->res_init_pos) >= digest_len_limit(shared_st, cmnt_type_1_st)) {
+		if (pgsql_shared_st->q_cur_pos >= pgsql_shared_st->q_len ||
+			(pgsql_shared_st->res_cur_pos - pgsql_shared_st->res_init_pos) >= digest_len_limit(pgsql_shared_st, pgsql_cmnt_type_1_st)) {
 			break;
 		}
 		if (cur_st == st_no_mark_found) {
 			// update the last position over the return buffer to be the current position
-			shared_st->res_pre_pos = shared_st->res_cur_pos;
-			cur_st = get_next_st(opts, shared_st);
+			pgsql_shared_st->res_pre_pos = pgsql_shared_st->res_cur_pos;
+			cur_st = get_next_st(opts, pgsql_shared_st);
 
 			// if next st isn't 'no_mark_found' transition to it without consuming current char
 			if (cur_st != st_no_mark_found) {
@@ -2084,9 +2084,9 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 				// Removal of spaces that doesn't belong to any particular parsing state.
 
 				// ignore all the leading spaces
-				if (shared_st->res_cur_pos == shared_st->res_init_pos && is_space_char(*shared_st->q)) {
-					shared_st->q++;
-					shared_st->q_cur_pos++;
+				if (pgsql_shared_st->res_cur_pos == pgsql_shared_st->res_init_pos && is_space_char(*pgsql_shared_st->q)) {
+					pgsql_shared_st->q++;
+					pgsql_shared_st->q_cur_pos++;
 					continue;
 				}
 
@@ -2100,115 +2100,115 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 				// Q: `SELECT\s\s  1`
 				//              ^ address used to be replaced by next char
 				// ```
-				if (is_space_char(shared_st->prev_char) && is_space_char(*shared_st->q)) {
+				if (is_space_char(pgsql_shared_st->prev_char) && is_space_char(*pgsql_shared_st->q)) {
 					// if current position in result buffer is the first space found, we move to the next
 					// position, in order to respect the first space char.
-					if (!is_space_char(*(shared_st->res_cur_pos-1))) {
-						shared_st->res_cur_pos++;
+					if (!is_space_char(*(pgsql_shared_st->res_cur_pos-1))) {
+						pgsql_shared_st->res_cur_pos++;
 					}
 
-					shared_st->prev_char = ' ';
-					*shared_st->res_cur_pos = ' ';
+					pgsql_shared_st->prev_char = ' ';
+					*pgsql_shared_st->res_cur_pos = ' ';
 
-					shared_st->q++;
-					shared_st->q_cur_pos++;
+					pgsql_shared_st->q++;
+					pgsql_shared_st->q_cur_pos++;
 					continue;
 				}
 
 				// copy the current char
-				copy_next_char(shared_st, opts);
+				copy_next_char(pgsql_shared_st, opts);
 			}
 		} else {
 			switch (cur_st) {
 				case st_cmnt_type_1:
 					// by default, we don't copy the next char for comments
-					shared_st->copy_next_char = 0;
-					cur_st = process_cmnt_type_1(opts, shared_st, cmnt_type_1_st, fst_cmnt);
+					pgsql_shared_st->copy_next_char = 0;
+					cur_st = process_cmnt_type_1(opts, pgsql_shared_st, pgsql_cmnt_type_1_st, fst_cmnt);
 					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_cmnt_type_2:
-					shared_st->copy_next_char = 0;
-					cur_st = process_cmnt_type_2(shared_st);
+					pgsql_shared_st->copy_next_char = 0;
+					cur_st = process_cmnt_type_2(pgsql_shared_st);
 					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_literal_string:
 					// NOTE: Not required to copy since spaces are not going to be processed here
-					shared_st->copy_next_char = 0;
-					cur_st = process_literal_string(shared_st, literal_str_st);
+					pgsql_shared_st->copy_next_char = 0;
+					cur_st = process_literal_string(pgsql_shared_st, literal_str_st);
 					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_quoted_identifier:
-					shared_st->copy_next_char = 1; // We copy characters in this state
-					cur_st = process_quoted_identifier(shared_st, quoted_identifier_str_st);
+					pgsql_shared_st->copy_next_char = 1; // We copy characters in this state
+					cur_st = process_quoted_identifier(pgsql_shared_st, quoted_identifier_str_st);
 					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_dollar_quote_string:
-					shared_st->copy_next_char = 0;
-					cur_st = process_dollar_quote_string(shared_st, dollar_quote_str_st);
+					pgsql_shared_st->copy_next_char = 0;
+					cur_st = process_dollar_quote_string(pgsql_shared_st, dollar_quote_str_st);
 					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_literal_number:
-					shared_st->copy_next_char = 1;
-					cur_st = process_literal_digit(shared_st, literal_dig_st, opts);
+					pgsql_shared_st->copy_next_char = 1;
+					cur_st = process_literal_digit(pgsql_shared_st, literal_dig_st, opts);
 					if (cur_st == st_no_mark_found) {
 						literal_dig_st->first_digit = 1;
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_replace_null:
-					// shared_st->copy_next_char = 1;
-					cur_st = process_replace_null(shared_st, opts);
+					// pgsql_shared_st->copy_next_char = 1;
+					cur_st = process_replace_null(pgsql_shared_st, opts);
 					if (cur_st == st_no_mark_found) {
-						// literal_null_st.null_pos = 0;
-						shared_st->copy_next_char = 1;
+						// pgsql_literal_null_st.null_pos = 0;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_replace_boolean:
-					// shared_st->copy_next_char = 1;
-					cur_st = process_replace_boolean(shared_st, opts);
+					// pgsql_shared_st->copy_next_char = 1;
+					cur_st = process_replace_boolean(pgsql_shared_st, opts);
 					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_pg_typecast:
-					shared_st->copy_next_char = 0;
-					cur_st = process_pg_typecast(shared_st, pg_tc_st);
+					pgsql_shared_st->copy_next_char = 0;
+					cur_st = process_pg_typecast(pgsql_shared_st, pg_tc_st);
 					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_array_literal:
-					shared_st->copy_next_char = 0;
-					cur_st = process_array_literal(shared_st, array_st);
+					pgsql_shared_st->copy_next_char = 0;
+					cur_st = process_array_literal(pgsql_shared_st, array_st);
 					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
 				case st_literal_prefix_type:
-					shared_st->copy_next_char = 0;
-					cur_st = process_literal_prefix_type(shared_st, literal_str_st);
+					pgsql_shared_st->copy_next_char = 0;
+					cur_st = process_literal_prefix_type(pgsql_shared_st, literal_str_st);
 					if (cur_st == st_no_mark_found) {
-						shared_st->copy_next_char = 1;
+						pgsql_shared_st->copy_next_char = 1;
 						continue;
 					}
 					break;
@@ -2216,27 +2216,27 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
 					break;
 			}
 
-			if (shared_st->copy_next_char) {
-				copy_next_char(shared_st, opts);
+			if (pgsql_shared_st->copy_next_char) {
+				copy_next_char(pgsql_shared_st, opts);
 			} else {
-				inc_proc_pos(shared_st);
+				inc_proc_pos(pgsql_shared_st);
 			}
 		}
 	}
 
 	// place the final null terminator
-	*shared_st->res_cur_pos = 0;
-	shared_st->st = cur_st;
+	*pgsql_shared_st->res_cur_pos = 0;
+	pgsql_shared_st->st = cur_st;
 
 	// store final state position
-	stage_1_st->pre_it_pos = shared_st->res_cur_pos;
+	pgsql_stage_1_st->pre_it_pos = pgsql_shared_st->res_cur_pos;
 
 	// if stage isn't finished parsing an element, set the current parsing position at which the last
 	// element was copied.
-	if (shared_st->st == st_literal_number) {
-		stage_1_st->new_end_pos = shared_st->res_cur_pos;
+	if (pgsql_shared_st->st == st_literal_number) {
+		pgsql_stage_1_st->new_end_pos = pgsql_shared_st->res_cur_pos;
 	} else {
-		stage_1_st->new_end_pos = NULL;
+		pgsql_stage_1_st->new_end_pos = NULL;
 	}
 }
 
@@ -2248,18 +2248,18 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, const options
  *   - Removal of (+|-) when acting on a single value.
  *   - When enabled, via 'pgsql_thread___query_digests_no_digits', removal of digits that aren't literals.
  *
- * @param shared_st Shared state used to continue the query processing.
- * @param stage_1_st The state resulting from the previous execution of 'stage 1'.
- * @param stage_2_st The state from previous execution of 'stage 2' to be udpated.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
+ * @param pgsql_stage_1_st The state resulting from the previous execution of 'stage 1'.
+ * @param pgsql_stage_2_st The state from previous execution of 'stage 2' to be udpated.
  * @param opts Options used for deciding wether or not enabling digits replacement.
  */
 static __attribute__((always_inline)) inline
-void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* stage_2_st, const options* opts) {
-	char* digest_end = get_stage_digest_end(shared_st, stage_1_st);
+void stage_2_parsing(pgsql_shared_st* pgsql_shared_st, pgsql_stage_1_st* pgsql_stage_1_st, pgsql_stage_2_st* pgsql_stage_2_st, const options* opts) {
+	char* digest_end = get_stage_digest_end(pgsql_shared_st, pgsql_stage_1_st);
 	if (digest_end == nullptr) {
-		stage_2_st->c_offset = 0;
-		stage_2_st->pre_it_pos = stage_1_st->new_end_pos ?
-			stage_1_st->literal_dig_st.start_pos : shared_st->res_cur_pos;
+		pgsql_stage_2_st->c_offset = 0;
+		pgsql_stage_2_st->pre_it_pos = pgsql_stage_1_st->new_end_pos ?
+			pgsql_stage_1_st->literal_dig_st.start_pos : pgsql_shared_st->res_cur_pos;
 		return;
 	}
 
@@ -2282,49 +2282,49 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 	// ```
 	//
 	// Using an offset of at least `6` should prevent missing patterns in this current iteration.
-	const ptrdiff_t lookback = ptrdiff_t(shared_st->gl_c_offset) - stage_2_st->c_offset + (5 + 1);
-	set_stage_next_start_pos(shared_st, digest_end, stage_2_st->pre_it_pos, lookback);
+	const ptrdiff_t lookback = ptrdiff_t(pgsql_shared_st->gl_c_offset) - pgsql_stage_2_st->c_offset + (5 + 1);
+	set_stage_next_start_pos(pgsql_shared_st, digest_end, pgsql_stage_2_st->pre_it_pos, lookback);
 
 	// second stage: Space and (+|-) replacement
-	while (shared_st->res_cur_pos <= digest_end) {
-		if (*shared_st->res_cur_pos == ' ') {
+	while (pgsql_shared_st->res_cur_pos <= digest_end) {
+		if (*pgsql_shared_st->res_cur_pos == ' ') {
 			char lc = '0';
 
-			if (shared_st->res_cur_pos > shared_st->res_init_pos) {
-				lc = *(shared_st->res_cur_pos-1);
+			if (pgsql_shared_st->res_cur_pos > pgsql_shared_st->res_init_pos) {
+				lc = *(pgsql_shared_st->res_cur_pos-1);
 			}
 
-			char rc = *(shared_st->res_cur_pos+1);
+			char rc = *(pgsql_shared_st->res_cur_pos+1);
 
 			if (lc == '(' || rc == ')') {
-				shared_st->res_cur_pos++;
+				pgsql_shared_st->res_cur_pos++;
 			} else if ((is_arithmetic_op(lc) && rc == '?') || lc == ',' || rc == ',') {
 				char llc = '0';
 
-				if (shared_st->res_cur_pos > shared_st->res_init_pos + 1) {
-					llc = *(shared_st->res_cur_pos-2);
+				if (pgsql_shared_st->res_cur_pos > pgsql_shared_st->res_init_pos + 1) {
+					llc = *(pgsql_shared_st->res_cur_pos-2);
 				}
 
 				if (opts->keep_comment && (llc == '*' && lc == '/')) {
-					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+					*pgsql_shared_st->res_pre_pos++ = *pgsql_shared_st->res_cur_pos++;
 				} else {
-					shared_st->res_cur_pos++;
+					pgsql_shared_st->res_cur_pos++;
 				}
 			} else if (is_arithmetic_op(rc) && lc == '?' && is_token_char(lc)) {
-				shared_st->res_cur_pos++;
+				pgsql_shared_st->res_cur_pos++;
 			} else {
-				*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+				*pgsql_shared_st->res_pre_pos++ = *pgsql_shared_st->res_cur_pos++;
 			}
-		} else if (*shared_st->res_cur_pos == '+' || *shared_st->res_cur_pos == '-') {
+		} else if (*pgsql_shared_st->res_cur_pos == '+' || *pgsql_shared_st->res_cur_pos == '-') {
 			char llc = '0';
-			if (shared_st->res_cur_pos > shared_st->res_init_pos + 1) {
-				llc = *(shared_st->res_cur_pos-2);
+			if (pgsql_shared_st->res_cur_pos > pgsql_shared_st->res_init_pos + 1) {
+				llc = *(pgsql_shared_st->res_cur_pos-2);
 			}
 			char lc = '0';
-			if (shared_st->res_cur_pos > shared_st->res_init_pos) {
-				lc = *(shared_st->res_cur_pos-1);
+			if (pgsql_shared_st->res_cur_pos > pgsql_shared_st->res_init_pos) {
+				lc = *(pgsql_shared_st->res_cur_pos-1);
 			}
-			char rc = *(shared_st->res_cur_pos+1);
+			char rc = *(pgsql_shared_st->res_cur_pos+1);
 
 			// patterns to cover:
 			//  - ? + ?
@@ -2336,35 +2336,35 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 			//  - c, + ?
 			if (lc == ' ') {
 				if (is_normal_char(llc)) {
-					shared_st->res_cur_pos++;
+					pgsql_shared_st->res_cur_pos++;
 				} else if (is_token_char(llc) && (llc != '?' && llc != ')') && (rc == '?' || rc == ' ')) {
-					shared_st->res_cur_pos++;
+					pgsql_shared_st->res_cur_pos++;
 				} else {
-					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+					*pgsql_shared_st->res_pre_pos++ = *pgsql_shared_st->res_cur_pos++;
 				}
 			} else {
 				if (is_token_char(lc) && (lc != '?' && lc != ')') && (rc == '?' || rc == ' ')) {
-					shared_st->res_cur_pos++;
+					pgsql_shared_st->res_cur_pos++;
 				} else {
-					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+					*pgsql_shared_st->res_pre_pos++ = *pgsql_shared_st->res_cur_pos++;
 				}
 			}
-		} else if (opts->replace_number == 1 && is_digit_char(*shared_st->res_cur_pos) ) {
-			if (shared_st->res_pre_pos > shared_st->res_init_pos && *(shared_st->res_pre_pos-1) != '?') {
-				*shared_st->res_pre_pos++ = '?';
+		} else if (opts->replace_number == 1 && is_digit_char(*pgsql_shared_st->res_cur_pos) ) {
+			if (pgsql_shared_st->res_pre_pos > pgsql_shared_st->res_init_pos && *(pgsql_shared_st->res_pre_pos-1) != '?') {
+				*pgsql_shared_st->res_pre_pos++ = '?';
 			}
-			shared_st->res_cur_pos++;
+			pgsql_shared_st->res_cur_pos++;
 		} else {
-			*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+			*pgsql_shared_st->res_pre_pos++ = *pgsql_shared_st->res_cur_pos++;
 		}
 	}
 
 	// store this iteration position and compute the compression offset
-	int c_2_offset = digest_end - shared_st->res_pre_pos + 1;
-	stage_2_st->c_offset = c_2_offset > 0 ? c_2_offset : 0;
+	int c_2_offset = digest_end - pgsql_shared_st->res_pre_pos + 1;
+	pgsql_stage_2_st->c_offset = c_2_offset > 0 ? c_2_offset : 0;
 
-	end_compression_stage_it(shared_st, digest_end, stage_1_st, &stage_2_st->pre_it_pos);
-	shared_st->res_cur_pos = shared_st->res_pre_pos;
+	end_compression_stage_it(pgsql_shared_st, digest_end, pgsql_stage_1_st, &pgsql_stage_2_st->pre_it_pos);
+	pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
 }
 
 /**
@@ -2372,21 +2372,21 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
  *   the value grouping pattern like '(?,?,?)' into '(?,...)' using the config value given by
  *   'pgsql_thread___query_digests_grouping_limit'.
  *
- * @param shared_st Shared state used to continue the query processing.
- * @param stage_1_st The state resulting from the previous execution of 'stage 1'.
- * @param stage_3_st The state from previous execution of 'stage 2' to be updated.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
+ * @param pgsql_stage_1_st The state resulting from the previous execution of 'stage 1'.
+ * @param pgsql_stage_3_st The state from previous execution of 'stage 2' to be updated.
  * @param opts Options used for deciding how to perform the group collapsing.
  */
 static __attribute__((always_inline)) inline
-void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* stage_3_st, const options* opts) {
+void stage_3_parsing(pgsql_shared_st* pgsql_shared_st, pgsql_stage_1_st* pgsql_stage_1_st, pgsql_stage_3_st* pgsql_stage_3_st, const options* opts) {
 	if (opts->grouping_limit == 0) { return; }
 
 	// compute the 'digest_end' for the stage 3
-	char* digest_end = get_stage_digest_end(shared_st, stage_1_st);
+	char* digest_end = get_stage_digest_end(pgsql_shared_st, pgsql_stage_1_st);
 	if (digest_end == nullptr) {
-		stage_3_st->c_offset = 0;
-		stage_3_st->pre_it_pos = stage_1_st->new_end_pos ?
-			stage_1_st->literal_dig_st.start_pos : shared_st->res_cur_pos;
+		pgsql_stage_3_st->c_offset = 0;
+		pgsql_stage_3_st->pre_it_pos = pgsql_stage_1_st->new_end_pos ?
+			pgsql_stage_1_st->literal_dig_st.start_pos : pgsql_shared_st->res_cur_pos;
 		return;
 	}
 
@@ -2406,13 +2406,13 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 	//   * 7: sizeof('...+ ') + sizeof('(') + 1.
 	//
 	int min_group_size = opts->grouping_limit*2 + 7;
-	const ptrdiff_t lookback = ptrdiff_t(shared_st->gl_c_offset) - stage_3_st->c_offset + min_group_size + 1;
-	set_stage_next_start_pos(shared_st, digest_end, stage_3_st->pre_it_pos, lookback);
+	const ptrdiff_t lookback = ptrdiff_t(pgsql_shared_st->gl_c_offset) - pgsql_stage_3_st->c_offset + min_group_size + 1;
+	set_stage_next_start_pos(pgsql_shared_st, digest_end, pgsql_stage_3_st->pre_it_pos, lookback);
 
 	char group_candidate = 0;
 
 	// it's a fixed pattern, we can perform a lookahead replacement
-	while (shared_st->res_cur_pos <= digest_end) {
+	while (pgsql_shared_st->res_cur_pos <= digest_end) {
 		// If this isn't the first iteration, it's possible to found an expansion pack '...' that is followed
 		// by characters copied in 'stage_1' during this iteration:
 		//
@@ -2420,16 +2420,16 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 		//    `(?,?,?,?,?,?,...,?,?)`
 		//                     ^ last 'stage_3' compression pos, followed by new: `,?,?)`
 		// ```
-		if (group_candidate == 1 && (shared_st->res_pre_pos - shared_st->res_init_pos) > 4) {
+		if (group_candidate == 1 && (pgsql_shared_st->res_pre_pos - pgsql_shared_st->res_init_pos) > 4) {
 			char found_exp_pack =
-				*(shared_st->res_pre_pos-1) == '.' &&
-				*(shared_st->res_pre_pos-2) == '.' &&
-				*(shared_st->res_pre_pos-3) == '.' &&
-				*(shared_st->res_pre_pos-4) == ',';
+				*(pgsql_shared_st->res_pre_pos-1) == '.' &&
+				*(pgsql_shared_st->res_pre_pos-2) == '.' &&
+				*(pgsql_shared_st->res_pre_pos-3) == '.' &&
+				*(pgsql_shared_st->res_pre_pos-4) == ',';
 
-			if (found_exp_pack == 1 && ((digest_end - shared_st->res_cur_pos) >= 1)) {
+			if (found_exp_pack == 1 && ((digest_end - pgsql_shared_st->res_cur_pos) >= 1)) {
 				// collapse new patterns founds after the expansion
-				char* new_cur_pos = shared_st->res_cur_pos;
+				char* new_cur_pos = pgsql_shared_st->res_cur_pos;
 				bool is_last = 0;
 
 				// if the first character is a ',' we skip it to count the '?,' patterns
@@ -2452,8 +2452,8 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 				// We update the current position if either:
 				//  * At least one '?,' was found.
 				//  * The final pattern '?)' was found.
-				if ((new_cur_pos > shared_st->res_cur_pos + 1) || is_last) {
-					shared_st->res_cur_pos = new_cur_pos;
+				if ((new_cur_pos > pgsql_shared_st->res_cur_pos + 1) || is_last) {
+					pgsql_shared_st->res_cur_pos = new_cur_pos;
 				}
 
 				// If the first stage hasn't finished parsing a number literal, the following situation is
@@ -2466,7 +2466,7 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 				//
 				// In this case, we break to avoid copying the last char. That copy should be performed by
 				// `end_compression_stage_it`.
-				if (stage_1_st->literal_dig_st.start_pos) {
+				if (pgsql_stage_1_st->literal_dig_st.start_pos) {
 					if (new_cur_pos >= digest_end && is_digit_char(*new_cur_pos)) {
 						break;
 					}
@@ -2474,8 +2474,8 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 			}
 		}
 
-		char* cur_char = shared_st->res_cur_pos;
-		char pattern_fits = (digest_end - shared_st->res_cur_pos) > opts->grouping_limit*2;
+		char* cur_char = pgsql_shared_st->res_cur_pos;
+		char pattern_fits = (digest_end - pgsql_shared_st->res_cur_pos) > opts->grouping_limit*2;
 		if (group_candidate == 1 && pattern_fits) {
 			// NOTE: Minimal viable pattern for replacement is the starting point: '?,?,'.
 			// This pattern also matches the size of a 32bit register, so probably will only
@@ -2491,7 +2491,7 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 			if (is_arithmetic_op(*(cur_char-1)) == 0 && is_min_pattern) {
 				int pattern_len = 0;
 				char pattern_broken = 0;
-				char* pattern_pos = shared_st->res_cur_pos;
+				char* pattern_pos = pgsql_shared_st->res_cur_pos;
 
 				while ((pattern_pos < digest_end) && pattern_broken == 0) {
 					if (*pattern_pos == '?' && *(pattern_pos+1) == ',') {
@@ -2513,35 +2513,35 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 				if (f_pattern_len >= (opts->grouping_limit * 2 + 3)) {
 					for (int i = 0; i < pattern_len; i++) {
 						if (i < opts->grouping_limit) {
-							*shared_st->res_pre_pos++ = '?';
-							*shared_st->res_pre_pos++ = ',';
+							*pgsql_shared_st->res_pre_pos++ = '?';
+							*pgsql_shared_st->res_pre_pos++ = ',';
 						} else if (i == opts->grouping_limit) {
-							*shared_st->res_pre_pos++ = '.';
-							*shared_st->res_pre_pos++ = '.';
-							*shared_st->res_pre_pos++ = '.';
+							*pgsql_shared_st->res_pre_pos++ = '.';
+							*pgsql_shared_st->res_pre_pos++ = '.';
+							*pgsql_shared_st->res_pre_pos++ = '.';
 						}
 					}
 
 					// we jump over the final '?' in case the final pattern was '?)'
 					if (pattern_broken == 2) {
-						shared_st->res_cur_pos = pattern_pos + 1;
+						pgsql_shared_st->res_cur_pos = pattern_pos + 1;
 					} else {
-						shared_st->res_cur_pos = pattern_pos - 1;
+						pgsql_shared_st->res_cur_pos = pattern_pos - 1;
 					}
 				} else {
 					for (int i = 0; i < pattern_len; i++) {
-						*shared_st->res_pre_pos++ = '?';
-						*shared_st->res_pre_pos++ = ',';
+						*pgsql_shared_st->res_pre_pos++ = '?';
+						*pgsql_shared_st->res_pre_pos++ = ',';
 					}
 
 					// Update the current position to the position where pattern was broken
-					shared_st->res_cur_pos = pattern_pos;
+					pgsql_shared_st->res_cur_pos = pattern_pos;
 				}
 			} else {
-				*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+				*pgsql_shared_st->res_pre_pos++ = *pgsql_shared_st->res_cur_pos++;
 			}
 		} else {
-			*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+			*pgsql_shared_st->res_pre_pos++ = *pgsql_shared_st->res_cur_pos++;
 		}
 
 		// grouping candidates always start with '('
@@ -2552,11 +2552,11 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 		}
 	}
 
-	int c_3_offset = digest_end - shared_st->res_pre_pos + 1;
-	stage_3_st->c_offset = c_3_offset > 0 ? c_3_offset : 0;
+	int c_3_offset = digest_end - pgsql_shared_st->res_pre_pos + 1;
+	pgsql_stage_3_st->c_offset = c_3_offset > 0 ? c_3_offset : 0;
 
-	end_compression_stage_it(shared_st, digest_end, stage_1_st, &stage_3_st->pre_it_pos);
-	shared_st->res_cur_pos = shared_st->res_pre_pos;
+	end_compression_stage_it(pgsql_shared_st, digest_end, pgsql_stage_1_st, &pgsql_stage_3_st->pre_it_pos);
+	pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
 }
 
 /**
@@ -2630,20 +2630,20 @@ bool is_group_pattern(const char* pos, const options* opts) {
  * (?,?,...),(?,?,...),(?,?,...),...
  * ```
  *
- * @param shared_st Shared state used to continue the query processing.
- * @param stage_1_st The state resulting from the previous execution of 'stage 1'.
- * @param stage_4_st The state from previous execution of 'stage 4' to be updated.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
+ * @param pgsql_stage_1_st The state resulting from the previous execution of 'stage 1'.
+ * @param pgsql_stage_4_st The state from previous execution of 'stage 4' to be updated.
  * @param opts Options used for deciding how to perform the group collapsing.
  */
 static __attribute__((always_inline)) inline
-void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* stage_4_st, const options* opts) {
+void stage_4_parsing(pgsql_shared_st* pgsql_shared_st, pgsql_stage_1_st* pgsql_stage_1_st, pgsql_stage_4_st* pgsql_stage_4_st, const options* opts) {
 	if (opts->groups_grouping_limit == 0 || opts->grouping_limit == 0) { return; }
 
-	char* digest_end = get_stage_digest_end(shared_st, stage_1_st);
+	char* digest_end = get_stage_digest_end(pgsql_shared_st, pgsql_stage_1_st);
 	if (digest_end == nullptr) {
-		stage_4_st->c_offset = 0;
-		stage_4_st->pre_it_pos = stage_1_st->new_end_pos ?
-			stage_1_st->literal_dig_st.start_pos : shared_st->res_cur_pos;
+		pgsql_stage_4_st->c_offset = 0;
+		pgsql_stage_4_st->pre_it_pos = pgsql_stage_1_st->new_end_pos ?
+			pgsql_stage_1_st->literal_dig_st.start_pos : pgsql_shared_st->res_cur_pos;
 		return;
 	}
 	//                       '( +       ?,?,n            + ... + ')  ,'
@@ -2669,19 +2669,19 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 	const ptrdiff_t lookback = ptrdiff_t(group_pattern_size) * (opts->groups_grouping_limit + 2);
 
 	// compute the starting point for the fourth stage
-	set_stage_next_start_pos(shared_st, digest_end, stage_4_st->pre_it_pos, lookback);
+	set_stage_next_start_pos(pgsql_shared_st, digest_end, pgsql_stage_4_st->pre_it_pos, lookback);
 
 	// it's a fixed pattern, we can perform a lookahead replacement
-	while (shared_st->res_cur_pos <= digest_end) {
-		char* cur_char = shared_st->res_cur_pos;
+	while (pgsql_shared_st->res_cur_pos <= digest_end) {
+		char* cur_char = pgsql_shared_st->res_cur_pos;
 
-		if ((shared_st->res_pre_pos - shared_st->res_init_pos) > 5) {
+		if ((pgsql_shared_st->res_pre_pos - pgsql_shared_st->res_init_pos) > 5) {
 			char found_exp_pack =
-				*(shared_st->res_pre_pos-1) == '.' &&
-				*(shared_st->res_pre_pos-2) == '.' &&
-				*(shared_st->res_pre_pos-3) == '.' &&
-				*(shared_st->res_pre_pos-4) == ',' &&
-				*(shared_st->res_pre_pos-5) == ')';
+				*(pgsql_shared_st->res_pre_pos-1) == '.' &&
+				*(pgsql_shared_st->res_pre_pos-2) == '.' &&
+				*(pgsql_shared_st->res_pre_pos-3) == '.' &&
+				*(pgsql_shared_st->res_pre_pos-4) == ',' &&
+				*(pgsql_shared_st->res_pre_pos-5) == ')';
 
 			if (found_exp_pack == 1) {
 				char* cur_pattern_pos = cur_char;
@@ -2707,8 +2707,8 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 					}
 				}
 
-				if (cur_pattern_pos > shared_st->res_cur_pos + 1) {
-					shared_st->res_cur_pos = cur_pattern_pos - 1;
+				if (cur_pattern_pos > pgsql_shared_st->res_cur_pos + 1) {
+					pgsql_shared_st->res_cur_pos = cur_pattern_pos - 1;
 					continue;
 				}
 
@@ -2720,7 +2720,7 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 
 		char pattern_fits =
 			// The last group has no trailing comma; compare lengths before forming lookahead pointers.
-			(digest_end - shared_st->res_cur_pos) >=
+			(digest_end - pgsql_shared_st->res_cur_pos) >=
 			(ptrdiff_t(group_pattern_size) * (opts->groups_grouping_limit + 1) - 2);
 
 		// fast check for knowing that this can potentially be a group pattern
@@ -2744,29 +2744,29 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 
 			// count found forward patterns
 			if (found_group_patterns > opts->groups_grouping_limit) {
-				memmove(shared_st->res_pre_pos, pattern_start, (long) group_pattern_size * opts->groups_grouping_limit);
-				shared_st->res_pre_pos += group_pattern_size * opts->groups_grouping_limit;
-				*shared_st->res_pre_pos++ = '.';
-				*shared_st->res_pre_pos++ = '.';
-				*shared_st->res_pre_pos++ = '.';
+				memmove(pgsql_shared_st->res_pre_pos, pattern_start, (long) group_pattern_size * opts->groups_grouping_limit);
+				pgsql_shared_st->res_pre_pos += group_pattern_size * opts->groups_grouping_limit;
+				*pgsql_shared_st->res_pre_pos++ = '.';
+				*pgsql_shared_st->res_pre_pos++ = '.';
+				*pgsql_shared_st->res_pre_pos++ = '.';
 
-				shared_st->res_cur_pos = cur_pattern_pos;
+				pgsql_shared_st->res_cur_pos = cur_pattern_pos;
 			}
 		}
 
-		if (shared_st->res_cur_pos > digest_end) {
+		if (pgsql_shared_st->res_cur_pos > digest_end) {
 			break;
 		} else {
-			*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+			*pgsql_shared_st->res_pre_pos++ = *pgsql_shared_st->res_cur_pos++;
 		}
 	}
 
-	int c_4_offset = digest_end - shared_st->res_pre_pos + 1;
-	stage_4_st->c_offset = c_4_offset > 0 ? c_4_offset : 0;
+	int c_4_offset = digest_end - pgsql_shared_st->res_pre_pos + 1;
+	pgsql_stage_4_st->c_offset = c_4_offset > 0 ? c_4_offset : 0;
 
-	end_compression_stage_it(shared_st, digest_end, stage_1_st, &stage_4_st->pre_it_pos);
+	end_compression_stage_it(pgsql_shared_st, digest_end, pgsql_stage_1_st, &pgsql_stage_4_st->pre_it_pos);
 
-	shared_st->res_cur_pos = shared_st->res_pre_pos;
+	pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
 }
 
 /**
@@ -2776,12 +2776,12 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
  *   * Final space replacement.
  *   * Trimmed digits replacement.
  *
- * @param shared_st Shared state used to continue the query processing.
- * @param stage_1_st Stage 1 final state, used for the trimmed digits replacement.
+ * @param pgsql_shared_st Shared state used to continue the query processing.
+ * @param pgsql_stage_1_st Stage 1 final state, used for the trimmed digits replacement.
  * @param opts Options, currently unused.
  */
 static __attribute__((always_inline)) inline
-void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* opts) {
+void final_stage(pgsql_shared_st* pgsql_shared_st, pgsql_stage_1_st* pgsql_stage_1_st, const options* opts) {
 	// Simple final cleanup for making queries more homogeneous when trimmed.
 	// Since literal number processing requires the copy of the literal into the output buffer, processing
 	// could finish before a number is completely parsed, due to compression non being able to create enough
@@ -2798,11 +2798,11 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	// INSERT INTO db.table pi_value VALUES (?
 	//                                       ^ replaced literal
 	// ```
-	if (stage_1_st->literal_dig_st.start_pos != NULL) {
-		if (digest_len_limit(shared_st, &stage_1_st->cmnt_type_1_st) <= (shared_st->res_cur_pos - shared_st->res_init_pos)) {
-			if (shared_st->st == st_literal_number && is_digit_char(*stage_1_st->literal_dig_st.start_pos)) {
-				*stage_1_st->literal_dig_st.start_pos++ = '?';
-				*stage_1_st->literal_dig_st.start_pos = '\0';
+	if (pgsql_stage_1_st->literal_dig_st.start_pos != NULL) {
+		if (digest_len_limit(pgsql_shared_st, &pgsql_stage_1_st->pgsql_cmnt_type_1_st) <= (pgsql_shared_st->res_cur_pos - pgsql_shared_st->res_init_pos)) {
+			if (pgsql_shared_st->st == st_literal_number && is_digit_char(*pgsql_stage_1_st->literal_dig_st.start_pos)) {
+				*pgsql_stage_1_st->literal_dig_st.start_pos++ = '?';
+				*pgsql_stage_1_st->literal_dig_st.start_pos = '\0';
 			}
 		}
 	}
@@ -2821,12 +2821,12 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	// - Semicolons (';') marking the end of the query are also removed.
 	{
 		// v1_crashing_payload_06
-		char* f_char = shared_st->res_cur_pos;
+		char* f_char = pgsql_shared_st->res_cur_pos;
 		// An empty result has nothing to trim, and 'res_cur_pos - 1' would point
 		// before the buffer. The first char is never trimmed (unchanged behaviour).
-		if (f_char > shared_st->res_init_pos) {
+		if (f_char > pgsql_shared_st->res_init_pos) {
 			f_char--;
-			while (f_char > shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
+			while (f_char > pgsql_shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
 				f_char--;
 			}
 			f_char++;
@@ -2834,7 +2834,7 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 		*f_char = '\0';
 		// NOTE: Since this is the last operation this isn't really required. But it's left in case this block
 		// is moved in the future.
-		shared_st->res_cur_pos = f_char;
+		pgsql_shared_st->res_cur_pos = f_char;
 	}
 }
 
@@ -2871,22 +2871,22 @@ char* pgsql_query_digest_and_first_comment(const char* const q, int q_len, char*
 #endif
 
 	// state shared between all the parsing states
-	struct shared_st shared_st;
-	memset(&shared_st, 0, sizeof(struct shared_st));
-	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+	struct pgsql_shared_st pgsql_shared_st;
+	memset(&pgsql_shared_st, 0, sizeof(struct pgsql_shared_st));
+	init_shared_st(&pgsql_shared_st, q, q_len, d_max_len, res);
 	// With 'keep_comment' the digest can be longer than the query ('res_max_len' > 'd_max_len').
-	shared_st.res_max_len = res_max_len;
+	pgsql_shared_st.res_max_len = res_max_len;
 
 	// individual states for stages
-	struct stage_1_st stage_1_st;
-	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
-	init_stage_1_st(&stage_1_st);
-	struct stage_2_st stage_2_st;
-	struct stage_3_st stage_3_st;
-	struct stage_4_st stage_4_st;
-	memset(&stage_2_st, 0, sizeof(struct stage_2_st));
-	memset(&stage_3_st, 0, sizeof(struct stage_3_st));
-	memset(&stage_4_st, 0, sizeof(struct stage_4_st));
+	struct pgsql_stage_1_st pgsql_stage_1_st;
+	memset(&pgsql_stage_1_st, 0, sizeof(struct pgsql_stage_1_st));
+	init_stage_1_st(&pgsql_stage_1_st);
+	struct pgsql_stage_2_st pgsql_stage_2_st;
+	struct pgsql_stage_3_st pgsql_stage_3_st;
+	struct pgsql_stage_4_st pgsql_stage_4_st;
+	memset(&pgsql_stage_2_st, 0, sizeof(struct pgsql_stage_2_st));
+	memset(&pgsql_stage_3_st, 0, sizeof(struct pgsql_stage_3_st));
+	memset(&pgsql_stage_4_st, 0, sizeof(struct pgsql_stage_4_st));
 
 	char min_digest_size = 0;
 
@@ -2907,62 +2907,62 @@ char* pgsql_query_digest_and_first_comment(const char* const q, int q_len, char*
 	// collapsed. Due to this, we might want to offer a way or limit to stop the iteration and offer a
 	// trade off between compression and performance for very big queries.
 	while (min_digest_size == 0) {
-		stage_1_parsing(&shared_st, &stage_1_st, opts, fst_cmnt);
-		stage_2_parsing(&shared_st, &stage_1_st, &stage_2_st, opts);
-		stage_3_parsing(&shared_st, &stage_1_st, &stage_3_st, opts);
-		stage_4_parsing(&shared_st, &stage_1_st, &stage_4_st, opts);
+		stage_1_parsing(&pgsql_shared_st, &pgsql_stage_1_st, opts, fst_cmnt);
+		stage_2_parsing(&pgsql_shared_st, &pgsql_stage_1_st, &pgsql_stage_2_st, opts);
+		stage_3_parsing(&pgsql_shared_st, &pgsql_stage_1_st, &pgsql_stage_3_st, opts);
+		stage_4_parsing(&pgsql_shared_st, &pgsql_stage_1_st, &pgsql_stage_4_st, opts);
 
 		// compute the compression offset of the whole iteration
-		shared_st.gl_c_offset = stage_1_st.pre_it_pos - shared_st.res_cur_pos;
+		pgsql_shared_st.gl_c_offset = pgsql_stage_1_st.pre_it_pos - pgsql_shared_st.res_cur_pos;
 		if (
-			shared_st.q_cur_pos >= shared_st.q_len ||
-			digest_len_limit(&shared_st, &stage_1_st.cmnt_type_1_st) <= (shared_st.res_cur_pos - shared_st.res_init_pos) ||
-			shared_st.gl_c_offset == 0
+			pgsql_shared_st.q_cur_pos >= pgsql_shared_st.q_len ||
+			digest_len_limit(&pgsql_shared_st, &pgsql_stage_1_st.pgsql_cmnt_type_1_st) <= (pgsql_shared_st.res_cur_pos - pgsql_shared_st.res_init_pos) ||
+			pgsql_shared_st.gl_c_offset == 0
 		) {
 			min_digest_size = 1;
 		} else {
 			// we need to update the shared state for processing again from the previous ending point
-			char* new_start_point = shared_st.res_cur_pos;
-			shared_st.res_it_init_pos = new_start_point;
-			shared_st.res_cur_pos = new_start_point;
-			shared_st.res_pre_pos = new_start_point;
+			char* new_start_point = pgsql_shared_st.res_cur_pos;
+			pgsql_shared_st.res_it_init_pos = new_start_point;
+			pgsql_shared_st.res_cur_pos = new_start_point;
+			pgsql_shared_st.res_pre_pos = new_start_point;
 		}
 	}
 
-	final_stage(&shared_st, &stage_1_st, opts);
+	final_stage(&pgsql_shared_st, &pgsql_stage_1_st, opts);
 
 	return res;
 }
 
 static __attribute__((always_inline)) inline
-enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_st* str_st) {
-	enum p_st next_state = st_literal_string;
+enum pgsql_p_st process_literal_string_space_rm(pgsql_shared_st* pgsql_shared_st, pgsql_literal_string_st* str_st) {
+	enum pgsql_p_st next_state = st_literal_string;
 
 	// process the first delimiter
 	if (str_st->delim_num == 0) {
-		str_st->delim_char = *shared_st->q;
+		str_st->delim_char = *pgsql_shared_st->q;
 		str_st->delim_num = 1;
 
 		// TODO: Remove exp space replacement
-		*shared_st->res_cur_pos++ = *shared_st->q;
+		*pgsql_shared_st->res_cur_pos++ = *pgsql_shared_st->q;
 
 		// consume the delimiter from the query
-		shared_st->q++;
-		shared_st->q_cur_pos++;
+		pgsql_shared_st->q++;
+		pgsql_shared_st->q_cur_pos++;
 	}
 
 	// need to be ignored case
-	if(shared_st->res_cur_pos > shared_st->res_pre_pos + SIZECHAR)
+	if(pgsql_shared_st->res_cur_pos > pgsql_shared_st->res_pre_pos + SIZECHAR)
 	{
 		if(
-			(shared_st->prev_char == '\\' && *shared_st->q == '\\') || // to process '\\\\', '\\'
-			(shared_st->prev_char == '\\' && *shared_st->q == str_st->delim_char) || // to process '\''
-			(shared_st->prev_char == str_st->delim_char && *shared_st->q == str_st->delim_char) // to process ''''
+			(pgsql_shared_st->prev_char == '\\' && *pgsql_shared_st->q == '\\') || // to process '\\\\', '\\'
+			(pgsql_shared_st->prev_char == '\\' && *pgsql_shared_st->q == str_st->delim_char) || // to process '\''
+			(pgsql_shared_st->prev_char == str_st->delim_char && *pgsql_shared_st->q == str_st->delim_char) // to process ''''
 		)
 		{
-			shared_st->prev_char = 'X';
-			shared_st->q++;
-			shared_st->q_cur_pos++;
+			pgsql_shared_st->prev_char = 'X';
+			pgsql_shared_st->q++;
+			pgsql_shared_st->q_cur_pos++;
 
 			return next_state;
 		}
@@ -2970,40 +2970,40 @@ enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_s
 
 	// satisfied closing string - swap string to ?
 	if(
-		*shared_st->q == str_st->delim_char &&
-		(shared_st->d_max_len == shared_st->q_cur_pos+1 || *(shared_st->q + SIZECHAR) != str_st->delim_char)
+		*pgsql_shared_st->q == str_st->delim_char &&
+		(pgsql_shared_st->d_max_len == pgsql_shared_st->q_cur_pos+1 || *(pgsql_shared_st->q + SIZECHAR) != str_st->delim_char)
 	) {
-		shared_st->res_cur_pos = shared_st->res_pre_pos;
-		char* _p = shared_st->res_pre_pos - 3;
+		pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
+		char* _p = pgsql_shared_st->res_pre_pos - 3;
 
 		// remove '+|-' symbols before the found literal
-		if ( _p >= shared_st->res_init_pos && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
+		if ( _p >= pgsql_shared_st->res_init_pos && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 			if (
 				( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
 				( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
 			) {
-				shared_st->res_cur_pos--;
+				pgsql_shared_st->res_cur_pos--;
 			}
 		}
 
 		// remove spaces before the found literal
-		if ( _p >= shared_st->res_init_pos && is_space_char(*(_p + 2))) {
+		if ( _p >= pgsql_shared_st->res_init_pos && is_space_char(*(_p + 2))) {
 			if  (
 				( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) || ( is_arithmetic_op(*(_p+1)) )
 			) {
-				if ( _p >= shared_st->res_init_pos && ( *(_p+3) == '\''|| *(_p+3) == '"' )) {
-					shared_st->res_cur_pos--;
+				if ( _p >= pgsql_shared_st->res_init_pos && ( *(_p+3) == '\''|| *(_p+3) == '"' )) {
+					pgsql_shared_st->res_cur_pos--;
 				}
 			}
 		}
 
 		// place the replacement mark
-		*shared_st->res_cur_pos++ = '?';
-		shared_st->prev_char = '?';
+		*pgsql_shared_st->res_cur_pos++ = '?';
+		pgsql_shared_st->prev_char = '?';
 
 		// don't copy this char if last
-		if (shared_st->d_max_len == shared_st->q_cur_pos + 1) {
-			shared_st->copy_next_char = 0;
+		if (pgsql_shared_st->d_max_len == pgsql_shared_st->q_cur_pos + 1) {
+			pgsql_shared_st->copy_next_char = 0;
 			// keep the same state, no token was found
 			return next_state;
 		}
@@ -3013,11 +3013,11 @@ enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_s
 		str_st->delim_num = 0;
 
 		// update the shared state
-		shared_st->prev_char = str_st->delim_char;
-		if(shared_st->q_cur_pos < shared_st->d_max_len) {
-			shared_st->q++;
+		pgsql_shared_st->prev_char = str_st->delim_char;
+		if(pgsql_shared_st->q_cur_pos < pgsql_shared_st->d_max_len) {
+			pgsql_shared_st->q++;
 		}
-		shared_st->q_cur_pos++;
+		pgsql_shared_st->q_cur_pos++;
 
 		// exit the literal parsing state
 		next_state = st_no_mark_found;
@@ -3027,96 +3027,96 @@ enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_s
 }
 
 static __attribute__((always_inline)) inline
-enum p_st process_literal_digit_space_rm(shared_st* shared_st, literal_digit_st* digit_st, options* opts) {
-	enum p_st next_state = st_literal_number;
+enum pgsql_p_st process_literal_digit_space_rm(pgsql_shared_st* pgsql_shared_st, pgsql_literal_digit_st* digit_st, options* opts) {
+	enum pgsql_p_st next_state = st_literal_number;
 
 	// consume the first digit
-	if (digit_st->first_digit == 1 && is_token_char(*(shared_st->q-1)) && is_digit_char(*shared_st->q)) {
+	if (digit_st->first_digit == 1 && is_token_char(*(pgsql_shared_st->q-1)) && is_digit_char(*pgsql_shared_st->q)) {
 		// place the previous position at the number start
-		*shared_st->res_cur_pos++ = *shared_st->q;
+		*pgsql_shared_st->res_cur_pos++ = *pgsql_shared_st->q;
 		digit_st->first_digit = 0;
 
-		shared_st->q++;
-		shared_st->q_cur_pos++;
+		pgsql_shared_st->q++;
+		pgsql_shared_st->q_cur_pos++;
 	}
 
 	// is float
 	if (
-		*shared_st->q == '.' || (*shared_st->q == 'e' || *shared_st->q == 'E') ||
+		*pgsql_shared_st->q == '.' || (*pgsql_shared_st->q == 'e' || *pgsql_shared_st->q == 'E') ||
 		(
-			(*shared_st->q == '+' || *shared_st->q == '-') &&
-			(shared_st->prev_char == 'e' || shared_st->prev_char == 'E')
+			(*pgsql_shared_st->q == '+' || *pgsql_shared_st->q == '-') &&
+			(pgsql_shared_st->prev_char == 'e' || pgsql_shared_st->prev_char == 'E')
 		)
 	) {
-		shared_st->prev_char = *shared_st->q;
-		shared_st->copy_next_char = 0;
+		pgsql_shared_st->prev_char = *pgsql_shared_st->q;
+		pgsql_shared_st->copy_next_char = 0;
 
 		return next_state;
 	}
 
 	// token char or last char
-	if (is_token_char(*shared_st->q) || shared_st->d_max_len == shared_st->q_cur_pos + 1) {
-		if (is_digit_string(shared_st->res_pre_pos, shared_st->res_cur_pos)) {
-			shared_st->res_cur_pos = shared_st->res_pre_pos;
+	if (is_token_char(*pgsql_shared_st->q) || pgsql_shared_st->d_max_len == pgsql_shared_st->q_cur_pos + 1) {
+		if (is_digit_string(pgsql_shared_st->res_pre_pos, pgsql_shared_st->res_cur_pos)) {
+			pgsql_shared_st->res_cur_pos = pgsql_shared_st->res_pre_pos;
 
-			char* _p = shared_st->res_pre_pos - 3;
+			char* _p = pgsql_shared_st->res_pre_pos - 3;
 
 			// remove symbol and keep parenthesis or comma
-			if (_p >= shared_st->res_init_pos && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
+			if (_p >= pgsql_shared_st->res_init_pos && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 				if (
 					( *(_p+1) == ',' ) || (*(_p+1) == '(') ||
 					( (*(_p+1) == ' ') && (*_p == ',' || *_p == '(') )
 				) {
-					shared_st->res_cur_pos--;
+					pgsql_shared_st->res_cur_pos--;
 				}
 			}
 
 			// Remove spaces before number counting with possible '.' presence
-			if (_p >= shared_st->res_init_pos && *_p == '.' &&
+			if (_p >= pgsql_shared_st->res_init_pos && *_p == '.' &&
 				(*(_p+1) == ' ' || *(_p+1) == '.') &&
 				(*(_p+2) == '-' || *(_p+2) == '+')
 			) {
 				if (*(_p + 1) == ' ') {
-					shared_st->res_cur_pos--;
+					pgsql_shared_st->res_cur_pos--;
 				}
-				shared_st->res_cur_pos--;
+				pgsql_shared_st->res_cur_pos--;
 			}
 
 			// remove spaces after a opening bracket when followed by a number
-			if (_p >= shared_st->res_init_pos && *(_p+1) == '(' && *(_p+2) == ' ') {
-				shared_st->res_cur_pos--;
+			if (_p >= pgsql_shared_st->res_init_pos && *(_p+1) == '(' && *(_p+2) == ' ') {
+				pgsql_shared_st->res_cur_pos--;
 			}
 
 			// remove spaces before number
-			if (_p >= shared_st->res_init_pos && is_space_char(*(_p + 2))) {
+			if (_p >= pgsql_shared_st->res_init_pos && is_space_char(*(_p + 2))) {
 				// a point '.' can be found prior to a number in case of query grouping
-				if ( _p >= shared_st->res_init_pos &&
+				if ( _p >= pgsql_shared_st->res_init_pos &&
 					(*(_p+1) == '-' || *(_p+1) == '+' || *(_p+1) == '*' || *(_p+1) == '/' ||
 					 *(_p+1) == '%' || *(_p+1) == ',' || *(_p+1) == '.')
 				) {
-					shared_st->res_cur_pos--;
+					pgsql_shared_st->res_cur_pos--;
 				}
 			}
 
 			// place the replacement mark
-			*shared_st->res_cur_pos++ = '?';
-			shared_st->prev_char = '?';
+			*pgsql_shared_st->res_cur_pos++ = '?';
+			pgsql_shared_st->prev_char = '?';
 
 			// don't copy this char if last
-			if (shared_st->d_max_len == shared_st->q_cur_pos + 1) {
-				shared_st->copy_next_char = 0;
+			if (pgsql_shared_st->d_max_len == pgsql_shared_st->q_cur_pos + 1) {
+				pgsql_shared_st->copy_next_char = 0;
 				// keep the same state, no token was found
 				return next_state;
 			}
 		} else {
 			// collapse any digits found in the string
 			if (opts->replace_number) {
-				int str_len = shared_st->res_cur_pos - shared_st->res_pre_pos + 1;
+				int str_len = pgsql_shared_st->res_cur_pos - pgsql_shared_st->res_pre_pos + 1;
 				int collapsed = 0;
 
 				for (int i = 0; i < str_len; i++) {
-					char* const c_p_r_t = ((char*)shared_st->res_pre_pos + i);
-					char* const n_p_r_t = ((char*)shared_st->res_pre_pos + i + 1);
+					char* const c_p_r_t = ((char*)pgsql_shared_st->res_pre_pos + i);
+					char* const n_p_r_t = ((char*)pgsql_shared_st->res_pre_pos + i + 1);
 
 					if (is_digit_char(*c_p_r_t) && is_digit_char(*n_p_r_t)) {
 						memmove(c_p_r_t, c_p_r_t + 1, str_len - i);
@@ -3124,11 +3124,11 @@ enum p_st process_literal_digit_space_rm(shared_st* shared_st, literal_digit_st*
 					}
 				}
 
-				shared_st->res_cur_pos -= collapsed;
+				pgsql_shared_st->res_cur_pos -= collapsed;
 
-				int new_str_len = shared_st->res_cur_pos - shared_st->res_pre_pos + 1;
+				int new_str_len = pgsql_shared_st->res_cur_pos - pgsql_shared_st->res_pre_pos + 1;
 				for (int i = 0; i < new_str_len; i++) {
-					char* const c_p_r_t = ((char*)shared_st->res_cur_pos + i);
+					char* const c_p_r_t = ((char*)pgsql_shared_st->res_cur_pos + i);
 					if (is_digit_char(*c_p_r_t)) {
 						*c_p_r_t = '?';
 					}
@@ -3265,19 +3265,19 @@ char* pgsql_query_digest_first_stage(const char* const q, int q_len, char** cons
 	char* res = get_result_buffer(res_max_len, buf);
 
 	// state shared between all the parsing states
-	struct shared_st shared_st;
-	memset(&shared_st, 0, sizeof(struct shared_st));
-	init_shared_st(&shared_st, q, q_len, d_max_len, res);
-	shared_st.res_max_len = res_max_len;
+	struct pgsql_shared_st pgsql_shared_st;
+	memset(&pgsql_shared_st, 0, sizeof(struct pgsql_shared_st));
+	init_shared_st(&pgsql_shared_st, q, q_len, d_max_len, res);
+	pgsql_shared_st.res_max_len = res_max_len;
 
-	struct stage_1_st stage_1_st;
-	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
-	init_stage_1_st(&stage_1_st);
+	struct pgsql_stage_1_st pgsql_stage_1_st;
+	memset(&pgsql_stage_1_st, 0, sizeof(struct pgsql_stage_1_st));
+	init_stage_1_st(&pgsql_stage_1_st);
 
 	// perform just the first stage parsing
-	stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
+	stage_1_parsing(&pgsql_shared_st, &pgsql_stage_1_st, &opts, fst_cmnt);
 
-	final_stage(&shared_st, &stage_1_st, &opts);
+	final_stage(&pgsql_shared_st, &pgsql_stage_1_st, &opts);
 
 	return res;
 }
@@ -3295,24 +3295,24 @@ char* pgsql_query_digest_second_stage(const char* const q, int q_len, char** con
 	char* res = get_result_buffer(res_max_len, buf);
 
 	// state shared between all the parsing states
-	struct shared_st shared_st;
-	memset(&shared_st, 0, sizeof(struct shared_st));
-	init_shared_st(&shared_st, q, q_len, d_max_len, res);
-	shared_st.res_max_len = res_max_len;
+	struct pgsql_shared_st pgsql_shared_st;
+	memset(&pgsql_shared_st, 0, sizeof(struct pgsql_shared_st));
+	init_shared_st(&pgsql_shared_st, q, q_len, d_max_len, res);
+	pgsql_shared_st.res_max_len = res_max_len;
 
-	struct stage_1_st stage_1_st;
-	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
-	init_stage_1_st(&stage_1_st);
-	struct stage_2_st stage_2_st;
-	memset(&stage_2_st, 0, sizeof(struct stage_2_st));
+	struct pgsql_stage_1_st pgsql_stage_1_st;
+	memset(&pgsql_stage_1_st, 0, sizeof(struct pgsql_stage_1_st));
+	init_stage_1_st(&pgsql_stage_1_st);
+	struct pgsql_stage_2_st pgsql_stage_2_st;
+	memset(&pgsql_stage_2_st, 0, sizeof(struct pgsql_stage_2_st));
 
 	// perform just the first stage parsing
-	stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
+	stage_1_parsing(&pgsql_shared_st, &pgsql_stage_1_st, &opts, fst_cmnt);
 
 	// second stage parsing
-	stage_2_parsing(&shared_st, &stage_1_st, &stage_2_st, &opts);
+	stage_2_parsing(&pgsql_shared_st, &pgsql_stage_1_st, &pgsql_stage_2_st, &opts);
 
-	final_stage(&shared_st, &stage_1_st, &opts);
+	final_stage(&pgsql_shared_st, &pgsql_stage_1_st, &opts);
 
 	return res;
 }
@@ -3340,41 +3340,41 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	char* res = get_result_buffer(res_max_len, buf);
 
 	// state shared between all the parsing states
-	struct shared_st shared_st;
-	memset(&shared_st, 0, sizeof(struct shared_st));
-	shared_st.q = q;
-	shared_st.q_len = q_len;
-	shared_st.d_max_len = d_max_len;
-	shared_st.res_max_len = res_max_len;
-	shared_st.res_init_pos = res;
-	shared_st.res_it_init_pos = res;
-	shared_st.res_cur_pos = res;
-	shared_st.res_pre_pos = res;
+	struct pgsql_shared_st pgsql_shared_st;
+	memset(&pgsql_shared_st, 0, sizeof(struct pgsql_shared_st));
+	pgsql_shared_st.q = q;
+	pgsql_shared_st.q_len = q_len;
+	pgsql_shared_st.d_max_len = d_max_len;
+	pgsql_shared_st.res_max_len = res_max_len;
+	pgsql_shared_st.res_init_pos = res;
+	pgsql_shared_st.res_it_init_pos = res;
+	pgsql_shared_st.res_cur_pos = res;
+	pgsql_shared_st.res_pre_pos = res;
 
 	// state required between different iterations of special parsing states
-	struct cmnt_type_1_st c_t_1_st;
-	struct literal_string_st literal_str_st;
-	struct literal_digit_st literal_digit_st;
-	struct dollar_quote_string_st dollar_str_st;
-	struct pg_typecast_st typecast_st;
-	struct array_literal_st array_st;
-	struct quoted_identifier_st quoted_iden_st;
-	memset(&c_t_1_st, 0, sizeof(struct cmnt_type_1_st));
-	memset(&literal_str_st, 0, sizeof(struct literal_string_st));
-	memset(&literal_digit_st, 0, sizeof(struct literal_digit_st));
-	memset(&dollar_str_st, 0, sizeof(struct dollar_quote_string_st));
-	memset(&typecast_st, 0, sizeof(struct pg_typecast_st));
-	memset(&array_st, 0, sizeof(struct array_literal_st));
-	memset(&quoted_iden_st, 0, sizeof(struct quoted_identifier_st));
+	struct pgsql_cmnt_type_1_st c_t_1_st;
+	struct pgsql_literal_string_st literal_str_st;
+	struct pgsql_literal_digit_st pgsql_literal_digit_st;
+	struct pgsql_dollar_quote_string_st dollar_str_st;
+	struct pgsql_typecast_st typecast_st;
+	struct pgsql_array_literal_st array_st;
+	struct pgsql_quoted_identifier_st quoted_iden_st;
+	memset(&c_t_1_st, 0, sizeof(struct pgsql_cmnt_type_1_st));
+	memset(&literal_str_st, 0, sizeof(struct pgsql_literal_string_st));
+	memset(&pgsql_literal_digit_st, 0, sizeof(struct pgsql_literal_digit_st));
+	memset(&dollar_str_st, 0, sizeof(struct pgsql_dollar_quote_string_st));
+	memset(&typecast_st, 0, sizeof(struct pgsql_typecast_st));
+	memset(&array_st, 0, sizeof(struct pgsql_array_literal_st));
+	memset(&quoted_iden_st, 0, sizeof(struct pgsql_quoted_identifier_st));
 
-	enum p_st cur_st = st_no_mark_found;
+	enum pgsql_p_st cur_st = st_no_mark_found;
 
 	// start char consumption
-	while (shared_st.q_cur_pos < d_max_len) {
+	while (pgsql_shared_st.q_cur_pos < d_max_len) {
 		if (cur_st == st_no_mark_found) {
 			// update the last position over the return buffer to be the current position
-			shared_st.res_pre_pos = shared_st.res_cur_pos;
-			cur_st = get_next_st(&opts, &shared_st);
+			pgsql_shared_st.res_pre_pos = pgsql_shared_st.res_cur_pos;
+			cur_st = get_next_st(&opts, &pgsql_shared_st);
 
 			// if next st isn't 'no_mark_found' transition to it without consuming current char
 			if (cur_st != st_no_mark_found) {
@@ -3386,9 +3386,9 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 				// Removal of spaces that doesn't belong to any particular parsing state.
 
 				// ignore all the leading spaces
-				if (shared_st.res_cur_pos == shared_st.res_init_pos && is_space_char(*shared_st.q)) {
-					shared_st.q++;
-					shared_st.q_cur_pos++;
+				if (pgsql_shared_st.res_cur_pos == pgsql_shared_st.res_init_pos && is_space_char(*pgsql_shared_st.q)) {
+					pgsql_shared_st.q++;
+					pgsql_shared_st.q_cur_pos++;
 					continue;
 				}
 
@@ -3402,120 +3402,120 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 				// Q: `SELECT\s\s  1`
 				//              ^ address used to be replaced by next char
 				// ```
-				if (is_space_char(shared_st.prev_char) && is_space_char(*shared_st.q)) {
+				if (is_space_char(pgsql_shared_st.prev_char) && is_space_char(*pgsql_shared_st.q)) {
 					// if current position in result buffer is the first space found, we move to the next
 					// position, in order to respect the first space char.
-					if (!is_space_char(*(shared_st.res_cur_pos - 1))) {
-						shared_st.res_cur_pos++;
+					if (!is_space_char(*(pgsql_shared_st.res_cur_pos - 1))) {
+						pgsql_shared_st.res_cur_pos++;
 					}
 
-					shared_st.prev_char = ' ';
-					*shared_st.res_cur_pos = ' ';
+					pgsql_shared_st.prev_char = ' ';
+					*pgsql_shared_st.res_cur_pos = ' ';
 
-					shared_st.q++;
-					shared_st.q_cur_pos++;
+					pgsql_shared_st.q++;
+					pgsql_shared_st.q_cur_pos++;
 					continue;
 				}
 
 				{
-					char* p = shared_st.res_cur_pos - 2;
+					char* p = pgsql_shared_st.res_cur_pos - 2;
 
 					// suppress spaces before arithmetic operators
-					if (p >= shared_st.res_init_pos && is_space_char(shared_st.prev_char) && is_arithmetic_op(*shared_st.q)) {
+					if (p >= pgsql_shared_st.res_init_pos && is_space_char(pgsql_shared_st.prev_char) && is_arithmetic_op(*pgsql_shared_st.q)) {
 						if (*p == '?') {
-							shared_st.prev_char = *shared_st.q;
-							--shared_st.res_cur_pos;
-							*shared_st.res_cur_pos++ = *shared_st.q;
+							pgsql_shared_st.prev_char = *pgsql_shared_st.q;
+							--pgsql_shared_st.res_cur_pos;
+							*pgsql_shared_st.res_cur_pos++ = *pgsql_shared_st.q;
 
-							shared_st.q++;
-							shared_st.q_cur_pos++;
+							pgsql_shared_st.q++;
+							pgsql_shared_st.q_cur_pos++;
 							continue;
 						}
 					}
 					// suppress spaces before and after commas
 					if (
-						p >= shared_st.res_init_pos && is_space_char(shared_st.prev_char) &&
-						((*shared_st.q == ',') || (*p == ','))
+						p >= pgsql_shared_st.res_init_pos && is_space_char(pgsql_shared_st.prev_char) &&
+						((*pgsql_shared_st.q == ',') || (*p == ','))
 						) {
-						if (*shared_st.q == ',') {
-							--shared_st.res_cur_pos;
-							*shared_st.res_cur_pos++ = *shared_st.q;
+						if (*pgsql_shared_st.q == ',') {
+							--pgsql_shared_st.res_cur_pos;
+							*pgsql_shared_st.res_cur_pos++ = *pgsql_shared_st.q;
 
-							shared_st.prev_char = ',';
-							shared_st.q++;
-							shared_st.q_cur_pos++;
+							pgsql_shared_st.prev_char = ',';
+							pgsql_shared_st.q++;
+							pgsql_shared_st.q_cur_pos++;
 						}
 						else {
-							shared_st.prev_char = ',';
-							--shared_st.res_cur_pos;
+							pgsql_shared_st.prev_char = ',';
+							--pgsql_shared_st.res_cur_pos;
 						}
 						continue;
 					}
 					// suppress spaces before closing brackets when grouping or mark is present
 					if (
-						p >= shared_st.res_init_pos && (*p == '.' || *p == '?') &&
-						is_space_char(shared_st.prev_char) && (*shared_st.q == ')')
+						p >= pgsql_shared_st.res_init_pos && (*p == '.' || *p == '?') &&
+						is_space_char(pgsql_shared_st.prev_char) && (*pgsql_shared_st.q == ')')
 						) {
-						shared_st.prev_char = *shared_st.q;
-						--shared_st.res_cur_pos;
-						*shared_st.res_cur_pos++ = *shared_st.q;
+						pgsql_shared_st.prev_char = *pgsql_shared_st.q;
+						--pgsql_shared_st.res_cur_pos;
+						*pgsql_shared_st.res_cur_pos++ = *pgsql_shared_st.q;
 
-						shared_st.q++;
-						shared_st.q_cur_pos++;
+						pgsql_shared_st.q++;
+						pgsql_shared_st.q_cur_pos++;
 						continue;
 					}
 				}
 
 				// copy the current char
-				copy_next_char(&shared_st, &opts);
+				copy_next_char(&pgsql_shared_st, &opts);
 			}
 		} else {
 			if (cur_st == st_cmnt_type_1) {
 				// by default, we don't copy the next char for comments
-				shared_st.copy_next_char = 0;
-				cur_st = process_cmnt_type_1(&opts, &shared_st, &c_t_1_st, fst_cmnt);
+				pgsql_shared_st.copy_next_char = 0;
+				cur_st = process_cmnt_type_1(&opts, &pgsql_shared_st, &c_t_1_st, fst_cmnt);
 				if (cur_st == st_no_mark_found) {
-					shared_st.copy_next_char = 1;
+					pgsql_shared_st.copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_cmnt_type_2) {
-				shared_st.copy_next_char = 0;
-				cur_st = process_cmnt_type_2(&shared_st);
+				pgsql_shared_st.copy_next_char = 0;
+				cur_st = process_cmnt_type_2(&pgsql_shared_st);
 				if (cur_st == st_no_mark_found) {
-					shared_st.copy_next_char = 1;
+					pgsql_shared_st.copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_literal_string) {
-				shared_st.copy_next_char = 1;
-				cur_st = process_literal_string_space_rm(&shared_st, &literal_str_st);
+				pgsql_shared_st.copy_next_char = 1;
+				cur_st = process_literal_string_space_rm(&pgsql_shared_st, &literal_str_st);
 				if (cur_st == st_no_mark_found) {
-					shared_st.copy_next_char = 1;
+					pgsql_shared_st.copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_literal_number) {
-				shared_st.copy_next_char = 1;
-				cur_st = process_literal_digit_space_rm(&shared_st, &literal_digit_st, &opts);
+				pgsql_shared_st.copy_next_char = 1;
+				cur_st = process_literal_digit_space_rm(&pgsql_shared_st, &pgsql_literal_digit_st, &opts);
 				if (cur_st == st_no_mark_found) {
-					literal_digit_st.first_digit = 1;
-					shared_st.copy_next_char = 1;
+					pgsql_literal_digit_st.first_digit = 1;
+					pgsql_shared_st.copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_dollar_quote_string) {
-				shared_st.copy_next_char = 1;
-				cur_st = process_dollar_quote_string(&shared_st, &dollar_str_st);
+				pgsql_shared_st.copy_next_char = 1;
+				cur_st = process_dollar_quote_string(&pgsql_shared_st, &dollar_str_st);
 				if (cur_st == st_no_mark_found) {
-					shared_st.copy_next_char = 1;
+					pgsql_shared_st.copy_next_char = 1;
 					continue;
 				}
 			}
 
-			if (shared_st.copy_next_char) {
-				copy_next_char(&shared_st, &opts);
+			if (pgsql_shared_st.copy_next_char) {
+				copy_next_char(&pgsql_shared_st, &opts);
 			}
 			else {
 				// if we do not copy we skip the next char, but copy it to `prev_char`
-				shared_st.prev_char = *shared_st.q++;
-				shared_st.q_cur_pos++;
+				pgsql_shared_st.prev_char = *pgsql_shared_st.q++;
+				pgsql_shared_st.q_cur_pos++;
 			}
 		}
 	}
@@ -3530,8 +3530,8 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	// D: `select ?  `
 	//              ^ never collapsed
 	// ```
-	if (shared_st.res_cur_pos > shared_st.res_it_init_pos) {
-		char* wspace = shared_st.res_cur_pos - 1;
+	if (pgsql_shared_st.res_cur_pos > pgsql_shared_st.res_it_init_pos) {
+		char* wspace = pgsql_shared_st.res_cur_pos - 1;
 		while (*wspace == ' ') {
 			wspace--;
 		}
@@ -3540,7 +3540,7 @@ char* pgsql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	}
 
 	// place the final null terminator
-	*shared_st.res_cur_pos = 0;
+	*pgsql_shared_st.res_cur_pos = 0;
 
 	return res;
 }
@@ -3630,16 +3630,122 @@ bool pgsql_text_has_word(const char* text, const char* keyword) {
 	return false;
 }
 
-bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword) {
-	const char* lost = NULL;
-	for (const char* s = pgsql_stmt_skip_lead(digest, &lost); s != NULL; s = pgsql_digest_next_stmt(s, &lost)) {
-		if (pgsql_stmt_first_keyword_is(s, keyword)) return true;
+// isalnum() of the C locale, without the libc call: this runs at every '_' of every digest.
+static inline bool pgsql_ident_char(char c) {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
+}
+
+// What pgsql_digest_scan() looks for, in one walk over the digest. Adding a target is adding a
+// row. Keywords that begin a statement:
+static const struct { const char* word; uint32_t bit; } pgsql_scan_stmt_targets[] = {
+	{ "LISTEN", PGSQL_SCAN_LISTEN },
+	{ "DO", PGSQL_SCAN_DO },
+};
+// Whole words anywhere outside comments and literals (a quoted identifier equal to one counts).
+// `next` is the letter after the word's first '_': most '_' of a digest are let go on it.
+// ponytail: a word target must contain '_' -- the digest walk only stops at '_' to look for
+// words. A target without one needs another stop character in pgsql_digest_scan().
+static const struct { const char* word; size_t len; char next; uint32_t bit; } pgsql_scan_word_targets[] = {
+	{ "set_config", 10, 'c', PGSQL_SCAN_SET_CONFIG },
+	{ "pg_settings", 11, 's', PGSQL_SCAN_PG_SETTINGS },
+};
+
+// Word targets equal to the word [w, w + len), any case.
+static uint32_t pgsql_scan_word(const char* w, size_t len) {
+	uint32_t bits = 0;
+	for (const auto& t : pgsql_scan_word_targets) {
+		if (t.len == len && strncasecmp(w, t.word, len) == 0) bits |= t.bit;
 	}
-	// From an unterminated comment or quote on, the statements cannot be told apart, so the
-	// keyword counts wherever it stands as a word -- inside that comment's own kept text as
-	// well, since `lost` points at its opening "/*". Refusing or pinning a query that only
-	// mentions it is the safe side of being wrong.
-	return pgsql_text_has_word(lost, keyword);
+	return bits;
+}
+
+// Statement targets the statement at `s` begins with. The first letter is compared before the
+// whole keyword (`| 0x20` lowercases an ASCII letter).
+static uint32_t pgsql_scan_stmt_start(const char* s) {
+	if (s == NULL) return 0;
+	uint32_t bits = 0;
+	for (const auto& t : pgsql_scan_stmt_targets) {
+		if ((s[0] | 0x20) == (t.word[0] | 0x20) && pgsql_stmt_first_keyword_is(s, t.word)) bits |= t.bit;
+	}
+	return bits;
+}
+
+// U&"..." is a name written with escapes: U&"set\005fconfig" is set_config. Its letters cannot
+// be compared, so it stands for every word target. `q` points at the '"'.
+static uint32_t pgsql_scan_unicode_name(const char* text, const char* q) {
+	if (q - text < 2 || q[-1] != '&' || (q[-2] | 0x20) != 'u') return 0;
+	uint32_t bits = 0;
+	for (const auto& t : pgsql_scan_word_targets) bits |= t.bit;
+	return bits;
+}
+
+uint32_t pgsql_text_find_words(const char* text, size_t len) {
+	if (text == NULL) return 0;
+	uint32_t bits = 0;
+	// The offset is checked before the byte: nothing past `len` is read.
+	auto more = [&](const char* p) { return (size_t)(p - text) < len && *p != '\0'; };
+	for (const char* p = text; more(p);) {
+		if (*p == '"') bits |= pgsql_scan_unicode_name(text, p);
+		if (!pgsql_ident_char(*p)) { p++; continue; }
+		const char* w = p;
+		while (more(p) && pgsql_ident_char(*p)) p++;
+		bits |= pgsql_scan_word(w, p - w);
+		for (const auto& t : pgsql_scan_stmt_targets) {
+			if ((size_t)(p - w) == strlen(t.word) && strncasecmp(w, t.word, p - w) == 0) bits |= t.bit;
+		}
+	}
+	return bits;
+}
+
+uint32_t pgsql_digest_scan(const char* digest) {
+	if (digest == NULL) return 0;
+	const char* lost = NULL;
+	const char* p = pgsql_stmt_skip_lead(digest, &lost);
+	uint32_t found = pgsql_scan_stmt_start(p);
+	// The walk of pgsql_digest_next_stmt(), stopping at '_' as well to look at the word around it.
+	while (p != NULL && (p = strpbrk(p, ";\"'/_")) != NULL) {
+		const char c = *p;
+		if (c == ';') {
+			p = pgsql_stmt_skip_lead(p + 1, &lost);
+			found |= pgsql_scan_stmt_start(p);
+			continue;
+		}
+		if (c == '_') {
+			const char next = p[1] | 0x20;
+			bool maybe = false;
+			for (const auto& t : pgsql_scan_word_targets) maybe |= (next == t.next);
+			if (!maybe) { p++; continue; }
+			const char* w = p;
+			while (w > digest && pgsql_ident_char(w[-1])) w--;
+			p++;
+			while (pgsql_ident_char(*p)) p++;
+			found |= pgsql_scan_word(w, p - w);
+			continue;
+		}
+		const char* end = NULL;
+		if (c == '/') {
+			// Only a block comment hides a word or a ';', and only with query_digests_keep_comment.
+			if (p[1] != '*') { p++; continue; }
+			end = pgsql_skip_block_comment(p);
+		} else {
+			// A quoted identifier (kept by the digest) or a literal. A doubled quote inside closes
+			// it and opens another, which the next round skips the same way.
+			end = strchr(p + 1, c);
+			if (end != NULL) {
+				if (c == '"') found |= pgsql_scan_word(p + 1, end - p - 1) | pgsql_scan_unicode_name(digest, p);
+				end++;
+			}
+		}
+		if (end == NULL) {
+			lost = p;
+			break;
+		}
+		p = end;
+	}
+	// From an unterminated comment or quote on, the statements cannot be told apart, so every
+	// target counts wherever it stands as a word -- inside that comment's own kept text as
+	// well, since `lost` points at its opening "/*". A false match is the safe side of being wrong.
+	return found | pgsql_text_find_words(lost);
 }
 
 char* pgsql_query_full_digest(const char* query) {
@@ -3657,25 +3763,27 @@ char* pgsql_query_full_digest(const char* query) {
 	return digest;
 }
 
-bool pgsql_query_has_stmt_keyword(const char* digest, const char* query, const char* keyword) {
+uint32_t pgsql_query_scan(const char* digest, const char* query, uint32_t targets) {
 	if (digest != NULL && *digest != '\0') {
 		// The digest buffer is as long as the query up to query_digests_max_query_length, so
 		// only the digest of a longer query can have been cut short.
 		if (query == NULL || strnlen(query, (size_t)pgsql_thread___query_digests_max_query_length + 1) <=
 			(size_t)pgsql_thread___query_digests_max_query_length) {
-			return pgsql_digest_has_stmt_keyword(digest, keyword);
+			return pgsql_digest_scan(digest) & targets;
 		}
 	}
-	// No digest, or one that may miss trailing statements. Only a query holding the word at
-	// all is digested in full, so the common case costs one scan of the text.
-	if (pgsql_text_has_word(query, keyword) == false) return false;
+	// No digest, or one that may miss trailing statements. Only a query holding a target word
+	// at all is digested in full, so the common case costs one scan of the text.
+	const uint32_t words = pgsql_text_find_words(query) & targets;
+	if (words == 0) return 0;
 	// The first statement is also read from the text itself, by pgsql_stmt_skip_lead(), so the
 	// gate does not rest on the digest tokenizer alone for it. Before the tokenizer read
 	// nested comments the way PostgreSQL does, "/*/*n*/*/LISTEN ch" digested to nothing.
-	if (pgsql_stmt_first_keyword_is(pgsql_stmt_skip_lead(query, NULL), keyword)) return true;
+	uint32_t found = pgsql_scan_stmt_start(pgsql_stmt_skip_lead(query, NULL)) & words;
+	if (found == words) return found;
 	char* full = pgsql_query_full_digest(query);
-	if (full == NULL) return true; // cannot be told apart: fail closed
-	const bool found = pgsql_digest_has_stmt_keyword(full, keyword);
+	if (full == NULL) return words; // cannot be told apart: fail closed
+	found |= pgsql_digest_scan(full);
 	free(full);
-	return found;
+	return found & targets;
 }

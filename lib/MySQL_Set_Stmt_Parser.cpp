@@ -36,6 +36,162 @@ static void remove_quotes(string& v) {
 	}
 }
 
+namespace {
+
+/**
+ * @brief Returns the narrow recogniser for the Connector/J tracking expression.
+ *
+ * Narrow recogniser for the MariaDB Connector/J 3.5.11+ initialization value
+ * of session_track_system_variables (issue #6562).
+ *
+ * This is intentionally not a general expression parser. Only the
+ * side-effect-free builtins CONCAT/IF/LOCATE/FIND_IN_SET/LOWER/REPLACE in the
+ * connector's fixed arrangement are accepted, with the connector's own string
+ * literals and @@session_track_system_variables references. The assignment is
+ * matched only at a real, monotonically valid assignment boundary. An
+ * unsupported RHS is never partially consumed, so the existing fallback path
+ * is unchanged: some unsupported forms take the hostgroup-locking path, while
+ * @-free forms are forwarded to the backend without local tracking.
+ *
+ * session_track_system_variables is an ignored variable: the value is preserved
+ * verbatim in the parse result and is neither evaluated nor replayed. ProxySQL
+ * configures backend session tracking (including MariaDB last_gtid) separately.
+ *
+ * @return Compiled case-insensitive RE2 recogniser.
+ */
+static re2::RE2& session_track_expression_re() {
+	static re2::RE2::Options options = [] {
+		re2::RE2::Options opt(RE2::Quiet);
+		opt.set_case_sensitive(false);
+		opt.set_longest_match(false);
+		return opt;
+	}();
+	static re2::RE2 re(
+		" *"
+		"(?:(?:SESSION|LOCAL) +|@@session\\.|@@local\\.|@@)?"
+		"(?:`session_track_system_variables`|session_track_system_variables)"
+		" *(?::=|=) *"
+		"(CONCAT\\( *'[A-Za-z0-9_, ]*' *, *"
+			"IF\\( *"
+				"LOCATE\\( *'\\*' *, *@@(?:session\\.)?session_track_system_variables *\\) *> *0 +"
+				"OR +"
+				"FIND_IN_SET\\( *'last_gtid' *, *"
+					"LOWER\\( *REPLACE\\( *@@(?:session\\.)?session_track_system_variables *, *' ' *, *'' *\\) *\\) *\\) *> *0 *"
+				" *, *',last_gtid' *, *'' *\\) *\\))"
+		// The connector always pairs the tracking expression with
+		// session_track_schema=1. Consume it here when it immediately follows
+		// the expression so parse1's legacy comma-in-value grammar cannot
+		// swallow the following NAMES assignment.
+		"((?:(?: *, *)(?:(?:SESSION|LOCAL) +|@@session\\.|@@local\\.|@@)?"
+			"(?:`session_track_schema`|session_track_schema) *(?::=|=) *1))?",
+		options);
+	return re;
+}
+
+/**
+ * @brief Tests whether an ordinary parse step consumed an assignment delimiter.
+ * @details The legacy SET grammars end each assignment with ` *,? *`, so a
+ *   consumed comma is the only evidence that the next token starts a new
+ *   assignment. Looking only at the current StringPiece position is not enough:
+ *   a missing comma leaves the next token adjacent after a RHS.
+ * @param before Input position before the ordinary parser consumed a match.
+ * @param after Input position after the ordinary parser consumed a match.
+ * @return True when the consumed text ends with a comma after trailing spaces.
+ */
+static bool consumed_assignment_delimiter(
+	re2::StringPiece before, re2::StringPiece after)
+{
+	if (after.size() >= before.size()) return false;
+	const char* begin = before.data();
+	const char* end = begin + (before.size() - after.size());
+	while (end > begin && isspace(static_cast<unsigned char>(end[-1]))) {
+		--end;
+	}
+	return end > begin && end[-1] == ',';
+}
+
+// Bound legacy ordinary matches after a connector assignment. Its value grammar
+// allows commas and can otherwise swallow the following assignment's name.
+// Only commas outside quoted values and function arguments are delimiters.
+static re2::StringPiece first_assignment(re2::StringPiece input) {
+	char quote = 0;
+	unsigned depth = 0;
+	for (size_t i = 0; i < input.size(); ++i) {
+		const char c = input[i];
+		if (quote) {
+			if (c == '\\' && i + 1 < input.size()) ++i;
+			else if (c == quote) {
+				if (i + 1 < input.size() && input[i + 1] == quote) ++i;
+				else quote = 0;
+			}
+		} else if (c == '\'' || c == '"' || c == '`') quote = c;
+		else if (c == '(') ++depth;
+		else if (c == ')' && depth) --depth;
+		else if (c == ',' && depth == 0) {
+			size_t end = i + 1;
+			while (end < input.size() && isspace(static_cast<unsigned char>(input[end]))) ++end;
+			return input.substr(0, end);
+		}
+	}
+	return input;
+}
+
+/**
+ * Consumes one connector-shaped session_track_system_variables assignment from
+ * @p input. On success advances @p input past the assignment and its optional
+ * trailing comma/spaces and stores the verbatim RHS in @p value. Reports
+ * whether the connector's adjacent session_track_schema=1 was consumed too and
+ * whether a comma started another assignment.
+ *
+ * A comma must be followed by another non-empty assignment; a dangling comma
+ * is rejected without consuming anything. Callers must only invoke this helper
+ * at a real assignment boundary and must keep that permission monotonic for the
+ * whole statement: once the legacy grammar consumes a step that leaves adjacent
+ * input without a comma, malformed SQL must not be repaired by a later comma.
+ * This keeps missing-delimiter inputs in the existing forward/lock fallback.
+ *
+ * @param input Remaining SET input; advanced on success only.
+ * @param value Receives the verbatim session_track_system_variables RHS.
+ * @param has_schema Receives true when session_track_schema=1 was consumed.
+ * @param has_following Receives true when a separator and another token remain.
+ * @return True when one connector assignment was consumed.
+ */
+static bool consume_session_track_expression(
+	re2::StringPiece* input, std::string* value, bool* has_schema,
+	bool* has_following)
+{
+	if (input->empty()) return false;
+	std::string schema;
+	re2::StringPiece remainder(*input);
+	if (!re2::RE2::Consume(&remainder, session_track_expression_re(), value, &schema)) {
+		return false;
+	}
+
+	*has_following = false;
+	size_t pos = 0;
+	while (pos < remainder.size() &&
+		isspace(static_cast<unsigned char>(remainder[pos]))) {
+		++pos;
+	}
+	if (pos < remainder.size()) {
+		if (remainder[pos] != ',') return false; // junk after the expression
+		++pos;
+		while (pos < remainder.size() &&
+			isspace(static_cast<unsigned char>(remainder[pos]))) {
+			++pos;
+		}
+		if (pos == remainder.size()) return false; // dangling comma
+		*has_following = true;
+	}
+	remainder.remove_prefix(pos);
+
+	*input = remainder;
+	*has_schema = !schema.empty();
+	return true;
+}
+
+} // namespace
+
 #ifdef PARSERDEBUG
 MySQL_Set_Stmt_Parser::MySQL_Set_Stmt_Parser(std::string nq, int verb) {
 	verbosity = verb;
@@ -111,7 +267,36 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	std::string var;
 	std::string value1, value2, value3, value4, value5;
 	re2::StringPiece input(query);
-	while (re2::RE2::Consume(&input, re, &value1, &value2, &value3, &value4, &value5)) {
+	bool connector_boundary_allowed = true;
+	bool connector_seen = false;
+	while (true) {
+		std::string session_track_value;
+		bool session_track_schema = false;
+		bool has_following = false;
+		if (connector_boundary_allowed && consume_session_track_expression(
+			&input, &session_track_value, &session_track_schema, &has_following)) {
+			result["session_track_system_variables"] = { session_track_value };
+			if (session_track_schema) {
+				result["session_track_schema"] = { "1" };
+			}
+			connector_seen = true;
+			connector_boundary_allowed = connector_boundary_allowed && has_following;
+			continue;
+		}
+		re2::StringPiece before = input;
+		re2::StringPiece assignment = connector_seen ? first_assignment(input) : input;
+		const size_t assignment_size = assignment.size();
+		if (!re2::RE2::Consume(&assignment, re, &value1, &value2, &value3, &value4, &value5)) {
+			break;
+		}
+		input.remove_prefix(assignment_size - assignment.size());
+		const bool delimiter_consumed =
+			consumed_assignment_delimiter(before, input);
+		connector_boundary_allowed = connector_boundary_allowed &&
+			delimiter_consumed;
+		if (connector_seen && !delimiter_consumed && !input.empty()) {
+			break;
+		}
 		std::vector<std::string> op;
 #ifdef DEBUG
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", value1.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
@@ -389,7 +574,33 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	std::string var;
 	std::string value1, value2, value3, value4, value5;
 	re2::StringPiece input(query);
-	while (re2::RE2::Consume(&input, *parse1v2_re, &value1, &value2, &value3, &value4, &value5)) {
+	bool connector_boundary_allowed = true;
+	bool connector_seen = false;
+	while (true) {
+		std::string session_track_value;
+		bool session_track_schema = false;
+		bool has_following = false;
+		if (connector_boundary_allowed && consume_session_track_expression(
+			&input, &session_track_value, &session_track_schema, &has_following)) {
+			result["session_track_system_variables"] = { session_track_value };
+			if (session_track_schema) {
+				result["session_track_schema"] = { "1" };
+			}
+			connector_seen = true;
+			connector_boundary_allowed = connector_boundary_allowed && has_following;
+			continue;
+		}
+		re2::StringPiece before = input;
+		if (!re2::RE2::Consume(&input, *parse1v2_re, &value1, &value2, &value3, &value4, &value5)) {
+			break;
+		}
+		const bool delimiter_consumed =
+			consumed_assignment_delimiter(before, input);
+		connector_boundary_allowed = connector_boundary_allowed &&
+			delimiter_consumed;
+		if (connector_seen && !delimiter_consumed && !input.empty()) {
+			break;
+		}
 		// FIXME: verify if we reached end of query. Did we parse everything?
 		std::vector<std::string> op;
 #ifdef DEBUG
