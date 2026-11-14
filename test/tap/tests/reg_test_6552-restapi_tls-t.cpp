@@ -8,6 +8,7 @@
  */
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -20,6 +21,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -34,6 +36,7 @@
 #include "utils.h"
 #include "proxysql_utils.h"
 #include "frontend_x509_test_utils.h"
+#include "json.hpp"
 
 using std::string;
 
@@ -290,20 +293,47 @@ static string read_file(const string& path) {
 	return string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
-static bool write_file(const string& path, const string& data, mode_t mode) {
-	std::ofstream out(path, std::ios::out | std::ios::binary | std::ios::trunc);
-	if (!out.is_open()) return false;
-	// Restrict the mode before any bytes are written: the reload script embeds
-	// admin credentials and must never be observable under a wider mode.
-	if (chmod(path.c_str(), mode) != 0) {
-		const int saved_errno = errno;
-		out.close();
+static bool write_file(
+	const string& path, const string& data, mode_t mode, uid_t owner = static_cast<uid_t>(-1)
+) {
+	// O_TRUNC is deliberately omitted: an existing file must keep its contents
+	// until ownership and mode are in place.
+	const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0600);
+	if (fd < 0) return false;
+	auto fail = [fd](int saved_errno) {
+		(void)close(fd);
 		errno = saved_errno;
 		return false;
+	};
+
+	if (owner != static_cast<uid_t>(-1) && fchown(fd, owner, static_cast<gid_t>(-1)) != 0) {
+		return fail(errno);
 	}
-	out.write(data.data(), static_cast<std::streamsize>(data.size()));
-	out.close();
-	return out.good();
+	// Restrict the mode before any bytes are written: the reload script embeds
+	// admin credentials and must never be observable under a wider mode.
+	if (fchmod(fd, mode) != 0) {
+		return fail(errno);
+	}
+	if (ftruncate(fd, 0) != 0) {
+		return fail(errno);
+	}
+
+	size_t written = 0;
+	while (written < data.size()) {
+		const ssize_t n = write(fd, data.data() + written, data.size() - written);
+		if (n < 0) {
+			if (errno == EINTR) continue;
+			return fail(errno);
+		}
+		if (n == 0) {
+			return fail(EIO);
+		}
+		written += static_cast<size_t>(n);
+	}
+	if (close(fd) != 0) {
+		return false;
+	}
+	return true;
 }
 
 static string resolve_ipv4(const string& host) {
@@ -782,28 +812,19 @@ static void test_distinct_admin_baselines(MYSQL* admin, cleanup_guard& original)
 }
 
 static int configure_reload_route(
-	MYSQL* admin, const string& fixture_root, const string& fixture_runtime_dir, const CommandLine& cl
+	MYSQL* admin, const string& fixture_root, const string& fixture_runtime_dir,
+	const CommandLine& cl, const string& sync_url, const string& ca_pem
 ) {
 	// Keep the executable outside the shared directory so another UID cannot
 	// pre-create its pathname before write_file() installs the admin credentials.
 	const string script = fixture_root + "/reg_test_6552_reload.sh";
-	char content[1024];
-	snprintf(
-		content, sizeof(content),
+	// First install a credential-free probe at the protected route pathname to
+	// learn the daemon UID from inside the REST API worker.
+	const string probe =
 		"#!/bin/sh\n"
-		"export MYSQL_PWD='%s'\n"
-		"mysql -u'%s' -h127.0.0.1 -P%d -e 'PROXYSQL RELOAD TLS' >/dev/null || exit 1\n"
-		"mysql -u'%s' -h127.0.0.1 -P%d -N -e 'SELECT 1' >/dev/null || exit 1\n"
-		"touch '%s/reg_test_6552_sync_marker'\n"
-		"echo '{\"ok\":true}'\n",
-		cl.admin_password, cl.admin_username, cl.admin_port,
-		cl.admin_username, cl.admin_port, fixture_runtime_dir.c_str()
-	);
-	// The script embeds admin credentials, so only its owner needs to execute it;
-	// write_file() applies 0700 before writing any bytes. The fixture tree owner
-	// shares its UID with the daemon (or the daemon runs as root).
-	if (content[0] == '\0' || !write_file(script, content, 0700)) {
-		diag("Cannot create /sync reload script %s", script.c_str());
+		"printf '{\"uid\":%s,\"gid\":%s}\\n' \"$(id -u)\" \"$(id -g)\"\n";
+	if (!write_file(script, probe, 0755)) {
+		diag("Cannot create /sync identity probe %s", script.c_str());
 		return EXIT_FAILURE;
 	}
 
@@ -817,6 +838,65 @@ static int configure_reload_route(
 		return EXIT_FAILURE;
 	}
 	if (!admin_query(admin, "LOAD RESTAPI TO RUNTIME")) {
+		return EXIT_FAILURE;
+	}
+
+	http_result probed = http_get(sync_url, ca_pem);
+	if (probed.rc != CURLE_OK || probed.code != 200) {
+		diag("Cannot probe /sync identity (rc=%d code=%ld)",
+			static_cast<int>(probed.rc), probed.code);
+		return EXIT_FAILURE;
+	}
+	uid_t daemon_uid {};
+	try {
+		const nlohmann::json identity = nlohmann::json::parse(probed.body);
+		if (!identity.is_object() || !identity.contains("uid") || !identity.contains("gid") ||
+			!identity["uid"].is_number_unsigned() || !identity["gid"].is_number_unsigned()) {
+			diag("Malformed /sync identity JSON: %s", probed.body.c_str());
+			return EXIT_FAILURE;
+		}
+		const uint64_t uid = identity["uid"].get<uint64_t>();
+		const uint64_t gid = identity["gid"].get<uint64_t>();
+		const uint64_t uid_limit = static_cast<uint64_t>(std::numeric_limits<uid_t>::max());
+		const uint64_t gid_limit = static_cast<uint64_t>(std::numeric_limits<gid_t>::max());
+		if (uid >= uid_limit || gid >= gid_limit) {
+			diag("Out-of-range /sync identity JSON: %s", probed.body.c_str());
+			return EXIT_FAILURE;
+		}
+		daemon_uid = static_cast<uid_t>(uid);
+	} catch (const std::exception& e) {
+		diag("Cannot parse /sync identity JSON (%s): %s", e.what(), probed.body.c_str());
+		return EXIT_FAILURE;
+	}
+
+	const uid_t runner = geteuid();
+	const bool root_runner = runner == 0;
+	if (daemon_uid != runner && daemon_uid != 0 && !root_runner) {
+		diag("Runner UID %u cannot install the credential-bearing /sync script for "
+			"daemon UID %u without a trusted shared group; failing closed",
+			static_cast<unsigned>(runner), static_cast<unsigned>(daemon_uid));
+		return EXIT_FAILURE;
+	}
+
+	char content[1024];
+	snprintf(
+		content, sizeof(content),
+		"#!/bin/sh\n"
+		"export MYSQL_PWD='%s'\n"
+		"mysql -u'%s' -h127.0.0.1 -P%d -e 'PROXYSQL RELOAD TLS' >/dev/null || exit 1\n"
+		"mysql -u'%s' -h127.0.0.1 -P%d -N -e 'SELECT 1' >/dev/null || exit 1\n"
+		"touch '%s/reg_test_6552_sync_marker'\n"
+		"echo '{\"ok\":true}'\n",
+		cl.admin_password, cl.admin_username, cl.admin_port,
+		cl.admin_username, cl.admin_port, fixture_runtime_dir.c_str()
+	);
+	// The script embeds admin credentials, so only its owner needs to execute
+	// it. A root runner gives it to the daemon UID; other accepted ownerships
+	// leave it with the runner (also valid when the daemon is root).
+	const uid_t owner = (root_runner && daemon_uid != runner)
+		? daemon_uid : static_cast<uid_t>(-1);
+	if (content[0] == '\0' || !write_file(script, content, 0700, owner)) {
+		diag("Cannot create /sync reload script %s", script.c_str());
 		return EXIT_FAILURE;
 	}
 	return EXIT_SUCCESS;
@@ -972,7 +1052,8 @@ int main() {
 	}
 
 	// ----------------------------------- /sync calls RELOAD TLS + new admin
-	ok(configure_reload_route(admin, fixture_root, runtime_dir, cl) == EXIT_SUCCESS,
+	const string sync_url = "https://" + restapi_host + "/sync/" + RESTAPI_ROUTE;
+	ok(configure_reload_route(admin, fixture_root, runtime_dir, cl, sync_url, ca_pem) == EXIT_SUCCESS,
 		"configured /sync route that reloads TLS and opens a second admin connection");
 	{
 		const string sync_marker = runtime_dir + "/reg_test_6552_sync_marker";

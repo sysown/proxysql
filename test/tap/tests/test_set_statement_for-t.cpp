@@ -87,7 +87,13 @@ static bool test_schema_routing(const CommandLine& cl) {
 		"UNION ALL SELECT MAX(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup) FROM mysql_group_replication_hostgroups "
 		"UNION ALL SELECT MAX(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup) FROM runtime_mysql_group_replication_hostgroups "
 		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup) FROM mysql_replication_hostgroups "
-		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup) FROM runtime_mysql_replication_hostgroups)");
+		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup) FROM runtime_mysql_replication_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup) FROM mysql_aws_aurora_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup) FROM runtime_mysql_aws_aurora_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup) FROM disk.mysql_aws_aurora_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup,COALESCE(green_writer_hostgroup,-1),COALESCE(green_reader_hostgroup,-1)) FROM mysql_aws_rds_bgd_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup,COALESCE(green_writer_hostgroup,-1),COALESCE(green_reader_hostgroup,-1)) FROM runtime_mysql_aws_rds_bgd_hostgroups "
+		"UNION ALL SELECT MAX(writer_hostgroup,reader_hostgroup,COALESCE(green_writer_hostgroup,-1),COALESCE(green_reader_hostgroup,-1)) FROM disk.mysql_aws_rds_bgd_hostgroups)");
 	const std::string parser = scalar("SELECT variable_value FROM global_variables WHERE variable_name='mysql-query_processor_parser'");
 	const std::string algorithm = scalar("SELECT variable_value FROM global_variables WHERE variable_name='mysql-set_parser_algorithm'");
 	const std::string locking = scalar("SELECT variable_value FROM global_variables WHERE variable_name='mysql-set_query_lock_on_hostgroup'");
