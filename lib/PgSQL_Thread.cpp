@@ -57,22 +57,22 @@ extern PgSQL_Logger* GloPgSQL_Logger;
 
 #include "Worker_Scheduler.h"
 
-typedef struct mythr_st_vars {
+typedef struct pgsql_thr_st_vars {
 	enum PgSQL_Thread_status_variable v_idx;
 	p_th_counter::metric m_idx;
 	char* name;
 	uint32_t conv;
-} mythr_st_vars_t;
+} pgsql_thr_st_vars_t;
 
-typedef struct mythr_g_st_vars {
+typedef struct pgsql_thr_g_st_vars {
 	enum PgSQL_Thread_status_variable v_idx;
 	p_th_gauge::metric m_idx;
 	char* name;
 	uint32_t conv;
-} mythr_g_st_vars_t;
+} pgsql_thr_g_st_vars_t;
 
 // Note: the order here is not important. 
-mythr_st_vars_t PgSQL_Thread_status_variables_counter_array[]{
+pgsql_thr_st_vars_t PgSQL_Thread_status_variables_counter_array[]{
 	/*{st_var_backend_stmt_prepare, p_th_counter::com_backend_stmt_prepare, (char*)"Com_backend_stmt_prepare"},
 	{ st_var_backend_stmt_execute, p_th_counter::com_backend_stmt_execute, (char*)"Com_backend_stmt_execute" },
 	{ st_var_backend_stmt_close,   p_th_counter::com_backend_stmt_close,   (char*)"Com_backend_stmt_close" },
@@ -112,7 +112,7 @@ mythr_st_vars_t PgSQL_Thread_status_variables_counter_array[]{
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char*)"client_host_error_killed_connections" },*/
 };
 
-mythr_g_st_vars_t PgSQL_Thread_status_variables_gauge_array[]{
+pgsql_thr_g_st_vars_t PgSQL_Thread_status_variables_gauge_array[]{
 	/*{st_var_hostgroup_locked,            p_th_gauge::client_connections_hostgroup_locked,  (char*)"Client_Connections_hostgroup_locked"}*/
 };
 
@@ -5124,7 +5124,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		result->add_row(pta);
 	}*/
 /*
-	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
+	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(pgsql_thr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {
 			if (strlen(PgSQL_Thread_status_variables_counter_array[i].name)) {
 				pta[0] = PgSQL_Thread_status_variables_counter_array[i].name;
@@ -5141,7 +5141,7 @@ SQLite3_result* PgSQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		}
 	}
 	// Gauge variables
-	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_gauge_array) / sizeof(mythr_g_st_vars_t); i++) {
+	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_gauge_array) / sizeof(pgsql_thr_g_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_gauge_array[i].name) {
 			if (strlen(PgSQL_Thread_status_variables_gauge_array[i].name)) {
 				pta[0] = PgSQL_Thread_status_variables_gauge_array[i].name;
@@ -6259,7 +6259,7 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 	get_pgsql_frontend_buffers_bytes();
 	get_pgsql_session_internal_bytes();
 /*
-	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(mythr_st_vars_t); i++) {
+	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_counter_array) / sizeof(pgsql_thr_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_counter_array[i].name) {
 			get_status_variable(
 				PgSQL_Thread_status_variables_counter_array[i].v_idx,
@@ -6269,7 +6269,7 @@ void PgSQL_Threads_Handler::p_update_metrics() {
 		}
 	}
 	// Gauge variables
-	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_gauge_array) / sizeof(mythr_g_st_vars_t); i++) {
+	for (unsigned int i = 0; i < sizeof(PgSQL_Thread_status_variables_gauge_array) / sizeof(pgsql_thr_g_st_vars_t); i++) {
 		if (PgSQL_Thread_status_variables_gauge_array[i].name) {
 			get_status_variable(
 				PgSQL_Thread_status_variables_gauge_array[i].v_idx,
