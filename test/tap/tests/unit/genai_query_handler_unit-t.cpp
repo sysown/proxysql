@@ -21,6 +21,8 @@
 #include "test_globals.h"
 #include "test_init.h"
 #include "proxysql.h"
+#include <list>
+#include <libpq-fe.h>
 
 // Use the private->public trick for strip_leading_comments (private method)
 #define private public
@@ -344,11 +346,38 @@ static void test_uppercase_or_unknown_empty() {
 		"uppercase_or_unknown: empty string returns 'UNKNOWN'");
 }
 
+static void test_pgsql_discard_preserves_other_wrapper() {
+	Query_Tool_Handler handler(":memory:");
+	Query_Tool_Handler::PgSQLConnection first{}, second{};
+	// An invalid connection option allocates ordinary libpq handles without
+	// opening a transport or requiring a database fixture.
+	first.pgconn = PQconnectStart("invalid_connection_option=1");
+	second.pgconn = PQconnectStart("invalid_connection_option=1");
+	first.in_use = second.in_use = true;
+	second.current_schema = "checked_out_schema";
+	ok(first.pgconn && second.pgconn, "libpq allocates pool test handles without connecting");
+	handler.pgsql_connection_pool.push_back(first);
+	handler.pgsql_connection_pool.push_back(second);
+	handler.pg_pool_size = 2;
+	auto* wrapper = handler.find_pgsql_connection(second.pgconn);
+	handler.discard_pgsql_connection(first.pgconn);
+	auto* remaining = handler.find_pgsql_connection(second.pgconn);
+	ok(handler.pgsql_connection_pool.size() == 1 && handler.pg_pool_size == 1,
+	   "discard removes only the poisoned PostgreSQL connection");
+	ok(remaining == wrapper, "discard preserves another checked-out wrapper address");
+	ok(remaining && remaining->pgconn == second.pgconn && remaining->in_use &&
+	   remaining->current_schema == "checked_out_schema",
+	   "discard preserves another checked-out connection and schema");
+	handler.discard_pgsql_connection(first.pgconn);
+	ok(handler.pg_pool_size == 1 && handler.find_pgsql_connection(second.pgconn) == remaining,
+	   "repeated discard does not close an already removed connection");
+}
+
 #endif /* PROXYSQL40 */
 
 int main() {
 #ifdef PROXYSQL40
-	plan(65);
+	plan(70);
 	test_init_minimal();
 
 	// validate_sql_identifier_sqlite tests (14)
@@ -402,6 +431,7 @@ int main() {
 	test_uppercase_or_unknown_basic();      // 3
 	test_uppercase_or_unknown_null();       // 2
 	test_uppercase_or_unknown_empty();      // 1
+	test_pgsql_discard_preserves_other_wrapper(); // 5
 
 	test_cleanup_minimal();
 	return exit_status();

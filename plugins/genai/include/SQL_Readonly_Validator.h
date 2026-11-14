@@ -45,7 +45,18 @@ inline bool readonly_sql(const std::string& sql, bool select_only = false) {
             first = false;
         }
         if (token.type == T::TK_SEMICOLON) { terminated = true; continue; }
-        if (token.type == T::TK_STRING || token.type == T::TK_MYSQL_OPTIMIZER_HINT) continue;
+        if (token.type == T::TK_MYSQL_OPTIMIZER_HINT) continue;
+        if constexpr (D == sql_parser::Dialect::PostgreSQL) {
+            // ParserSQL does not decode Unicode-escaped identifiers/strings.
+            // They could otherwise hide a denied function name (also UESCAPE).
+            if (token.source.len == 1 && (source[0] == 'U' || source[0] == 'u') &&
+                sql.data() + sql.size() - source >= 3 && source[1] == '&' &&
+                (source[2] == '"' || source[2] == '\'')) return false;
+        }
+        // Backend escape settings need not match the tokenizer's defaults.
+        if (token.type == T::TK_STRING &&
+            std::string_view(token.text.ptr, token.text.len).find('\\') != std::string_view::npos)
+            return false;
         const bool quoted = token.type == T::TK_IDENTIFIER && token.source.len &&
             (token.source.ptr[0] == '`' || token.source.ptr[0] == '"');
         std::string word(token.text.ptr, token.text.len);
@@ -57,15 +68,28 @@ inline bool readonly_sql(const std::string& sql, bool select_only = false) {
         if (explain_options) {
             if (!quoted && (token.type == T::TK_SELECT || token.type == T::TK_WITH ||
                             token.type == T::TK_SHOW)) explain_options = false;
-            else if (word == "ANALYZE") return false;
+            else if (word == "ANALYZE" || word == "ANALYSE") return false;
         }
         // Quoted function names can still invoke backend functions.
         const bool function = lexer.peek().type == T::TK_LPAREN;
         if (function && word == "LOAD_FILE") return false;
-        if (select_only && function) {
-            for (const char* denied : {"SCRIPT", "SLEEP", "BENCHMARK", "WAITFOR", "DELAY"})
+        if (function) {
+            for (const char* denied : {"SCRIPT", "SLEEP", "BENCHMARK", "WAITFOR", "DELAY",
+                                       "PG_SLEEP", "PG_SLEEP_FOR", "PG_SLEEP_UNTIL"})
                 if (word == denied) return false;
+            if constexpr (D == sql_parser::Dialect::PostgreSQL) {
+                for (const char* denied : {"SET_CONFIG", "SETVAL", "NEXTVAL", "LO_IMPORT", "LO_EXPORT",
+                        "PG_ADVISORY_LOCK", "PG_ADVISORY_LOCK_SHARED", "PG_TRY_ADVISORY_LOCK",
+                        "PG_TRY_ADVISORY_LOCK_SHARED", "PG_ADVISORY_XACT_LOCK",
+                        "PG_ADVISORY_XACT_LOCK_SHARED", "PG_TRY_ADVISORY_XACT_LOCK",
+                        "PG_TRY_ADVISORY_XACT_LOCK_SHARED", "PG_TERMINATE_BACKEND",
+                        "PG_CANCEL_BACKEND", "DBLINK_EXEC"})
+                    if (word == denied) return false;
+            }
         }
+        // MySQL double quotes may name functions under ANSI_QUOTES. Check
+        // calls before skipping literals, regardless of the backend SQL mode.
+        if (token.type == T::TK_STRING) continue;
         if (quoted) continue;
         // INTO creates tables on PostgreSQL, writes files on MySQL, or assigns
         // variables. FOR SHARE / FOR KEY SHARE acquire row locks.

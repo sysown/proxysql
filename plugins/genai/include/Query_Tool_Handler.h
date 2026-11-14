@@ -6,6 +6,7 @@
 #include "MCP_Tool_Handler.h"
 #include "Discovery_Schema.h"
 #include <pthread.h>
+#include <list>
 
 // Forward declaration to avoid circular include
 class Static_Harvester;
@@ -71,7 +72,8 @@ private:
 		std::string current_schema;  ///< Track current schema for this connection
 	};
 	std::vector<MySQLConnection> connection_pool;
-	std::vector<PgSQLConnection> pgsql_connection_pool;
+	// Discarding one checked-out connection must not move other wrappers.
+	std::list<PgSQLConnection> pgsql_connection_pool;
 	std::vector<QueryTarget> target_registry;
 	pthread_mutex_t pool_lock;
 	int pool_size;      ///< MySQL pool size
@@ -162,6 +164,7 @@ private:
 	 */
 	MySQLConnection* find_connection(void* mysql_ptr);
 	PgSQLConnection* find_pgsql_connection(void* pgconn_ptr);
+	void discard_pgsql_connection(void* pgconn_ptr);
 
 	/**
 	 * @brief Execute a query and return results as JSON
@@ -177,7 +180,8 @@ private:
 	std::string execute_query_with_schema(
 		const std::string& query,
 		const std::string& schema,
-		const std::string& target_id
+		const std::string& target_id,
+		bool readonly_transaction = false
 	);
 
 	/**

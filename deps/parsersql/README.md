@@ -52,8 +52,11 @@ rm parsersql && ln -s parsersql-X.Y.Z parsersql
 ```
 
 The Makefile auto-detects the version via `parsersql-*.tar.gz` and
-`ParserSQL-*/` glob patterns, so no Makefile change is required for
-a routine bump.
+`ParserSQL-*/` glob patterns. Revalidate and, if needed, rebase
+`utf8-identifiers.patch` against the new release and run its tokenizer
+regressions before rebuilding. Once upstream includes the fix, remove the
+patch and its application and dependency from `deps/Makefile` instead of
+applying it again.
 
 ## Working on the parser: fix it upstream, don't work around it
 

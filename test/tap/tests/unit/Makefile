@@ -1605,7 +1605,7 @@ managed_runtime_pgsql_unit-t: managed_runtime_pgsql_unit-t.cpp $(ODIR)/tap.o $(O
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
 
 # Header-only ParserSQL policy needs no GenAI runtime or database fixtures.
-genai_sql_readonly_unit-t: genai_sql_readonly_unit-t.cpp $(PROXYSQL_PATH)/plugins/genai/include/SQL_Readonly_Validator.h $(PARSERSQL_IDIR)/sql_parser/tokenizer.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+genai_sql_readonly_unit-t: genai_sql_readonly_unit-t.cpp $(PROXYSQL_PATH)/plugins/genai/include/SQL_Readonly_Validator.h $(PROXYSQL_PATH)/plugins/genai/include/PgSQL_Readonly_Transaction.h $(PARSERSQL_IDIR)/sql_parser/tokenizer.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/genai/include -I$(PARSERSQL_IDIR) \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@

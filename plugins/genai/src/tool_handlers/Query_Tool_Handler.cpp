@@ -1,4 +1,5 @@
 #include "SQL_Readonly_Validator.h"
+#include "PgSQL_Readonly_Transaction.h"
 #ifdef PROXYSQL40
 
 #include "proxysql.h"
@@ -882,6 +883,22 @@ Query_Tool_Handler::PgSQLConnection* Query_Tool_Handler::find_pgsql_connection(v
 	return nullptr;
 }
 
+// A connection whose transaction state cannot be reset must leave the pool.
+void Query_Tool_Handler::discard_pgsql_connection(void* pgconn_ptr) {
+	bool removed = false;
+	pthread_mutex_lock(&pool_lock);
+	for (auto it = pgsql_connection_pool.begin(); it != pgsql_connection_pool.end(); ++it) {
+		if (it->pgconn == pgconn_ptr) {
+			pgsql_connection_pool.erase(it);
+			--pg_pool_size;
+			removed = true;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&pool_lock);
+	if (removed) PQfinish(static_cast<PGconn*>(pgconn_ptr));
+}
+
 std::string Query_Tool_Handler::execute_query(const std::string& query, const std::string& target_id) {
 	const QueryTarget* target = resolve_target(target_id);
 	if (target == NULL) {
@@ -1025,7 +1042,8 @@ std::string Query_Tool_Handler::execute_query(const std::string& query, const st
 std::string Query_Tool_Handler::execute_query_with_schema(
 	const std::string& query,
 	const std::string& schema,
-	const std::string& target_id
+	const std::string& target_id,
+	bool readonly_transaction
 ) {
 	const QueryTarget* target = resolve_target(target_id);
 	if (target == NULL) {
@@ -1048,10 +1066,17 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 		PGconn* pgconn = static_cast<PGconn*>(pgconn_v);
 		PgSQLConnection* conn_wrapper = find_pgsql_connection(pgconn_v);
 
+		if (readonly_transaction && PQtransactionStatus(pgconn) != PQTRANS_IDLE) {
+			discard_pgsql_connection(pgconn_v);
+			return json({{"success", false}, {"error", "PostgreSQL connection is not idle"}}).dump();
+		}
+
 		if (!schema.empty() && conn_wrapper && conn_wrapper->current_schema != schema) {
 			std::string validated_schema = validate_sql_identifier_sqlite(schema);
 			if (validated_schema.empty()) {
-				return_connection(pgconn_v);
+				if (readonly_transaction && PQtransactionStatus(pgconn) != PQTRANS_IDLE)
+					discard_pgsql_connection(pgconn_v);
+				else return_connection(pgconn_v);
 				json j;
 				j["success"] = false;
 				j["error"] = "Invalid schema name: contains unsafe characters";
@@ -1068,7 +1093,9 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 				if (set_res) {
 					PQclear(set_res);
 				}
-				return_connection(pgconn_v);
+				if (readonly_transaction && PQtransactionStatus(pgconn) != PQTRANS_IDLE)
+					discard_pgsql_connection(pgconn_v);
+				else return_connection(pgconn_v);
 				json j;
 				j["success"] = false;
 				j["error"] = err;
@@ -1078,13 +1105,40 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 			conn_wrapper->current_schema = validated_schema;
 		}
 
+		std::string transaction_error;
+		std::unique_ptr<genai::PgSQL_Readonly_Transaction> transaction;
+		if (readonly_transaction) {
+			transaction.reset(new genai::PgSQL_Readonly_Transaction(
+				[&](const char* command) {
+					PGresult* result = PQexec(pgconn, command);
+					bool success = result && PQresultStatus(result) == PGRES_COMMAND_OK;
+					if (!success && transaction_error.empty())
+						transaction_error = result ? PQresultErrorMessage(result) : PQerrorMessage(pgconn);
+					if (result) PQclear(result);
+					return success;
+				},
+				[&]() { return PQtransactionStatus(pgconn) == PQTRANS_IDLE; },
+				[&](bool reusable) {
+					if (reusable) return_connection(pgconn_v);
+					else discard_pgsql_connection(pgconn_v);
+				}));
+			if (!transaction->ready())
+				return json({{"success", false}, {"error", transaction_error.empty()
+					? "Unable to start read-only PostgreSQL transaction" : transaction_error}}).dump();
+		}
+		auto release_connection = [&]() {
+			if (transaction) return transaction->finish();
+			return_connection(pgconn_v);
+			return true;
+		};
+
 		PGresult* res = PQexec(pgconn, query.c_str());
 		if (res == NULL) {
 			proxy_error(
 				"Query_Tool_Handler: PQexec returned null result for target='%s' query='%s'\n",
 				target->target_id.c_str(), query.c_str()
 			);
-			return_connection(pgconn_v);
+			release_connection();
 			json j;
 			j["success"] = false;
 			j["error"] = std::string("PQexec returned null result");
@@ -1099,7 +1153,7 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 				target->target_id.c_str(), err.c_str(), schema.c_str(), query.c_str()
 			);
 			PQclear(res);
-			return_connection(pgconn_v);
+			release_connection();
 			json j;
 			j["success"] = false;
 			j["error"] = err;
@@ -1113,7 +1167,8 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 				affected = atol(tuples);
 			}
 			PQclear(res);
-			return_connection(pgconn_v);
+			if (!release_connection())
+				return json({{"success", false}, {"error", "Failed to reset PostgreSQL transaction"}}).dump();
 			json j;
 			j["success"] = true;
 			j["affected_rows"] = affected;
@@ -1132,7 +1187,8 @@ std::string Query_Tool_Handler::execute_query_with_schema(
 		}
 
 		PQclear(res);
-		return_connection(pgconn_v);
+		if (!release_connection())
+			return json({{"success", false}, {"error", "Failed to reset PostgreSQL transaction"}}).dump();
 
 		json j;
 		j["success"] = true;
@@ -2588,7 +2644,7 @@ json Query_Tool_Handler::execute_tool(const std::string& tool_name, const json& 
 			if (!validate_readonly_query(sql, is_pgsql_protocol(target->protocol))) {
 				result = create_error_response("SQL is not read-only");
 			} else {
-				std::string query_result = execute_query_with_schema(sql, schema, target->target_id);
+				std::string query_result = execute_query_with_schema(sql, schema, target->target_id, true);
 				try {
 					json result_json = json::parse(query_result);
 					// Check if query actually failed
