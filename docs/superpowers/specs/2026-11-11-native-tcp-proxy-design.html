@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Historical standalone TCP design — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-11-native-tcp-proxy-design.md">Markdown source</a></nav><blockquote><strong>Historical snapshot.</strong> This report describes an earlier implementation. See the <a href="../../tcp-proxy-plugin.html">current four-table configuration guide</a> for supported behavior.</blockquote><h1 id="native-tcp-proxy-plugin">Native TCP proxy plugin</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#intent-and-approaches">Intent and approaches</a></li><li class="level-2"><a href="#scope-and-constraints">Scope and constraints</a></li><li class="level-2"><a href="#configuration-contract">Configuration contract</a></li><li class="level-2"><a href="#admin-commands-and-persistence">Admin commands and persistence</a></li><li class="level-2"><a href="#runtime-interfaces-and-ownership">Runtime interfaces and ownership</a></li><li class="level-2"><a href="#activation-and-concurrency">Activation and concurrency</a></li><li class="level-2"><a href="#forwarding-balancing-and-health">Forwarding, balancing, and health</a></li><li class="level-2"><a href="#core-listener-validation-service">Core listener-validation service</a></li><li class="level-2"><a href="#metrics-and-lifecycle">Metrics and lifecycle</a></li><li class="level-2"><a href="#verification-and-acceptance">Verification and acceptance</a></li></ul></details>
+<p>Date: 2026-11-11. Status: implementation authorized by the user after the detailed design. The user selected the native approach and requested subagents with most implementation, test, and benchmark work delegated to OpenCode using DeepSeek v4.1 Flash. No additional design-approval pause is required. No commits, pushes, or deployment are requested.</p>
+<h2 id="intent-and-approaches">Intent and approaches</h2>
+<p>Provide opaque TCP forwarding selected by listening address/port, configurable entirely through ProxySQL Admin. Users can add/remove backends, change balancing and network routing policies, inspect health/statistics, and persist configuration without another control plane.</p>
+<p>The user selected a native C++ plugin over a plugin supervising HAProxy. Native forwarding gives one process, direct runtime ownership, and the usual Admin configuration model, at the cost of building and validating the relay. Embedding HAProxy was rejected because adapting its process/thread/lifecycle assumptions creates a much larger coupling. The adjacent HAProxy checkout is reference material and an optional benchmark comparator, not a linked dependency.</p>
+<h2 id="scope-and-constraints">Scope and constraints</h2>
+<ul>
+<li>Build only with <code>PROXYSQL40=1</code>; use the same C++ toolchain/build tier as core. Linux is the initial supported data-plane platform; unsupported platforms receive an explicit build/runtime diagnostic, never a silent fallback.</li>
+<li>Plugin name <code>tcp_proxy</code>; artifact <code>plugins/tcp_proxy/proxysql_tcp_proxy.so</code>; entry point <code>proxysql_plugin_descriptor_v1</code>.</li>
+<li>IPv4 and IPv6 TCP, byte-transparent TLS passthrough, one backend connection per client connection. Numeric IPv4/IPv6 listener and backend addresses only in this first version. The conventional <code>hostname</code> column stores an address. DNS support is deferred until a cancellable bounded resolver is designed; libc getaddrinfo on an Admin callback would violate bounded shutdown.</li>
+<li>Weighted round-robin and weighted least-connections; primary/backup servers; network routing rules; active TCP-connect health checking; dynamic listener/backend changes; draining and immediate administrative disconnect; bounded resources; Admin/runtime/statistics views and existing Prometheus endpoint.</li>
+<li>Exclude UDP, TLS termination, payload/SNI/SQL routing, PROXY protocol, transparent source spoofing, protocol authentication, application health scripts, backend pooling, queued excess connections, automatic Cluster replication, DNS backend names, and zero-copy optimizations in this version. Backend peers see ProxySQL's source address. These are explicit version boundaries, not stub APIs.</li>
+<li>No network I/O, SQL, DNS, logging callbacks, or worker joins while holding a data-plane global lock. No SQL or DNS on connection workers. Admin callbacks must release Admin's global mutex before waiting for control-plane work and reacquire before returning.</li>
+<li>Preserve unrelated files and existing work; workers must not commit, push, create branches, install dependencies globally, read credentials, or operate production endpoints.</li>
+</ul>
+<h2 id="configuration-contract">Configuration contract</h2>
+<p>Five editable tables have identical persistent <code>config_db</code> twins registered in <code>register_schemas()</code>. Runtime tables prefix the editable name with <code>runtime_</code>. Values below are authoritative; bounds are checked both by schema and compiler when practical. All IDs are nonnegative signed 32-bit integers; ports are 1..65535. All tables except settings include <code>comment TEXT NOT NULL DEFAULT ''</code>.</p>
+<p><code>tcp_settings</code> has exactly one default row, <code>id=1</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th style="text-align:right">Default</th>
+<th>Bounds/meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td style="text-align:right">1</td>
+<td>PRIMARY KEY, CHECK(id=1)</td>
+</tr>
+<tr>
+<td><code>worker_threads</code></td>
+<td style="text-align:right">2</td>
+<td>1..64; startup-only after workers run</td>
+</tr>
+<tr>
+<td><code>max_connections</code></td>
+<td style="text-align:right">10000</td>
+<td>1..1000000; all listeners, including pending connects</td>
+</tr>
+<tr>
+<td><code>buffer_size</code></td>
+<td style="text-align:right">16384</td>
+<td>1024..1048576 bytes per direction; startup-only</td>
+</tr>
+<tr>
+<td><code>shutdown_timeout_ms</code></td>
+<td style="text-align:right">5000</td>
+<td>0..60000; stop draining deadline</td>
+</tr>
+<tr>
+<td><code>half_close_timeout_ms</code></td>
+<td style="text-align:right">30000</td>
+<td>1..3600000; completion after first EOF</td>
+</tr>
+</tbody>
+</table>
+<p><code>tcp_hostgroups</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hostgroup_id</code></td>
+<td>required</td>
+<td>PRIMARY KEY, independent of MySQL/PgSQL hostgroups</td>
+</tr>
+<tr>
+<td><code>balance</code></td>
+<td><code>roundrobin</code></td>
+<td><code>roundrobin</code> or <code>leastconn</code></td>
+</tr>
+<tr>
+<td><code>health_check_interval_ms</code></td>
+<td>1000</td>
+<td>0 disables checks; otherwise 100..3600000</td>
+</tr>
+<tr>
+<td><code>health_check_timeout_ms</code></td>
+<td>500</td>
+<td>1..60000</td>
+</tr>
+<tr>
+<td><code>health_check_rise</code></td>
+<td>2</td>
+<td>1..100 consecutive successful checks</td>
+</tr>
+<tr>
+<td><code>health_check_fall</code></td>
+<td>3</td>
+<td>1..100 consecutive failed checks</td>
+</tr>
+</tbody>
+</table>
+<p><code>tcp_servers</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>server_id</code></td>
+<td>required</td>
+<td>PRIMARY KEY; stable administrative identity</td>
+</tr>
+<tr>
+<td><code>hostgroup_id</code></td>
+<td>required</td>
+<td>Must reference a configured hostgroup</td>
+</tr>
+<tr>
+<td><code>hostname</code></td>
+<td>required</td>
+<td>Numeric IPv4/IPv6 address only, no embedded NUL</td>
+</tr>
+<tr>
+<td><code>port</code></td>
+<td>required</td>
+<td>Backend TCP port</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>ONLINE</code></td>
+<td><code>ONLINE</code>, <code>OFFLINE_SOFT</code>, <code>OFFLINE_HARD</code></td>
+</tr>
+<tr>
+<td><code>weight</code></td>
+<td>1</td>
+<td>1..1000</td>
+</tr>
+<tr>
+<td><code>max_connections</code></td>
+<td>1000</td>
+<td>1..1000000, across all workers</td>
+</tr>
+<tr>
+<td><code>backup</code></td>
+<td>0</td>
+<td>0 or 1</td>
+</tr>
+</tbody>
+</table>
+<p><code>tcp_listeners</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>listener_id</code></td>
+<td>required</td>
+<td>PRIMARY KEY; stable capacity/statistics identity</td>
+</tr>
+<tr>
+<td><code>active</code></td>
+<td>1</td>
+<td>0 or 1</td>
+</tr>
+<tr>
+<td><code>bind_address</code></td>
+<td><code>0.0.0.0</code></td>
+<td>Numeric IPv4/IPv6; IPv6 sockets explicitly IPV6_V6ONLY</td>
+</tr>
+<tr>
+<td><code>bind_port</code></td>
+<td>required</td>
+<td>Listening TCP port</td>
+</tr>
+<tr>
+<td><code>default_hostgroup</code></td>
+<td>required</td>
+<td>Must reference a configured hostgroup</td>
+</tr>
+<tr>
+<td><code>max_connections</code></td>
+<td>10000</td>
+<td>1..1000000</td>
+</tr>
+<tr>
+<td><code>connect_timeout_ms</code></td>
+<td>2000</td>
+<td>1..60000; total connection-establishment budget</td>
+</tr>
+<tr>
+<td><code>idle_timeout_ms</code></td>
+<td>60000</td>
+<td>0 disables; otherwise 1..86400000</td>
+</tr>
+<tr>
+<td><code>max_connect_attempts</code></td>
+<td>3</td>
+<td>1..16; failed connects only</td>
+</tr>
+</tbody>
+</table>
+<p><code>tcp_routing_rules</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rule_id</code></td>
+<td>required</td>
+<td>PRIMARY KEY; ascending order, first match wins</td>
+</tr>
+<tr>
+<td><code>active</code></td>
+<td>1</td>
+<td>0 or 1</td>
+</tr>
+<tr>
+<td><code>listener_id</code></td>
+<td>NULL</td>
+<td>NULL matches every listener; otherwise valid listener reference</td>
+</tr>
+<tr>
+<td><code>source_cidr</code></td>
+<td>NULL</td>
+<td>NULL matches every source; otherwise canonical IPv4/IPv6 CIDR</td>
+</tr>
+<tr>
+<td><code>action</code></td>
+<td><code>ROUTE</code></td>
+<td><code>ROUTE</code> or <code>REJECT</code></td>
+</tr>
+<tr>
+<td><code>destination_hostgroup</code></td>
+<td>NULL</td>
+<td>Required for ROUTE; NULL for REJECT</td>
+</tr>
+</tbody>
+</table>
+<p>Rule matching uses the actual socket peer address, never untrusted application metadata. No matching rule means the listener's default hostgroup. A matching REJECT closes without protocol-specific reply. A healthy empty hostgroup is legal: it rejects new connections rather than falling back elsewhere. Reject dangling references even in inactive rows so activation is deterministic. Reject overlapping active listeners, including duplicates inside this plugin. Reject IPv4-mapped IPv6 bind/CIDR spellings unless normalized consistently; simplest initial implementation rejects those spellings with a clear error.</p>
+<h2 id="admin-commands-and-persistence">Admin commands and persistence</h2>
+<p>Canonical exact commands:</p>
+<ul>
+<li><code>LOAD TCP CONFIG TO RUNTIME</code>: all five tables, one activation.</li>
+<li><code>SAVE TCP CONFIG FROM RUNTIME</code>: replace all five editable tables with the effective runtime configuration; no health/counter persistence.</li>
+<li><code>LOAD TCP CONFIG FROM DISK</code>: replace all five editable tables transactionally; no implicit activation.</li>
+<li><code>SAVE TCP CONFIG TO DISK</code>: persist all five editable tables transactionally; no implicit activation.</li>
+</ul>
+<p>Register conventional aliases <code>LOAD TCP CONFIG FROM MEMORY</code>, <code>SAVE TCP CONFIG TO MEMORY</code>, <code>LOAD TCP CONFIG TO MEMORY</code>, and <code>SAVE TCP CONFIG FROM MEMORY</code> for the corresponding canonical operation. Do not expose per-table LOAD commands that could create mixed policy/server generations. SQL DML affects editable memory only. Saving to disk may intentionally persist a configuration not yet active; startup validates it before serving.</p>
+<p>Default startup with no TCP configuration succeeds with zero listeners. Settings defaults are inserted only if absent. Invalid persisted configuration fails the plugin startup without opening its listeners; do not overwrite persisted rows. Core's existing configured-plugin failure policy remains authoritative. No-start exposes registered schema but does not create relay workers/listeners; plugin command availability follows existing chassis behavior. STOP/START and RESTART must leave no plugin threads/fds behind and restore disk configuration in the normal chassis sequence.</p>
+<p>Runtime projections have the editable columns plus a <code>generation</code> column; SAVE uses explicit column lists. <code>runtime_tcp_status</code> provides state, generation, last activation error, and active/retired connections. Statistics tables in stats DB: <code>stats_tcp_listeners</code>, <code>stats_tcp_servers</code>, <code>stats_tcp_rules</code>; include IDs, active connections, accepted/selected totals, rejects, connect errors, byte counters, administrative/health status as appropriate. Keep useful rows for retired identities while their sessions drain; snapshots clearly identify retired rows. Runtime tables represent the actual configuration, never unactivated SQL edits.</p>
+<h2 id="runtime-interfaces-and-ownership">Runtime interfaces and ownership</h2>
+<p>Plugin-independent engine code lives under <code>plugins/tcp_proxy/include</code> and <code>src</code>, with no ProxySQL globals, SQLite, JSON library, or Prometheus dependency. This makes the real relay independently testable. Public engine API in <code>tcp_proxy.h</code> uses namespace <code>tcp_proxy</code>:</p>
+<ul>
+<li>Value types <code>Settings</code>, <code>Hostgroup</code>, <code>Server</code>, <code>Listener</code>, <code>Rule</code>, <code>Config</code> represent the tables with the exact column names above. Optional rule values use <code>std::optional</code>. <code>Config</code> owns settings and vectors <code>hostgroups</code>, <code>servers</code>, <code>listeners</code>, <code>rules</code>.</li>
+<li><code>bool validate_config(const Config&amp;, std::string&amp; error)</code> performs pure structural/range/address/CIDR/reference validation; no binds/DNS. <code>std::string listener_interfaces(const Config&amp;)</code> formats active endpoints for core collision validation.</li>
+<li><code>class Engine</code> with PIMPL; constructor/destructor; <code>bool start(const Config&amp;, std::string&amp;)</code>; <code>bool apply(const Config&amp;, std::string&amp;)</code>; <code>void stop()</code>; <code>Snapshot snapshot() const</code>; <code>Config config() const</code>; <code>bool running() const</code>. No throws across these public mutation boundaries. <code>start</code> starts resources and applies generation 1, even for empty configuration. <code>apply</code> serializes via try-lock and reports busy instead of blocking another Admin load. Startup-only setting changes reject atomically. <code>stop</code> is idempotent and bounded by shutdown_timeout_ms plus short thread cleanup overhead.</li>
+<li><code>Snapshot</code> contains <code>generation</code>, <code>running</code>, <code>last_error</code>, global totals, and typed listener/server/rule rows. Header defines exact snapshot member names before Admin implementation begins; the root coordinator freezes that header between implementation stages. Statistics are copied without network or SQL and without holding a lock over worker joins.</li>
+</ul>
+<p>Private files separate config validation/route compilation, selection/capacity state, relay/accept lifecycle, and health monitoring. A test harness may drive Engine directly; the production plugin must use that same engine, not a second simplified relay.</p>
+<h2 id="activation-and-concurrency">Activation and concurrency</h2>
+<p>The Admin callback first acquires a plugin-owned LOAD mutex with try_lock while holding the Admin mutex, before copying any editable row. A competing LOAD returns busy immediately without waiting while holding Admin. The successful callback retains the LOAD guard until after reacquiring Admin and completing its response, preventing stale snapshots or out-of-order publication. It copies all editable rows while it holds the Admin mutex. It releases that mutex using the paired command-context callbacks, validates/prepares and applies through Engine, then reacquires using RAII on every exit. If callbacks are unavailable in isolated tests, direct invocation may run synchronously because no Admin client owns that test connection. Workers never request the Admin mutex, avoiding an inverse wait. Two overlapping runtime loads return a descriptive busy error for one; do not let an older delayed snapshot overwrite a later successful activation. Snapshot/save operations briefly hold the engine configuration mutex only.</p>
+<p>Prepare the complete immutable candidate, convert numeric backend addresses into owned sockaddr values, validate core reservations, prepare newly required listener sockets, allocate changed runtime state, and stage worker control messages before publication. Bind with SO_REUSEADDR but never SO_REUSEPORT. All socket/thread setup errors roll back temporary resources and preserve generation and old listeners. No getaddrinfo or other resolver is used on this path; inet_pton validates both families. This keeps configuration work cancellable/bounded and avoids delaying shutdown on an active Admin resolver callback.</p>
+<p>An acceptor thread owns the current listener set and hands accepted sockets to a fixed pool of epoll workers through bounded queues and eventfd wakeups. A different fixed-pool design is acceptable only if it preserves single-worker ownership for each flow and the same atomic activation semantics. Short acceptance/publication locking establishes one linearization point: every accepted flow pins one complete generation. Reuse unchanged endpoint sockets even if listener ID or policies change. New binds become visible together; removed endpoints cease accepting before activation returns. An endpoint replacement requiring closing an overlapping active socket before binding the replacement is rejected atomically with instructions to remove/apply/add/apply; do not claim transactional rollback across an irreversible close/rebind gap.</p>
+<p>Stable shared capacity state for listener/server IDs counts pending and established connections across workers and pinned generations. Acquire global, listener, and server slots before dispatch/connect; release every acquired slot exactly once on every failure/close path. Use CAS or equivalent race-safe reservations; no unchecked fetch-add admission. Lowering a capacity does not kill existing sessions, but prevents admission until below the new limit. Endpoint edits retain established old flows; health resets for changed endpoints. Removed rows cease receiving new assignments and retain runtime state until draining completes. All queued accepted sockets count toward limits. Dispatch queues are bounded; full queues reject and count a reason.</p>
+<p>Administrative <code>OFFLINE_HARD</code> publishes a disconnect instruction for that server_id to every worker, affecting connections pinned to older generations too. Acknowledge processing before LOAD returns. There is no later fail-able preparation after irreversible hard disconnect begins. All other configuration edits, including OFFLINE_SOFT and removal, preserve established flows. Worker commands must not retain raw pointers to reclaimed generations or close a reused file descriptor from stale epoll events; use stable per-flow tokens/tombstones or deferred destruction across an event batch.</p>
+<h2 id="forwarding-balancing-and-health">Forwarding, balancing, and health</h2>
+<p>Flow states: accepted, selecting, connecting, relaying, half-closed, closed. Nonblocking connect completion checks SO_ERROR. Support server-first protocols by initiating connect immediately on acceptance. Retry only failed connection attempts, within total deadline and max_connect_attempts, avoiding already attempted server/address candidates when alternatives exist. Never retry after a backend connection has succeeded, after sending any application byte, or after receiving an application byte from that backend; never replay application traffic. Do not read client application bytes until backend establishment, or retain them without forwarding during retries. An accepted old-generation flow with a reserved in-flight connect may complete that connect after a soft removal or endpoint edit. If it must retry, only currently ONLINE, healthy, capacity-eligible servers with unchanged endpoint identity in its pinned hostgroup may be chosen; removed/offline/replaced endpoints cannot receive new retry attempts. A hard-offline instruction closes queued, pending and established flows for the server ID. Test these pending-connect boundaries explicitly.</p>
+<p>Each direction uses at most buffer_size payload bytes. Enable read interest only with buffer space; enable write interest only with queued bytes. Handle EINTR, EAGAIN, short reads/writes, SO_ERROR, HUP combined with readable data, and MSG_NOSIGNAL. Flush bytes read before EOF before calling shutdown(peer, SHUT_WR). Continue the reverse stream until its EOF/error/deadline. The first EOF starts half_close_timeout_ms; normal idle deadline is based on successful I/O progress using monotonic time. No one-thread-per-connection implementation.</p>
+<p>Eligible backends are ONLINE, healthy (or checks disabled), below their capacity, and in the selected hostgroup. Select primaries first; backups become eligible only when no primary is eligible, including primary saturation. Round-robin honors weights across workers through shared scheduler state; smooth weighted round-robin is acceptable. Leastconn minimizes reserved_connections/weight with rotating ties. Capacity reservation and selection must be coordinated so contending workers cannot exceed max_connections or overcommit the selected server. Checks never consume application capacity or user byte counters.</p>
+<p>A dedicated bounded nonblocking health loop probes endpoints using connect + SO_ERROR, monotonic deadlines and rise/fall hysteresis, never one thread per server. Limit simultaneous probes (default 64) and jitter schedules. New checked endpoints start UNKNOWN/ineligible until rise successes. Disabled checks treat ONLINE servers as eligible immediately. Health DOWN prevents new connections and preserves established ones. Keep administrative and health status separate. Do not convert a single user connect error into a persistent administrative status change. Probes for removed/stale endpoint identities cannot overwrite the health of replacements. Expose selected numeric endpoint and health. Each server row identifies exactly one endpoint.</p>
+<h2 id="core-listener-validation-service">Core listener-validation service</h2>
+<p>Append one service callback and bump chassis layout/max to ABI 17 while keeping all existing compatible prefixes and the existing rejection of reserved/incompatible layouts:</p>
+<p><code>bool (*validate_listener_interfaces)(const char* owner, const char* interfaces, std::string&amp; error);</code></p>
+<p>Before plugin init, <code>ProxySQL_Main_exit_on_listener_conflicts()</code> copies the enabled core listener modules it already collected into an owned process-local reservation snapshot. Add a small generic listener-reservation helper (new header/source is preferred) and seed it from that function before its borrowed variable strings are freed. The service compares a plugin's numeric candidate interfaces against this snapshot using the existing listener validator. It performs no SQL and accepts no mutation of core interfaces. Phase B returns a clear unavailable error; normal init/start and Admin LOAD can call it. Clear/reseed reservations on internal reload. Plugin-to-plugin conflicts are additionally prevented by exclusive kernel binds; no plugin-specific table names enter core.</p>
+<p>Initial start and every LOAD validate active TCP endpoints through this service before Engine activation; a missing service rejects listener activation explicitly. Check enabled core listeners only, allowing a TCP-only process to reuse a disabled MySQL/PgSQL port. Bind failure remains authoritative for unrelated external processes and other plugin listeners. Explicit V6ONLY sockets avoid cross-family kernel surprises; conservative rejection from core's existing validator is acceptable if clearly diagnosed. Update tests that currently label ABI 17 as unsupported to use ABI 18, and add compatible ABI 16 prefix coverage. Test debug-tier compatibility too.</p>
+<h2 id="metrics-and-lifecycle">Metrics and lifecycle</h2>
+<p>Lifecycle review ruling: plugin Context storage must remain alive until the core manager's stop callback, including release SIGTERM's std::exit/atexit path. An automatically destroyed function-static Context is unsafe because its destructor runs before the earlier-created global plugin manager. Use explicit module-owned storage with destruction only after chassis stop during DSO finalization; release all resources on init failure/stop and free storage on unload, with no per-reload heap leak. Do not change generic core signal semantics to mask plugin ownership. Verify real SIGTERM fast exit and ordinary STOP/START.</p>
+<p>Read API ruling: only mutation boundaries promise no exceptions. A failed config()/snapshot() copy must propagate a failure, never return a valid-looking empty configuration that Admin SAVE could persist. Read-only consumers fail safely; metric sampler contains exceptions at its thread boundary. If a coherent configuration/generation cannot be obtained after bounded retries, Admin returns an error and leaves editable tables untouched.</p>
+<p>Prometheus metrics use <code>proxysql_tcp_</code> prefix and bounded labels: listener/server/rule IDs, never client addresses. Include connection totals/active, directional bytes, rejects/connect failures, health and active generation. The core Registry owns the twelve stable metric families for process lifetime; the plugin owns only its samples. Retain families across plugin unload, remove only plugin-owned samples after joining the sampler, and rebind empty families on restart. This avoids deleting merged preexisting families in the default Merge registry. A fixed component=tcp_proxy constant label names the module, and the tcp_proxy metric namespace and sample labels have one serialized lifecycle/sampler writer. Reject visible conflicting names and existing sample labels; never adopt/delete a foreign sample. Core-library constructors/vtables own Family, Counter and Gauge objects, so no plugin-defined Collectable callback remains after unload. Empty retained families do not appear in scrapes, twelve names bound family storage, and all dynamic samples must be pruned. Handle initialization failure cleanup. Counters may reset across STOP/START and process restarts; document this.</p>
+<p><code>register_schemas</code>: declare persistent pairs, runtime/stats tables, commands, aliases and refresh callbacks without accessing DB handles. <code>init</code>: obtain services, read restored config and prepare metrics/context; all init failures clean their own resources because the chassis does not call stop on failed init. <code>start</code>: validate listener reservations and start Engine; no protocol worker objects are required. <code>runtime_ready</code> can report running/unconfigured state but is not the safety gate for owned sockets. <code>stop</code>: close accepts, allow bounded connection drain, force close remaining sockets, stop health loop, wake/join workers, remove owned metric samples and release all module-owned resources. Tolerate start failure and repeated local stop calls.</p>
+<h2 id="verification-and-acceptance">Verification and acceptance</h2>
+<p>Engine tests must exercise actual loopback sockets and assert bytes and close behavior. Minimum cases: configuration bounds/references/CIDRs/duplicate wildcards; IPv4 and supported IPv6; arbitrary binary payload &gt; several buffers; server-first greeting; bidirectional half-close with response after client SHUT_WR; simultaneous flows and capacity enforcement; weighted distribution and leastconn; source rule/reject/default; primary/backup; unavailable backend and bounded connect retry; idle and half-close timeouts; health fall/rise and stale endpoint results; backend/listener edits preserving existing sessions; OFFLINE_HARD closing old-generation sessions; failed bind and invalid config leaving generation/listener behavior unchanged; startup-only settings rejection; bounded stop and repeated restart; fd/thread leak checks; concurrent apply/admission.</p>
+<p>Admin/DSO tests must cover exported descriptor/name/ABI, exact schema pairs and seeded settings, every command and alias, malformed rows, SQL quoting, runtime-vs-memory distinction, all-table disk roundtrip, startup restore, SAVE excluding health, mutex release/reacquire on failure, runtime/statistics projections, metrics cleanup, and listener reservation service. Add real daemon/Admin tests when a v4 daemon can be built; otherwise report that gap explicitly and do not present an engine harness as full daemon verification.</p>
+<p>Provide reproducible benchmark tooling with a direct backend baseline and the same Engine implementation. Measure small-message roundtrip latency p50/p95/p99, connections/s, sustained bytes/s, CPU/RSS and idle connection footprint with fixed workload parameters. Compare HAProxy only if available/built; record binary versions, worker counts, concurrency, payload, durations, host details and raw results. Benchmarks are local measurements, not performance claims without data. Default runs are short (seconds), bind loopback, start only task-owned children and clean them up reliably. No broad pkill or load against external services.</p>
+<p>Implementation is complete only when scoped tests pass, integration seams are reviewed, benchmark evidence exists, user documentation/SQL examples are included, and all unverified platform/daemon/performance limitations are explicitly recorded.</p>
+<p>Metrics ownership review ruling: default Registry::Merge cannot identify newly-created empty families through its public API. Do not mutate global insertion policy, access private library layout, or change dependency ABI. Retain core-owned stable families, own samples only, stage ownership bookkeeping before Add, and remove newly-created samples on tracking failure. The sampler never acquires Admin's SQL mutex, because fast SHUTDOWN/KILL may call exit while holding it and teardown must join the sampler. Core v4 defers STOP/RESTART counter reset until after plugin and worker teardown. The plugin manager holds shared ownership of the registry through stop and DSO unload, including fast process exit; no plugin atexit workaround or dependency ABI change is needed.</p>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>

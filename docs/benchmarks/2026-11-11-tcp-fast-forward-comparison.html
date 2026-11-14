@@ -1,0 +1,1413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Native TCP versus fast-forward benchmark — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-11-tcp-fast-forward-comparison.md">Markdown source</a></nav><h1 id="native-mapped-tcp-vs-permanent-sql-fast-forward">Native mapped TCP vs permanent SQL fast-forward</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#interpretation-and-verification">Interpretation and verification</a></li><li class="level-2"><a href="#workload">Workload</a></li><li class="level-2"><a href="#provenance">Provenance</a></li><li class="level-2"><a href="#per-trial-values-all-rounds">Per-trial values (all rounds)</a></li><li class="level-2"><a href="#median-and-range-across-rounds">Median and range across rounds</a></li><li class="level-2"><a href="#configuration-auth-tls-evidence">Configuration/auth/TLS evidence</a></li><li class="level-2"><a href="#wire-counters-versus-application-payload">Wire counters versus application payload</a></li><li class="level-2"><a href="#active-proof">Active proof</a></li><li class="level-2"><a href="#resource-summary">Resource summary</a></li><li class="level-2"><a href="#resource-scopes-and-limitations">Resource scopes and limitations</a></li></ul></details>
+<p>Status: <strong>MEASURED</strong></p>
+<p>Generated: <code>2026-11-11T20:09:10.499185+00:00</code></p>
+<p>Profile: <code>measure</code></p>
+<p>This report is generated from real task-owned MySQL and PostgreSQL servers and immutable benchmarked binaries. The smoke profile is not a measurement and must not be interpreted as benchmark results.</p>
+<h2 id="interpretation-and-verification">Interpretation and verification</h2>
+<p>The following comparisons use the median of three rotated rounds, with four clients and two workers per proxy path. Both proxy paths used the same backend, SQL text, client binary, plaintext transport and user configuration. Direct database results are included as a baseline below.</p>
+<table>
+<thead>
+<tr>
+<th>Protocol</th>
+<th>Metric</th>
+<th style="text-align:right">Native TCP</th>
+<th style="text-align:right">Fast-forward</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MySQL</td>
+<td>64-byte query RTT p50 (microseconds)</td>
+<td style="text-align:right">71.6</td>
+<td style="text-align:right">77.4</td>
+</tr>
+<tr>
+<td>MySQL</td>
+<td>Fresh authenticated connection cycles/second</td>
+<td style="text-align:right">8172</td>
+<td style="text-align:right">3791</td>
+</tr>
+<tr>
+<td>MySQL</td>
+<td>64 KiB payload throughput (MiB/s per direction)</td>
+<td style="text-align:right">285.2</td>
+<td style="text-align:right">340.8</td>
+</tr>
+<tr>
+<td>MySQL</td>
+<td>1 MiB payload throughput (MiB/s per direction)</td>
+<td style="text-align:right">319.5</td>
+<td style="text-align:right">349.0</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td>64-byte query RTT p50 (microseconds)</td>
+<td style="text-align:right">59.3</td>
+<td style="text-align:right">130.9</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td>Fresh authenticated connection cycles/second</td>
+<td style="text-align:right">1553</td>
+<td style="text-align:right">1402</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td>64 KiB payload throughput (MiB/s per direction)</td>
+<td style="text-align:right">408.4</td>
+<td style="text-align:right">328.2</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td>1 MiB payload throughput (MiB/s per direction)</td>
+<td style="text-align:right">567.7</td>
+<td style="text-align:right">410.1</td>
+</tr>
+</tbody>
+</table>
+<p>Native TCP achieved 2.16 times the MySQL connection-cycle rate. MySQL fast-forward had higher median sustained payload throughput: 19.5% for 64 KiB and 9.2% for 1 MiB. PostgreSQL native TCP had 54.7% lower median query RTT and higher median throughput: 24.4% for 64 KiB and 38.4% for 1 MiB.</p>
+<p>These are local SQL workload observations. Each connection-rate and throughput phase lasted about two seconds; RTT used 1000 samples per client. Several metrics varied substantially between rounds; the ranges and all trial values below show that variation. The workload includes database SQL parsing/execution and client result validation. It does not establish maximum relay capacity, statistical significance, scaling at higher concurrency, encrypted transport performance, or the cause of the throughput differences. The results support a connection-setup benefit and a PostgreSQL benefit in this workload; they do not establish a universal performance advantage for native TCP.</p>
+<p>A connection cycle includes connect, authentication, the first verified query and close. Throughput sends a SQL literal and returns the same payload; each reported direction has the stated application throughput, with protocol framing recorded separately. The native TCP relay used its configured 16 KiB buffer. No production code was changed for this comparison.</p>
+<p>Root verification independently recomputed all 72 phase results, 72,000 raw RTT samples and percentiles, elapsed-time rates, exact payload byte totals, and round summaries. All trials had successful result validation, zero reported HGM connection errors and zero remaining Used/Free connections; all task-owned daemons and databases exited successfully. Live probes confirmed permanent SQL fast-forward and native TCP hostgroup accounting. The <a href="2026-11-11-tcp-fast-forward-comparison.json">raw JSON report</a> contains the samples, proofs, configuration, counters and artifact hashes. The <a href="../../plugins/tcp_proxy/tests/README.fast-forward.md">reproduction guide</a> describes the harness.</p>
+<h2 id="workload">Workload</h2>
+<ul>
+<li>Rounds: 3; clients: 4; warmups/client: 20; RTT samples/client: 1000.</li>
+<li>Requested phase duration: 2.0 s; throughput payloads: [65536, 1048576] bytes.</li>
+<li>Order rotation: <code>[['direct', 'native', 'ff'], ['native', 'ff', 'direct'], ['ff', 'direct', 'native']]</code>.</li>
+<li>Smoke label: none (measured profile).</li>
+</ul>
+<h2 id="provenance">Provenance</h2>
+<ul>
+<li>host: <code>/tmp/tcp-four-table/core-final/proxysql</code> sha256 <code>81c4f518f15e05af5de94a14ac445570ffbd0845e9f7bd4a2e9a85b281800d02</code></li>
+<li>plugin: <code>/tmp/tcp-four-table/plugin-final/binaries/proxysql_tcp_proxy-release.so</code> sha256 <code>f4111f8949276645977d9ee917eed9784c574017d3a00709050b614ca527b9c4</code></li>
+<li>client: <code>/tmp/tcp-ff-benchmark/fast_forward_bench_client</code> sha256 <code>c216b7f446ceaad45c3dc18400084b72198bf781623f3474a285093d6fe2d1cf</code></li>
+</ul>
+<p>Build/library evidence:</p>
+<ul>
+<li>Compiler: <code>/usr/bin/g++</code> ['g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0', 'Copyright (C) 2023 Free Software Foundation, Inc.']</li>
+<li>Flags: <code>-std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror -pthread</code></li>
+<li>Include flags: <code>-I/mnt/data/rene/proxysql5/proxysql/deps/mariadb-client-library/mariadb_client/include -I/mnt/data/rene/proxysql5/proxysql/deps/postgresql/postgresql/src/interfaces/libpq -I/mnt/data/rene/proxysql5/proxysql/deps/postgresql/postgres-REL_16_10/src/include</code></li>
+<li>Link inputs: <code>/mnt/data/rene/proxysql5/proxysql/deps/mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a /lib/x86_64-linux-gnu/libpq.so.5 -lssl -lcrypto -lz -ldl -lm -lresolv -pthread</code></li>
+<li>Linked client library versions: <code>{'mariadb_connector_c': '3.3.8', 'libpq': '160015'}</code></li>
+<li>Host: <code>{'node': 'dev128', 'system': 'Linux', 'release': '6.8.0-85-generic', 'machine': 'x86_64', 'processor': 'x86_64', 'cpu_model': 'AMD Ryzen 9 5950X 16-Core Processor', 'cpu_count': 32, 'mem_total_kb': 131804344, 'uid': 1000, 'python': '3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]'}</code></li>
+</ul>
+<p>Source/host provenance references:</p>
+<ul>
+<li><code>/tmp/tcp-ff-benchmark/benchmark-design.md</code> sha256 <code>a5420021fa3bd51da09c47b8e64cb1ad6772ea8a1d00733d2ef41763f75062bc</code></li>
+<li><code>/tmp/tcp-ff-benchmark/ff-mode-evidence.md</code> sha256 <code>4e3682f91155460478b8c24897eb9f4e95caae5ec39e5c71fe1e4b48202a6c04</code></li>
+<li><code>/tmp/tcp-four-table/core-final/all-core-source-hashes.json</code> sha256 <code>cb62c4b1eb0d85ec5c3440548d37a6c165b0d4a221125259af0942cffd3fd1a6</code></li>
+<li><code>/tmp/tcp-four-table/core-final/manifest.json</code> sha256 <code>05c62af6935bf59cf0902d9ad8b8637a967e782a582a9d58d5e459dc9ff3110c</code></li>
+<li><code>/tmp/tcp-four-table/plugin-final/SHA256SUMS</code> sha256 <code>ecad4969fed2ef6dd833688cfdd0024cbbb634dc9b4199273c7663bae222b30b</code></li>
+<li><code>/tmp/tcp-four-table/plugin-final/manifest.json</code> sha256 <code>d8a14d467d97dcb0b7f66f5dfef5eefbbddabd764db257331d84d335e7fccbb0</code></li>
+</ul>
+<h2 id="per-trial-values-all-rounds">Per-trial values (all rounds)</h2>
+<table>
+<thead>
+<tr>
+<th>Proto</th>
+<th style="text-align:right">Round</th>
+<th>Path</th>
+<th>RTT p50/p95/p99 (us)</th>
+<th style="text-align:right">Conn/s</th>
+<th style="text-align:right">64K q/s</th>
+<th style="text-align:right">64K MiB/s</th>
+<th style="text-align:right">1M q/s</th>
+<th style="text-align:right">1M MiB/s</th>
+<th>requested/actual s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>37.4/43.3/49.9</td>
+<td style="text-align:right">14899.5</td>
+<td style="text-align:right">10695.2</td>
+<td style="text-align:right">668.451</td>
+<td style="text-align:right">386.7</td>
+<td style="text-align:right">386.726</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>71.6/92.5/101.0</td>
+<td style="text-align:right">7966.6</td>
+<td style="text-align:right">4931.4</td>
+<td style="text-align:right">308.209</td>
+<td style="text-align:right">364.1</td>
+<td style="text-align:right">364.085</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>74.7/94.8/107.7</td>
+<td style="text-align:right">3791.1</td>
+<td style="text-align:right">5152.3</td>
+<td style="text-align:right">322.021</td>
+<td style="text-align:right">349.0</td>
+<td style="text-align:right">348.952</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>36.3/48.4/57.4</td>
+<td style="text-align:right">14908.1</td>
+<td style="text-align:right">8780.8</td>
+<td style="text-align:right">548.800</td>
+<td style="text-align:right">660.3</td>
+<td style="text-align:right">660.338</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>129.6/151.8/169.1</td>
+<td style="text-align:right">8172.5</td>
+<td style="text-align:right">4444.5</td>
+<td style="text-align:right">277.779</td>
+<td style="text-align:right">319.5</td>
+<td style="text-align:right">319.471</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>86.3/112.3/125.5</td>
+<td style="text-align:right">3693.0</td>
+<td style="text-align:right">5453.1</td>
+<td style="text-align:right">340.818</td>
+<td style="text-align:right">246.6</td>
+<td style="text-align:right">246.604</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>62.3/73.2/86.1</td>
+<td style="text-align:right">14854.8</td>
+<td style="text-align:right">9773.4</td>
+<td style="text-align:right">610.839</td>
+<td style="text-align:right">372.1</td>
+<td style="text-align:right">372.148</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>68.1/77.6/87.0</td>
+<td style="text-align:right">8281.1</td>
+<td style="text-align:right">4563.9</td>
+<td style="text-align:right">285.247</td>
+<td style="text-align:right">297.8</td>
+<td style="text-align:right">297.753</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>77.4/88.5/98.4</td>
+<td style="text-align:right">3791.7</td>
+<td style="text-align:right">5958.6</td>
+<td style="text-align:right">372.410</td>
+<td style="text-align:right">360.1</td>
+<td style="text-align:right">360.097</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>54.1/61.4/69.0</td>
+<td style="text-align:right">1671.8</td>
+<td style="text-align:right">11696.3</td>
+<td style="text-align:right">731.021</td>
+<td style="text-align:right">854.7</td>
+<td style="text-align:right">854.705</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>53.6/66.1/74.0</td>
+<td style="text-align:right">1552.7</td>
+<td style="text-align:right">8081.1</td>
+<td style="text-align:right">505.068</td>
+<td style="text-align:right">567.7</td>
+<td style="text-align:right">567.665</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>130.9/164.8/186.9</td>
+<td style="text-align:right">1426.7</td>
+<td style="text-align:right">3251.6</td>
+<td style="text-align:right">203.228</td>
+<td style="text-align:right">421.4</td>
+<td style="text-align:right">421.387</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>32.4/41.5/55.3</td>
+<td style="text-align:right">1647.3</td>
+<td style="text-align:right">11636.8</td>
+<td style="text-align:right">727.300</td>
+<td style="text-align:right">850.1</td>
+<td style="text-align:right">850.146</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>61.0/69.7/75.9</td>
+<td style="text-align:right">1542.8</td>
+<td style="text-align:right">5999.3</td>
+<td style="text-align:right">374.954</td>
+<td style="text-align:right">567.9</td>
+<td style="text-align:right">567.863</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>79.5/98.6/112.6</td>
+<td style="text-align:right">1401.9</td>
+<td style="text-align:right">5251.8</td>
+<td style="text-align:right">328.236</td>
+<td style="text-align:right">401.3</td>
+<td style="text-align:right">401.284</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>45.0/60.4/72.2</td>
+<td style="text-align:right">1646.3</td>
+<td style="text-align:right">11698.5</td>
+<td style="text-align:right">731.156</td>
+<td style="text-align:right">850.0</td>
+<td style="text-align:right">850.046</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>59.3/67.5/73.5</td>
+<td style="text-align:right">1565.9</td>
+<td style="text-align:right">6535.1</td>
+<td style="text-align:right">408.442</td>
+<td style="text-align:right">491.9</td>
+<td style="text-align:right">491.905</td>
+<td>2.00/2.00</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>135.9/171.9/199.0</td>
+<td style="text-align:right">1364.1</td>
+<td style="text-align:right">5921.6</td>
+<td style="text-align:right">370.098</td>
+<td style="text-align:right">410.1</td>
+<td style="text-align:right">410.079</td>
+<td>2.00/2.00</td>
+</tr>
+</tbody>
+</table>
+<h2 id="median-and-range-across-rounds">Median and range across rounds</h2>
+<table>
+<thead>
+<tr>
+<th>Proto</th>
+<th>Path</th>
+<th style="text-align:right">RTT p50 us</th>
+<th style="text-align:right">RTT p95 us</th>
+<th style="text-align:right">RTT p99 us</th>
+<th style="text-align:right">Conn/s</th>
+<th style="text-align:right">64K q/s</th>
+<th style="text-align:right">64K MiB/s</th>
+<th style="text-align:right">1M q/s</th>
+<th style="text-align:right">1M MiB/s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>mysql</td>
+<td>direct</td>
+<td style="text-align:right">37.4 [36.3-62.3]</td>
+<td style="text-align:right">48.4 [43.3-73.2]</td>
+<td style="text-align:right">57.4 [49.9-86.1]</td>
+<td style="text-align:right">14899.5 [14854.8-14908.1]</td>
+<td style="text-align:right">9773.4 [8780.8-10695.2]</td>
+<td style="text-align:right">610.8 [548.8-668.5]</td>
+<td style="text-align:right">386.7 [372.1-660.3]</td>
+<td style="text-align:right">386.7 [372.1-660.3]</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td>native</td>
+<td style="text-align:right">71.6 [68.1-129.6]</td>
+<td style="text-align:right">92.5 [77.6-151.8]</td>
+<td style="text-align:right">101.0 [87.0-169.1]</td>
+<td style="text-align:right">8172.5 [7966.6-8281.1]</td>
+<td style="text-align:right">4563.9 [4444.5-4931.4]</td>
+<td style="text-align:right">285.2 [277.8-308.2]</td>
+<td style="text-align:right">319.5 [297.8-364.1]</td>
+<td style="text-align:right">319.5 [297.8-364.1]</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td>ff</td>
+<td style="text-align:right">77.4 [74.7-86.3]</td>
+<td style="text-align:right">94.8 [88.5-112.3]</td>
+<td style="text-align:right">107.7 [98.4-125.5]</td>
+<td style="text-align:right">3791.1 [3693.0-3791.7]</td>
+<td style="text-align:right">5453.1 [5152.3-5958.6]</td>
+<td style="text-align:right">340.8 [322.0-372.4]</td>
+<td style="text-align:right">349.0 [246.6-360.1]</td>
+<td style="text-align:right">349.0 [246.6-360.1]</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td>direct</td>
+<td style="text-align:right">45.0 [32.4-54.1]</td>
+<td style="text-align:right">60.4 [41.5-61.4]</td>
+<td style="text-align:right">69.0 [55.3-72.2]</td>
+<td style="text-align:right">1647.3 [1646.3-1671.8]</td>
+<td style="text-align:right">11696.3 [11636.8-11698.5]</td>
+<td style="text-align:right">731.0 [727.3-731.2]</td>
+<td style="text-align:right">850.1 [850.0-854.7]</td>
+<td style="text-align:right">850.1 [850.0-854.7]</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td>native</td>
+<td style="text-align:right">59.3 [53.6-61.0]</td>
+<td style="text-align:right">67.5 [66.1-69.7]</td>
+<td style="text-align:right">74.0 [73.5-75.9]</td>
+<td style="text-align:right">1552.7 [1542.8-1565.9]</td>
+<td style="text-align:right">6535.1 [5999.3-8081.1]</td>
+<td style="text-align:right">408.4 [375.0-505.1]</td>
+<td style="text-align:right">567.7 [491.9-567.9]</td>
+<td style="text-align:right">567.7 [491.9-567.9]</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td>ff</td>
+<td style="text-align:right">130.9 [79.5-135.9]</td>
+<td style="text-align:right">164.8 [98.6-171.9]</td>
+<td style="text-align:right">186.9 [112.6-199.0]</td>
+<td style="text-align:right">1401.9 [1364.1-1426.7]</td>
+<td style="text-align:right">5251.8 [3251.6-5921.6]</td>
+<td style="text-align:right">328.2 [203.2-370.1]</td>
+<td style="text-align:right">410.1 [401.3-421.4]</td>
+<td style="text-align:right">410.1 [401.3-421.4]</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-auth-tls-evidence">Configuration/auth/TLS evidence</h2>
+<ul>
+<li>mysql fixture: <code>real-mysql</code> /usr/sbin/mysqld  Ver 8.0.46-0ubuntu0.24.04.4 for Linux on x86_64 ((Ubuntu)) auth=<code>mysql_native_password</code>.</li>
+<li>mysql round 1 native: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	101	1	1	0	1	1000</code> source=<code>101	127.0.0.1	42025	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>None</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>mysql round 1 ff: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	101	1	1	0	1	1000</code> source=<code>101	127.0.0.1	42025	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>None</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>mysql round 2 native: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	101	1	1	0	1	1000</code> source=<code>101	127.0.0.1	42025	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>None</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>mysql round 2 ff: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	101	1	1	0	1	1000</code> source=<code>101	127.0.0.1	42025	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>None</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>mysql round 3 native: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	101	1	1	0	1	1000</code> source=<code>101	127.0.0.1	42025	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>None</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>mysql round 3 ff: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	101	1	1	0	1	1000</code> source=<code>101	127.0.0.1	42025	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>None</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>pgsql fixture: <code>real-postgresql</code> postgres (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) auth=<code>md5</code>.</li>
+<li>pgsql round 1 native: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	201	1	1	0	1	1000</code> source=<code>201	127.0.0.1	37425	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>2</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>pgsql round 1 ff: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	201	1	1	0	1	1000</code> source=<code>201	127.0.0.1	37425	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>2</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>pgsql round 2 native: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	201	1	1	0	1	1000</code> source=<code>201	127.0.0.1	37425	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>2</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>pgsql round 2 ff: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	201	1	1	0	1	1000</code> source=<code>201	127.0.0.1	37425	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>2</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>pgsql round 3 native: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	201	1	1	0	1	1000</code> source=<code>201	127.0.0.1	37425	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>2</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+<li>pgsql round 3 ff: sql_threads=<code>2</code> tcp_workers=<code>2	10000	16384	5000	30000</code> user=<code>ffbench	1	0	201	1	1	0	1	1000</code> source=<code>201	127.0.0.1	37425	ONLINE	1	0	1000	0	0</code> pgsql_auth=<code>2</code> tls=<code>False</code> ssl_cipher=`` gss=<code>False</code> tcp_nodelay=<code>1</code>.</li>
+</ul>
+<h2 id="wire-counters-versus-application-payload">Wire counters versus application payload</h2>
+<p>Application bytes below come from verified native-client queries. HGM/TCP wire counters include authentication, SQL text and protocol framing and are never expected to equal payload bytes. Native paths expose plugin TCP and HGM counters; this immutable host exposes zero HGM byte counters for fast-forward sessions, so those zeros are recorded rather than substituted.</p>
+<table>
+<thead>
+<tr>
+<th>Proto</th>
+<th style="text-align:right">Round</th>
+<th>Path</th>
+<th>Phase</th>
+<th style="text-align:right">App response bytes</th>
+<th>HGM sent/recv delta</th>
+<th>TCP wire c2s/s2c delta</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>connections</td>
+<td style="text-align:right">1907392</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>throughput64k</td>
+<td style="text-align:right">1402077184</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>throughput1m</td>
+<td style="text-align:right">814743552</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>417144/563704</td>
+<td>417144/563704</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>connections</td>
+<td style="text-align:right">1019904</td>
+<td>5545728/4844544</td>
+<td>5545728/4844544</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>throughput64k</td>
+<td style="text-align:right">646512640</td>
+<td>652134414/652521949</td>
+<td>652134414/652521949</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>throughput1m</td>
+<td style="text-align:right">768606208</td>
+<td>852524166/852555553</td>
+<td>852524166/852555553</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>connections</td>
+<td style="text-align:right">485440</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>throughput64k</td>
+<td style="text-align:right">675479552</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>throughput1m</td>
+<td style="text-align:right">735051776</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>connections</td>
+<td style="text-align:right">1908480</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>throughput64k</td>
+<td style="text-align:right">1151074304</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>throughput1m</td>
+<td style="text-align:right">1388314624</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>417144/563704</td>
+<td>417144/563704</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>connections</td>
+<td style="text-align:right">1046272</td>
+<td>5689104/4969792</td>
+<td>5689104/4969792</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>throughput64k</td>
+<td style="text-align:right">582746112</td>
+<td>588330912/588680500</td>
+<td>588330912/588680500</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>throughput1m</td>
+<td style="text-align:right">672137216</td>
+<td>756051678/756079477</td>
+<td>756051678/756079477</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>connections</td>
+<td style="text-align:right">472960</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>throughput64k</td>
+<td style="text-align:right">715063296</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>throughput1m</td>
+<td style="text-align:right">522190848</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>connections</td>
+<td style="text-align:right">1901632</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>throughput64k</td>
+<td style="text-align:right">1281228800</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>throughput1m</td>
+<td style="text-align:right">784334848</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>417144/563704</td>
+<td>417144/563704</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>connections</td>
+<td style="text-align:right">1060224</td>
+<td>5764968/5036064</td>
+<td>5764968/5036064</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>throughput64k</td>
+<td style="text-align:right">598540288</td>
+<td>604134246/604493233</td>
+<td>604134246/604493233</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>throughput1m</td>
+<td style="text-align:right">628097024</td>
+<td>712009890/712036051</td>
+<td>712009890/712036051</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>connections</td>
+<td style="text-align:right">485504</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>throughput64k</td>
+<td style="text-align:right">781320192</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>throughput1m</td>
+<td style="text-align:right">759169024</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>connections</td>
+<td style="text-align:right">214272</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>throughput64k</td>
+<td style="text-align:right">1533411328</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td>throughput1m</td>
+<td style="text-align:right">1795162112</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>420700/577180</td>
+<td>420700/577180</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>connections</td>
+<td style="text-align:right">198976</td>
+<td>677762/1915144</td>
+<td>677762/1915144</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>throughput64k</td>
+<td style="text-align:right">1059454976</td>
+<td>1065331910/1065950698</td>
+<td>1065331910/1065950698</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td>throughput1m</td>
+<td style="text-align:right">1193279488</td>
+<td>1277213530/1277261254</td>
+<td>1277213530/1277261254</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>connections</td>
+<td style="text-align:right">182848</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>throughput64k</td>
+<td style="text-align:right">426377216</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td>throughput1m</td>
+<td style="text-align:right">888143872</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>connections</td>
+<td style="text-align:right">211072</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>throughput64k</td>
+<td style="text-align:right">1525612544</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td>throughput1m</td>
+<td style="text-align:right">1786773504</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>420700/577180</td>
+<td>420700/577180</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>connections</td>
+<td style="text-align:right">197568</td>
+<td>672966/1901592</td>
+<td>672966/1901592</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>throughput64k</td>
+<td style="text-align:right">786563072</td>
+<td>792277610/792738166</td>
+<td>792277610/792738166</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td>throughput1m</td>
+<td style="text-align:right">1193279488</td>
+<td>1277213530/1277261254</td>
+<td>1277213530/1277261254</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>connections</td>
+<td style="text-align:right">179648</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>throughput64k</td>
+<td style="text-align:right">688652288</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td>throughput1m</td>
+<td style="text-align:right">846200832</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>connections</td>
+<td style="text-align:right">210944</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>throughput64k</td>
+<td style="text-align:right">1533673472</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td>throughput1m</td>
+<td style="text-align:right">1785724928</td>
+<td>None/None</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>420700/577180</td>
+<td>420700/577180</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>connections</td>
+<td style="text-align:right">200640</td>
+<td>683430/1931160</td>
+<td>683430/1931160</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>throughput64k</td>
+<td style="text-align:right">856817664</td>
+<td>862574010/863075302</td>
+<td>862574010/863075302</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td>throughput1m</td>
+<td style="text-align:right">1034944512</td>
+<td>1118872665/1118914651</td>
+<td>1118872665/1118914651</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>rtt64</td>
+<td style="text-align:right">256000</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>connections</td>
+<td style="text-align:right">174784</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>throughput64k</td>
+<td style="text-align:right">776339456</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td>throughput1m</td>
+<td style="text-align:right">862978048</td>
+<td>0/0</td>
+<td>None/None</td>
+</tr>
+</tbody>
+</table>
+<h2 id="active-proof">Active proof</h2>
+<ul>
+<li>mysql round 1 FF: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/mysql/round-000/ff/proof/mysql-ff-proof.json</code>; command <code>Fast forward</code>; cli_port <code>59202</code>; runtime fast_forward <code>1</code>; status <code>22</code>.</li>
+<li>mysql round 1 native: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/mysql/round-000/native/proof/mysql-native-proof.json</code>; held cli_port <code>50932</code>; SQL processlist matches <code>0</code>; plugin active <code>1</code>; HGM ConnUsed <code>1</code>.</li>
+<li>mysql round 2 FF: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/mysql/round-001/ff/proof/mysql-ff-proof.json</code>; command <code>Fast forward</code>; cli_port <code>47716</code>; runtime fast_forward <code>1</code>; status <code>22</code>.</li>
+<li>mysql round 2 native: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/mysql/round-001/native/proof/mysql-native-proof.json</code>; held cli_port <code>51818</code>; SQL processlist matches <code>0</code>; plugin active <code>1</code>; HGM ConnUsed <code>1</code>.</li>
+<li>mysql round 3 FF: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/mysql/round-002/ff/proof/mysql-ff-proof.json</code>; command <code>Fast forward</code>; cli_port <code>50340</code>; runtime fast_forward <code>1</code>; status <code>22</code>.</li>
+<li>mysql round 3 native: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/mysql/round-002/native/proof/mysql-native-proof.json</code>; held cli_port <code>45664</code>; SQL processlist matches <code>0</code>; plugin active <code>1</code>; HGM ConnUsed <code>1</code>.</li>
+<li>pgsql round 1 FF: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/pgsql/round-000/ff/proof/pgsql-ff-proof.json</code>; command <code>Fast forward</code>; cli_port <code>52972</code>; runtime fast_forward <code>1</code>; status <code>22</code>.</li>
+<li>pgsql round 1 native: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/pgsql/round-000/native/proof/pgsql-native-proof.json</code>; held cli_port <code>57424</code>; SQL processlist matches <code>0</code>; plugin active <code>1</code>; HGM ConnUsed <code>1</code>.</li>
+<li>pgsql round 2 FF: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/pgsql/round-001/ff/proof/pgsql-ff-proof.json</code>; command <code>Fast forward</code>; cli_port <code>60930</code>; runtime fast_forward <code>1</code>; status <code>22</code>.</li>
+<li>pgsql round 2 native: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/pgsql/round-001/native/proof/pgsql-native-proof.json</code>; held cli_port <code>38206</code>; SQL processlist matches <code>0</code>; plugin active <code>1</code>; HGM ConnUsed <code>1</code>.</li>
+<li>pgsql round 3 FF: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/pgsql/round-002/ff/proof/pgsql-ff-proof.json</code>; command <code>Fast forward</code>; cli_port <code>37060</code>; runtime fast_forward <code>1</code>; status <code>22</code>.</li>
+<li>pgsql round 3 native: <code>/tmp/tcp-ff-benchmark/measure-20261111-200910-3493133/pgsql/round-002/native/proof/pgsql-native-proof.json</code>; held cli_port <code>58380</code>; SQL processlist matches <code>0</code>; plugin active <code>1</code>; HGM ConnUsed <code>1</code>.</li>
+</ul>
+<h2 id="resource-summary">Resource summary</h2>
+<table>
+<thead>
+<tr>
+<th>Proto</th>
+<th style="text-align:right">Round</th>
+<th>Path</th>
+<th style="text-align:right">Proxy CPU%</th>
+<th style="text-align:right">Proxy RSS KB</th>
+<th>Proxy fd/thread</th>
+<th style="text-align:right">DB CPU%</th>
+<th style="text-align:right">DB RSS KB</th>
+<th style="text-align:right">Client CPU%</th>
+<th style="text-align:right">Client RSS KB</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td style="text-align:right"></td>
+<td style="text-align:right">-1</td>
+<td>-1/-1</td>
+<td style="text-align:right">306.0</td>
+<td style="text-align:right">415140</td>
+<td style="text-align:right">106.0</td>
+<td style="text-align:right">22436</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td style="text-align:right">98.7</td>
+<td style="text-align:right">37364</td>
+<td>29/11</td>
+<td style="text-align:right">216.1</td>
+<td style="text-align:right">424612</td>
+<td style="text-align:right">88.7</td>
+<td style="text-align:right">23092</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td style="text-align:right">98.2</td>
+<td style="text-align:right">38980</td>
+<td>29/11</td>
+<td style="text-align:right">162.5</td>
+<td style="text-align:right">424612</td>
+<td style="text-align:right">73.7</td>
+<td style="text-align:right">20532</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td style="text-align:right"></td>
+<td style="text-align:right">-1</td>
+<td>-1/-1</td>
+<td style="text-align:right">297.6</td>
+<td style="text-align:right">429732</td>
+<td style="text-align:right">121.0</td>
+<td style="text-align:right">25344</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td style="text-align:right">99.0</td>
+<td style="text-align:right">37008</td>
+<td>29/11</td>
+<td style="text-align:right">206.7</td>
+<td style="text-align:right">424612</td>
+<td style="text-align:right">98.3</td>
+<td style="text-align:right">22164</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td style="text-align:right">95.6</td>
+<td style="text-align:right">41084</td>
+<td>29/11</td>
+<td style="text-align:right">140.9</td>
+<td style="text-align:right">424612</td>
+<td style="text-align:right">69.8</td>
+<td style="text-align:right">19924</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td style="text-align:right"></td>
+<td style="text-align:right">-1</td>
+<td>-1/-1</td>
+<td style="text-align:right">303.5</td>
+<td style="text-align:right">435108</td>
+<td style="text-align:right">111.3</td>
+<td style="text-align:right">23484</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td style="text-align:right">98.6</td>
+<td style="text-align:right">37080</td>
+<td>29/11</td>
+<td style="text-align:right">207.2</td>
+<td style="text-align:right">435364</td>
+<td style="text-align:right">82.7</td>
+<td style="text-align:right">21260</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td style="text-align:right">98.5</td>
+<td style="text-align:right">40496</td>
+<td>29/11</td>
+<td style="text-align:right">162.4</td>
+<td style="text-align:right">429732</td>
+<td style="text-align:right">73.5</td>
+<td style="text-align:right">20580</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>direct</td>
+<td style="text-align:right"></td>
+<td style="text-align:right">-1</td>
+<td>-1/-1</td>
+<td style="text-align:right">0.0</td>
+<td style="text-align:right">37120</td>
+<td style="text-align:right">98.8</td>
+<td style="text-align:right">29572</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>native</td>
+<td style="text-align:right">94.2</td>
+<td style="text-align:right">35412</td>
+<td>33/12</td>
+<td style="text-align:right">0.0</td>
+<td style="text-align:right">37120</td>
+<td style="text-align:right">65.7</td>
+<td style="text-align:right">29836</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">1</td>
+<td>ff</td>
+<td style="text-align:right">103.8</td>
+<td style="text-align:right">41840</td>
+<td>27/11</td>
+<td style="text-align:right">0.0</td>
+<td style="text-align:right">37120</td>
+<td style="text-align:right">40.0</td>
+<td style="text-align:right">29560</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>direct</td>
+<td style="text-align:right"></td>
+<td style="text-align:right">-1</td>
+<td>-1/-1</td>
+<td style="text-align:right">0.2</td>
+<td style="text-align:right">37120</td>
+<td style="text-align:right">100.8</td>
+<td style="text-align:right">29828</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>native</td>
+<td style="text-align:right">90.2</td>
+<td style="text-align:right">36604</td>
+<td>31/11</td>
+<td style="text-align:right">0.0</td>
+<td style="text-align:right">37120</td>
+<td style="text-align:right">63.1</td>
+<td style="text-align:right">29572</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">2</td>
+<td>ff</td>
+<td style="text-align:right">106.9</td>
+<td style="text-align:right">42804</td>
+<td>27/11</td>
+<td style="text-align:right">0.0</td>
+<td style="text-align:right">37120</td>
+<td style="text-align:right">43.2</td>
+<td style="text-align:right">29824</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>direct</td>
+<td style="text-align:right"></td>
+<td style="text-align:right">-1</td>
+<td>-1/-1</td>
+<td style="text-align:right">0.2</td>
+<td style="text-align:right">37120</td>
+<td style="text-align:right">97.0</td>
+<td style="text-align:right">29572</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>native</td>
+<td style="text-align:right">91.2</td>
+<td style="text-align:right">36032</td>
+<td>33/11</td>
+<td style="text-align:right">0.0</td>
+<td style="text-align:right">37120</td>
+<td style="text-align:right">61.1</td>
+<td style="text-align:right">30084</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td style="text-align:right">3</td>
+<td>ff</td>
+<td style="text-align:right">87.7</td>
+<td style="text-align:right">42152</td>
+<td>27/11</td>
+<td style="text-align:right">0.2</td>
+<td style="text-align:right">37120</td>
+<td style="text-align:right">40.6</td>
+<td style="text-align:right">29824</td>
+</tr>
+</tbody>
+</table>
+<h2 id="resource-scopes-and-limitations">Resource scopes and limitations</h2>
+<ul>
+<li>Proxy resources cover the whole ProxySQL daemon PID; database resources cover the whole mysqld PID or PostgreSQL postmaster PID only, so PostgreSQL forked backend CPU is not included.</li>
+<li>Client CPU is a bounded live-sampled estimate (50 ms) and can miss startup/exit ticks. RSS/fd/thread endpoint maxima are named explicitly.</li>
+<li>Byte equality to application payload is not required or used for HGM/TCP wire counters.</li>
+<li>No winner or production-capacity claim is made from these workloads.</li>
+</ul>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>

@@ -69,11 +69,30 @@ public:
 	bool start_all(std::string &err);
 	bool runtime_ready_all(ProxySQL_PluginRuntimeContext& context, std::string& err);
 	bool stop_all();
+	// Borrowed through stop callbacks and dlclose, including std::exit after
+	// the global registry owner has already been destroyed.
+	prometheus::Registry* prometheus_registry() const noexcept {
+		return prometheus_registry_.get();
+	}
 	/** @brief Require exactly one managed configuration provider before startup. */
 	bool check_managed_configuration_provider(std::string& error) const;
 	/** @brief Borrow the initialized provider service until plugin shutdown. */
 	const ProxySQL_ManagedConfigurationServiceV1* managed_configuration_service(std::string& error) const;
 	const std::vector<ProxySQL_PluginTableDef>& tables(ProxySQL_PluginDBKind kind) const;
+	/**
+	 * @brief Fail-closed preflight of every registered persistent plugin
+	 *        table in config_db before any core schema mutation.
+	 *
+	 * A missing table is accepted (it will be created during schema
+	 * materialization). An existing table is accepted only when its stored
+	 * SQL matches the registered definition after the same canonicalization
+	 * used by SQLite3DB::check_table_structure. Any other existing object
+	 * with the registered name (view/index/trigger), a different definition,
+	 * or an error while inspecting sqlite_master is fatal. The check is
+	 * read-only so no plugin table is recreated before every definition has
+	 * been validated.
+	 */
+	bool preflight_config_schemas(SQLite3DB* db, std::string& err) const;
 	// Name and ABI version of every loaded plugin, for the Cluster plugin-set guard.
 	std::vector<ProxySQL_ClusterPluginIdentity> plugin_identities() const;
 	bool dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const;
@@ -170,6 +189,10 @@ public:
 	size_t size() const;
 
 private:
+	// Keep the registry alive until the destructor body has stopped plugins
+	// and released every DSO. Declared first so this lease is released last.
+	std::shared_ptr<prometheus::Registry> prometheus_registry_;
+
 	struct plugin_handle_t {
 		void *handle{nullptr};
 		const ProxySQL_PluginDescriptor *descriptor{nullptr};

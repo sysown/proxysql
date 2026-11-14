@@ -805,6 +805,22 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	 */
 	configdb->open((char *)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 
+#ifdef PROXYSQL40
+	// Validate every registered persistent plugin config_db schema BEFORE any
+	// PRAGMA, core upgrade, seeding, or table materialization. The ordinary
+	// check_and_build_table() path drops mismatching tables; doing that here
+	// would destroy plugin rows before the owning plugin can reject or
+	// migrate them. Missing tables are fine (they are created later); any
+	// existing mismatch is a fatal, actionable startup error.
+	if (ProxySQL_PluginManager* plugin_manager = proxysql_get_plugin_manager()) {
+		std::string preflight_error;
+		if (!plugin_manager->preflight_config_schemas(configdb, preflight_error)) {
+			proxy_error("%s\n", preflight_error.c_str());
+			return false;
+		}
+	}
+#endif /* PROXYSQL40 */
+
 	/**
 	 * @brief Enable SQLite extension loading for config database
 	 *

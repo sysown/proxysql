@@ -1,0 +1,27 @@
+{
+  "commands": [
+    "make PROXYSQL40=1 clean",
+    "make PROXYSQL40=1 -j8 NPROCS=8"
+  ],
+  "cwd": "/mnt/data/rene/proxysql7/proxysql",
+  "version": "ProxySQL version 4.0.13-144-ge30a016, codename Truls",
+  "source_head": "e30a016be613a9e9758f03df78f462b99efd2974",
+  "files": {
+    "/mnt/data/rene/proxysql7/proxysql/src/proxysql": {
+      "sha256": "4692b1f0924a218df0c3721e0febf41176a118418cbdcf1046a5022a9999e037",
+      "bytes": 201873088
+    },
+    "/mnt/data/rene/proxysql7/proxysql/plugins/tcp_proxy/proxysql_tcp_proxy.so": {
+      "sha256": "bd6886b009b0c18a2ee6d6f06774435429239b9b53d73795188e96d73efcff30",
+      "bytes": 8851568
+    },
+    "/tmp/tcp-proper-v4-rebuild/clean.log": {
+      "sha256": "14773581d60e20e45d14017fc0e5f9eb4739086bca5bb7457e75c6ad16c40999",
+      "bytes": 3574
+    },
+    "/tmp/tcp-proper-v4-rebuild/build.log": {
+      "sha256": "bb83e6876c3ac0aeb0226bbf598800c023102a2aaa3383474ee8852a94998481",
+      "bytes": 2470705
+    }
+  }
+}

@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Historical five-mode daemon benchmark — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-11-tcp-hostgroup-mapping-daemon.md">Markdown source</a></nav><blockquote><strong>Historical snapshot.</strong> This report describes an earlier implementation. See the <a href="../tcp-proxy-plugin.html">current four-table configuration guide</a> for supported behavior.</blockquote><h1 id="mapped-tcp-proxy-full-daemon-benchmark">Mapped TCP proxy full-daemon benchmark</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#provenance-and-scope">Provenance and scope</a></li><li class="level-2"><a href="#workload">Workload</a></li><li class="level-2"><a href="#results">Results</a></li><li class="level-2"><a href="#mode-details">Mode details</a></li><li class="level-3"><a href="#direct-completed">direct: completed</a></li><li class="level-3"><a href="#static-completed">static: completed</a></li><li class="level-3"><a href="#mysql-completed">mysql: completed</a></li><li class="level-3"><a href="#pgsql-completed">pgsql: completed</a></li><li class="level-3"><a href="#haproxy-completed">haproxy: completed</a></li><li class="level-2"><a href="#caveats">Caveats</a></li><li class="level-2"><a href="#final-matched-artifact-provenance">Final matched-artifact provenance</a></li></ul></details>
+<p>Date: 2026-11-11. Status: local loopback measurement; not a deployment claim.</p>
+<p>Environment: <code>dev128</code>, 6.8.0-85-generic, x86_64, 32 CPUs, <code>AMD Ryzen 9 5950X 16-Core Processor</code>. Load average at start: [1.12353515625, 1.5009765625, 1.5498046875]. Python: <code>3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]</code>.</p>
+<h2 id="provenance-and-scope">Provenance and scope</h2>
+<ul>
+<li>ProxySQL host: <code>/tmp/native-tcp-hgm/core-final-v2-daemon</code> sha256 <code>0954cf2534ccb1217dbe4a9ade47f06b2a2a3a3db6f9b638c9a04735b2564451</code>.</li>
+<li>Plugin source: <code>/tmp/native-tcp-hgm/engine-binaries-candidate-v3/proxysql_tcp_proxy.release.so</code> sha256 <code>55ca8e586481a459272287ed2335448455217236b846f86ee0dc56b890b80e75</code>; immutable run snapshot <code>/tmp/native-tcp-hgm/final-validation/benchmark-raw/proxysql_tcp_proxy.benchmark.snapshot.so</code> sha256 <code>55ca8e586481a459272287ed2335448455217236b846f86ee0dc56b890b80e75</code>.</li>
+<li>ProxySQL modes use the whole daemon process PID for CPU/RSS/fd/thread values: core, Admin, SQLite, metrics, plugin and mapped HGM accounting are included. These are not <code>engine_harness</code> or engine-only measurements.</li>
+<li>Monitors and SQL worker listeners were disabled for static, mysql and pgsql modes. TCP forwarding workers and the Admin interface remained active.</li>
+<li>Approved source provenance: 17 Core snapshot files, 12 Engine/plugin snapshot files, and 2 unchanged Engine units; every file digest is verified and included in the raw JSON. This includes <code>backend_provider.cpp</code> (<code>1299a4959c9b108a327ce3b3f8aeacad79240c551083d1b712b98a96ffc9ca8b</code>) and <code>ProxySQL_PluginRawBackend.cpp</code> (<code>2a2b72fa964a2f3f8901eb386e55b77e92595b76b451a52b687302b038d1a066</code>).</li>
+</ul>
+<h2 id="workload">Workload</h2>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mode order</td>
+<td>direct, static, mysql, pgsql, haproxy</td>
+</tr>
+<tr>
+<td>Backend</td>
+<td>task-owned selector echo process PID 3164042 127.0.0.1:38069</td>
+</tr>
+<tr>
+<td>Client concurrency</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Daemon/HAProxy worker threads</td>
+<td>2</td>
+</tr>
+<tr>
+<td>RTT payload / warmup / samples per connection</td>
+<td>64 B / 20 / 300</td>
+</tr>
+<tr>
+<td>Connections/s payload</td>
+<td>64 B</td>
+</tr>
+<tr>
+<td>Throughput payload / duration</td>
+<td>65536 B / 2.0 s</td>
+</tr>
+<tr>
+<td>Idle connections</td>
+<td>8</td>
+</tr>
+</tbody>
+</table>
+<p>Each connection/s transaction requires connect + send + exact echo receive + close. Throughput verifies every echoed chunk byte-for-byte; MiB/s is application payload.</p>
+<h2 id="results">Results</h2>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Status</th>
+<th style="text-align:right">RTT p50 / p95 / p99 ms</th>
+<th style="text-align:right">Connections/s</th>
+<th style="text-align:right">MiB/s c→s</th>
+<th style="text-align:right">MiB/s s→c</th>
+<th style="text-align:right">Daemon CPU %</th>
+<th style="text-align:right">Daemon RSS KiB</th>
+<th style="text-align:right">Daemon fds</th>
+<th style="text-align:right">Daemon threads</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>direct</td>
+<td>completed</td>
+<td style="text-align:right">0.092 / 0.184 / 0.244</td>
+<td style="text-align:right">17641.3</td>
+<td style="text-align:right">1513.26</td>
+<td style="text-align:right">1513.26</td>
+<td style="text-align:right">null</td>
+<td style="text-align:right">null</td>
+<td style="text-align:right">null</td>
+<td style="text-align:right">null</td>
+</tr>
+<tr>
+<td>static</td>
+<td>completed</td>
+<td style="text-align:right">0.082 / 0.109 / 0.129</td>
+<td style="text-align:right">14803.8</td>
+<td style="text-align:right">1371.72</td>
+<td style="text-align:right">1371.72</td>
+<td style="text-align:right">138.6</td>
+<td style="text-align:right">35740</td>
+<td style="text-align:right">23</td>
+<td style="text-align:right">10</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td>completed</td>
+<td style="text-align:right">0.085 / 0.105 / 0.117</td>
+<td style="text-align:right">13629.6</td>
+<td style="text-align:right">1393.15</td>
+<td style="text-align:right">1393.15</td>
+<td style="text-align:right">138.3</td>
+<td style="text-align:right">35296</td>
+<td style="text-align:right">23</td>
+<td style="text-align:right">11</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td>completed</td>
+<td style="text-align:right">0.087 / 0.110 / 0.122</td>
+<td style="text-align:right">14569.8</td>
+<td style="text-align:right">1259.59</td>
+<td style="text-align:right">1259.59</td>
+<td style="text-align:right">133.6</td>
+<td style="text-align:right">34516</td>
+<td style="text-align:right">23</td>
+<td style="text-align:right">11</td>
+</tr>
+<tr>
+<td>haproxy</td>
+<td>completed</td>
+<td style="text-align:right">0.064 / 0.137 / 0.151</td>
+<td style="text-align:right">15517.6</td>
+<td style="text-align:right">1124.15</td>
+<td style="text-align:right">1124.15</td>
+<td style="text-align:right">130.0</td>
+<td style="text-align:right">14364</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="mode-details">Mode details</h2>
+<h3 id="direct-completed">direct: completed</h3>
+<ul>
+<li>Target: 127.0.0.1:38069; precheck 1 MiB exact echo sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200; connections: 35287; throughput transactions: 48436.</li>
+<li>Idle connections: 8; quiescent interval 1.000069 s; proxy idle CPU None.</li>
+<li>Backend reconciliation: c→s 3177690568 (expected 3177690568), s→c 3177690568 (expected 3177690568), connections 35304/35304.</li>
+</ul>
+<h3 id="static-completed">static: completed</h3>
+<ul>
+<li>Target: 127.0.0.1:36417; precheck 1 MiB exact echo sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200; connections: 29613; throughput transactions: 43904.</li>
+<li>Idle connections: 8; quiescent interval 1.000091 s; proxy idle CPU 0.0.</li>
+<li>Whole daemon PID during measurement <code>3164104</code>; config <code>/tmp/native-tcp-hgm/final-validation/benchmark-raw/bench-static/proxysql.cfg</code>, log <code>/tmp/native-tcp-hgm/final-validation/benchmark-raw/bench-static/daemon.log</code>, post-run returncode <code>0</code>.</li>
+<li>Backend reconciliation: c→s 2880318280 (expected 2880318280), s→c 2880318280 (expected 2880318280), connections 29630/29630.</li>
+<li>Static mode used tcp_hostgroups/tcp_servers/tcp_listeners (no mapping row); SQL recorded in raw JSON.</li>
+</ul>
+<h3 id="mysql-completed">mysql: completed</h3>
+<ul>
+<li>Target: 127.0.0.1:37879; precheck 1 MiB exact echo sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200; connections: 27264; throughput transactions: 44590.</li>
+<li>Idle connections: 8; quiescent interval 1.000078 s; proxy idle CPU 0.0.</li>
+<li>Whole daemon PID during measurement <code>3164239</code>; config <code>/tmp/native-tcp-hgm/final-validation/benchmark-raw/bench-mysql/proxysql.cfg</code>, log <code>/tmp/native-tcp-hgm/final-validation/benchmark-raw/bench-mysql/daemon.log</code>, post-run returncode <code>0</code>.</li>
+<li>Backend reconciliation: c→s 2925125640 (expected 2925125640), s→c 2925125640 (expected 2925125640), connections 27281/27281.</li>
+<li>Mapped HGM reconciliation: byte deltas 2925125640/2925125640 (expected 2925125640/2925125640); Used/Free after drain 0/0.</li>
+<li>Mapped TCP hostgroup 20 -&gt; MYSQL hostgroup 10 (no tcp_servers rows). SQL recorded in raw JSON.</li>
+</ul>
+<h3 id="pgsql-completed">pgsql: completed</h3>
+<ul>
+<li>Target: 127.0.0.1:47935; precheck 1 MiB exact echo sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200; connections: 29143; throughput transactions: 40317.</li>
+<li>Idle connections: 8; quiescent interval 1.000075 s; proxy idle CPU 0.0.</li>
+<li>Whole daemon PID during measurement <code>3164400</code>; config <code>/tmp/native-tcp-hgm/final-validation/benchmark-raw/bench-pgsql/proxysql.cfg</code>, log <code>/tmp/native-tcp-hgm/final-validation/benchmark-raw/bench-pgsql/daemon.log</code>, post-run returncode <code>0</code>.</li>
+<li>Backend reconciliation: c→s 2645210568 (expected 2645210568), s→c 2645210568 (expected 2645210568), connections 29160/29160.</li>
+<li>Mapped HGM reconciliation: byte deltas 2645210568/2645210568 (expected 2645210568/2645210568); Used/Free after drain 0/0.</li>
+<li>Mapped TCP hostgroup 20 -&gt; PGSQL hostgroup 10 (no tcp_servers rows). SQL recorded in raw JSON.</li>
+</ul>
+<h3 id="haproxy-completed">haproxy: completed</h3>
+<ul>
+<li>Target: 127.0.0.1:34635; precheck 1 MiB exact echo sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200; connections: 31040; throughput transactions: 35982.</li>
+<li>Idle connections: 8; quiescent interval 1.000079 s; proxy idle CPU 0.0.</li>
+<li>Backend reconciliation: c→s 2361233416 (expected 2361233416), s→c 2361233416 (expected 2361233416), connections 31057/31057.</li>
+<li>HAProxy HAProxy version 3.5-dev11 2026/11/04 - https://haproxy.org/ nbthread=2.</li>
+</ul>
+<h2 id="caveats">Caveats</h2>
+<ul>
+<li>Local loopback short runs only; Python client/backend scheduling and GIL limits apply.</li>
+<li>Modes run sequentially and each ProxySQL mode starts a fresh task-owned daemon.</li>
+<li><code>static</code>, <code>mysql</code> and <code>pgsql</code> CPU/RSS/fd/thread figures describe the whole daemon process, not the standalone Engine harness and not a deployment footprint.</li>
+<li>Missing optional HAProxy is an explicit skipped mode and is never fabricated.</li>
+<li>A failed exact-byte precheck or benchmark phase marks that mode <code>error</code>; the process exits nonzero if any requested mode errored.</li>
+</ul>
+<p>Raw JSON: <a href="2026-11-11-tcp-hostgroup-mapping-daemon.json">2026-11-11-tcp-hostgroup-mapping-daemon.json</a>.</p>
+<h2 id="final-matched-artifact-provenance">Final matched-artifact provenance</h2>
+<ul>
+<li>
+<p>Benchmark JSON SHA256: <code>918fe1c7ed2dd3a90f6e15d5e2b5e085f5cc36476276ff258819dab806427aa4</code>.</p>
+</li>
+<li>
+<p>Approval-ready manifest <code>/tmp/native-tcp-hgm/final-validation-ready.json</code> SHA256 <code>d7cb4e784f851668888fb5bb3a64715427fb84b630224a7937bb02fd3e53e2af</code>; approved status: FINAL CORE V2 / ENGINE V3 SOURCE APPROVED FOR VALIDATION; integration signoff separate.</p>
+</li>
+<li>
+<p>Core source manifest <code>/tmp/native-tcp-hgm/core-final-v2-manifest.json</code> SHA256 <code>e82dddfca5c8521cfad3d3cb575b8ed4bef66acfdfd415dc1307a29fe5727125</code>; authoritative snapshot <code>/tmp/native-tcp-hgm/core-source-final-v2</code>.</p>
+</li>
+<li>
+<p>Engine/plugin source manifest <code>/tmp/native-tcp-hgm/engine-source-candidate-v3/manifest.json</code> SHA256 <code>a67bee4ccd3dc329faa8ba545b3538f9a921bd653f5ca2b119dbe195cc896ac8</code>; worktree <code>/home/rene/.codex/worktrees/8616/proxysql</code>; service_version=2, outer_plugin_abi=18.</p>
+</li>
+<li>
+<p>Approved daemon <code>/tmp/native-tcp-hgm/core-final-v2-daemon</code> SHA256 <code>0954cf2534ccb1217dbe4a9ade47f06b2a2a3a3db6f9b638c9a04735b2564451</code>.</p>
+</li>
+<li>
+<p>Approved release plugin <code>/tmp/native-tcp-hgm/engine-binaries-candidate-v3/proxysql_tcp_proxy.release.so</code> SHA256 <code>55ca8e586481a459272287ed2335448455217236b846f86ee0dc56b890b80e75</code>; immutable run snapshot SHA256 <code>55ca8e586481a459272287ed2335448455217236b846f86ee0dc56b890b80e75</code>.</p>
+</li>
+<li>
+<p>Daemon all-12 result <code>/tmp/native-tcp-hgm/final-validation/daemon-all12.json</code> SHA256 <code>fe0dad8a2e3c648fd781e43d05e0be497f586dd15d216a65e1babd8fe6935542</code>: {'BLOCKED': 0, 'FAIL': 0, 'PASS': 12} exit 0.</p>
+</li>
+<li>
+<p>Static standalone 44 result <code>/tmp/native-tcp-hgm/final-validation/static44-final-header/summary.json</code> SHA256 <code>001dd20ecf1791bdc8d824f6455af0779543b0830ed30e2bb2f7b80e1b34ba41</code>: {'PASS': 44, 'FAIL': 0, 'BLOCKED': 0, 'INCONCLUSIVE': 0}, harness SHA256 <code>043ba866bd990cd2aec0d3a58c4623948ad5a8dab6b54c7f743afe4c9614083f</code>.</p>
+</li>
+<li>
+<p>Source digests above are verified against the immutable approved snapshots, including the raw-backend adapter. Full Core/Engine manifests, tool hashes, phase values and raw records are embedded in the JSON.</p>
+</li>
+<li>
+<p>Static harness reports the actual public-header SHA256 <code>bf08ead8131dc597dbfae8e9672a2c323fc24bccfe5971dd5113d13ebaa72c76</code>, embedded from that file at compile time and verified against the approved source digest.</p>
+</li>
+<li>
+<p>Metadata enrichment preserved every measured record: canonical measurement SHA256 <code>b7ca52623ce805ec72db25456ec32300878c1c2efaaa099b5044b89e2ab48822</code>.</p>
+</li>
+</ul>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>

@@ -1,5 +1,6 @@
 #include "ProxySQL_Plugin.h"
 #include "plugin_services_abi_layout.h"
+#include "ProxySQL_PluginListenerReservations.h"
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "sqlite3db.h"
@@ -273,16 +274,45 @@ void test_abi13_fixture_and_invalid_registration() {
 	ok(abi13_fixture != nullptr && abi13_tail_called != nullptr &&
 		mgr.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err) && mgr.init_all(err) && mgr.start_all(err) &&
 		abi13_tail_called(),
-		"a frozen ABI-13 DSO calls its ABI-13 tail through ABI-16 loader/init lifecycle");
+		"a frozen ABI-13 DSO calls its ABI-13 tail through ABI-17 loader/init lifecycle");
 	ok(mgr.stop_all(), "ABI-13 fixture stops cleanly");
 	dlclose(abi13_fixture);
+	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16", "1", 1);
+	ProxySQL_PluginManager abi16_manager;
+	const bool abi16_loaded = abi16_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err);
+	ok(abi16_loaded && abi16_manager.init_all(err) && abi16_manager.start_all(err),
+		"an ABI-16 fixture remains compatible with the ABI-17 core");
+	ok(abi16_loaded && !abi16_manager.check_managed_configuration_provider(err) &&
+		err.find("exactly one ABI15 management provider") != std::string::npos,
+		"an ABI-16 descriptor with a null managed accessor is not read past its tail");
+	ok(abi16_manager.stop_all(), "ABI-16 fixture stops cleanly");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI16");
 	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI17", "1", 1);
+	void *abi17_fixture = open_retained_module(PROXYSQL_FAKE_PLUGIN_ABI13_PATH);
+	using abi17_tail_called_cb = bool (*)();
+	auto abi17_tail_called = abi17_fixture == nullptr ? nullptr :
+		reinterpret_cast<abi17_tail_called_cb>(dlsym(
+			abi17_fixture, "proxysql_fake_plugin_abi17_tail_called"));
+	ProxySQL_PluginManager abi17_manager;
+	ok(abi17_fixture != nullptr && abi17_tail_called != nullptr &&
+		abi17_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err) &&
+		abi17_manager.init_all(err) && abi17_manager.start_all(err) &&
+		abi17_tail_called(),
+		"a frozen ABI-17 DSO loads, initializes, starts and calls its ABI-17 validator tail");
+	ok(abi17_tail_called != nullptr && abi17_tail_called() &&
+		!abi17_manager.check_managed_configuration_provider(err) &&
+		err.find("exactly one ABI15 management provider") != std::string::npos,
+		"the full-sized ABI-17 fixture exposes a null managed accessor without an out-of-bounds read");
+	ok(abi17_manager.stop_all(), "ABI-17 fixture stops cleanly");
+	dlclose(abi17_fixture);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI17");
+	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI19", "1", 1);
 	ProxySQL_PluginManager newer_abi_manager;
 	ok(!newer_abi_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err),
-		"ABI-17 descriptor is rejected by the ABI-16 core");
+		"ABI-19 descriptor is rejected by the ABI-18 core");
 	ok(err.find("ABI") != std::string::npos && newer_abi_manager.size() == 0,
-		"ABI-17 rejection does not retain a plugin handle");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI17");
+		"ABI-19 rejection does not retain a plugin handle");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI19");
 	for (const char *version : {"10", "11", "12", "13"}) {
 		setenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI", version, 1);
 		ProxySQL_PluginManager legacy_aws_manager;
@@ -640,10 +670,69 @@ void test_controller_callback_lease_barrier() {
 		"controller DSO unloads after its final callback lease drains");
 }
 
+void test_listener_reservation_service_callbacks() {
+	make_log_path();
+	clear_log();
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_CHECK_LISTENER_RESERVATIONS", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_CHECK_LISTENER_RESERVATIONS_INIT", "1", 1);
+
+	// Seed the owned snapshot exactly as startup does, then prove the manager
+	// forwards init/start to the live validator and Phase B to the rejecting
+	// stub.  The plugin itself owns no product logic here.
+	ProxySQL_PluginListenerReservations::replace_reservations({{"MySQL", "127.0.0.1:6033"}});
+	std::unique_ptr<ProxySQL_PluginManager> manager;
+	std::string err;
+	const std::vector<std::string> plugins {PROXYSQL_FAKE_PLUGIN_PATH};
+	const bool loaded = proxysql_load_configured_plugins(manager, plugins, err);
+	ok(loaded, "plugin with listener-service probes loads through Phase B");
+	ok(read_log().find(":phase_b_listener_unavailable\n") != std::string::npos,
+		"Phase B listener validation rejects with an unavailable error");
+	ok(loaded && proxysql_init_configured_plugins(manager.get(), err) &&
+		proxysql_start_configured_plugins(manager.get(), err),
+		"plugin with listener-service probes initializes and starts");
+	ok(read_log().find("init_listener_conflict_rejected_and_distinct_accepted") !=
+		std::string::npos,
+		"live callback rejects a reserved collision and accepts a distinct port");
+	if (manager) (void)proxysql_stop_configured_plugins(manager, err);
+
+	ProxySQL_PluginListenerReservations::clear_reservations();
+	unsetenv("PROXYSQL_FAKE_PLUGIN_CHECK_LISTENER_RESERVATIONS_INIT");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_CHECK_LISTENER_RESERVATIONS");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+	cleanup_log();
+}
+
+void test_raw_backend_service_availability() {
+	make_log_path();
+	clear_log();
+	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_CHECK_RAW_BACKEND", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_CHECK_RAW_BACKEND_INIT", "1", 1);
+
+	std::unique_ptr<ProxySQL_PluginManager> manager;
+	std::string err;
+	const std::vector<std::string> plugins {PROXYSQL_FAKE_PLUGIN_PATH};
+	const bool loaded = proxysql_load_configured_plugins(manager, plugins, err);
+	ok(loaded && read_log().find(":phase_b_raw_backend_null\n") != std::string::npos,
+		"Phase B can call the raw-backend getter but it returns no service");
+	ok(loaded && proxysql_init_configured_plugins(manager.get(), err) &&
+		proxysql_start_configured_plugins(manager.get(), err),
+		"a plugin probing the raw-backend getter initializes and starts");
+	ok(read_log().find(":init_raw_backend_live\n") != std::string::npos,
+		"normal init receives the live version-2 raw-backend callback table");
+	if (manager) (void)proxysql_stop_configured_plugins(manager, err);
+
+	unsetenv("PROXYSQL_FAKE_PLUGIN_CHECK_RAW_BACKEND_INIT");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PHASE_B_CHECK_RAW_BACKEND");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+	cleanup_log();
+}
+
 } // namespace
 
 int main() {
-	plan(60);
+	plan(73);
 	test_abi13_fixture_and_invalid_registration();
 	test_service_phase_availability();
 	test_reserved_register_server_module();
@@ -654,5 +743,7 @@ int main() {
 	test_controller_self_uninstall_reentrancy();
 	test_controller_self_uninstall_concurrent_external_retirement();
 	test_controller_callback_lease_barrier();
+	test_listener_reservation_service_callbacks();
+	test_raw_backend_service_availability();
 	return exit_status();
 }

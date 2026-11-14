@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Historical standalone implementation — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-11-native-tcp-proxy.md">Markdown source</a></nav><blockquote><strong>Historical snapshot.</strong> This report describes an earlier implementation. See the <a href="../../tcp-proxy-plugin.html">current four-table configuration guide</a> for supported behavior.</blockquote><h1 id="native-tcp-proxy-implementation-plan">Native TCP Proxy Implementation Plan</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#global-constraints">Global Constraints</a></li><li class="level-2"><a href="#review-focus">Review Focus</a></li><li class="level-3"><a href="#task-1-core-independent-tcp-engine">Task 1: Core-independent TCP engine</a></li><li class="level-3"><a href="#task-2-generic-core-listener-reservation-service">Task 2: Generic core listener reservation service</a></li><li class="level-3"><a href="#task-3-admin-plugin-metrics-and-build-integration">Task 3: Admin plugin, metrics and build integration</a></li><li class="level-3"><a href="#task-4-independent-adversarial-testing-benchmarks-and-documentation">Task 4: Independent adversarial testing, benchmarks and documentation</a></li><li class="level-3"><a href="#task-5-final-integration-and-independent-review">Task 5: Final integration and independent review</a></li><li class="level-2"><a href="#final-integration-evidence">Final integration evidence</a></li></ul></details>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (<code>- [x]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Deliver a native opaque TCP plugin with transactional Admin configuration, safe hot changes, health monitoring, tests and measured benchmark evidence.</p>
+<p><strong>Architecture:</strong> A core-independent C++ engine owns the TCP data plane and immutable generations. A thin plugin translates Admin tables/commands and projects runtime/metrics. A generic additive chassis service validates candidate listeners against enabled core reservations.</p>
+<p><strong>Tech Stack:</strong> C++17-compatible standard/POSIX APIs, Linux epoll/eventfd, SQLite3DB and existing plugin/Prometheus services; Python3 loopback test/benchmark tooling.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-11-11-native-tcp-proxy-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Build only with <code>PROXYSQL40=1</code>; use the same C++ toolchain/build tier as core.</li>
+<li>Plugin name <code>tcp_proxy</code>; artifact <code>plugins/tcp_proxy/proxysql_tcp_proxy.so</code>; entry point <code>proxysql_plugin_descriptor_v1</code>.</li>
+<li>No one-thread-per-connection implementation. No SQL or DNS on connection workers. No application replay.</li>
+<li>Failed configuration preparation preserves active generation/listeners. Irreversible hard disconnect begins only after all fail-able preparation.</li>
+<li>OpenCode implementation workers use <code>opencode/deepseek-v4.1-flash</code>; root/subagents coordinate and independently review/verify. No commits, pushes, or production operations.</li>
+<li>Concurrent OpenCode workers use distinct managed worktrees. Integrate only reviewed scoped files back to the user's original checkout; do not change unrelated work.</li>
+<li>The user explicitly authorized implementation after the design; proceed through the plan without another approval pause.</li>
+</ul>
+<h2 id="review-focus">Review Focus</h2>
+<ul>
+<li>Reload during partial send/EOF must preserve buffered bytes and never act on stale/reused fds.</li>
+<li>Concurrent LOAD and SAVE must not deadlock Admin or publish an older slow candidate after a newer one.</li>
+<li>Capacity counts must include queued/pending/old-generation sessions and release every reservation on failure.</li>
+<li>Startup collision checking must account for enabled core listeners before they bind, and permit ports of disabled components.</li>
+<li>STOP/START must leave no plugin threads, fds or metric samples. Twelve core-owned empty families may remain across unload.</li>
+</ul>
+<hr />
+<h3 id="task-1-core-independent-tcp-engine">Task 1: Core-independent TCP engine</h3>
+<p><strong>Files:</strong> Create <code>plugins/tcp_proxy/include/tcp_proxy.h</code>, private engine headers as needed, <code>plugins/tcp_proxy/src/config.cpp</code>, <code>engine.cpp</code>, <code>health.cpp</code> (or similarly focused units), <code>plugins/tcp_proxy/tests/engine_unit.cpp</code>, and a standalone <code>plugins/tcp_proxy/tests/Makefile</code>.</p>
+<p><strong>Interfaces:</strong> Consumes the exact configuration/default/semantic contract in the spec. Produces <code>tcp_proxy::Config</code>, <code>Settings</code>, <code>Hostgroup</code>, <code>Server</code>, <code>Listener</code>, <code>Rule</code>, <code>Snapshot</code>, <code>validate_config</code>, <code>listener_interfaces</code>, and the PIMPL <code>Engine</code> public API specified there. Snapshot row field names must be documented and frozen in the header before Task 3 starts; notify coordinator when ready. Header includes no ProxySQL/SQLite/Prometheus types.</p>
+<ul>
+<li>[x] Write actual failing tests for config defaults/bounds/dangling references/CIDR and a real socket forward + client-half-close response. Run them and record failure.</li>
+<li>[x] Define the public API and implement pure validation and route selection; exact column names/defaults come from the spec. Reject embedded NULs and unsupported mapped IPv6 values explicitly.</li>
+<li>[x] Implement fixed-worker nonblocking forwarding, bounded buffers/queues/capacity, backend connection budget/retries, correct server-first and half-close behavior, and monotonic deadlines. Per-flow event tokens prevent stale epoll-event fd reuse.</li>
+<li>[x] Implement prepare/publish/reuse/remove listener activation, cross-generation stable state, busy rejection, atomic startup-setting rejection, acknowledged hard disconnect, and bounded/idempotent stop. Test failed bind leaves generation/listeners intact and old-generation sessions survive soft changes but close on hard changes.</li>
+<li>[x] Implement bounded nonblocking health loop, rise/fall hysteresis, primary/backup eligibility, shared weighted scheduling and leastconn reservations. Test health transitions and stale endpoint state protection.</li>
+<li>[x] Run standalone tests with normal compiler warnings and ASan/UBSan where supported. Assert loopback binary payloads larger than buffers, capacity under parallel clients, concurrent apply, idle/half-close deadline, restart, and fd/thread counts. Write exact commands and results to the worker report.</li>
+</ul>
+<h3 id="task-2-generic-core-listener-reservation-service">Task 2: Generic core listener reservation service</h3>
+<p><strong>Files:</strong> Create <code>include/ProxySQL_PluginListenerReservations.h</code>, <code>lib/ProxySQL_PluginListenerReservations.cpp</code>, <code>test/tap/tests/unit/plugin_listener_reservations_unit-t.cpp</code>; modify <code>include/ProxySQL_Plugin.h</code>, <code>lib/ProxySQL_PluginManager.cpp</code>, <code>src/main.cpp</code>, <code>test/tap/tests/unit/Makefile</code>, and incompatible ABI expectation tests only as needed. Inspect lib Makefile source discovery before adding explicit objects.</p>
+<p><strong>Interfaces:</strong> Produces ABI-17 service tail <code>bool (*validate_listener_interfaces)(const char* owner, const char* interfaces, std::string&amp; error)</code>; no earlier service/descriptor offsets change. Generic reservation helper accepts an owned vector of module-name/interface strings copied from existing startup modules. API names may be chosen by worker and recorded in report. Consumes existing <code>proxysql_listen_validator</code> overlap logic.</p>
+<ul>
+<li>[x] Add failing standalone TAP tests for exact and wildcard IPv4/IPv6 collisions, disabled/empty reservations, no conflicts on distinct ports, replacing reservation snapshots during reload, and borrowed-input lifetime independence. Run red.</li>
+<li>[x] Implement thread-safe owned reservation snapshot and pure candidate validation. Strictly reject malformed candidate strings rather than silently accepting validator parse failures. Core existing parser behavior outside this service remains unchanged.</li>
+<li>[x] Seed enabled core reservations in <code>ProxySQL_Main_exit_on_listener_conflicts()</code> before freeing variable strings; wire live and phase-B rejecting callbacks; bump layout/max to 17 and update ABI-version comments. Leave compatible prefixes and reserved ABI rejection unchanged.</li>
+<li>[x] Update future-ABI fixtures from 17 to 18, explicitly verify ABI 16 remains compatible, and ensure DEBUG tagging still works. Add standalone target to unit Makefile.</li>
+<li>[x] Run reservation TAP directly with standard library + TAP; run relevant existing standalone listener/gate tests. Compile affected core paths when dependencies are available and report any gap accurately.</li>
+</ul>
+<h3 id="task-3-admin-plugin-metrics-and-build-integration">Task 3: Admin plugin, metrics and build integration</h3>
+<p><strong>Files:</strong> Create <code>plugins/tcp_proxy/{Makefile,exports.map,README.md}</code>, <code>include/tcp_proxy_plugin.h</code>, <code>src/plugin.cpp</code>, <code>src/admin.cpp</code>, <code>src/metrics.cpp</code>, private headers as needed, <code>tests/admin_unit.cpp</code>; modify top-level <code>Makefile</code> build/debug/clean/install/uninstall entries only. Create <code>doc/tcp-proxy-plugin.md</code> or make README the canonical user reference with link from doc. Add any necessary focused TAP target/integration test without broad test-suite changes.</p>
+<p><strong>Interfaces:</strong> Consumes Task 1's frozen header and Task 2's ABI-17 callback. Produces the descriptor, five persistent table pairs with identical DDL, runtime/stats projections, exact canonical commands and aliases, and Prometheus metrics with lifecycle cleanup. Production plugin uses Task 1 Engine.</p>
+<ul>
+<li>[x] Write failing registration/command/schema tests with fake services and real isolated SQLite3DB where feasible. Assert defaults, aliases, no DB access in phase B, and all configured columns.</li>
+<li>[x] Implement strict SQL-to-Config parsing without silent numeric truncation, invalid enum fallback, dangling references, or embedded-NUL acceptance; every column/default is fixed by the spec.</li>
+<li>[x] Implement transactional disk/memory and runtime/memory copying with explicit column lists and SQL quoting, plus LOAD try-lock before snapshot -&gt; Admin mutex handoff -&gt; listener validation -&gt; Engine apply -&gt; reacquire on all exits. Reject concurrent applies promptly and preserve runtime on validation/apply failure. Test two LOADs and SAVE while first LOAD is unlocked.</li>
+<li>[x] Implement runtime/config/retired-state statistics snapshots and bounded-label Prometheus families. Remove only owned samples after sampler/worker shutdown; retain core-owned families and pin registry lifetime through DSO unload. Verify repeated init/start/stop and failure cleanup.</li>
+<li>[x] Implement startup/stop/descriptor, lowercase artifact/exports, Linux guard, standard toolchain/feature-tier flags, stage-runtime if used, and top-level build/debug/clean/install/uninstall wiring. No changes to v3 build behavior.</li>
+<li>[x] Run admin/DSO tests and build release + debug plugin. Inspect <code>nm -D</code> export surface. Run real isolated daemon Admin smoke if a matching v4 core is available; test SQL configure, LOAD, forwarding, failed LOAD rollback, SAVE disk/restore and lifecycle. Record limitations explicitly.</li>
+</ul>
+<h3 id="task-4-independent-adversarial-testing-benchmarks-and-documentation">Task 4: Independent adversarial testing, benchmarks and documentation</h3>
+<p><strong>Files:</strong> Create <code>plugins/tcp_proxy/tests/engine_harness.cpp</code>, Python test/benchmark tools under <code>plugins/tcp_proxy/tests/</code>, documented test/benchmark targets, and a dated results artifact under <code>docs/benchmarks/</code> containing reproducible workload/host details and measurements. Update user reference and spec/plan status with actual shipped limitations. Worker uses its own worktree until integrated.</p>
+<p><strong>Interfaces:</strong> Consumes frozen Engine header/implementation; harness starts the same Engine and offers a minimal test control interface for reload/snapshot/stop. No alternate TCP engine. Tests can use standard Python socket/threading/subprocess and loopback backend children. DSO/Admin integration uses actual production plugin.</p>
+<ul>
+<li>[x] Build a controllable harness and write failing adversarial tests around actual sockets: random binary/backpressure, server-first, SHUT_WR response, capacities, source policies, backups, timeouts, bind rollback, concurrent reload, hard-offline old generations, listener/backend soft removal, and repeated restart/leak counts.</li>
+<li>[x] Run the suite and send concrete defects to coordinator rather than quietly relaxing assertions or changing design. Keep edits limited to test/documentation paths; implementation fixes return to responsible worker.</li>
+<li>[x] Implement reproducible short direct/backend and native-engine benchmarks for latency p50/p95/p99, connections/s, throughput, process CPU/RSS and idle connections. Include cleanup, raw JSON, host/compiler/worker/concurrency/payload/duration metadata and sample counts. Build/run adjacent HAProxy as optional comparison if feasible, with identical workloads and worker counts.</li>
+<li>[x] Run actual benchmarks and write results with scope/measurement caveats; no fabricated comparisons or hard performance claims from tiny samples. Confirm direct baseline measures the same backend protocol and payload.</li>
+<li>[x] Document working SQL examples for listener/hostgroup/backend/rule configuration, soft/hard removal and persistence; explain numeric-address-only backend support, TCP-only/TLS passthrough/source identity, no-start/lifecycle behavior, v4 build and existing Admin interface.</li>
+</ul>
+<h3 id="task-5-final-integration-and-independent-review">Task 5: Final integration and independent review</h3>
+<p><strong>Files:</strong> Only scoped changes from Tasks 1–4, progress/evidence artifacts; root original checkout receives reviewed changes with no commits.</p>
+<p><strong>Interfaces:</strong> All task deliverables and exact tests above.</p>
+<ul>
+<li>[x] Review every complete diff for scope, design compliance, and concurrency/resource lifetime defects; root integrates files explicitly, preserving unrelated changes. No concurrent workers mutate one worktree.</li>
+<li>[x] Run root-owned meaningful verification: standalone engine/admin/reservations + adversarial suite, release/debug compile, focused chassis regression tests, and daemon smoke when provisioned dependencies permit. Do not duplicate unchanged passing suites without a new change or concern.</li>
+<li>[x] Request an independent whole-change review of design compliance, Admin lock ordering, event/flow lifetimes, failure rollback, and build/ABI compatibility; repair concrete findings through delegated workers and recheck affected paths.</li>
+<li>[x] Confirm benchmark raw evidence and user docs match actual behavior. Update plan/ledger with completed tasks and any external build/platform gaps. Report exact tested scope and remaining limitations, plus design/documentation links.</li>
+</ul>
+<h2 id="final-integration-evidence">Final integration evidence</h2>
+<p>All five tasks completed in the original checkout. Subagents coordinated
+OpenCode implementation/testing with <code>opencode-go/deepseek-v4.1-flash</code> (the
+requested DeepSeek model through the available provider). Root independently
+reviewed/integrated the changes and verified the final composed build.</p>
+<ul>
+<li>Engine: 69 cases / 1,138 checks; ASan/UBSan/leak checks also passed.</li>
+<li>Admin: 240 assertions with real SQLite3DB and deterministic Engine tests.</li>
+<li>Independent real sockets: 44 scenarios, including binary streams, backpressure,
+half-close, TLS passthrough, health, retries, reload and retirement.</li>
+<li>Core: reservations 52 checks (release/debug), lifecycle 98, ABI 67, managed
+configuration 12 and Prometheus 12. Existing gate/validator checks also passed.</li>
+<li>Final release/debug DSO builds passed; layout 17, correct DEBUG tagging, only
+<code>proxysql_plugin_descriptor_v1</code> exported.</li>
+<li>Final matching release daemon: basic forwarding, reload/rollback, five-table
+disk persistence, lifecycle and enabled/disabled core collisions all passed.
+Lifecycle includes no-start/START, STOP/START, SLOW shutdown, SIGTERM, fast SQL
+SHUTDOWN and KILL with bounded successful exit.</li>
+<li>Final independent Engine and integration reviews found no remaining blockers.
+Final metrics ownership and registry lifetime findings have regression tests.</li>
+</ul>
+<p>The final v4-only core integration pins the shared registry through plugin stop
+and unload, and defers STOP/RESTART counter reset until after plugin and worker
+teardown. The sampler acquires no Admin SQL mutex. V3 reset timing is preserved.</p>
+<p>Release plugin SHA256:
+<code>bee084a3d23075b6868c712a0e28f0e5527c75c9c9a9d2db216de28e12d03d0d</code>.
+Matching release host SHA256:
+<code>0a192231469657639a3173a8c61f7ae673b8e8e2ee8719000df3b7bcfdff61be</code>.</p>
+<p>The matching core was compiled in the isolated core worktree using existing
+read-only donor dependency builds; the original checkout's dependency tree was
+not rebuilt. Release and debug plugin builds used the same dependency headers.
+Full debug-daemon integration was not run. Linux is the shipped platform;
+backend addresses must be numeric IPv4/IPv6. TLS is passed through unchanged.
+The benchmark compares the standalone production Engine harness with direct
+connections and HAProxy; its resource figures exclude the full ProxySQL daemon.</p>
+<p>See <a href="../../tcp-proxy-plugin.html">user guide</a> and
+<a href="../../benchmarks/2026-11-11-native-tcp-proxy.html">benchmark results</a>.
+No commits, pushes or production deployments were performed.</p>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>

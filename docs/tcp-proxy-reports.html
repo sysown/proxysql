@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reports — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<h1>ProxySQL native TCP proxy reports</h1><p>Design, implementation, configuration and benchmark reports in HTML.</p><ul class="report-list"><li><a href="benchmarks/2026-11-13-tcp-sysbench-v4.html">MySQL sysbench: standard ProxySQL 4.0 build</a><p>Fresh top-level PROXYSQL40 build; 48 completed cases comparing native TCP, fast forward, HAProxy and direct MySQL.</p></li><li><a href="benchmarks/2026-11-13-tcp-sysbench-basic.html">Superseded basic MySQL sysbench benchmark</a><p>Earlier measurements using the incorrectly versioned build; see the standard ProxySQL 4.0 rerun above.</p></li><li><a href="benchmarks/2026-11-12-tcp-ranking-diagnostic.html">SELECT 1 ranking diagnostic</a><p>Controlled CPU placement and cross-hostgroup mapping investigation of the MySQL/PostgreSQL throughput ranking.</p></li><li><a href="benchmarks/2026-11-11-tcp-select1-fast-forward.html">SELECT 1: native TCP versus fast-forward</a><p>Simple query latency, established-session queries per second and authenticated connection cycles for real MySQL and PostgreSQL.</p></li><li><a href="benchmarks/2026-11-11-tcp-fast-forward-comparison.html">Native TCP versus fast-forward benchmark</a><p>Real MySQL and PostgreSQL comparison: query latency, authenticated connection cycles, payload throughput, three rotated rounds and raw evidence.</p></li><li><a href="tcp-proxy-plugin.html">Configuration guide</a><p>Current four-table configuration, routing examples, shared HGM accounting, safe upgrade and operational commands.</p></li><li><a href="superpowers/specs/2026-11-11-tcp-four-table-design.html">Mandatory-mapping design</a><p>Current design: all TCP backends use the existing MySQL/PostgreSQL hostgroup managers.</p></li><li><a href="superpowers/plans/2026-11-11-tcp-four-table.html">Four-table implementation and verification</a><p>Completed implementation, migration safeguards, test coverage and final verification.</p></li><li><a href="benchmarks/2026-11-11-tcp-four-table-daemon.html">Current raw TCP daemon benchmark</a><p>Raw echo workload comparing direct, mapped MySQL, mapped PostgreSQL and HAProxy modes, with exact accounting reconciliation.</p></li><li><a href="superpowers/specs/2026-11-11-tcp-hostgroup-mapping-design.html">Historical shared-hostgroup design</a><p>Earlier six-table design with optional mapping and standalone TCP pools.</p></li><li><a href="superpowers/plans/2026-11-11-tcp-hostgroup-mapping.html">Historical shared-hostgroup implementation</a><p>Completed earlier implementation before mandatory mappings and four-table simplification.</p></li><li><a href="benchmarks/2026-11-11-tcp-hostgroup-mapping-daemon.html">Historical five-mode daemon benchmark</a><p>Earlier six-table implementation, including the subsequently removed standalone mode.</p></li><li><a href="benchmarks/2026-11-11-native-tcp-proxy.html">Historical standalone Engine benchmark</a><p>Initial static Engine comparison with direct connections and HAProxy.</p></li><li><a href="superpowers/specs/2026-11-11-native-tcp-proxy-design.html">Historical standalone TCP design</a><p>Original generic TCP design, retained as historical context.</p></li><li><a href="superpowers/plans/2026-11-11-native-tcp-proxy.html">Historical standalone implementation</a><p>Completed initial implementation before shared hostgroups and mandatory mappings.</p></li></ul><footer>Each report is self-contained and can be read offline. Original Markdown and raw benchmark JSON remain available.</footer>
+</main></body>
+</html>

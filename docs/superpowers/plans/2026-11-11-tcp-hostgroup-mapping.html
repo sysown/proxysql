@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Historical shared-hostgroup implementation — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-11-tcp-hostgroup-mapping.md">Markdown source</a></nav><blockquote><strong>Historical snapshot.</strong> This report describes an earlier implementation. See the <a href="../../tcp-proxy-plugin.html">current four-table configuration guide</a> for supported behavior.</blockquote><h1 id="shared-hostgroup-tcp-forwarding-implementation-plan">Shared hostgroup TCP forwarding implementation plan</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#global-constraints">Global constraints</a></li><li class="level-2"><a href="#review-focus">Review focus</a></li><li class="level-3"><a href="#task-1-core-hgm-raw-connection-service">Task 1: Core HGM raw connection service</a></li><li class="level-3"><a href="#task-2-engine-provider-and-admin-mapping-integration">Task 2: Engine provider and Admin mapping integration</a></li><li class="level-3"><a href="#task-3-independent-composed-tests-and-benchmarks">Task 3: Independent composed tests and benchmarks</a></li><li class="level-3"><a href="#task-4-root-integration-and-final-review">Task 4: Root integration and final review</a></li><li class="level-2"><a href="#final-verification">Final verification</a></li></ul></details>
+<blockquote>
+<p>For agentic workers: use superpowers:subagent-driven-development; root coordinates OpenCode DeepSeek v4.1 Flash and owns integration/verification.</p>
+</blockquote>
+<p><strong>Goal:</strong> Map TCP routes to actual MySQL/PostgreSQL HGM connections with unified accounting and always-destroy lifecycle.</p>
+<p><strong>Architecture:</strong> Native epoll relay consumes a core-independent provider, adapted to a borrowed ABI18 core service that registers actual protocol connection objects in existing ConnectionsUsed lists.</p>
+<p><strong>Tech stack:</strong> C++17, existing HGM/monitor/SQLite/plugin services, Python loopback tests/benchmarks.</p>
+<p><strong>Spec:</strong> docs/superpowers/specs/2026-11-11-tcp-hostgroup-mapping-design.md</p>
+<h2 id="global-constraints">Global constraints</h2>
+<ul>
+<li>User approved mapping, unified existing counters/limits/status and fast-forward-like always-destroy lifecycle; OFFLINE_HARD alone forces close.</li>
+<li>Preserve static mode and the existing five table definitions; add a sixth mapping pair.</li>
+<li>No SQL/authentication/protocol framing on the native path, no reuse, blocking DNS, worker callbacks retained by core, commits/pushes or donor dependency writes.</li>
+<li>Independent OpenCode workers use isolated existing managed worktrees and opencode-go/deepseek-v4.1-flash. Root integrates scoped reviewed files.</li>
+</ul>
+<h2 id="review-focus">Review focus</h2>
+<ul>
+<li>Pending/queued objects count in the actual HGM, every unwind destroys once, native sockets have one owner.</li>
+<li>HGM TLS policy and lock ordering are valid on acceptor/epoll workers; no fake SQL session.</li>
+<li>OFFLINE_HARD closes idle/pending streams without reroute; old backend identity survives removal and TCP remapping.</li>
+<li>Old persistent TCP rows survive bootstrap; six-table copies are atomic and derived source state is not persisted.</li>
+<li>Stats reflect actual bytes/outcomes, lifecycle stops callers before HGM teardown, ABI17 prefix and v3 behavior survive.</li>
+</ul>
+<h3 id="task-1-core-hgm-raw-connection-service">Task 1: Core HGM raw connection service</h3>
+<ul>
+<li>[x] Add frozen service implementation and ABI18 getter/live/phase-B stubs with compatible ABI17 prefix tests.</li>
+<li>[x] Reuse real selection/in-use protocol objects, policy TLS/throttles/DNS cache and existing counters/errors; always destroy safely without protocol state.</li>
+<li>[x] Add failing then passing targeted HGM/service tests and run chassis lifecycle/ABI regressions.</li>
+<li>[x] Build matching release core with read-only donor dependencies and publish immutable manifest/artifact.</li>
+</ul>
+<h3 id="task-2-engine-provider-and-admin-mapping-integration">Task 2: Engine provider and Admin mapping integration</h3>
+<ul>
+<li>[x] Add HostgroupMapping/provider interfaces, validation and RAII Accepted/Flow ownership; preserve static paths.</li>
+<li>[x] Integrate connect outcomes, HGM wire-byte accounting and periodic OFFLINE_HARD checks without static-ID interference.</li>
+<li>[x] Register sixth table pair/runtime projection and six-table parsing/copy/persistence; retain old DDL.</li>
+<li>[x] Adapter/descriptor release/debug build, meaningful engine/provider/Admin tests, user-guide updates.</li>
+</ul>
+<h3 id="task-3-independent-composed-tests-and-benchmarks">Task 3: Independent composed tests and benchmarks</h3>
+<ul>
+<li>[x] Implement daemon tests for both HGM modes and actual monitoring role changes with task-owned fixtures.</li>
+<li>[x] Validate shared Used/Free/limits/counters/errors/bytes, opaque/TLS, SOFT/HARD, pending/removal/remap/restart.</li>
+<li>[x] Run existing adversarial regressions and identical direct/static/mapped MySQL/mapped PG/HAProxy benchmark workloads.</li>
+<li>[x] Publish raw JSON, Markdown and HTML reports with precise full-daemon scope and source/artifact hashes.</li>
+</ul>
+<h3 id="task-4-root-integration-and-final-review">Task 4: Root integration and final review</h3>
+<ul>
+<li>[x] Review complete scoped changes and integrate into original without overwriting unrelated work.</li>
+<li>[x] Independently verify targeted engine/Admin/core/composed daemon behavior and release/debug ABI/export/build compatibility.</li>
+<li>[x] Independent final concurrency/lifetime/accounting review, repair reproduced defects and rerun affected checks.</li>
+<li>[x] Refresh HTML reports/index/user guide, record source/test manifests and remaining limitations, report completion without commits.</li>
+</ul>
+<h2 id="final-verification">Final verification</h2>
+<p>Implementation and integration completed on 2026-11-11. OpenCode workers used
+<code>opencode-go/deepseek-v4.1-flash</code>; root owned the design, scoped integration,
+independent review and final checks. No commits or pushes were made.</p>
+<ul>
+<li>Engine: 85 cases / 1,382 checks; Admin: 333 assertions; raw HGM service: 100
+assertions. ABI: 73; core lifecycle: 98; listener reservations: 54; managed
+configuration: 13. Release/debug builds and Engine ASan/UBSan/leak checks pass.</li>
+<li>Final composed suite: 12 mapped daemon cases / 154 checks and 44 adversarial
+scenarios pass. Both MySQL and PostgreSQL monitor role changes are exercised;
+PostgreSQL uses a controlled wire fixture, rather than physical replication.</li>
+<li>Root additionally verified five existing static daemon cases, six shutdown
+paths with live mapped connections, and mapped STOP/START for both protocols.</li>
+<li>Independent final concurrency/lifetime/accounting review is clean. It exposed
+and verified fixes for late OFFLINE_HARD during retirement and native
+comparative-latency policy. Atomic destruction returns the final HARD state
+before the Engine decides whether it can retry.</li>
+<li>Five-mode full-daemon benchmark completed with exact backend byte/connection
+reconciliation and mapped HGM byte reconciliation; Used/Free drain to zero.
+Measurements are short loopback runs with Python clients, not production
+capacity estimates. See <a href="../../benchmarks/2026-11-11-tcp-hostgroup-mapping-daemon.html">the report</a>.</li>
+</ul>
+<p>Final manifests and raw verification logs are retained under
+<code>/tmp/native-tcp-hgm/</code>. The reproducible tools live in
+<code>plugins/tcp_proxy/tests/</code>; the <a href="../../tcp-proxy-plugin.html">configuration guide</a>
+and <a href="../../tcp-proxy-reports.html">HTML report index</a> describe usage and results.</p>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>

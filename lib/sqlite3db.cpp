@@ -615,8 +615,8 @@ int SQLite3DB::return_one_int(const char *str) {
  * @param table_def The definition of the table.
  * @return The number of tables matching the structure.
  */
-int SQLite3DB::check_table_structure(const char *table_name, const char *table_def) {
-	if (db == NULL || quarantined) return 0;
+std::string SQLite3DB::canonical_table_definition(const char *table_def) {
+	if (table_def == nullptr || *table_def == '\0') return {};
 	// SQLite stores an uppercase CREATE TABLE prefix without IF NOT EXISTS.
 	// Normalize only these leading keywords; preserve names and the table body.
 	std::string canonical_def(table_def);
@@ -638,6 +638,12 @@ int SQLite3DB::check_table_structure(const char *table_name, const char *table_d
 		}
 		if (table_start != nullptr) canonical_def = std::string("CREATE TABLE ") + table_start;
 	}
+	return canonical_def;
+}
+
+int SQLite3DB::check_table_structure(const char *table_name, const char *table_def) {
+	if (db == NULL || quarantined) return 0;
+	const std::string canonical_def = canonical_table_definition(table_def);
 	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=?1 AND sql=?2";
 	int count=0;
 	sqlite3_stmt *statement=NULL;

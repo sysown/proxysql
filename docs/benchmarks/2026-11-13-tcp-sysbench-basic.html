@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Superseded basic MySQL sysbench benchmark — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-13-tcp-sysbench-basic.md">Markdown source</a></nav><h1 id="basic-mysql-sysbench-comparison">Basic MySQL sysbench comparison</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#method">Method</a></li><li class="level-2"><a href="#point-select-queries-per-second">Point-select: queries per second</a></li><li class="level-2"><a href="#read-only-transactions-per-second">Read-only: transactions per second</a></li><li class="level-2"><a href="#point-query-p95-latency-ms">Point-query p95 latency (ms)</a></li><li class="level-2"><a href="#read-only-transaction-p95-latency-ms">Read-only transaction p95 latency (ms)</a></li><li class="level-2"><a href="#interpretation">Interpretation</a></li><li class="level-2"><a href="#raw-evidence">Raw evidence</a></li><li class="level-2"><a href="#command">Command</a></li></ul></details>
+<p><strong>Superseded:</strong> See the <a href="2026-11-13-tcp-sysbench-v4.html">standard ProxySQL 4.0 build rerun</a>. This earlier run used a PROXYSQL40-enabled executable with an incorrect 3.0.13 version banner after bypassing the top-level build; its raw measurements are retained.</p>
+<p><strong>48 runs completed successfully; zero ignored SQL errors and zero reconnects.</strong> One five-second stock sysbench run per configuration, no repeat-run averages.</p>
+<p>All backends are the same MySQL server. Native TCP uses MySQL HGM only.</p>
+<h2 id="method">Method</h2>
+<p>sysbench 1.0.20, prepared statements, unchanged stock point-select and read-only Lua scripts. Eight prewarmed InnoDB tables of 100,000 rows; 2 GiB buffer pool; uniform random keys. MySQL 8.0.46, maximum connections 4096 and prepared statements 262144. TLS disabled at the server and compression restricted to uncompressed.</p>
+<p>Native TCP and HAProxy have two forwarding workers and a two-core budget (CPUs 6–7). Database CPUs 0–5; sysbench CPUs 8–13. ProxySQL keeps its MySQL frontend workers and Admin enabled. HAProxy is 3.5-dev11 from the local checkout. The same ProxySQL process exposes native TCP and permanent fast-forward listeners; modes run sequentially and their order rotates between cells.</p>
+<p>No checkpoint, reporting wrapper, per-session security scan or extra profiling was used. Dataset prewarm ran once before all tests.</p>
+<h2 id="point-select-queries-per-second">Point-select: queries per second</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align:right">Connections</th>
+<th style="text-align:right">Direct MySQL</th>
+<th style="text-align:right">Native TCP</th>
+<th style="text-align:right">HAProxy</th>
+<th style="text-align:right">Fast-forward</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right">4</td>
+<td style="text-align:right">75,217</td>
+<td style="text-align:right">48,683</td>
+<td style="text-align:right">44,839</td>
+<td style="text-align:right">47,753</td>
+</tr>
+<tr>
+<td style="text-align:right">16</td>
+<td style="text-align:right">133,238</td>
+<td style="text-align:right">109,715</td>
+<td style="text-align:right">110,484</td>
+<td style="text-align:right">93,233</td>
+</tr>
+<tr>
+<td style="text-align:right">64</td>
+<td style="text-align:right">130,130</td>
+<td style="text-align:right">108,184</td>
+<td style="text-align:right">110,564</td>
+<td style="text-align:right">41,366</td>
+</tr>
+<tr>
+<td style="text-align:right">256</td>
+<td style="text-align:right">120,500</td>
+<td style="text-align:right">95,323</td>
+<td style="text-align:right">104,545</td>
+<td style="text-align:right">18,910</td>
+</tr>
+<tr>
+<td style="text-align:right">512</td>
+<td style="text-align:right">112,324</td>
+<td style="text-align:right">80,992</td>
+<td style="text-align:right">80,948</td>
+<td style="text-align:right">15,057</td>
+</tr>
+<tr>
+<td style="text-align:right">1024</td>
+<td style="text-align:right">100,609</td>
+<td style="text-align:right">81,931</td>
+<td style="text-align:right">74,408</td>
+<td style="text-align:right">12,437</td>
+</tr>
+</tbody>
+</table>
+<h2 id="read-only-transactions-per-second">Read-only: transactions per second</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align:right">Connections</th>
+<th style="text-align:right">Direct MySQL</th>
+<th style="text-align:right">Native TCP</th>
+<th style="text-align:right">HAProxy</th>
+<th style="text-align:right">Fast-forward</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right">4</td>
+<td style="text-align:right">3,021</td>
+<td style="text-align:right">1,969</td>
+<td style="text-align:right">2,158</td>
+<td style="text-align:right">2,088</td>
+</tr>
+<tr>
+<td style="text-align:right">16</td>
+<td style="text-align:right">6,118</td>
+<td style="text-align:right">5,710</td>
+<td style="text-align:right">5,697</td>
+<td style="text-align:right">5,083</td>
+</tr>
+<tr>
+<td style="text-align:right">64</td>
+<td style="text-align:right">5,888</td>
+<td style="text-align:right">5,808</td>
+<td style="text-align:right">5,988</td>
+<td style="text-align:right">2,750</td>
+</tr>
+<tr>
+<td style="text-align:right">256</td>
+<td style="text-align:right">5,300</td>
+<td style="text-align:right">5,157</td>
+<td style="text-align:right">5,877</td>
+<td style="text-align:right">1,117</td>
+</tr>
+<tr>
+<td style="text-align:right">512</td>
+<td style="text-align:right">4,882</td>
+<td style="text-align:right">5,018</td>
+<td style="text-align:right">4,945</td>
+<td style="text-align:right">907</td>
+</tr>
+<tr>
+<td style="text-align:right">1024</td>
+<td style="text-align:right">4,630</td>
+<td style="text-align:right">4,286</td>
+<td style="text-align:right">4,138</td>
+<td style="text-align:right">773</td>
+</tr>
+</tbody>
+</table>
+<h2 id="point-query-p95-latency-ms">Point-query p95 latency (ms)</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align:right">Connections</th>
+<th style="text-align:right">Direct MySQL</th>
+<th style="text-align:right">Native TCP</th>
+<th style="text-align:right">HAProxy</th>
+<th style="text-align:right">Fast-forward</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right">4</td>
+<td style="text-align:right">0.06</td>
+<td style="text-align:right">0.11</td>
+<td style="text-align:right">0.13</td>
+<td style="text-align:right">0.10</td>
+</tr>
+<tr>
+<td style="text-align:right">16</td>
+<td style="text-align:right">0.15</td>
+<td style="text-align:right">0.15</td>
+<td style="text-align:right">0.16</td>
+<td style="text-align:right">0.24</td>
+</tr>
+<tr>
+<td style="text-align:right">64</td>
+<td style="text-align:right">0.57</td>
+<td style="text-align:right">0.62</td>
+<td style="text-align:right">0.61</td>
+<td style="text-align:right">2.71</td>
+</tr>
+<tr>
+<td style="text-align:right">256</td>
+<td style="text-align:right">2.86</td>
+<td style="text-align:right">2.76</td>
+<td style="text-align:right">2.66</td>
+<td style="text-align:right">16.41</td>
+</tr>
+<tr>
+<td style="text-align:right">512</td>
+<td style="text-align:right">5.67</td>
+<td style="text-align:right">7.84</td>
+<td style="text-align:right">8.13</td>
+<td style="text-align:right">36.24</td>
+</tr>
+<tr>
+<td style="text-align:right">1024</td>
+<td style="text-align:right">11.45</td>
+<td style="text-align:right">12.98</td>
+<td style="text-align:right">14.46</td>
+<td style="text-align:right">86.00</td>
+</tr>
+</tbody>
+</table>
+<h2 id="read-only-transaction-p95-latency-ms">Read-only transaction p95 latency (ms)</h2>
+<table>
+<thead>
+<tr>
+<th style="text-align:right">Connections</th>
+<th style="text-align:right">Direct MySQL</th>
+<th style="text-align:right">Native TCP</th>
+<th style="text-align:right">HAProxy</th>
+<th style="text-align:right">Fast-forward</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right">4</td>
+<td style="text-align:right">1.79</td>
+<td style="text-align:right">2.61</td>
+<td style="text-align:right">2.81</td>
+<td style="text-align:right">2.07</td>
+</tr>
+<tr>
+<td style="text-align:right">16</td>
+<td style="text-align:right">3.19</td>
+<td style="text-align:right">3.19</td>
+<td style="text-align:right">3.19</td>
+<td style="text-align:right">4.65</td>
+</tr>
+<tr>
+<td style="text-align:right">64</td>
+<td style="text-align:right">12.08</td>
+<td style="text-align:right">11.87</td>
+<td style="text-align:right">11.45</td>
+<td style="text-align:right">34.95</td>
+</tr>
+<tr>
+<td style="text-align:right">256</td>
+<td style="text-align:right">70.55</td>
+<td style="text-align:right">64.47</td>
+<td style="text-align:right">45.79</td>
+<td style="text-align:right">325.98</td>
+</tr>
+<tr>
+<td style="text-align:right">512</td>
+<td style="text-align:right">153.02</td>
+<td style="text-align:right">137.35</td>
+<td style="text-align:right">108.68</td>
+<td style="text-align:right">682.06</td>
+</tr>
+<tr>
+<td style="text-align:right">1024</td>
+<td style="text-align:right">350.33</td>
+<td style="text-align:right">244.38</td>
+<td style="text-align:right">248.83</td>
+<td style="text-align:right">1,304.21</td>
+</tr>
+</tbody>
+</table>
+<h2 id="interpretation">Interpretation</h2>
+<p>Native TCP and HAProxy were broadly comparable in this basic run; neither led at every connection count. At 16 connections, point-select throughput was 109,715 QPS native versus 110,484 HAProxy. At 1024, native reached 81,931 QPS versus 74,408 HAProxy. Read-only at 1024 reached 4,286 TPS native versus 4,138 HAProxy.</p>
+<p>Fast-forward throughput fell markedly at higher concurrency: 12,437 point QPS and 773 read-only TPS at 1024 connections. This run measures that behavior but does not profile its cause.</p>
+<p>A point-select event is one primary-key SELECT. A read-only transaction contains ten point reads, four range reads, and BEGIN/COMMIT (16 SQL statements). Its p95 covers the entire transaction. These are short single-pass observations; small differences and occasional proxy throughput above the direct baseline require repeats before treating them as advantages.</p>
+<h2 id="raw-evidence">Raw evidence</h2>
+<p><a href="2026-11-13-tcp-sysbench-basic.csv">CSV</a> · <a href="2026-11-13-tcp-sysbench-basic.json">JSON</a></p>
+<p>Each raw log includes the stock sysbench counts, measured elapsed time, rates, p95 and error totals. Root checked all 48 unique cells, zero errors/reconnects, rates against counts/time, and one/16 SQL statements per event as appropriate. All owned benchmark processes were stopped after completion.</p>
+<table>
+<thead>
+<tr>
+<th>Workload</th>
+<th style="text-align:right">Connections</th>
+<th>Direct</th>
+<th>Native</th>
+<th>HAProxy</th>
+<th>Fast-forward</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>oltp_point_select</td>
+<td style="text-align:right">4</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-4-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-4-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-4-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-4-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_point_select</td>
+<td style="text-align:right">16</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-16-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-16-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-16-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-16-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_point_select</td>
+<td style="text-align:right">64</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-64-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-64-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-64-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-64-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_point_select</td>
+<td style="text-align:right">256</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-256-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-256-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-256-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-256-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_point_select</td>
+<td style="text-align:right">512</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-512-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-512-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-512-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-512-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_point_select</td>
+<td style="text-align:right">1024</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-1024-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-1024-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-1024-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_point_select-1024-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_read_only</td>
+<td style="text-align:right">4</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-4-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-4-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-4-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-4-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_read_only</td>
+<td style="text-align:right">16</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-16-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-16-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-16-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-16-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_read_only</td>
+<td style="text-align:right">64</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-64-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-64-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-64-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-64-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_read_only</td>
+<td style="text-align:right">256</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-256-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-256-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-256-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-256-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_read_only</td>
+<td style="text-align:right">512</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-512-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-512-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-512-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-512-ff.log">ff</a></td>
+</tr>
+<tr>
+<td>oltp_read_only</td>
+<td style="text-align:right">1024</td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-1024-direct.log">direct</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-1024-native.log">native</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-1024-haproxy.log">haproxy</a></td>
+<td><a href="2026-11-13-tcp-sysbench-basic-logs/oltp_read_only-1024-ff.log">ff</a></td>
+</tr>
+</tbody>
+</table>
+<h2 id="command">Command</h2>
+<pre><code class="language-sh">sysbench --config-file=PRIVATE.cnf --threads=N --time=5 --events=0 \
+  --db-driver=mysql --db-ps-mode=auto --mysql-ssl=off --mysql-compression=off \
+  --rand-type=uniform --rand-seed=20261113 --tables=8 --table_size=100000 \
+  --range_size=100 --percentile=95 /usr/share/sysbench/oltp_point_select.lua run
+</code></pre>
+<p>Use <code>oltp_read_only.lua</code> for the read-only workload. Credentials were kept in private config files. The basic launcher and original logs remain under <code>/tmp/tcp-sysbench-benchmark/</code>.</p>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>

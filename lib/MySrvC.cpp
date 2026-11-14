@@ -1,4 +1,5 @@
 #include "MySQL_HostGroups_Manager.h"
+#include "ProxySQL_PluginRawBackend.h"
 
 class MySrvConnList;
 class MySrvC;
@@ -148,4 +149,12 @@ MySrvC::~MySrvC() {
 void MySrvC::set_status(MySerStatus _status) {
 	status = _status;
 	if (myhgc)myhgc->refresh_online_server_count();
+#ifdef PROXYSQL40
+	// Latch actual OFFLINE_HARD transitions for raw streams pinned to this
+	// exact server.  The hook only takes the bounded registry mutex and never
+	// runs callbacks or allocates.
+	if (_status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+		proxysql_raw_backend_mark_offline_hard(this);
+	}
+#endif
 }

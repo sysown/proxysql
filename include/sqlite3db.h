@@ -247,6 +247,14 @@ class SQLite3DB {
 	bool execute_prepared(sqlite3_stmt* statement, char** error, int* cols, int* affected_rows, SQLite3_result** resultset);
 	SQLite3_result* execute_prepared(sqlite3_stmt* statement, char** _error, int* cols, int* affected_rows);
 	int return_one_int(const char *);
+	/**
+	 * @brief Canonicalize the leading CREATE TABLE [IF NOT EXISTS] keywords
+	 *        of a table definition the same way SQLite stores them.
+	 *
+	 * Only the leading keywords and the whitespace between them are
+	 * normalized; the table name and body are preserved byte-for-byte.
+	 */
+	static std::string canonical_table_definition(const char *table_def);
 	int check_table_structure(const char *table_name, const char *table_def);
 	bool build_table(const char *table_name, const char *table_def, bool dropit);
 	bool check_and_build_table(const char *table_name, const char *table_def);

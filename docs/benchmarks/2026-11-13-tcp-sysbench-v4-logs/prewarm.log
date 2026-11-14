@@ -1,0 +1,26 @@
+sysbench 1.0.20 (using system LuaJIT 2.1.0-beta3)
+
+Initializing worker threads...
+
+FATAL: unable to connect to MySQL server on host '127.0.0.1', port 37305, aborting...
+FATAL: error 2026: SSL connection error: SSL is required but the server doesn't support it
+FATAL: unable to connect to MySQL server on host '127.0.0.1', port 37305, aborting...
+(last message repeated 2 times)
+FATAL: error 2026: SSL connection error: SSL is required but the server doesn't support it
+(last message repeated 1 times)
+FATAL: `sysbench.cmdline.call_command' function failed: /usr/share/sysbench/oltp_common.lua:98: connection creation failed
+FATAL: error 2026: SSL connection error: SSL is required but the server doesn't support it
+FATAL: `sysbench.cmdline.call_command' function failed: /usr/share/sysbench/oltp_common.lua:98: connection creation failed
+(last message repeated 2 times)
+FATAL: unable to connect to MySQL server on host '127.0.0.1', port 37305, aborting...
+FATAL: error 2026: SSL connection error: SSL is required but the server doesn't support it
+FATAL: `sysbench.cmdline.call_command' function failed: /usr/share/sysbench/oltp_common.lua:98: connection creation failed
+FATAL: unable to connect to MySQL server on host '127.0.0.1', port 37305, aborting...
+FATAL: error 2026: SSL connection error: SSL is required but the server doesn't support it
+FATAL: `sysbench.cmdline.call_command' function failed: /usr/share/sysbench/oltp_common.lua:98: connection creation failed
+FATAL: unable to connect to MySQL server on host '127.0.0.1', port 37305, aborting...
+FATAL: error 2026: SSL connection error: SSL is required but the server doesn't support it
+FATAL: `sysbench.cmdline.call_command' function failed: /usr/share/sysbench/oltp_common.lua:98: connection creation failed
+FATAL: unable to connect to MySQL server on host '127.0.0.1', port 37305, aborting...
+FATAL: error 2026: SSL connection error: SSL is required but the server doesn't support it
+FATAL: `sysbench.cmdline.call_command' function failed: /usr/share/sysbench/oltp_common.lua:98: connection creation failed

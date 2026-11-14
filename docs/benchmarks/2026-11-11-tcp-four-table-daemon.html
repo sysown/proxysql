@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Current full-daemon benchmark — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-11-tcp-four-table-daemon.md">Markdown source</a></nav><h1 id="four-table-tcp-proxy-full-daemon-benchmark">Four-table TCP proxy full-daemon benchmark</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#provenance-and-scope">Provenance and scope</a></li><li class="level-2"><a href="#workload">Workload</a></li><li class="level-2"><a href="#results">Results</a></li><li class="level-2"><a href="#mode-details">Mode details</a></li><li class="level-3"><a href="#direct-completed">direct: completed</a></li><li class="level-3"><a href="#mysql-completed">mysql: completed</a></li><li class="level-3"><a href="#pgsql-completed">pgsql: completed</a></li><li class="level-3"><a href="#haproxy-completed">haproxy: completed</a></li><li class="level-2"><a href="#caveats">Caveats</a></li></ul></details>
+<p>Date: 2026-11-11. Status: local loopback measurement; not a deployment claim.</p>
+<p>Environment: <code>dev128</code>, 6.8.0-85-generic, x86_64, 32 CPUs, <code>AMD Ryzen 9 5950X 16-Core Processor</code>. Load average at start: [0.9248046875, 0.97265625, 1.08056640625]. Python: <code>3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]</code>.</p>
+<h2 id="provenance-and-scope">Provenance and scope</h2>
+<ul>
+<li>ProxySQL host: <code>/tmp/tcp-four-table/core-final/proxysql</code> sha256 <code>81c4f518f15e05af5de94a14ac445570ffbd0845e9f7bd4a2e9a85b281800d02</code>.</li>
+<li>Plugin source: <code>/tmp/tcp-four-table/plugin-final/binaries/proxysql_tcp_proxy-release.so</code> sha256 <code>f4111f8949276645977d9ee917eed9784c574017d3a00709050b614ca527b9c4</code>; immutable run snapshot <code>/tmp/tcp-four-table/validation-final/benchmark-raw/proxysql_tcp_proxy.benchmark.snapshot.so</code> sha256 <code>f4111f8949276645977d9ee917eed9784c574017d3a00709050b614ca527b9c4</code>.</li>
+<li>ProxySQL modes use the whole daemon process PID for CPU/RSS/fd/thread values: core, Admin, SQLite, metrics, plugin and mapped HGM accounting are included. These are not <code>engine_harness</code> or engine-only measurements.</li>
+<li>Monitors and SQL worker listeners were disabled for mysql and pgsql modes. TCP forwarding workers and the Admin interface remained active.</li>
+<li>Source files: 318 files verified from <code>/tmp/tcp-four-table/validation-final/final-source-provenance.json</code> sha256 <code>81c828a0f52a8055fd687db9dc74b55ad9affa94f3a52201a471b22a02d7a2c2</code>; core manifest <code>05c62af6935bf59cf0902d9ad8b8637a967e782a582a9d58d5e459dc9ff3110c</code>, plugin manifest <code>d8a14d467d97dcb0b7f66f5dfef5eefbbddabd764db257331d84d335e7fccbb0</code>. Full list in raw JSON.</li>
+</ul>
+<h2 id="workload">Workload</h2>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mode order</td>
+<td>direct, mysql, pgsql, haproxy</td>
+</tr>
+<tr>
+<td>Backend</td>
+<td>task-owned selector echo process PID 3402640 127.0.0.1:37645</td>
+</tr>
+<tr>
+<td>Client concurrency</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Daemon/HAProxy worker threads</td>
+<td>2</td>
+</tr>
+<tr>
+<td>RTT payload / warmup / samples per connection</td>
+<td>64 B / 20 / 300</td>
+</tr>
+<tr>
+<td>Connections/s payload</td>
+<td>64 B</td>
+</tr>
+<tr>
+<td>Throughput payload / duration</td>
+<td>65536 B / 2.0 s</td>
+</tr>
+<tr>
+<td>Idle connections</td>
+<td>8</td>
+</tr>
+</tbody>
+</table>
+<p>Each connection/s transaction requires connect + send + exact echo receive + close. Throughput verifies every echoed chunk byte-for-byte; MiB/s is application payload.</p>
+<h2 id="results">Results</h2>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Status</th>
+<th style="text-align:right">RTT p50 / p95 / p99 ms</th>
+<th style="text-align:right">Connections/s</th>
+<th style="text-align:right">MiB/s c→s</th>
+<th style="text-align:right">MiB/s s→c</th>
+<th style="text-align:right">Daemon CPU %</th>
+<th style="text-align:right">Daemon RSS KiB</th>
+<th style="text-align:right">Daemon fds</th>
+<th style="text-align:right">Daemon threads</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>direct</td>
+<td>completed</td>
+<td style="text-align:right">0.037 / 0.064 / 0.090</td>
+<td style="text-align:right">16137.3</td>
+<td style="text-align:right">1388.23</td>
+<td style="text-align:right">1388.23</td>
+<td style="text-align:right">null</td>
+<td style="text-align:right">null</td>
+<td style="text-align:right">null</td>
+<td style="text-align:right">null</td>
+</tr>
+<tr>
+<td>mysql</td>
+<td>completed</td>
+<td style="text-align:right">0.066 / 0.102 / 0.122</td>
+<td style="text-align:right">14015.0</td>
+<td style="text-align:right">1264.28</td>
+<td style="text-align:right">1264.28</td>
+<td style="text-align:right">133.4</td>
+<td style="text-align:right">35648</td>
+<td style="text-align:right">21</td>
+<td style="text-align:right">10</td>
+</tr>
+<tr>
+<td>pgsql</td>
+<td>completed</td>
+<td style="text-align:right">0.055 / 0.074 / 0.086</td>
+<td style="text-align:right">14557.4</td>
+<td style="text-align:right">1264.76</td>
+<td style="text-align:right">1264.76</td>
+<td style="text-align:right">131.2</td>
+<td style="text-align:right">35008</td>
+<td style="text-align:right">21</td>
+<td style="text-align:right">10</td>
+</tr>
+<tr>
+<td>haproxy</td>
+<td>completed</td>
+<td style="text-align:right">0.069 / 0.086 / 0.124</td>
+<td style="text-align:right">15690.5</td>
+<td style="text-align:right">1145.01</td>
+<td style="text-align:right">1145.01</td>
+<td style="text-align:right">130.6</td>
+<td style="text-align:right">14388</td>
+<td style="text-align:right">10</td>
+<td style="text-align:right">2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="mode-details">Mode details</h2>
+<h3 id="direct-completed">direct: completed</h3>
+<ul>
+<li>Target: 127.0.0.1:37645; precheck 1 MiB exact echo sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200; connections: 32289; throughput transactions: 44481.</li>
+<li>Idle connections: 8; quiescent interval 1.000083 s; proxy idle CPU None.</li>
+<li>Backend reconciliation: c→s 2918303816 (expected 2918303816), s→c 2918303816 (expected 2918303816), connections 32306/32306.</li>
+</ul>
+<h3 id="mysql-completed">mysql: completed</h3>
+<ul>
+<li>Target: 127.0.0.1:51819; precheck 1 MiB exact echo sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200; connections: 28034; throughput transactions: 40466.</li>
+<li>Idle connections: 8; quiescent interval 1.00007 s; proxy idle CPU 0.0.</li>
+<li>Whole daemon PID during measurement <code>3402727</code>; config <code>/tmp/tcp-four-table/validation-final/benchmark-raw/bench-mysql/proxysql.cfg</code>, log <code>/tmp/tcp-four-table/validation-final/benchmark-raw/bench-mysql/daemon.log</code>, post-run returncode <code>0</code>.</li>
+<li>Backend reconciliation: c→s 2654904456 (expected 2654904456), s→c 2654904456 (expected 2654904456), connections 28051/28051.</li>
+<li>Mapped HGM reconciliation: byte deltas 2654904456/2654904456 (expected 2654904456/2654904456); Used/Free after drain 0/0.</li>
+<li>TCP hostgroup 20 -&gt; MYSQL hostgroup 10 (mandatory mapping; no local server inventory). SQL recorded in raw JSON.</li>
+</ul>
+<h3 id="pgsql-completed">pgsql: completed</h3>
+<ul>
+<li>Target: 127.0.0.1:40933; precheck 1 MiB exact echo sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200; connections: 29120; throughput transactions: 40481.</li>
+<li>Idle connections: 8; quiescent interval 1.000065 s; proxy idle CPU 0.0.</li>
+<li>Whole daemon PID during measurement <code>3402901</code>; config <code>/tmp/tcp-four-table/validation-final/benchmark-raw/bench-pgsql/proxysql.cfg</code>, log <code>/tmp/tcp-four-table/validation-final/benchmark-raw/bench-pgsql/daemon.log</code>, post-run returncode <code>0</code>.</li>
+<li>Backend reconciliation: c→s 2655957000 (expected 2655957000), s→c 2655957000 (expected 2655957000), connections 29137/29137.</li>
+<li>Mapped HGM reconciliation: byte deltas 2655957000/2655957000 (expected 2655957000/2655957000); Used/Free after drain 0/0.</li>
+<li>TCP hostgroup 20 -&gt; PGSQL hostgroup 10 (mandatory mapping; no local server inventory). SQL recorded in raw JSON.</li>
+</ul>
+<h3 id="haproxy-completed">haproxy: completed</h3>
+<ul>
+<li>Target: 127.0.0.1:38819; precheck 1 MiB exact echo sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200; connections: 31385; throughput transactions: 36650.</li>
+<li>Idle connections: 8; quiescent interval 1.000087 s; proxy idle CPU 0.0.</li>
+<li>Backend reconciliation: c→s 2405033544 (expected 2405033544), s→c 2405033544 (expected 2405033544), connections 31402/31402.</li>
+<li>HAProxy version 3.5-dev11 2026/11/04 - https://haproxy.org/ nbthread=2.</li>
+</ul>
+<h2 id="caveats">Caveats</h2>
+<ul>
+<li>Local loopback short runs only; Python client/backend scheduling and GIL limits apply.</li>
+<li>Modes run sequentially and each ProxySQL mode starts a fresh task-owned daemon.</li>
+<li><code>mysql</code> and <code>pgsql</code> CPU/RSS/fd/thread figures describe the whole daemon process, not the standalone Engine harness and not a deployment footprint.</li>
+<li>Missing optional HAProxy is an explicit skipped mode and is never fabricated.</li>
+<li>A failed exact-byte precheck or benchmark phase marks that mode <code>error</code>; the process exits nonzero if any requested mode errored.</li>
+</ul>
+<p>Raw JSON: <code>/home/rene/.codex/worktrees/483d/proxysql/docs/benchmarks/2026-11-11-tcp-four-table-daemon.json</code>.</p>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>

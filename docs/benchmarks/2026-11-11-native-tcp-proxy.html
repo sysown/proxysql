@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Historical standalone Engine benchmark — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-11-native-tcp-proxy.md">Markdown source</a></nav><blockquote><strong>Historical snapshot.</strong> This report describes an earlier implementation. See the <a href="../tcp-proxy-plugin.html">current four-table configuration guide</a> for supported behavior.</blockquote><h1 id="native-tcp-proxy-engine-benchmark">Native TCP proxy engine benchmark</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#workload">Workload</a></li><li class="level-2"><a href="#results">Results</a></li><li class="level-2"><a href="#mode-details">Mode details</a></li><li class="level-3"><a href="#direct-completed">direct: completed</a></li><li class="level-3"><a href="#native-completed">native: completed</a></li><li class="level-3"><a href="#haproxy-completed">haproxy: completed</a></li><li class="level-2"><a href="#engine-source-provenance-and-test-status">Engine source provenance and test status</a></li><li class="level-2"><a href="#caveats">Caveats</a></li></ul></details>
+<p>Date: 2026-11-11. Status: local loopback measurement; not a deployment claim.</p>
+<p>Environment: <code>dev128</code>, 6.8.0-85-generic, x86_64, 32 CPUs, <code>AMD Ryzen 9 5950X 16-Core Processor</code>. Load average at start: [0.81689453125, 0.998046875, 0.9951171875]. Compiler: <code>g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0</code>. Python: <code>3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]</code>.</p>
+<h2 id="workload">Workload</h2>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mode order</td>
+<td>direct, native, haproxy</td>
+</tr>
+<tr>
+<td>Backend</td>
+<td>task-owned selector echo process, PID 2758864, 127.0.0.1:40821</td>
+</tr>
+<tr>
+<td>Client concurrency</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Engine/HAProxy worker threads</td>
+<td>2</td>
+</tr>
+<tr>
+<td>RTT payload / warmup / samples per connection</td>
+<td>64 B / 20 / 300</td>
+</tr>
+<tr>
+<td>Connections/s payload</td>
+<td>64 B</td>
+</tr>
+<tr>
+<td>Throughput payload / duration</td>
+<td>65536 B / 2.0 s</td>
+</tr>
+<tr>
+<td>Idle connections measured</td>
+<td>256</td>
+</tr>
+</tbody>
+</table>
+<p>Each connection/s sample is a completed connect + send + exact echo receive + close transaction. Throughput verifies every echoed payload chunk byte-for-byte; rates are application payload bytes per second, separately for client→server and server→client.</p>
+<p>Scope of native mode: the native target is the <strong>standalone <code>engine_harness</code> process</strong> linked from the reviewed Engine sources. Its proxy CPU, RSS, fd and thread figures describe only that harness process. They exclude ProxySQL core, Admin, SQLite, metrics and plugin/daemon integration work, so they are not a full-daemon or full-plugin footprint.</p>
+<h2 id="results">Results</h2>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Status</th>
+<th style="text-align:right">RTT p50 / p95 / p99 ms</th>
+<th style="text-align:right">Connections/s</th>
+<th style="text-align:right">MiB/s c→s</th>
+<th style="text-align:right">MiB/s s→c</th>
+<th style="text-align:right">Proxy CPU % (native = harness only)</th>
+<th style="text-align:right">Backend CPU %</th>
+<th style="text-align:right">Proxy idle CPU % (native = harness only)</th>
+<th style="text-align:right">Proxy RSS idle Δ KiB (native = harness only)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>direct</td>
+<td>completed</td>
+<td style="text-align:right">0.052 / 0.107 / 0.137</td>
+<td style="text-align:right">16600.0</td>
+<td style="text-align:right">1443.92</td>
+<td style="text-align:right">1443.92</td>
+<td style="text-align:right">null</td>
+<td style="text-align:right">59.4</td>
+<td style="text-align:right">null</td>
+<td style="text-align:right">null</td>
+</tr>
+<tr>
+<td>native</td>
+<td>completed</td>
+<td style="text-align:right">0.050 / 0.072 / 0.093</td>
+<td style="text-align:right">15798.7</td>
+<td style="text-align:right">1214.37</td>
+<td style="text-align:right">1214.37</td>
+<td style="text-align:right">127.1</td>
+<td style="text-align:right">66.3</td>
+<td style="text-align:right">0.0</td>
+<td style="text-align:right">7680</td>
+</tr>
+<tr>
+<td>haproxy</td>
+<td>completed</td>
+<td style="text-align:right">0.055 / 0.069 / 0.077</td>
+<td style="text-align:right">15699.2</td>
+<td style="text-align:right">1167.98</td>
+<td style="text-align:right">1167.98</td>
+<td style="text-align:right">135.7</td>
+<td style="text-align:right">66.7</td>
+<td style="text-align:right">0.0</td>
+<td style="text-align:right">512</td>
+</tr>
+</tbody>
+</table>
+<p>Proxy/backend CPU percentages in the first CPU columns are process tick deltas over the mode's whole monotonic elapsed window (including bounded client-thread joins), not sums of short phase percentages. Direct mode has no proxy PID, so its proxy CPU/RSS fields are <code>null</code>; backend CPU is still measured. Native proxy CPU/RSS/fd/thread values cover only the standalone Engine harness, not a full ProxySQL daemon. The idle CPU column is a separate quiescent sample taken over the configured interval only after the idle flows were established and settled; establishment CPU is reported separately in the mode details. Idle RSS/fd/thread deltas compare the settled idle state with the pre-connection baseline.</p>
+<h2 id="mode-details">Mode details</h2>
+<h3 id="direct-completed">direct: completed</h3>
+<ul>
+<li>Precheck: 1 MiB exact echo in 0.001698 s, sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200 raw samples.</li>
+<li>Connections/s: 33204 completed transactions in 2.000245 s.</li>
+<li>Throughput: 3029073920 c→s bytes and 3029073920 s→c bytes, 46220 verified echo transactions.</li>
+<li>Idle resources: 256 connections; settle 0.5 s.
+<ul>
+<li>Establishment (connect + echo + settle, 0.524285 s) process CPU: proxy=None, backend=1.907.</li>
+<li>Quiescent 1.000092 s (tick precision 10.0 ms) process CPU: proxy=None, backend=0.0.</li>
+<li>Baseline -&gt; settled idle deltas: proxy None, backend {'rss_kb_delta': 0, 'fds_delta': 256, 'threads_delta': 0}.</li>
+<li>Socket options: TCP_NODELAY on benchmark client sockets and accepted Python backend sockets.</li>
+</ul>
+</li>
+</ul>
+<h3 id="native-completed">native: completed</h3>
+<ul>
+<li>Precheck: 1 MiB exact echo in 0.003665 s, sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200 raw samples.</li>
+<li>Connections/s: 31603 completed transactions in 2.000351 s.</li>
+<li>Throughput: 2547187712 c→s bytes and 2547187712 s→c bytes, 38867 verified echo transactions.</li>
+<li>Idle resources: 256 connections; settle 0.5 s.
+<ul>
+<li>Establishment (connect + echo + settle, 0.616206 s) process CPU: proxy=4.869, backend=1.623.</li>
+<li>Quiescent 1.000067 s (tick precision 10.0 ms) process CPU: proxy=0.0, backend=0.0.</li>
+<li>Baseline -&gt; settled idle deltas: proxy {'rss_kb_delta': 7680, 'fds_delta': 512, 'threads_delta': 0}, backend {'rss_kb_delta': 0, 'fds_delta': 256, 'threads_delta': 0}.</li>
+<li>Socket options: TCP_NODELAY on benchmark client sockets and accepted Python backend sockets.</li>
+</ul>
+</li>
+<li>Engine settings: worker_threads=2, buffer_size=16384.</li>
+<li>Native target scope: standalone Engine harness only; proxy CPU/RSS/fd/thread values exclude ProxySQL core, Admin, SQLite, metrics and plugin/daemon integration footprint.</li>
+</ul>
+<h3 id="haproxy-completed">haproxy: completed</h3>
+<ul>
+<li>Precheck: 1 MiB exact echo in 0.004326 s, sha256 <code>06f5f32a1282780cd4109090a8559854f1fad9ab26208560f31e102ce0ba6397</code>.</li>
+<li>RTT samples: 1200 raw samples.</li>
+<li>Connections/s: 31404 completed transactions in 2.000361 s.</li>
+<li>Throughput: 2450194432 c→s bytes and 2450194432 s→c bytes, 37387 verified echo transactions.</li>
+<li>Idle resources: 256 connections; settle 0.5 s.
+<ul>
+<li>Establishment (connect + echo + settle, 0.595661 s) process CPU: proxy=3.358, backend=3.358.</li>
+<li>Quiescent 1.000086 s (tick precision 10.0 ms) process CPU: proxy=0.0, backend=0.0.</li>
+<li>Baseline -&gt; settled idle deltas: proxy {'rss_kb_delta': 512, 'fds_delta': 512, 'threads_delta': 0}, backend {'rss_kb_delta': 0, 'fds_delta': 256, 'threads_delta': 0}.</li>
+<li>Socket options: TCP_NODELAY on benchmark client sockets and accepted Python backend sockets.</li>
+</ul>
+</li>
+<li>HAProxy: <code>HAProxy version 3.5-dev11 2026/11/04 - https://haproxy.org/</code> sha256 <code>1684852bad690fda9d87492e137d0c3e989234f84e9fc45f36bf34c1f11937e9</code>, nbthread=2.</li>
+</ul>
+<h2 id="engine-source-provenance-and-test-status">Engine source provenance and test status</h2>
+<ul>
+<li>Readiness marker: <code>/tmp/native-tcp-proxy/test-engine-sources-ready.json</code> (manifest sha256 <code>b9d2aa18cb4acdbc3291c1fc3ac7b16d42a69066647f6d778151a5029fda3263</code>).</li>
+<li>Marker status: FINAL WRAPPER-FIXED SOURCE APPROVED FOR FULL ADVERSARIAL/BENCHMARK VALIDATION; root integration review separate.</li>
+<li>Marker note: Supersedes queue-fixed source after public start/apply sustained-OOM containment/partial-start cleanup repair. Only engine.cpp differs among6productiondeps: a7351cd1a8eae8eec8b17c5d35c0185608f691455351d7368fa1d20a3e8db5df. Engine coordinator independently69cases/1138checks normal+ASan/UBSan/leaks green, externalOOMmodes0. Refresh44suite+identical3mode workload; do not reuse pre-wrapper performance evidence. Integration approval remainsfalse and separate.</li>
+<li>Frozen header sha256: <code>2b826b1ef861ff6f36b5b937715e6b92470345d3ef24615c70174a541dc7e24b</code>.</li>
+<li>Resolved source digests at run time:
+<ul>
+<li><code>/home/rene/.codex/worktrees/483d/proxysql/plugins/tcp_proxy/src/config.cpp</code> <code>d463104fc63a38b579ea0b0db90d9a00e5878bf1f00875793a7dd39460fe8a81</code></li>
+<li><code>/home/rene/.codex/worktrees/483d/proxysql/plugins/tcp_proxy/src/engine.cpp</code> <code>a7351cd1a8eae8eec8b17c5d35c0185608f691455351d7368fa1d20a3e8db5df</code></li>
+<li><code>/home/rene/.codex/worktrees/483d/proxysql/plugins/tcp_proxy/src/selection.cpp</code> <code>11d1fd03e152d628e84a9ca7cbeaffe18b7126425a24e4f261e3a9ea7bebb10d</code></li>
+<li><code>/home/rene/.codex/worktrees/483d/proxysql/plugins/tcp_proxy/src/health.cpp</code> <code>9e7fa31ef7b3c36915346ebc5d55bbe17cfd9a23e9dd32f809f70bac6a5e810e</code></li>
+</ul>
+</li>
+<li>Adversarial suite at <code>/tmp/native-tcp-proxy/test-wrapper-final-results/summary.json</code>: 44 PASS, 0 FAIL, 0 BLOCKED, 0 INCONCLUSIVE (44 scenarios).</li>
+</ul>
+<h2 id="caveats">Caveats</h2>
+<ul>
+<li>Loopback only; no external network, production endpoint or load generator.</li>
+<li>Python clients/backends are subject to interpreter scheduling and GIL limits. The client process and backend are separate, but Python-side cost can dominate at high rates and masks some engine detail.</li>
+<li>Mode order is sequential and each mode starts a fresh measurement session; the backend process is shared but counters are sampled around each mode.</li>
+<li>Percentiles are nearest-rank over raw per-connection RTT samples; they are not confidence intervals.</li>
+<li>Idle CPU comes from /proc utime+stime clock ticks, whose precision is stated per sample (typically 10 ms); a one-second quiescent sample therefore has tick-quantized resolution. RSS deltas are single-sample VmRSS observations, not allocator accounting.</li>
+<li>Native mode is skipped unless production Engine sources were approved and a harness was built; a failed exact-byte precheck blocks benchmark runs rather than producing fabricated numbers.</li>
+<li>Native mode measures the standalone <code>engine_harness</code> process only. Its CPU/RSS/fd/thread numbers exclude ProxySQL core, Admin, SQLite, metrics and plugin/daemon integration and cannot describe a full daemon/plugin footprint.</li>
+<li>Measurements describe this host and these short runs only.</li>
+</ul>
+<p>Raw evidence: <a href="2026-11-11-native-tcp-proxy.json">benchmark JSON</a>.</p>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>

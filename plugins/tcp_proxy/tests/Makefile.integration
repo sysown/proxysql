@@ -1,0 +1,158 @@
+# Task4-only integration build/test/benchmark targets.
+#
+# Deliberately separate from tests/Makefile (owned by Task 1).  Production
+# Engine sources are NEVER wildcarded: either the coordinator readiness
+# manifest supplies the explicit list, or the two remaining units below are
+# used after `check-engine-ready` verifies the manifest.  Admin/plugin sources are
+# not compiled here.
+
+SHELL := /bin/bash
+PYTHON ?= python3
+CXX ?= g++
+CXXFLAGS ?= -O2 -g -std=c++17 -pthread -Wall -Wextra
+CPPFLAGS += -I../include -I$(abspath ../../../deps/json)
+HEADER_SHA256 := $(shell sha256sum ../include/tcp_proxy.h | cut -d' ' -f1)
+CPPFLAGS += -DTCP_PROXY_HEADER_SHA256='"$(HEADER_SHA256)"'
+
+READY_MARKER ?= /tmp/native-tcp-proxy/test-engine-sources-ready.json
+export TCP_PROXY_ENGINE_READY := $(READY_MARKER)
+READINESS = $(PYTHON) readiness.py --marker $(READY_MARKER)
+APPROVED_ENGINE_SRCS := $(shell $(READINESS) --emit-srcs 2>/dev/null)
+DEFAULT_ENGINE_SRCS := ../src/config.cpp ../src/engine.cpp
+ENGINE_SRCS ?= $(if $(strip $(APPROVED_ENGINE_SRCS)),$(APPROVED_ENGINE_SRCS),$(DEFAULT_ENGINE_SRCS))
+
+HARNESS := engine_harness
+SCENARIOS := test_engine_adversarial.py
+SELFCHECK := test_fixtures_selfcheck.py
+BENCH := benchmark.py
+MAPPED_SMOKE := daemon_mapped_smoke.py
+MAPPED_BENCH := daemon_benchmark.py
+MAPPED_FIXTURES := mapped_monitor_fixtures.py
+MAPPED_SELFCHECK := mapped_fixture_selfcheck.py
+CONVERTER ?= $(abspath ../tools/migrate_tcp_config.py)
+SOURCE_MANIFEST ?=
+MAPPED_RESULTS_DIR ?= /tmp/native-tcp-proxy/mapped-results
+MAPPED_JSON ?= ../../../docs/benchmarks/2026-11-11-tcp-four-table-daemon.json
+MAPPED_MD ?= ../../../docs/benchmarks/2026-11-11-tcp-four-table-daemon.md
+MAPPED_CASES ?= all
+MAPPED_MODES ?= direct,mysql,pgsql,haproxy
+PROXYSQL ?=
+PLUGIN ?=
+MYSQL ?= $(shell command -v mysql 2>/dev/null || echo /usr/bin/mysql)
+HAPROXY ?=
+RESULTS_DIR ?= /tmp/native-tcp-proxy/test-results
+LOCAL_MANIFEST ?= /tmp/native-tcp-proxy/test-final-local-manifest.json
+BENCH_JSON ?= ../../../docs/benchmarks/2026-11-11-native-tcp-proxy-historical.json
+BENCH_MD ?= ../../../docs/benchmarks/2026-11-11-native-tcp-proxy-historical.md
+
+.PHONY: help syntax harness check-engine-ready local-manifest pycompile selfcheck \
+        test test-selfcheck bench bench-selfcheck clean \
+        daemon-admin-help daemon-admin-smoke \
+        daemon-mapped-help daemon-mapped-selfcheck daemon-mapped-smoke daemon-mapped-bench
+
+help:
+	@echo "Task4 tcp_proxy Engine integration targets"
+	@echo "  make -f Makefile.integration syntax          # header-only syntax check (no marker)"
+	@echo "  make -f Makefile.integration pycompile       # byte-compile Task4 Python"
+	@echo "  make -f Makefile.integration selfcheck       # fixture self-checks (no Engine)"
+	@echo "  make -f Makefile.integration check-engine-ready"
+	@echo "  make -f Makefile.integration local-manifest # explicit local-source manifest"
+	@echo "  make -f Makefile.integration harness         # requires readiness marker"
+	@echo "  make -f Makefile.integration test            # harness + adversarial suite"
+	@echo "  make -f Makefile.integration bench           # historical engine-only direct+HAProxy"
+	@echo "  make -f Makefile.integration bench-selfcheck # direct+HAProxy short tool check"
+	@echo "  make -f Makefile.integration daemon-mapped-help    # mapped smoke/benchmark --help"
+	@echo "  make -f Makefile.integration daemon-mapped-selfcheck # psql/mysqld/upgrade fixture checks"
+	@echo "  make -f Makefile.integration daemon-mapped-smoke   # requires PROXYSQL/PLUGIN"
+	@echo "  make -f Makefile.integration daemon-admin-help    # admin smoke --help"
+	@echo "  make -f Makefile.integration daemon-admin-smoke   # four-table admin lifecycle smoke"
+	@echo "  make -f Makefile.integration daemon-mapped-bench  # four-mode full daemon"
+	@echo "  make -f Makefile.integration clean"
+	@echo ""
+	@echo "Override explicit sources only with a reviewed list:"
+	@echo "  make -f Makefile.integration harness ENGINE_SRCS='../src/config.cpp ...'"
+	@echo "Readiness marker: $(READY_MARKER)"
+
+check-engine-ready:
+	@$(READINESS) --check
+
+# Clean-checkout reproducibility: two Engine units + headers, hashed.
+# Use READY_MARKER=$(LOCAL_MANIFEST) for local runs; this never replaces the
+# coordinator marker for the current task.
+local-manifest:
+	$(PYTHON) readiness.py --create-local-manifest $(LOCAL_MANIFEST)
+
+syntax:
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -fsyntax-only engine_harness.cpp
+
+pycompile:
+	$(PYTHON) -m py_compile tcp_proxy_testlib.py $(SELFCHECK) $(SCENARIOS) $(BENCH) \
+		bench_backend.py readiness.py daemon_admin_smoke.py $(MAPPED_SMOKE) \
+		$(MAPPED_BENCH) $(MAPPED_FIXTURES) upgrade_fixtures.py $(MAPPED_SELFCHECK)
+
+selfcheck: pycompile
+	$(PYTHON) $(SELFCHECK)
+
+harness: check-engine-ready
+	@for source in $(ENGINE_SRCS); do \
+		test -f "$$source" || { echo "missing approved Engine source: $$source" >&2; exit 1; }; \
+	done
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $(HARNESS) engine_harness.cpp $(ENGINE_SRCS)
+
+test: harness
+	mkdir -p $(RESULTS_DIR)
+	$(PYTHON) $(SCENARIOS) --harness ./$(HARNESS) --results-dir $(RESULTS_DIR)
+
+test-selfcheck: selfcheck
+
+bench:
+	$(PYTHON) $(BENCH) --output-json $(BENCH_JSON) --output-md $(BENCH_MD) \
+		--suite-summary $(RESULTS_DIR)/summary.json
+
+bench-selfcheck: pycompile
+	$(PYTHON) $(BENCH) --modes direct,haproxy \
+		--latency-samples 50 --warmup 5 --duration 0.5 --idle-connections 4 \
+		--output-json /tmp/native-tcp-proxy/bench-tooling-selfcheck.json \
+		--output-md /tmp/native-tcp-proxy/bench-tooling-selfcheck.md \
+		--raw-dir /tmp/native-tcp-proxy/bench-raw-selfcheck
+
+daemon-admin-help: pycompile
+	$(PYTHON) daemon_admin_smoke.py --help
+
+daemon-mapped-help: pycompile
+	$(PYTHON) $(MAPPED_SMOKE) --help
+	$(PYTHON) $(MAPPED_BENCH) --help
+
+daemon-mapped-selfcheck: pycompile
+	$(PYTHON) $(MAPPED_SELFCHECK) --converter "$(CONVERTER)"
+
+daemon-admin-smoke: pycompile
+	@test -n "$(PROXYSQL)" || { echo "set PROXYSQL=/path/to/proxysql" >&2; exit 2; }
+	@test -n "$(PLUGIN)" || { echo "set PLUGIN=/path/to/proxysql_tcp_proxy.so" >&2; exit 2; }
+	mkdir -p $(MAPPED_RESULTS_DIR)
+	$(PYTHON) daemon_admin_smoke.py --proxysql "$(PROXYSQL)" --plugin "$(PLUGIN)" \
+		--mysql "$(MYSQL)" --case all \
+		--output-json $(MAPPED_RESULTS_DIR)/admin-smoke.json
+
+daemon-mapped-smoke: pycompile
+	@test -n "$(PROXYSQL)" || { echo "set PROXYSQL=/path/to/proxysql" >&2; exit 2; }
+	@test -n "$(PLUGIN)" || { echo "set PLUGIN=/path/to/proxysql_tcp_proxy.so" >&2; exit 2; }
+	mkdir -p $(MAPPED_RESULTS_DIR)
+	$(PYTHON) $(MAPPED_SMOKE) --proxysql "$(PROXYSQL)" --plugin "$(PLUGIN)" \
+		--mysql "$(MYSQL)" --converter "$(CONVERTER)" --case "$(MAPPED_CASES)" \
+		--output-json $(MAPPED_RESULTS_DIR)/mapped-smoke.json
+
+daemon-mapped-bench: pycompile
+	@test -n "$(PROXYSQL)" || { echo "set PROXYSQL=/path/to/proxysql" >&2; exit 2; }
+	@test -n "$(PLUGIN)" || { echo "set PLUGIN=/path/to/proxysql_tcp_proxy.so" >&2; exit 2; }
+	mkdir -p $(MAPPED_RESULTS_DIR)
+	$(PYTHON) $(MAPPED_BENCH) --modes "$(MAPPED_MODES)" \
+		$(if $(SOURCE_MANIFEST),--source-manifest "$(SOURCE_MANIFEST)",) \
+		--proxysql "$(PROXYSQL)" --plugin "$(PLUGIN)" --mysql "$(MYSQL)" \
+		$(if $(HAPROXY),--haproxy "$(HAPROXY)",) \
+		--output-json $(MAPPED_JSON) --output-md $(MAPPED_MD) \
+		--raw-dir $(MAPPED_RESULTS_DIR)/raw
+
+clean:
+	rm -f $(HARNESS)
+	rm -rf __pycache__

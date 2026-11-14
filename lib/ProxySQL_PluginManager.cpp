@@ -8,6 +8,7 @@
 #include "ProxySQL_PluginSecrets.h"
 #include "ProxySQL_ConfigurationAccess.h"
 #include "ProxySQL_PluginListenerGate.h"
+#include "ProxySQL_PluginListenerReservations.h"
 #include "Aws_Iam_Provider.h"
 #include "Aws_Locality_Manager.h"
 #include "MySQL_HostGroups_Manager.h"
@@ -550,6 +551,12 @@ bool register_query_hook_phase_b_stub(ProxySQL_PluginProtocol,
 }
 
 prometheus::Registry* get_prometheus_registry_service() {
+	if (g_stop_callback_target.manager != nullptr) {
+		return g_stop_callback_target.manager->prometheus_registry();
+	}
+	if (g_registry_callback_target.manager != nullptr) {
+		return g_registry_callback_target.manager->prometheus_registry();
+	}
 	return GloVars.prometheus_registry.get();
 }
 #endif /* PROXYSQL40 */
@@ -631,6 +638,27 @@ bool set_listener_gate_not_available(const ProxySQL_PluginListenerGate&) {
 	return false;
 }
 
+bool validate_listener_interfaces_service(const char* owner, const char* interfaces,
+	std::string& error) {
+	return ProxySQL_PluginListenerReservations::validate_candidate(owner, interfaces, error);
+}
+
+bool validate_listener_interfaces_not_available(const char* owner, const char* interfaces,
+	std::string& error) {
+	(void)owner;
+	(void)interfaces;
+	error = "listener interface validation is unavailable during plugin schema registration";
+	return false;
+}
+
+const ProxySQL_RawBackendServiceV2* get_raw_backend_service_live() {
+	return proxysql_raw_backend_service();
+}
+
+const ProxySQL_RawBackendServiceV2* get_raw_backend_service_not_available() {
+	return nullptr;
+}
+
 ProxySQL_PluginMysqlConfigResult apply_mysql_config_not_available(
 	const ProxySQL_PluginMysqlConfigPlan&) {
 	return { false, 0, "MySQL configuration publication is not available", {} };
@@ -709,7 +737,8 @@ ProxySQL_ServerRuntimeManagerPin::~ProxySQL_ServerRuntimeManagerPin() = default;
 // null function pointer.
 static SQLite3_result* snapshot_stub() { return nullptr; }
 
-ProxySQL_PluginManager::ProxySQL_PluginManager() {
+ProxySQL_PluginManager::ProxySQL_PluginManager()
+	: prometheus_registry_(GloVars.prometheus_registry) {
 	std::memset(&services_, 0, sizeof(services_));
 	services_.register_table = &register_table_service;
 	services_.register_command = &register_command_service;
@@ -748,6 +777,8 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.prepare_managed_runtime_locked = &proxysql_prepare_managed_runtime_locked;
 	services_.activate_managed_runtime_locked = &proxysql_activate_managed_runtime_locked;
 	services_.destroy_managed_prepared_runtime = &proxysql_destroy_managed_prepared_runtime;
+	services_.validate_listener_interfaces = &validate_listener_interfaces_service;
+	services_.get_raw_backend_service = &get_raw_backend_service_live;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -783,6 +814,10 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_phase_b_.refresh_mysql_aws_locality_stats =
 		&refresh_mysql_aws_locality_stats_service;
 	services_phase_b_.register_server_module = &register_server_module_unsupported;
+	services_phase_b_.validate_listener_interfaces =
+		&validate_listener_interfaces_not_available;
+	services_phase_b_.get_raw_backend_service =
+		&get_raw_backend_service_not_available;
 #endif /* PROXYSQL40 */
 }
 
@@ -860,7 +895,7 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// safe via the tail-append pattern -- fields the plugin didn't define
 	// are never dereferenced (see handling of register_schemas below).
 	//
-	// abi_version carries the ABI 1..16 layout-version number in its low
+	// abi_version carries the ABI 1..18 layout-version number in its low
 	// bits and PROXYSQL_PLUGIN_ABI_DEBUG_BIT as a separate, independent
 	// tag (see the long comment on PROXYSQL_PLUGIN_ABI_DEBUG_BIT in
 	// ProxySQL_Plugin.h for the dump_pkt/DSS-offset-shift mechanism this
@@ -976,7 +1011,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		//
 		// abi_version must be masked before this comparison: it carries
 		// PROXYSQL_PLUGIN_ABI_DEBUG_BIT in a high bit orthogonal to the
-		// ABI 1..16 layout-version number (see the contract comment next
+		// ABI 1..18 layout-version number (see the contract comment next
 		// to PROXYSQL_PLUGIN_ABI_DEBUG_BIT in ProxySQL_Plugin.h). A
 		// DEBUG-tagged ABI-1 descriptor has abi_version == 0x40000001,
 		// which satisfies a raw ">= 2u" and would wrongly dereference
@@ -1377,6 +1412,247 @@ const std::vector<ProxySQL_PluginTableDef>& ProxySQL_PluginManager::tables(Proxy
 		proxy_warning("Invalid plugin table registry kind requested: %d\n", static_cast<int>(kind));
 		return empty_tables;
 	}
+}
+
+bool ProxySQL_PluginManager::preflight_config_schemas(SQLite3DB* db, std::string& err) const {
+	err.clear();
+	if (db == nullptr || db->get_db() == nullptr) {
+		err = "Plugin config_db schema preflight cannot inspect an unavailable database connection; "
+			"refusing to materialize plugin tables. Check that the datadir is readable and restart ProxySQL.";
+		return false;
+	}
+
+	sqlite3* handle = db->get_db();
+
+	// Check the complete sqlite_master type/name metadata once, before any
+	// registered-name lookup. SQLite can resolve a table through BLOB or
+	// embedded-NUL name/type aliases even though the destructive builder's
+	// exact "type='table' AND name=?1 AND sql=?2" count does not. Rejecting
+	// non-TEXT storage (and NUL-bearing TEXT) here closes that bypass for
+	// every metadata object, not only names that happen to match a def.
+	{
+		const char* metadata_query = "SELECT type, name FROM sqlite_master";
+		sqlite3_stmt* metadata = nullptr;
+		int rc = (*proxy_sqlite3_prepare_v2)(handle, metadata_query, -1, &metadata, nullptr);
+		if (rc != SQLITE_OK) {
+			err = "Plugin config_db schema preflight failed to inspect sqlite_master metadata: ";
+			err += (*proxy_sqlite3_errmsg)(handle);
+			err += ". Refusing to materialize plugin tables; run the owning plugin's offline schema-migration tool before restarting.";
+			(*proxy_sqlite3_finalize)(metadata);
+			return false;
+		}
+		bool metadata_failed = false;
+		while ((rc = (*proxy_sqlite3_step)(metadata)) == SQLITE_ROW) {
+			for (int column = 0; column < 2; ++column) {
+				const int storage_type = (*proxy_sqlite3_column_type)(metadata, column);
+				if (storage_type != SQLITE_TEXT) {
+					err = "Plugin config_db schema preflight found non-TEXT sqlite_master ";
+					err += column == 0 ? "type" : "name";
+					err += " metadata. Refusing to materialize plugin tables; "
+						"stop ProxySQL and run the owning plugin's offline schema-migration tool before restarting.";
+					metadata_failed = true;
+					break;
+				}
+				const unsigned char* text = (*proxy_sqlite3_column_text)(metadata, column);
+				const int bytes = (*proxy_sqlite3_column_bytes)(metadata, column);
+				if (text == nullptr || bytes < 0) {
+					err = "Plugin config_db schema preflight found unreadable sqlite_master ";
+					err += column == 0 ? "type" : "name";
+					err += " metadata. Refusing to materialize plugin tables; "
+						"stop ProxySQL and run the owning plugin's offline schema-migration tool before restarting.";
+					metadata_failed = true;
+					break;
+				}
+				const std::string value(reinterpret_cast<const char*>(text), static_cast<size_t>(bytes));
+				if (value.find('\0') != std::string::npos) {
+					err = "Plugin config_db schema preflight found an embedded NUL in sqlite_master ";
+					err += column == 0 ? "type" : "name";
+					err += " metadata. Refusing to materialize plugin tables; "
+						"stop ProxySQL and run the owning plugin's offline schema-migration tool before restarting.";
+					metadata_failed = true;
+					break;
+				}
+			}
+			if (metadata_failed) break;
+		}
+		if (metadata_failed) {
+			(*proxy_sqlite3_finalize)(metadata);
+			return false;
+		}
+		if (rc != SQLITE_DONE) {
+			err = "Plugin config_db schema preflight failed while reading sqlite_master metadata: ";
+			err += (*proxy_sqlite3_errmsg)(handle);
+			err += ". Refusing to materialize plugin tables; run the owning plugin's offline schema-migration tool before restarting.";
+			(*proxy_sqlite3_finalize)(metadata);
+			return false;
+		}
+		rc = (*proxy_sqlite3_finalize)(metadata);
+		if (rc != SQLITE_OK) {
+			err = "Plugin config_db schema preflight failed to finalize sqlite_master metadata inspection: ";
+			err += (*proxy_sqlite3_errmsg)(handle);
+			err += ". Refusing to materialize plugin tables; run the owning plugin's offline schema-migration tool before restarting.";
+			return false;
+		}
+	}
+
+	for (const ProxySQL_PluginTableDef& def : tables_config_) {
+		if (def.table_name == nullptr || *def.table_name == '\0' ||
+		    def.table_def == nullptr || *def.table_def == '\0') {
+			err = "Plugin config_db schema preflight found an invalid registered table definition; "
+				"refusing to materialize plugin tables. Check the plugin's register_schemas callback.";
+			return false;
+		}
+
+		const std::string canonical_def = SQLite3DB::canonical_table_definition(def.table_def);
+		// CAST keeps case-insensitive discovery working even if a name is an
+		// unusual storage class; the broad metadata scan above has already
+		// rejected non-TEXT/NUL metadata. The accepted row below must still
+		// match the builder's exact type/name/SQL TEXT equality.
+		const char* query =
+			"SELECT type, name, sql FROM sqlite_master "
+			"WHERE CAST(name AS TEXT) = ?1 COLLATE NOCASE";
+		sqlite3_stmt* statement = nullptr;
+		int rc = (*proxy_sqlite3_prepare_v2)(handle, query, -1, &statement, nullptr);
+		if (rc != SQLITE_OK) {
+			err = "Plugin config_db schema preflight failed to inspect sqlite_master for table '";
+			err += def.table_name;
+			err += "': ";
+			err += (*proxy_sqlite3_errmsg)(handle);
+			err += ". Refusing to materialize plugin tables; run the owning plugin's offline schema-migration tool before restarting.";
+			(*proxy_sqlite3_finalize)(statement);
+			return false;
+		}
+		rc = (*proxy_sqlite3_bind_text)(statement, 1, def.table_name, -1, SQLITE_TRANSIENT);
+		if (rc != SQLITE_OK) {
+			err = "Plugin config_db schema preflight failed to inspect table '";
+			err += def.table_name;
+			err += "': ";
+			err += (*proxy_sqlite3_errmsg)(handle);
+			err += ". Refusing to materialize plugin tables; run the owning plugin's offline schema-migration tool before restarting.";
+			(*proxy_sqlite3_finalize)(statement);
+			return false;
+		}
+
+		bool failed = false;
+		while ((rc = (*proxy_sqlite3_step)(statement)) == SQLITE_ROW) {
+			const int type_storage = (*proxy_sqlite3_column_type)(statement, 0);
+			const int name_storage = (*proxy_sqlite3_column_type)(statement, 1);
+			if (type_storage != SQLITE_TEXT || name_storage != SQLITE_TEXT) {
+				err = "Plugin config_db schema preflight found non-TEXT sqlite_master type/name metadata for table '";
+				err += def.table_name;
+				err += "'. Refusing to rebuild plugin data; stop ProxySQL and run the owning plugin's "
+					"offline schema-migration tool before restarting.";
+				failed = true;
+				break;
+			}
+			const int stored_sql_storage = (*proxy_sqlite3_column_type)(statement, 2);
+			const unsigned char* type_text = (*proxy_sqlite3_column_text)(statement, 0);
+			const int type_bytes = (*proxy_sqlite3_column_bytes)(statement, 0);
+			const unsigned char* actual_name = (*proxy_sqlite3_column_text)(statement, 1);
+			const int actual_name_bytes = (*proxy_sqlite3_column_bytes)(statement, 1);
+			const unsigned char* stored_sql = (*proxy_sqlite3_column_text)(statement, 2);
+			const int stored_sql_bytes = (*proxy_sqlite3_column_bytes)(statement, 2);
+			if (type_text == nullptr || type_bytes < 0 ||
+			    actual_name == nullptr || actual_name_bytes < 0) {
+				err = "Plugin config_db schema preflight found unreadable sqlite_master metadata for table '";
+				err += def.table_name;
+				err += "'. Refusing to rebuild plugin data; stop ProxySQL and run the owning plugin's "
+					"offline schema-migration tool before restarting.";
+				failed = true;
+				break;
+			}
+			const std::string object_type(
+				reinterpret_cast<const char*>(type_text), static_cast<size_t>(type_bytes));
+			const std::string found_name(
+				reinterpret_cast<const char*>(actual_name), static_cast<size_t>(actual_name_bytes));
+			if (object_type != "table") {
+				err = "Plugin config_db schema preflight found an existing ";
+				err += object_type;
+				err += " named '";
+				err += found_name;
+				err += "' instead of the registered table. Refusing to rebuild plugin data; "
+					"stop ProxySQL and run the owning plugin's offline schema-migration tool before restarting.";
+				failed = true;
+				break;
+			}
+			if (found_name != def.table_name) {
+				err = "Plugin config_db schema preflight found sqlite_master name '";
+				err += found_name;
+				err += "' that differs in case or bytes from registered name '";
+				err += def.table_name;
+				err += "'. Refusing to rebuild plugin data; stop ProxySQL and run the owning plugin's "
+					"offline schema-migration tool before restarting.";
+				failed = true;
+				break;
+			}
+			if (stored_sql_storage == SQLITE_NULL || stored_sql == nullptr || stored_sql_bytes < 0) {
+				err = "Plugin config_db schema preflight found table '";
+				err += def.table_name;
+				err += "' without readable stored DDL in sqlite_master. Refusing to rebuild plugin data; "
+					"stop ProxySQL and run the owning plugin's offline schema-migration tool before restarting.";
+				failed = true;
+				break;
+			}
+			if (stored_sql_storage != SQLITE_TEXT) {
+				err = "Plugin config_db schema preflight found a non-TEXT stored DDL for table '";
+				err += def.table_name;
+				err += "'. Refusing to rebuild plugin data; stop ProxySQL and run the owning plugin's "
+					"offline schema-migration tool before restarting.";
+				failed = true;
+				break;
+			}
+			// sqlite3_column_text() is NUL-terminated, but sqlite_master.sql may
+			// itself contain embedded NUL bytes. Compare the complete TEXT value
+			// exactly as SQLite3DB::check_table_structure() does; a C-string
+			// prefix comparison would let a NUL-suffixed definition through and
+			// the schema builder would then drop the table.
+			const std::string stored_sql_text(
+				reinterpret_cast<const char*>(stored_sql),
+				static_cast<size_t>(stored_sql_bytes));
+			if (stored_sql_text.find('\0') != std::string::npos) {
+				err = "Plugin config_db schema preflight found table '";
+				err += def.table_name;
+				err += "' with an embedded NUL in its stored DDL. Refusing to rebuild plugin data; "
+					"stop ProxySQL and run the owning plugin's offline schema-migration tool before restarting.";
+				failed = true;
+				break;
+			}
+			if (canonical_def != stored_sql_text) {
+				err = "Plugin config_db schema preflight detected a schema mismatch for table '";
+				err += def.table_name;
+				err += "': the existing definition differs from the registered definition. "
+					"Refusing to drop or rebuild plugin data; stop ProxySQL and run the owning plugin's "
+					"offline schema-migration tool before restarting.";
+				failed = true;
+				break;
+			}
+		}
+		if (failed) {
+			(*proxy_sqlite3_finalize)(statement);
+			return false;
+		}
+		if (rc != SQLITE_DONE) {
+			err = "Plugin config_db schema preflight failed while reading table '";
+			err += def.table_name;
+			err += "': ";
+			err += (*proxy_sqlite3_errmsg)(handle);
+			err += ". Refusing to materialize plugin tables; run the owning plugin's offline schema-migration tool before restarting.";
+			(*proxy_sqlite3_finalize)(statement);
+			return false;
+		}
+		rc = (*proxy_sqlite3_finalize)(statement);
+		if (rc != SQLITE_OK) {
+			err = "Plugin config_db schema preflight failed to finalize inspection of table '";
+			err += def.table_name;
+			err += "': ";
+			err += (*proxy_sqlite3_errmsg)(handle);
+			err += ". Refusing to materialize plugin tables; run the owning plugin's offline schema-migration tool before restarting.";
+			return false;
+		}
+		// No sqlite_master row means a fresh database: materialization will
+		// create the registered definition after every definition passed.
+	}
+	return true;
 }
 
 bool ProxySQL_PluginManager::dispatch_admin_command(const ProxySQL_PluginCommandContext& ctx, const std::string& sql, ProxySQL_PluginCommandResult& result) const {

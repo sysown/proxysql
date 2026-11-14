@@ -1,0 +1,46 @@
+# Native client for the permanent-fast-forward vs mapped-TCP benchmark.
+#
+# The client is intentionally built outside the repository.  Donor trees are
+# read-only include/link inputs.  See README.fast-forward.md.
+#
+# Usage:
+#   make -f plugins/tcp_proxy/tests/Makefile.fast-forward \
+#        DEPS_PATH=/mnt/data/rene/proxysql5/proxysql/deps \
+#        OUT_DIR=/tmp/tcp-ff-benchmark
+#   make -f ... clean
+
+CXX      ?= g++
+CXXFLAGS ?= -std=c++17 -O2 -g -Wall -Wextra -Wpedantic -Werror -pthread
+CPPFLAGS ?=
+LDFLAGS  ?=
+OUT_DIR  ?= /tmp/tcp-ff-benchmark
+TARGET   := $(OUT_DIR)/fast_forward_bench_client
+MAKEFILE_SELF := $(abspath $(lastword $(MAKEFILE_LIST)))
+SOURCE   := $(dir $(MAKEFILE_SELF))fast_forward_bench_client.cpp
+
+DEPS_PATH ?= /mnt/data/rene/proxysql5/proxysql/deps
+MARIADB_INC ?= $(DEPS_PATH)/mariadb-client-library/mariadb_client/include
+MARIADB_LIB ?= $(DEPS_PATH)/mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a
+PQ_INC ?= $(DEPS_PATH)/postgresql/postgresql/src/interfaces/libpq
+PQ_SRC_INC ?= $(DEPS_PATH)/postgresql/postgres-REL_16_10/src/include
+PQ_LIB ?= /lib/x86_64-linux-gnu/libpq.so.5
+
+CPPFLAGS += -I$(MARIADB_INC) -I$(PQ_INC) -I$(PQ_SRC_INC)
+LDLIBS += $(MARIADB_LIB) $(PQ_LIB) -lssl -lcrypto -lz -ldl -lm -lresolv -pthread
+
+.PHONY: all clean check-inputs
+
+all: $(TARGET)
+
+$(TARGET): $(SOURCE) $(MAKEFILE_SELF) | check-inputs
+	@mkdir -p "$(OUT_DIR)"
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCE) $(LDFLAGS) $(LDLIBS) -o "$@"
+
+check-inputs:
+	@test -f "$(MARIADB_INC)/mysql.h" || { echo "missing $(MARIADB_INC)/mysql.h" >&2; exit 2; }
+	@test -f "$(PQ_INC)/libpq-fe.h" || { echo "missing $(PQ_INC)/libpq-fe.h" >&2; exit 2; }
+	@test -f "$(MARIADB_LIB)" || { echo "missing $(MARIADB_LIB)" >&2; exit 2; }
+	@test -f "$(PQ_LIB)" || { echo "missing $(PQ_LIB)" >&2; exit 2; }
+
+clean:
+	rm -f "$(TARGET)"

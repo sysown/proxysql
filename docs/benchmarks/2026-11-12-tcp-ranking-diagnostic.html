@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SELECT 1 ranking diagnostic — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-12-tcp-ranking-diagnostic.md">Markdown source</a></nav><h1 id="investigating-the-select-1-throughput-ranking-reversal">Investigating the SELECT 1 throughput ranking reversal</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#controlled-results">Controlled results</a></li><li class="level-2"><a href="#what-changed-from-the-earlier-test">What changed from the earlier test</a></li><li class="level-2"><a href="#cpu-and-routing-evidence">CPU and routing evidence</a></li><li class="level-2"><a href="#per-arm-variation">Per-arm variation</a></li><li class="level-2"><a href="#verification-and-provenance">Verification and provenance</a></li></ul></details>
+<p>The earlier cross-protocol ranking was setup-sensitive. A controlled follow-up did not reproduce the reversal: PostgreSQL was faster both directly and through native TCP. This investigation found no query-counting error or product correctness failure. It does not identify the exact cause of the historical ranking.</p>
+<h2 id="controlled-results">Controlled results</h2>
+<p>Same immutable client, ProxySQL host and TCP plugin binaries, exact <code>SELECT 1</code>, verified result <code>1</code>, four synchronous clients, 100 warmups per client, five-second persistent-query phases, three globally rotated rounds. Each native trial used a fresh daemon with both SQL worker groups set to two, two TCP workers, Admin active and monitors disabled. The database, proxy and clients used separate physical CPU core sets.</p>
+<table>
+<thead>
+<tr>
+<th>Backend protocol</th>
+<th style="text-align:right">Direct QPS</th>
+<th style="text-align:right">Via MySQL HGM QPS</th>
+<th style="text-align:right">Via PostgreSQL HGM QPS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MySQL</td>
+<td style="text-align:right">111,385</td>
+<td style="text-align:right">69,624</td>
+<td style="text-align:right">65,992</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td style="text-align:right">123,820</td>
+<td style="text-align:right">75,086</td>
+<td style="text-align:right">75,752</td>
+</tr>
+</tbody>
+</table>
+<p>All values are medians of three observations. Direct and native PostgreSQL results now exceed their corresponding MySQL results. For each database, changing the mapping selected a different hostgroup manager while retaining the same actual database endpoint, database protocol and client library. Native TCP handles the traffic as bytes, so this cross-mapping is a useful diagnostic control with SQL monitors disabled.</p>
+<p>MySQL traffic was faster through the MySQL manager than through the PostgreSQL manager (69,623.6 versus 65,991.5 QPS). PostgreSQL traffic changed little across the two managers (75,085.8 versus 75,751.9 QPS). The data therefore does not support a MySQL-manager-specific penalty as the explanation of the original cross-protocol gap. It also does not establish that hostgroup-manager costs are identical: the observed namespace differences were about 5.2% for MySQL traffic and 0.9% for PostgreSQL traffic, with only three observations per arm.</p>
+<h2 id="what-changed-from-the-earlier-test">What changed from the earlier test</h2>
+<p>The earlier <a href="2026-11-11-tcp-select1-fast-forward.html">SELECT 1 comparison</a> correctly recorded completed verified queries and elapsed time. It left CPU placement to the scheduler and ran all MySQL rounds before PostgreSQL rounds. The new diagnostic pins the database to CPUs 0–3, proxy to 4–5, clients to 8–11 and orchestration to 12–15, without sharing SMT sibling cores between these groups. It interleaves protocol arms globally and enables both SQL worker groups identically in every native arm. Monitoring and process-wait orchestration also differ. These controls changed together; the improvement cannot be attributed solely to CPU affinity.</p>
+<table>
+<thead>
+<tr>
+<th>Run</th>
+<th style="text-align:right">MySQL direct QPS</th>
+<th style="text-align:right">PostgreSQL direct QPS</th>
+<th style="text-align:right">MySQL native QPS</th>
+<th style="text-align:right">PostgreSQL native QPS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Earlier SELECT 1 test</td>
+<td style="text-align:right">108,923</td>
+<td style="text-align:right">90,269</td>
+<td style="text-align:right">46,606</td>
+<td style="text-align:right">57,360</td>
+</tr>
+<tr>
+<td>Controlled diagnostic</td>
+<td style="text-align:right">111,385</td>
+<td style="text-align:right">123,820</td>
+<td style="text-align:right">69,624</td>
+<td style="text-align:right">75,752</td>
+</tr>
+</tbody>
+</table>
+<p>The native entries use each protocol's corresponding hostgroup manager. The substantial movement shows why the earlier numbers should be treated as observations of that setup, rather than stable protocol-specific proxy costs. This diagnostic did not rerun fast-forward, so its native figures must not be compared directly with the old fast-forward figures to claim a new speedup.</p>
+<p>MySQL uses MariaDB Connector/C and PostgreSQL uses libpq, with different wire-protocol and client I/O behavior. Consequently the two database paths do not constitute an experiment with identical client/server implementations. A rank change alone cannot distinguish a relay defect from scheduling, protocol, client or server interactions. The precise historical cause remains unisolated.</p>
+<h2 id="cpu-and-routing-evidence">CPU and routing evidence</h2>
+<p>Under these controls, median proxy CPU time per verified query was 21.63 microseconds for MySQL through MySQL HGM and 21.19 microseconds for PostgreSQL through PostgreSQL HGM. The cross-mapped arms were also approximately 21–23 microseconds per query. These values come from true per-thread task statistics summed across the daemon; the interval includes client startup, warmups and close, so they are diagnostic CPU costs rather than isolated relay instruction costs. Two proxy threads dominated the CPU usage, consistent with the two active relay workers.</p>
+<p>Each native arm held a successfully queried connection open and proved: the requested runtime mapping was active; the selected manager had a Used connection; the other manager had none; plugin accepted/active and bidirectional byte counters advanced; neither SQL frontend processlist contained that client socket; result verification succeeded. Each trial then completed without connection errors and drained its Used/Free counts.</p>
+<p>Per-thread client affinity was observed while all five threads were live, rather than inferred after process exit. A separate busy/idle thread oracle checked that per-thread CPU counters were not accidentally duplicated process totals. Early development errors in this new diagnostic's CPU and affinity evidence were corrected before the timed run; they did not affect the historical QPS calculations.</p>
+<p>PostgreSQL query-backend CPU remains unavailable in this diagnostic: exited query processes are missed by the endpoint snapshots, and the recorded database CPU is explicitly a lower bound. Hardware performance counters were unavailable (<code>perf_event_paranoid=4</code>); no kernel settings were changed and no traces ran during the timing phases. CPU affinity is not exclusive CPU reservation, and unrelated host load or frequency scaling can still matter.</p>
+<h2 id="per-arm-variation">Per-arm variation</h2>
+<table>
+<thead>
+<tr>
+<th>Arm</th>
+<th style="text-align:right">Median QPS</th>
+<th style="text-align:right">Minimum QPS</th>
+<th style="text-align:right">Maximum QPS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>mysql_direct</td>
+<td style="text-align:right">111,385.0</td>
+<td style="text-align:right">111,187.0</td>
+<td style="text-align:right">112,144.0</td>
+</tr>
+<tr>
+<td>mysql_via_MYSQL_HGM</td>
+<td style="text-align:right">69,623.6</td>
+<td style="text-align:right">66,826.3</td>
+<td style="text-align:right">70,553.0</td>
+</tr>
+<tr>
+<td>mysql_via_PGSQL_HGM</td>
+<td style="text-align:right">65,991.5</td>
+<td style="text-align:right">60,274.3</td>
+<td style="text-align:right">66,358.2</td>
+</tr>
+<tr>
+<td>pgsql_direct</td>
+<td style="text-align:right">123,820.0</td>
+<td style="text-align:right">114,801.0</td>
+<td style="text-align:right">125,648.0</td>
+</tr>
+<tr>
+<td>pgsql_via_MYSQL_HGM</td>
+<td style="text-align:right">75,085.8</td>
+<td style="text-align:right">73,148.8</td>
+<td style="text-align:right">75,223.4</td>
+</tr>
+<tr>
+<td>pgsql_via_PGSQL_HGM</td>
+<td style="text-align:right">75,751.9</td>
+<td style="text-align:right">74,965.3</td>
+<td style="text-align:right">75,893.7</td>
+</tr>
+</tbody>
+</table>
+<h2 id="verification-and-provenance">Verification and provenance</h2>
+<p>One controlled run completed: 18 trials, twelve positive held-routing proofs, verified SQL/result and rate arithmetic, observed client/proxy affinities, successful shutdown of twelve daemons and both task-owned database fixtures, and independent confirmation that all fourteen owned PIDs were gone. Root recomputed the raw query-count/elapsed-time rates and all median/range summaries; a separate reviewer approved the evidence and the limited interpretation. No production or benchmark-tool source in either repository changed.</p>
+<p>The <a href="2026-11-12-tcp-ranking-diagnostic.json">raw diagnostic JSON</a> contains all trials, configuration, counters, process statistics, proofs, order and input hashes. The temporary reproducibility bundle is <code>/tmp/tcp-ranking-diagnostic/final/</code>; its delivery manifest and standalone harness are retained there. The standalone harness was delegated through OpenCode using <code>opencode-go/deepseek-v4.1-flash</code>, with root review and verification.</p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>SHA-256</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ProxySQL</td>
+<td><code>81c4f518f15e05af5de94a14ac445570ffbd0845e9f7bd4a2e9a85b281800d02</code></td>
+</tr>
+<tr>
+<td>TCP plugin</td>
+<td><code>f4111f8949276645977d9ee917eed9784c574017d3a00709050b614ca527b9c4</code></td>
+</tr>
+<tr>
+<td>Native client</td>
+<td><code>87092ec5d5a95b73acc8e9278f686e97ad12641e7bb202c2f7ac1f52384c572b</code></td>
+</tr>
+<tr>
+<td>Diagnostic harness</td>
+<td><code>d6230232e4d7e298fcac294b215e4b9f38acd674a2f5db9743535fc0c601a187</code></td>
+</tr>
+</tbody>
+</table>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>

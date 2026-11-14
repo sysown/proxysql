@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Four-table implementation and verification — ProxySQL TCP proxy</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172536; background: #edf2f6; }
+* { box-sizing: border-box; }
+body { margin: 0; line-height: 1.65; }
+main { max-width: 1080px; margin: 32px auto; padding: 34px 48px 48px; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 18px; border-bottom: 1px solid #d8e2ec; font-size: .92rem; }
+a { color: #075da7; text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:hover { color: #003963; }
+h1, h2, h3, h4 { line-height: 1.25; color: #102c46; scroll-margin-top: 20px; }
+h1 { font-size: 2.1rem; margin: 30px 0 20px; }
+h2 { font-size: 1.45rem; margin-top: 36px; padding-bottom: 8px; border-bottom: 1px solid #e3eaf0; }
+h3 { font-size: 1.14rem; margin-top: 25px; }
+p, li { overflow-wrap: anywhere; }
+li + li { margin-top: 5px; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: .88em; background: #edf2f6; border-radius: 4px; padding: 2px 5px; }
+pre { background: #102435; color: #edf5fc; padding: 18px 20px; border-radius: 7px; overflow-x: auto; line-height: 1.55; }
+pre code { color: inherit; background: none; padding: 0; font-size: .86rem; overflow-wrap: normal; }
+table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .9rem; margin: 22px 0; }
+th, td { border: 1px solid #d8e2ec; padding: 9px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf1f7; color: #102c46; }
+tr:nth-child(even) td { background: #f7f9fb; }
+blockquote { border-left: 4px solid #538bb6; margin: 20px 0; padding: 1px 18px; color: #40556a; background: #f4f8fb; }
+hr { border: 0; border-top: 1px solid #d8e2ec; margin: 32px 0; }
+details { background: #f4f8fb; border: 1px solid #d8e2ec; border-radius: 7px; padding: 12px 18px; margin: 24px 0; }
+summary { font-weight: 600; cursor: pointer; }
+.toc { list-style: none; padding-left: 0; font-size: .92rem; }
+.toc .level-3 { padding-left: 20px; }
+.report-list { list-style: none; padding: 0; }
+.report-list li { border: 1px solid #d8e2ec; border-radius: 7px; padding: 18px 22px; margin: 16px 0; }
+.report-list a { font-size: 1.13rem; font-weight: 600; }
+.report-list p { margin: 8px 0 0; color: #40556a; }
+footer { border-top: 1px solid #d8e2ec; margin-top: 36px; padding-top: 16px; color: #526577; font-size: .86rem; }
+@media (max-width: 700px) { main { margin: 0; border: 0; border-radius: 0; padding: 22px 18px; } h1 { font-size: 1.7rem; } pre { padding: 14px; } }
+@media print { :root { background: white; color: black; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, details { display: none; } pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f4f4; color: black; } table { display: table; width: 100%; font-size: .75rem; } a { color: inherit; } }
+</style>
+</head>
+<body><main>
+<nav aria-label="Report navigation"><a href="../../tcp-proxy-reports.html">All TCP proxy reports</a><a href="2026-11-11-tcp-four-table.md">Markdown source</a></nav><h1 id="four-table-tcp-configuration-implementation-plan">Four-table TCP configuration implementation plan</h1><details><summary>Contents</summary><ul class="toc"><li class="level-2"><a href="#global-constraints">Global constraints</a></li><li class="level-2"><a href="#review-focus">Review focus</a></li><li class="level-3"><a href="#task-1-early-schema-protection-and-offline-converter">Task 1: Early schema protection and offline converter</a></li><li class="level-3"><a href="#task-2-unified-mandatory-mapping-plugin">Task 2: Unified mandatory-mapping plugin</a></li><li class="level-3"><a href="#task-3-composed-validation-tools-and-documentation">Task 3: Composed validation, tools and documentation</a></li><li class="level-3"><a href="#task-4-root-integration-and-review">Task 4: Root integration and review</a></li><li class="level-2"><a href="#final-verification">Final verification</a></li></ul></details>
+<blockquote>
+<p><strong>For agentic workers:</strong> use subagent-driven-development for coordinated OpenCode workers; root owns design, source review and final integration.</p>
+</blockquote>
+<p><strong>Goal:</strong> Remove standalone TCP backend management and expose only mandatory mappings to existing hostgroup managers.</p>
+<p><strong>Architecture:</strong> Four-table Admin configuration drives the existing native relay and ABI18/V2 backend provider. An early generic core schema check prevents destructive upgrades; an explicit plugin-owned offline converter upgrades saved mappings transactionally.</p>
+<p><strong>Tech Stack:</strong> C++17, SQLite, native sockets, Python test/migration tools, existing HGM services.</p>
+<p><strong>Spec:</strong> docs/superpowers/specs/2026-11-11-tcp-four-table-design.md</p>
+<h2 id="global-constraints">Global constraints</h2>
+<ul>
+<li>Mandatory MYSQL/PGSQL mappings; preserve real HGM counters/limits, no reuse, always destroy, OFFLINE_HARD sole force-close authority.</li>
+<li>Exactly four config tables; preserve listener/rule/settings columns and TCP commands/aliases. Source server persistence remains separate.</li>
+<li>No new plugin ABI; immutable core raw service and ownership fence remain intact.</li>
+<li>Preserve uncommitted original work; isolated existing managed worktrees; OpenCode model opencode-go/deepseek-v4.1-flash; no commits/pushes or donor writes.</li>
+<li>Runtime config application and persistence copies are atomic. Legacy DBs never silently lose rows.</li>
+</ul>
+<h2 id="review-focus">Review focus</h2>
+<ul>
+<li>Preflight must run before exact-DDL materialization, including --no-start and STOP/START paths, and inspect every registered persistent plugin table first.</li>
+<li>Converter backup/locking/revalidation/rollback preserve old data on every rejected layout or failure; SQL strings/comments survive unchanged.</li>
+<li>Removing static state must preserve socket ownership, late HARD destruction fence, pending cancellation and no-retry-after-forwarding behavior.</li>
+<li>Tests must replace backend fixtures for relay cases; delete only obsolete standalone policy/health assertions with an explicit retirement list.</li>
+<li>All current examples and tools must use four tables; old benchmark measurements are historical and never relabeled as new runs.</li>
+</ul>
+<h3 id="task-1-early-schema-protection-and-offline-converter">Task 1: Early schema protection and offline converter</h3>
+<p><strong>Files:</strong> core generic plugin schema helper/call site and focused unit tests; plugins/tcp_proxy/tools/migrate_tcp_config.py and focused Python tests. Do not edit production Engine/Admin plugin files.</p>
+<p><strong>Interfaces:</strong> consumes registered ProxySQL_PluginTableDef config definitions and SQLite3DB. Produces bool preflight result plus actionable error, invoked before bootstrap table construction. Converter exact tcp_hostgroups DDL is frozen in spec; CLI --database FILE --check/--apply.</p>
+<ul>
+<li>[x] Add failing core preflight tests: missing/current accepted, later mismatch leaves earlier tables unchanged, malformed SQL/error fails closed.</li>
+<li>[x] Implement generic preflight and early call path; verify non-v4 remains unchanged.</li>
+<li>[x] Add failing converter tests for mapped merge, comments/binary-safe text, static/unmapped/dangling/unknown rejection, backup collision, missing DB, rollback and idempotency.</li>
+<li>[x] Implement explicit transactional offline conversion and tests; compare exact DDL to frozen spec/plugin definition.</li>
+<li>[x] Run focused tests, rebuild matching release core using existing read-only donor dependencies, publish scoped immutable files and hashes.</li>
+</ul>
+<h3 id="task-2-unified-mandatory-mapping-plugin">Task 2: Unified mandatory-mapping plugin</h3>
+<p><strong>Files:</strong> plugins/tcp_proxy/include/<em>.h, src/</em>.cpp, Makefile, tests/Makefile, tests/Makefile.admin, tests/engine_unit.cpp, tests/admin_unit.cpp. Delete obsolete health.cpp/selection.cpp if no remaining responsibility. Do not edit tools, core or integration Python/harness files.</p>
+<p><strong>Interfaces:</strong> Hostgroup has exactly hostgroup_id/source_protocol/source_hostgroup/comment; Config has settings/hostgroups/listeners/rules. Snapshot retains global/listener/rule data, no server data. BackendConnection/Provider and core service remain unchanged. Authoritative DDL from spec.</p>
+<ul>
+<li>[x] Add failing tests for new hostgroup mapping definition, provider requirement, invalid/missing destinations and four-table schema/transactions.</li>
+<li>[x] Remove static config/runtime/selection/health path and merge mappings into hostgroups; preserve native relay lifecycle and exact accounting/fences.</li>
+<li>[x] Register four persistent pairs/projections; remove server views/metrics and all ignored knobs; enforce service availability for configured hostgroups.</li>
+<li>[x] Adapt relay test fixtures to injected test backend providers, retain mapped race/ownership coverage, record retired obsolete cases.</li>
+<li>[x] Run Engine/Admin targeted suites, release/debug plugin builds, sanitizers; publish immutable source/binaries and scoped diff.</li>
+</ul>
+<h3 id="task-3-composed-validation-tools-and-documentation">Task 3: Composed validation, tools and documentation</h3>
+<p><strong>Files:</strong> plugins/tcp_proxy/tests integration Python, harness and Makefile.integration/README.integration.md; doc/tcp-proxy-plugin.md; plugins/tcp_proxy/README.md; new dated benchmark reports. Root refreshes HTML/index and plan/ledger. Consume final Core/Engine artifacts; no product edits without reporting defect.</p>
+<ul>
+<li>[x] Adapt daemon fixtures, harness and applicable adversarial scenarios to four-table product configuration; document retired static-only scenarios.</li>
+<li>[x] Add real-daemon preflight refusal before data loss, converter/startup, four-table persistence, shared source mappings and removed schema/metrics checks.</li>
+<li>[x] Run both-protocol real-daemon lifecycle/accounting/status/monitor tests and relevant relay adversarial cases against final matching immutable artifacts.</li>
+<li>[x] Run measured direct/MySQL/PgSQL/HAProxy short benchmark with byte/counter reconciliation and source/artifact provenance; no static mode.</li>
+<li>[x] Rewrite current configuration guide and integration commands, preserving historical reports as historical.</li>
+</ul>
+<h3 id="task-4-root-integration-and-review">Task 4: Root integration and review</h3>
+<ul>
+<li>[x] Compare all scoped changes to saved original baseline; independently review core/data migration and plugin lifetime changes; dispatch whole-change review.</li>
+<li>[x] Integrate only reviewed scoped files, including deletions, preserving unrelated work and editable modes; force fresh artifact builds as needed.</li>
+<li>[x] Independently verify relevant Engine/Admin/migration and composed-daemon cases in original checkout; resolve material findings and rerun affected checks.</li>
+<li>[x] Refresh current HTML guide/index/design/plan/benchmark and legacy guide compatibility copy; check files, anchors and docs-only HTTP serving.</li>
+<li>[x] Save final manifest/ledger and report completion with limitations and no commits.</li>
+</ul>
+<h2 id="final-verification">Final verification</h2>
+<p>Completed on 2026-11-11. OpenCode <code>opencode-go/deepseek-v4.1-flash</code> handled
+implementation, test tools, composed testing and the benchmark; root owned the
+architecture, integration, source review and independent verification.</p>
+<ul>
+<li>Engine: 65 cases / 1,029 checks, including ASan/UBSan/leak checks. The 21
+retired cases test deleted standalone policy/health/server-stat behavior;
+pending-generation, generic relay and mapped ownership/HARD tests remain.</li>
+<li>Admin: 354 assertions. Core schema preflight: 51 assertions. Converter: 21
+tests with actual legacy fixtures and actual plugin DDL. Release/debug
+plugins build and export only the descriptor. Affected non-v4 core units
+also pass syntax checks; no full non-v4 link is claimed.</li>
+<li>Composed daemon: all five Admin cases and all 15 mapped cases pass, including
+86 portable upgrade checks. All 36 applicable socket adversarial scenarios
+pass; eight obsolete local selection/health scenarios are explicitly retired.
+Final component hashes/build flags exactly match that tested Engine binary.
+MySQL monitoring uses a task-owned mysqld; PostgreSQL monitoring uses a
+controlled wire-protocol fixture, rather than physical replica promotion.</li>
+<li>Root independently rebuilt the original plugin and reran Engine/Admin and
+converter checks. Live tests using actual old-daemon DBs verify refusal
+before data changes, safe conversion, both protocol HGM limits shared by two
+TCP groups, Used/Free drain, fresh connections and saved restart. Seven actual
+core metadata/control probes verify the fail-closed preflight. The root-built
+DSO also passes binary relay/HARD closure against the final host.</li>
+<li>The single measured four-mode benchmark completes with independently
+recomputed exact backend bytes/connections and HGM byte/connection outcomes;
+mapped Used/Free return to zero. These are short local loopback measurements,
+not production capacity estimates. See <a href="../../benchmarks/2026-11-11-tcp-four-table-daemon.html">the benchmark</a>.</li>
+<li>Independent source/spec and code-quality review is clean; reproduced schema
+identity/fail-open defects were fixed and retested. Final evidence and source
+manifests are retained under <code>/tmp/tcp-four-table/</code>.</li>
+</ul>
+<p>The <a href="../../tcp-proxy-plugin.html">configuration guide</a> describes the four
+remaining tables and explicit offline upgrade. The <a href="../../tcp-proxy-reports.html">HTML report index</a>
+links current reports and clearly labeled historical snapshots. Changes remain
+uncommitted; existing unrelated edits and old measured Markdown/JSON reports
+are preserved.</p>
+<footer>HTML edition of the original report. Tables and code examples are preserved; this page works offline.</footer>
+</main></body>
+</html>
