@@ -18,7 +18,8 @@ struct MySQL_Query_Limit {
         sql_parser::Tokenizer<sql_parser::Dialect::MySQL> lexer;
         lexer.reset(sql.data(), sql.size());
         unsigned depth = 0;
-        T previous = T::TK_EOF, before_previous = T::TK_EOF;
+        bool select_list_active = false;
+        T previous = T::TK_EOF;
         for (;;) {
             auto token = lexer.next_token();
             if (token.type == T::TK_EOF || token.type == T::TK_ERROR ||
@@ -32,9 +33,18 @@ struct MySQL_Query_Limit {
                 if ((token.type == T::TK_COUNT || token.type == T::TK_SUM ||
                      token.type == T::TK_AVG) && lexer.peek().type == T::TK_LPAREN)
                     aggregate = true;
-                if (token.type == T::TK_FROM && previous == T::TK_ASTERISK &&
-                    before_previous == T::TK_SELECT) select_star = true;
-                before_previous = previous;
+
+                if (token.type == T::TK_SELECT) select_list_active = true;
+                if (token.type == T::TK_FROM || token.type == T::TK_UNION)
+                    select_list_active = false;
+                if (select_list_active && token.type == T::TK_ASTERISK) {
+                    // A projection wildcard ends an item. Multiplication has
+                    // an operand after '*'; COUNT(*) is inside parentheses.
+                    const T next = lexer.peek().type;
+                    if (next == T::TK_COMMA || next == T::TK_FROM ||
+                        next == T::TK_EOF || next == T::TK_SEMICOLON)
+                        select_star = true;
+                }
                 previous = token.type;
             }
             if (token.type == T::TK_LPAREN) ++depth;
@@ -47,6 +57,7 @@ struct MySQL_Query_Limit {
         result.insert(insert_at, " LIMIT " + std::to_string(max_rows));
         return result;
     }
+
 };
 } // namespace genai
 #endif

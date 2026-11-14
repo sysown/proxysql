@@ -162,6 +162,15 @@ static void test_query_limits() {
        "SELECT-star guard sees through comments");
     ok(!genai::MySQL_Query_Limit("SELECT 'SELECT * FROM t' FROM t").select_star,
        "SELECT-star text in a literal does not trigger the guard");
+    for (const char* sql : {"SELECT *, 1 FROM t", "SELECT DISTINCT *, 1 FROM t",
+                            "SELECT t.*, 1 FROM t", "SELECT 1, t.* FROM t",
+                            "SELECT ALL t.* FROM t", "SELECT SQL_NO_CACHE * FROM t",
+                            "SELECT 1 UNION SELECT *, 1 FROM t"})
+        ok(genai::MySQL_Query_Limit(sql).select_star, "detect projection wildcard: %s", sql);
+    for (const char* sql : {"SELECT a * b FROM t", "SELECT COUNT(*) FROM t",
+                            "SELECT 1, a * b FROM t", "SELECT (SELECT * FROM t) FROM u"})
+        ok(!genai::MySQL_Query_Limit(sql).select_star, "expression/nested star is not outer wildcard: %s", sql);
+
 }
 
 static void test_cleanup_exceptions() {
@@ -230,6 +239,7 @@ int main() {
         "SELECT RELEASE_ALL_LOCKS()", "SELECT LAST_INSERT_ID(1)",
         "SELECT SOURCE_POS_WAIT('mysql-bin.000001', 4)",
         "SELECT MASTER_POS_WAIT('mysql-bin.000001', 4)",
+        "SELECT MASTER_GTID_WAIT('0-1-100')",
         "SELECT WAIT_FOR_EXECUTED_GTID_SET('3E11FA47-71CA-11E1-9E33-C80AA9429562:1')",
         "SELECT @mcp_value := 1", "SELECT @mcp_value /**/ := 1",
         "SELECT LAST_INSERT_ID /**/ (1)", "SELECT `LAST_INSERT_ID` /* x */ (1)"
@@ -237,7 +247,7 @@ int main() {
     plan(2 * (sizeof(allowed)/sizeof(*allowed) + sizeof(denied)/sizeof(*denied)) + 5 + 24
          + 4 * (sizeof(boundary_cases)/sizeof(*boundary_cases))
          + 2 * (sizeof(pg_effect_functions)/sizeof(*pg_effect_functions)
-                + sizeof(pg_unicode_cases)/sizeof(*pg_unicode_cases)) + 4 + 23 + 10 + 12 + 7);
+                + sizeof(pg_unicode_cases)/sizeof(*pg_unicode_cases)) + 4 + 23 + 10 + 12 + 7 + 11);
     for (bool select_only : {false, true}) {
         for (auto sql : allowed)
             ok(genai::readonly_sql<sql_parser::Dialect::MySQL>(sql, select_only),

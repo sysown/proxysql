@@ -79,7 +79,7 @@ inline bool readonly_sql(const std::string& sql, bool select_only = false) {
                 if (word == denied) return false;
             if constexpr (D == sql_parser::Dialect::MySQL) {
                 for (const char* denied : {"GET_LOCK", "RELEASE_LOCK", "RELEASE_ALL_LOCKS",
-                        "MASTER_POS_WAIT", "SOURCE_POS_WAIT", "WAIT_FOR_EXECUTED_GTID_SET"})
+                        "MASTER_GTID_WAIT", "MASTER_POS_WAIT", "SOURCE_POS_WAIT", "WAIT_FOR_EXECUTED_GTID_SET"})
                     if (word == denied) return false;
                 if (word == "LAST_INSERT_ID") {
                     // Copy the lexer so comments and quoting cannot hide
