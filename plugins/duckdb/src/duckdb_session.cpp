@@ -690,6 +690,25 @@ bool apply_client_config_policy(const std::string& sql, std::string& to_prepare,
 		to_prepare = sql;
 		return true;
 	}
+	// DuckDB 2.0 expands these PRAGMAs into SET during prepare. Preserve the
+	// session-only aliases without admitting other unconfined configuration SETs.
+	if (keyword == "PRAGMA") {
+		const size_t name_at = skip_space_and_comments(sql, keyword_at + keyword.size());
+		const std::string name = read_lower_identifier(sql, name_at);
+		if (name == "enable_optimizer" || name == "disable_optimizer") {
+			size_t end = name_at + name.size();
+			if (name_at < sql.size() && sql[name_at] == '"') end += 2;
+			const size_t suffix_at = end;
+			end = skip_space_and_comments(sql, end);
+			if (end < sql.size() && sql[end] == ';') end = skip_space_and_comments(sql, end + 1);
+			if (end == sql.size()) {
+				to_prepare = std::string("SET SESSION enable_optimizer=") +
+				             (name == "enable_optimizer" ? "true" : "false") + sql.substr(suffix_at);
+				confined = true;
+				return true;
+			}
+		}
+	}
 	if (keyword != "SET" && keyword != "RESET") {
 		to_prepare = sql;
 		return true;

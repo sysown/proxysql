@@ -1,179 +1,115 @@
 # Vendored DuckDB
 
-DuckDB source is vendored under this directory and prepared as a
-static library (`libduckdb_static.a`) for the `PROXYSQL40` plugin-chassis
-tier. The release archive is committed directly to git (like every other
-dependency under `deps/`), alongside a committed SHA-256 sidecar and a
-`verify-source.bash` preflight. The verifier fails fast and legibly if the
-archive is missing, corrupted, or tampered with.
+DuckDB is built as a static library for the `PROXYSQL40` plugin tier. The
+complete source archive and SHA-256 sidecar are committed directly to git.
+`verify-source.bash` checks the checksum and archive root before extraction.
 
-## Pinned version
+## Pinned source
 
-- **Version:** DuckDB **v1.4.5** (DuckDB's LTS release line)
-- **Upstream URL:** https://github.com/duckdb/duckdb/archive/refs/tags/v1.4.5.tar.gz
-- **Release page:** https://github.com/duckdb/duckdb/releases/tag/v1.4.5
-- **Archive:** `deps/duckdb/duckdb-1.4.5.tar.gz`
-- **SHA-256:** `29931ac91cf9077292773099a900c67be6d13b933978e176249b6e5b75b0b958`
-  (also recorded in `deps/duckdb/duckdb-1.4.5.tar.gz.sha256`)
-- **Archive root:** `duckdb-1.4.5/`
+- **Version:** DuckDB **v2.0.0** (LTS)
+- **Release:** https://github.com/duckdb/duckdb/releases/tag/v2.0.0
+- **Upstream archive:** https://github.com/duckdb/duckdb/archive/refs/tags/v2.0.0.tar.gz
+- **Upstream gzip SHA-256:** `7e89053255046bfb26afbd7f524a2fb84df7dbef496aa911ea35e4a1182fdc00`
+- **Vendored archive:** `duckdb-2.0.0.tar.xz` (86,703,408 bytes)
+- **Vendored SHA-256:** `853148808ccfbb916465066d5701ce89fc60db8d2d6f2defacba2ae75be13e59`
+- **Uncompressed tar SHA-256:** `271f44bb49145f16aabdb189ee5532e252721f53069e9ad61a072e113f7a565c`
+- **Archive root:** `duckdb-2.0.0/`
 
-v1.4.5 was chosen (over the latest v1.5.5) because it is DuckDB's LTS line
-and targets an older toolchain floor, matching the AlmaLinux 8 floor in this
-project's package build matrix (`.github/workflows/CI-package-*almalinux8*.yml`).
+The upstream gzip archive is 106,477,075 bytes, exceeding GitHub's 100 MiB
+file limit. It is recompressed using XZ Utils without changing the tar stream
+or excluding source files. No Git LFS or build-time download is required.
+The pinned archive was produced with XZ Utils 5.4.5:
 
-## The archive is vendored directly in git
+```bash
+curl --fail -L -o duckdb-2.0.0.tar.gz \
+  https://github.com/duckdb/duckdb/archive/refs/tags/v2.0.0.tar.gz
+gzip -dc duckdb-2.0.0.tar.gz | xz -T2 -9e > duckdb-2.0.0.tar.xz
+sha256sum duckdb-2.0.0.tar.gz duckdb-2.0.0.tar.xz
+gzip -dc duckdb-2.0.0.tar.gz | sha256sum
+xz -dc duckdb-2.0.0.tar.xz | sha256sum
+```
 
-`deps/duckdb/duckdb-1.4.5.tar.gz` is a regular git blob — no Git LFS, no
-extra fetch step. A plain `git clone` contains the full 98 MB archive, so
-`deps/duckdb/verify-source.bash` only has to guard against corruption or
-tampering (SHA-256 + archive-root checks), and no workflow needs any
-LFS-related `actions/checkout` setting.
+Check both decompressed hashes match. Other compressor versions or thread
+settings may produce a different compressed checksum; the tar hash must match.
+
+## Compatibility
+
+DuckDB 2.0 requires C++17, already required by ProxySQL. Source builds also
+need CMake 3.14 or newer and XZ-capable tar (GNU tar needs `xz` / `xz-utils`). The verifier
+reports a missing decompressor before extraction. The v1 C API remains in
+`duckdb.h`; the separate v2 C API is not used by the plugin.
+
+New 2.0 database files use a storage format unreadable by DuckDB 1.x. Opening
+an existing 1.x file preserves its storage format. Before upgrading, back up
+persistent files and test application SQL: 2.0 uses the PEG parser by default
+and disables single-arrow lambdas. Use `lambda x: ...` for lambdas. Restore a
+backup or export/import into a file explicitly created with an older
+`STORAGE_VERSION` when rolling back a new 2.0 database. External DuckDB
+extensions must match the engine release and platform.
+
+See the [release announcement](https://duckdb.org/2026/10/21/announcing-duckdb-200)
+and [storage compatibility](https://duckdb.org/docs/2.0/internals/storage).
 
 ## Building
-
-The default `DEPS_MODE=auto` restores an exact verified compiled artifact when
-registered, and otherwise builds this vendored source. Use `DEPS_MODE=source`
-for source-only preparation or `DEPS_MODE=prebuilt` to require an artifact.
-See [compiled dependency reuse](../../doc/dependency-artifacts.md) for publication,
-registration, supported configurations, and cache behavior.
 
 ```bash
 make -C deps PROXYSQL40=1 duckdb
 ```
 
-produces `deps/duckdb/duckdb/build/release/src/libduckdb_static.a` and
-headers under `deps/duckdb/duckdb/src/include/`. The paths are exposed to
-the rest of the build via `include/makefiles_paths.mk`:
+This produces `duckdb/build/release/src/libduckdb_static.a` and headers under
+`duckdb/src/include/`. `include/makefiles_paths.mk` exposes these as
+`DUCKDB_PATH`, `DUCKDB_IDIR` and `DUCKDB_LDIR`.
 
-```make
-DUCKDB_PATH := $(DEPS_PATH)/duckdb/duckdb
-DUCKDB_IDIR := $(DUCKDB_PATH)/src/include
-DUCKDB_LDIR := $(DUCKDB_PATH)/build/release/src
-```
+`DEPS_MODE=auto` restores an exact verified compiled artifact when registered,
+otherwise builds the vendored source. Use `DEPS_MODE=source` for source-only
+preparation or `DEPS_MODE=prebuilt` to require an artifact. See
+[compiled dependency reuse](../../doc/dependency-artifacts.md).
 
-The plugin needs the complete static archive set, not only
-`libduckdb_static.a`. `list-static-archives.sh` reads the generated
-`build/release/DuckDBExports.cmake` and rejects any missing or empty archive
-before linking. It also validates existing builds on an incremental invocation.
-The expected set is configuration-dependent: the normal macOS build has 15
-archives, while the normal Linux build has 16 because DuckDB adds its jemalloc
-extension there. No platform-independent minimum count is used. A missing
-manifest requires reconfiguring/rebuilding DuckDB; it must not be bypassed by
-adding unrelated archives. Build-relative paths permit relocated dependency
-caches, provided the complete configured set and its manifest are copied.
+The plugin needs every static archive listed in the generated
+`build/release/DuckDBExports.cmake`. `list-static-archives.sh` rejects missing
+or empty archives before linking and uses relative paths for relocated caches.
+The set depends on platform and configuration. DuckDB exports capability
+archives (HTTP and loadable extensions), a C++ API archive under `tools/cpp/`,
+and jemalloc under `third_party/` on Linux. Static consumers compile the
+generated extension loader and upstream autoregistration source directly into
+their final binary or plugin; the archives alone do not register core SQL
+functions. Both loader sources are included in compiled dependency bundles.
+The build enables HTTP and loadable-extension capabilities explicitly, excluding
+the build-local extension repository so relocated binaries do not retain its path.
+TSAN builds force
+`ENABLE_THREAD_SANITIZER=ON` and `ENABLE_JEMALLOC=OFF`; excluding a jemalloc
+extension alone does not disable the allocator in this release.
 
-The root Makefile exports `PROXYSQL40` to dependency sub-makes, so
-`PROXYSQL40=1 make` prepares DuckDB and builds the plugin. Direct plugin builds
-also reevaluate DuckDB preparation before compiling. The focused source recipe
-and its version/configure settings are in `deps/duckdb/build.mk`.
+The root Makefile exports `PROXYSQL40` to dependency sub-makes. Direct plugin
+builds also reevaluate dependency preparation. The focused source recipe and
+version settings are in `build.mk`. `DUCKDB_OPTIMIZATION_PROFILE=NONE` preserves
+the compiler target baseline; upstream's CLI profile otherwise selects
+`-march=x86-64-v3` for Linux release builds.
 
-## Bumping the version
+## Updating the source
 
-1. Download the new release archive and compute its checksum:
-   ```bash
-   cd deps/duckdb
-   curl -L -o duckdb-<new-version>.tar.gz \
-     https://github.com/duckdb/duckdb/archive/refs/tags/v<new-version>.tar.gz
-   sha256sum duckdb-<new-version>.tar.gz | awk '{print $1"  duckdb-<new-version>.tar.gz"}' \
-     > duckdb-<new-version>.tar.gz.sha256
-   tar -tzf duckdb-<new-version>.tar.gz | head -1   # confirm the archive root
-   ```
-2. Update `deps/duckdb/verify-source.bash`:
-   - `archive` default path -> `duckdb-<new-version>.tar.gz`
-   - `required_root` -> the root printed by `tar -tzf ... | head -1` (usually
-     `duckdb-<new-version>`, but verify — do not assume)
-3. Update `DUCKDB_VERSION` and the explicit DuckDB version in
-   `deps/duckdb/build.mk`. If the archive root changed, update its extraction
-   command as well. Publish/register new compiled artifacts for the changed
-   dependency; old registry entries cannot match the new source/recipe digest.
-4. Commit the new archive and checksum file directly (`git add
-   deps/duckdb/duckdb-<new-version>.tar.gz
-   deps/duckdb/duckdb-<new-version>.tar.gz.sha256`) — no Git LFS.
-   Remove the old archive and checksum file (`git rm
-   deps/duckdb/duckdb-<old-version>.tar.gz
-   deps/duckdb/duckdb-<old-version>.tar.gz.sha256`).
-   Note: GitHub blocks individual files over 100 MB in regular git; if a
-   future DuckDB archive exceeds that, the vendoring strategy must be
-   revisited (e.g. download-on-demand at build time) instead of LFS —
-   LFS bandwidth is metered and was the reason LFS was removed.
-5. Re-run the verifier test:
-   ```bash
-   bash test/infra/control/test-vendored-duckdb-source.bash
-   ```
-6. Rebuild and re-check the result-API shape (see below) in case it changed:
-   ```bash
-   make -C deps PROXYSQL40=1 duckdb
-   grep -c "duckdb_value_varchar\|duckdb_row_count\|duckdb_value_is_null" \
-     deps/duckdb/duckdb/src/include/duckdb.h
-   ```
-7. Update this README's "Pinned version" and "Result-API shape" sections.
+1. Download the upstream release and record its checksum. If recompression is
+   needed, preserve the complete tar stream and record both compressed hashes
+   and the matching tar hash. Keep the committed file below 100 MiB.
+2. Update the archive, SHA-256 sidecar, verifier defaults/root and `build.mk`
+   version. Keep archive suffixes consistent with `deps/artifacts/identity.py`
+   and the no-Python fallback in `deps/artifacts/prepare.bash`.
+3. Remove the previous archive and sidecar. Update fixture version expectations
+   and installation documentation. Old compiled artifacts cannot match the
+   changed source/recipe identity; publish new artifacts separately.
+4. Run the source-verifier and dependency-artifact tests, rebuild DuckDB and
+   the plugin, and run DuckDB integration/unit tests. Check existing and newly
+   created persistent files when storage compatibility changes.
 
-## Build cost
+## Result API
 
-Design decision D2 (`docs/superpowers/specs/2026-08-26-duckdb-server-plugin-design.md`,
-§4) committed to measuring the real cost of this dep build rather than
-leaving the original 10–30 minute estimate standing.
+The pinned `duckdb.h` still declares `duckdb_value_varchar`, `duckdb_row_count`
+and `duckdb_value_is_null`. They are deprecated and included by default
+(`DUCKDB_API_ALLOW_DEPRECATED=1`); `DUCKDB_API_NO_DEPRECATED` hides them.
+Recheck declarations and call sites on each future upgrade.
 
-**This is an observation, not a controlled from-scratch measurement.**
-A true `cleanall` + timed rebuild was not performed in the session that
-recorded these numbers, specifically to avoid destroying the working
-DuckDB build tree that later verification and review depend on (per that
-task's explicit instructions). What follows is the actual wall-clock this
-dep build took the two times it was genuinely built from scratch during
-this sub-project's development, read back from that session's own
-transcript rather than re-measured:
-
-| Run | What happened | Wall-clock | Cores |
-|---|---|---|---|
-| Initial vendoring build | `make -C deps PROXYSQL40=1 duckdb` — verify, extract, cmake configure, `cmake --build build/release -j32` | ~10 minutes | 32 (`nproc`) |
-| Rebuild after the `DUCKDB_EXPLICIT_VERSION` fix | `libduckdb_static.a` deleted and the same recipe re-run in full (re-verify, re-extract, reconfigure, rebuild) | ~7 minutes | 32 (`nproc`) |
-
-No peak-RSS figure was captured for either run (`/usr/bin/time -v` was
-not used at the time); only wall-clock is known. Both runs were on the
-same 32-core machine this repository's DuckDB build tree currently lives
-on. Artifact sizes at the time of writing:
-
-- `deps/duckdb/duckdb-1.4.5.tar.gz` (the vendored source archive): 98,359,161 bytes (~94 MiB)
-- `deps/duckdb/duckdb/build/release/src/libduckdb_static.a` (the built static library): 73,663,416 bytes (~70 MiB)
-- `deps/duckdb/duckdb/` (full extracted + built tree): ~606 MiB
-
-**Verdict on D2's gating decision, pending a real controlled measurement:**
-~7–10 minutes wall-clock on 32 cores is well inside the original 10–30
-minute estimate's low end, not near its high end — DuckDB's build does not
-appear to be the largest compile in the tree in practice, at least on a
-high-core-count machine. A slower/fewer-core CI runner will see a larger
-number; anyone revisiting D2 should get a genuine `/usr/bin/time -v make
--C deps PROXYSQL40=1 duckdb` run (after `cleanall`) on the actual CI
-runner class, not extrapolate from this workstation figure.
-
-## Result-API shape (checked against v1.4.5)
-
-`deps/duckdb/duckdb/src/include/duckdb.h` in the pinned v1.4.5 tree still
-declares the deprecated scalar-value result accessors:
-
-```
-grep -c "duckdb_value_varchar\|duckdb_row_count\|duckdb_value_is_null" \
-  deps/duckdb/duckdb/src/include/duckdb.h
-# => 6
-```
-
-All three symbols (`duckdb_value_varchar`, `duckdb_row_count`,
-`duckdb_value_is_null`) are present and usable, but each is guarded by
-`#ifndef DUCKDB_API_NO_DEPRECATED` and individually documented with a
-`**DEPRECATION NOTICE**: This method is scheduled for removal in a future
-release.` comment (DuckDB does not define `DUCKDB_API_NO_DEPRECATED` in this
-build, so they compile in normally). Practically:
-
-- A later task (result-materialization, e.g. Task 5) **may** use
-  `duckdb_value_varchar` / `duckdb_row_count` / `duckdb_value_is_null`
-  against this pinned version — they exist and work.
-- Because they are marked for future removal, prefer implementing against
-  `duckdb_fetch_chunk` + `duckdb_vector_get_data` +
-  `duckdb_validity_row_is_valid` instead if avoiding a forced rewrite on the
-  next version bump matters more than short-term implementation speed. This
-  is the fallback strategy this task's brief specified for the case where
-  the deprecated accessors are *absent* (count == 0); here they are present,
-  so using them is a valid choice, but not future-proof.
-- On any future version bump, re-run the Step 8 grep above — if the count
-  drops to 0, the deprecated accessors have been removed and the chunk-based
-  API becomes mandatory, not just preferred.
+The plugin converts results using materialized chunks, vector data and
+validity masks to preserve embedded NUL bytes and distinguish SQL NULLs.
+Some result/session paths and tests still use deprecated accessors.
+`GEOMETRY` and `VARIANT`, introduced after 1.4, remain outside the plugin's
+explicit supported-type list and are rejected before conversion.

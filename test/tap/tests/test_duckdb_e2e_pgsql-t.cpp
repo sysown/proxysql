@@ -20,11 +20,13 @@ namespace {
 // instead of failing outright.
 const char* DUCKDB_PGSQL_PORT = "6034";
 
-PGconn* connect_duckdb(CommandLine& cl, const char* user, const char* pass) {
+PGconn* connect_duckdb(CommandLine& cl, const char* user, const char* pass,
+                     const char* sslmode = nullptr) {
 	std::string conninfo = "host=" + std::string(cl.host) +
 		" port=" + DUCKDB_PGSQL_PORT +
 		" user=" + user + " password=" + pass +
 		" dbname=main connect_timeout=10";
+	if (sslmode != nullptr) conninfo += " sslmode=" + std::string(sslmode);
 	PGconn* c = PQconnectdb(conninfo.c_str());
 	if (c == nullptr) return nullptr;
 	if (PQstatus(c) != CONNECTION_OK) { PQfinish(c); return NULL; }
@@ -256,15 +258,17 @@ int main(int argc, char** argv) {
 		PQclear(r);
 	}
 
+	// These probes bypass libpq's TLS I/O and send protocol frames directly
+	// through PQsocket(), so only their connections must use plaintext.
 	for (char type : { 'P', 'B', 'C', 'D', 'E' }) {
-		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
+		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password, "disable");
 		ok(extended != NULL && unsupported_message_gets_error(extended, type),
 		   "unsupported extended-query message %c gets an immediate ErrorResponse", type);
 		if (extended != NULL) PQfinish(extended);
 	}
 
 	{
-		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
+		PGconn* extended = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password, "disable");
 		ok(extended != NULL && extended_error_resynchronizes_on_sync(extended),
 		   "extended-query rejection emits one error, discards Flush until Sync, then sends ReadyForQuery");
 		if (extended != NULL) PQfinish(extended);

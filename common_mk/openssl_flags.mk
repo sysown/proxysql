@@ -1,4 +1,4 @@
-OPENSSL_VERSION := 3.5.7
+OPENSSL_VERSION := 3.5.9
 
 DEPS_PATH ?= $(PROXYSQL_PATH)/deps
 SSL_PATH := $(DEPS_PATH)/libssl/openssl

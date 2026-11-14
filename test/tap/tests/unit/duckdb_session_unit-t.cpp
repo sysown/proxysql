@@ -51,7 +51,7 @@ std::string scalar_text(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(95);
+	plan(100);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -466,6 +466,26 @@ int main() {
 	   explain_comments.error.c_str());
 	const DuckDBExecOutcome session_pragma = duckdb_execute_effective(managed_conn, "PRAGMA enable_optimizer");
 	ok(session_pragma.ok, "a session-local optimizer PRAGMA is allowed (%s)", session_pragma.error.c_str());
+
+	const DuckDBExecOutcome optimizer_off = duckdb_execute_effective(managed_conn,
+		"/* client */ PRAGMA \"disable_optimizer\"; -- session only");
+	ok(optimizer_off.ok && scalar_text(managed_conn, "SELECT current_setting('enable_optimizer')") == "false" &&
+	   scalar_text(other_conn, "SELECT current_setting('enable_optimizer')") == "true",
+	   "optimizer PRAGMA remains private to its connection (%s)", optimizer_off.error.c_str());
+	const DuckDBExecOutcome optimizer_on = duckdb_execute_effective(managed_conn,
+		"PRAGMA /* option */ enable_optimizer;");
+	ok(optimizer_on.ok && scalar_text(managed_conn, "SELECT current_setting('enable_optimizer')") == "true",
+	   "optimizer PRAGMA accepts comments and restores the session value (%s)", optimizer_on.error.c_str());
+	const DuckDBExecOutcome optimizer_batch = duckdb_execute_effective(managed_conn,
+		"PRAGMA enable_optimizer; SET GLOBAL threads=64");
+	ok(!optimizer_batch.ok, "optimizer alias does not bypass the multi-statement configuration gate");
+
+	const DuckDBExecOutcome optimizer_comment = duckdb_execute_effective(managed_conn,
+		"PRAGMA disable_optimizer /* unterminated");
+	ok(!optimizer_comment.ok && scalar_text(managed_conn, "SELECT current_setting('enable_optimizer')") == "true",
+	   "optimizer alias preserves malformed-comment errors without changing the session");
+	const DuckDBExecOutcome optimizer_call = duckdb_execute_effective(managed_conn, "PRAGMA disable_optimizer()");
+	ok(!optimizer_call.ok, "optimizer alias does not accept unsupported empty-parentheses syntax");
 
 	// Binding a SET evaluates its value, so the statement must be prepared exactly
 	// once, already confined: a volatile value must be evaluated a single time.

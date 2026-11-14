@@ -43,15 +43,15 @@ class PreparationTests(unittest.TestCase):
         shutil.copy(ROOT / 'deps/libssl/build.mk', directory)
         (directory / 'verify-source.bash').write_text('#!/bin/sh\nexit 0\n')
         (directory / 'verify-source.bash').chmod(0o755)
-        (directory / 'openssl').symlink_to('openssl-3.5.7')
-        template = self.root / 'template/openssl-3.5.7'
+        (directory / 'openssl').symlink_to('openssl-3.5.9')
+        template = self.root / 'template/openssl-3.5.9'
         fixture_tree(template, 'openssl')
         (template / 'include/openssl/x509.h').write_text('another public header')
         (template / 'config').write_text('#!/bin/sh\nexit 0\n')
         (template / 'config').chmod(0o755)
         (template / 'Makefile').write_text('all:\n\t@sleep 0.05\n\t@echo built >> ' +
                                            str(self.root / 'source-builds') + '\n')
-        source = directory / 'openssl-3.5.7.tar.gz'
+        source = directory / 'openssl-3.5.9.tar.gz'
         with tarfile.open(str(source), 'w:gz') as archive:
             archive.add(str(template), arcname=template.name)
         Path(str(source) + '.sha256').write_text(self.identity.digest_file(source) + '  ' + source.name + '\n')
@@ -60,8 +60,8 @@ class PreparationTests(unittest.TestCase):
             'CC := cc\nCXX := c++\nexport CC CXX\n'
             'include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk\n'
             'include $(PROXYSQL_PATH)/deps/libssl/build.mk\n'
-            'cleanbuild:\n\trm -rf libssl/openssl-3.5.7\n')
-        self.tree = directory / 'openssl-3.5.7'
+            'cleanbuild:\n\trm -rf libssl/openssl-3.5.9\n')
+        self.tree = directory / 'openssl-3.5.9'
         # Direct API tests use the real toolchain, as subprocess Make does.
 
     def prepare(self, mode='auto'):
@@ -123,7 +123,7 @@ class PreparationTests(unittest.TestCase):
     def assert_tsan_openssl_compilation(self, python_free=False, custom_flags=False):
         # Model configure's generated flags, then really compile and archive an
         # object. Replacing those flags at recursive make time must fail here.
-        template = self.root / 'template/openssl-3.5.7'
+        template = self.root / 'template/openssl-3.5.9'
         (template / 'fixture.c').write_text(
             '#ifndef PACKAGE_REQUIRED\n#error missing configured flag\n#endif\n'
             '#ifndef OBJECT_REQUIRED\n#error missing per-object flag\n#endif\n'
@@ -138,7 +138,7 @@ class PreparationTests(unittest.TestCase):
             'fixture.o: fixture.c\n\t$(CC) $(CFLAGS) -c fixture.c -o fixture.o\n'
             'libssl.a libcrypto.a: fixture.o\n\tar rcs $@ fixture.o\n'
             'MAKEFILE\n')
-        source = self.root / 'deps/libssl/openssl-3.5.7.tar.gz'
+        source = self.root / 'deps/libssl/openssl-3.5.9.tar.gz'
         with tarfile.open(str(source), 'w:gz') as archive:
             archive.add(str(template), arcname=template.name)
         Path(str(source) + '.sha256').write_text(
@@ -195,7 +195,7 @@ class PreparationTests(unittest.TestCase):
                 self.prepare('prebuilt')
 
     def test_corrupt_vendored_source_is_not_an_availability_miss(self):
-        (self.root / 'deps/libssl/openssl-3.5.7.tar.gz').write_bytes(b'corrupt')
+        (self.root / 'deps/libssl/openssl-3.5.9.tar.gz').write_bytes(b'corrupt')
         with self.assertRaisesRegex(ValueError, 'SHA-256'):
             self.prepare('auto')
         self.assertEqual(0, self.count())
@@ -425,9 +425,9 @@ class PreparationTests(unittest.TestCase):
     def install_real_source_verifier(self):
         directory = self.root / 'deps/libssl'
         shutil.copy(ROOT / 'deps/libssl/verify-source.bash', directory)
-        template = self.root / 'template/openssl-3.5.7'
+        template = self.root / 'template/openssl-3.5.9'
         (template / 'Configure').write_text('# fixture configure\n')
-        source = directory / 'openssl-3.5.7.tar.gz'
+        source = directory / 'openssl-3.5.9.tar.gz'
         with tarfile.open(str(source), 'w:gz') as archive:
             archive.add(str(template), arcname=template.name)
         Path(str(source) + '.sha256').write_text(self.identity.digest_file(source) + '  ' + source.name + '\n')
@@ -469,7 +469,7 @@ class PreparationTests(unittest.TestCase):
         original.rename(self.root)
         # Python 3.6's TemporaryDirectory cleanup requires its original path.
         self.addCleanup(self.root.rename, original)
-        self.tree = self.root / 'deps/libssl/openssl-3.5.7'
+        self.tree = self.root / 'deps/libssl/openssl-3.5.9'
         makefile = self.root / 'deps/Makefile'
         makefile.write_text(makefile.read_text().replace(str(original), str(self.root)))
         env['PATH'] = str(self.root / 'bin')
@@ -529,8 +529,8 @@ class PreparationTests(unittest.TestCase):
             path = template / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('public output')
-        (directory / 'duckdb-1.4.5.tar.gz').write_bytes(b'fixture source')
-        (directory / 'duckdb-1.4.5.tar.gz.sha256').write_text('fixture checksum\n')
+        (directory / 'duckdb-2.0.0.tar.xz').write_bytes(b'fixture source')
+        (directory / 'duckdb-2.0.0.tar.xz.sha256').write_text('fixture checksum\n')
         with (self.root / 'deps/Makefile').open('a') as stream:
             stream.write('\n.PHONY: dependency-source-duckdb\ndependency-source-duckdb:\n'
                          '\t@cp -R ' + str(template) + ' ' + str(tree) + '\n'
@@ -542,7 +542,9 @@ class PreparationTests(unittest.TestCase):
                                 universal_newlines=True, timeout=30)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         for index, name in enumerate(('src/include/duckdb.hpp', 'third_party/library/LICENSE',
-                                     'build/release/extension/parquet/libparquet_extension.a'), 2):
+                                     'build/release/extension/parquet/libparquet_extension.a',
+                                     'build/release/src/duckdb_static_extension_loader.c',
+                                     'extension/loader/static_extension_autoregister.cpp'), 2):
             with self.subTest(name=name):
                 (tree / name).unlink()
                 result = subprocess.run(cli, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
