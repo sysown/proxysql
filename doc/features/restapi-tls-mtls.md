@@ -102,8 +102,18 @@ shuts down.
 The socket's immediate parent directory must be owned by root or the ProxySQL
 user. If it permits group or other writes, it must have the sticky bit set.
 
-On Linux the listener binds through the already-pinned parent file descriptor,
-so socket creation cannot be redirected by renaming an ancestor and shared
+The configured and canonical Unix paths must fit in `sun_path`, including the
+terminating NUL (107 pathname bytes on Linux). Linux also requires the effective
+`/proc/self/fd/<dirfd>/<leaf>` bind path to fit. Its 14-byte prefix, decimal FD
+and separating slash leave `92 - <FD digit count>` bytes for the leaf: 91 bytes
+for a one-digit FD, 90 for a two-digit FD. Startup checks this exact limit after
+opening the parent FD and before binding; a longer effective path is logged and
+the listener stays down even if the configured path passed parsing.
+
+On Linux the listener binds through the already-pinned parent file
+descriptor, so socket creation cannot be redirected by renaming an ancestor
+after the parent has been opened and pinned; canonical path resolution and
+opening of the immediate parent occur before that protection starts. Shared
 ancestors remain supported. This requires `/proc/self/fd` to be available;
 otherwise listener startup fails. On other platforms every canonical ancestor,
 from `/` through the immediate parent, must meet the same ownership and write

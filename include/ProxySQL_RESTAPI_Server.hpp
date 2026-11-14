@@ -38,6 +38,11 @@ struct ProxySQL_RESTAPI_Config {
 /**
  * @brief Parse an admin-restapi_interface value into a bind address.
  *
+ * Unix parsing checks the supplied pathname length without inspecting the
+ * filesystem. Startup also checks the canonical path and, on Linux, the
+ * effective /proc/self/fd/<dirfd>/<leaf> length after opening the parent FD.
+ * A path accepted here can therefore still fail listener startup.
+ *
  * @param interface_name Value of admin-restapi_interface.
  * @param port TCP port (0..65535) for the IPv4/IPv6 sockaddr (ignored for Unix).
  * @param has_bind_address Set true when addr/addr_len must be passed to
@@ -71,14 +76,17 @@ class ProxySQL_RESTAPI_Server {
 	 * Unix listeners require the immediate parent to be owned by root or the
 	 * effective UID and non-writable by group/other unless sticky.
 	 * The parent FD is opened once, before startup, so validation and cleanup
-	 * cannot be redirected by renaming or replacing the parent path.
-	 * On Linux the listener binds through /proc/self/fd/<dir_fd>/<leaf>, so
-	 * socket creation also stays in the pinned directory and shared ancestors
-	 * remain supported. On other platforms every canonical ancestor must meet
-	 * the same ownership/write policy before canonical binding; untrusted UIDs cannot
-	 * replace a validated ancestor, but trusted root/effective-user filesystem
-	 * changes remain outside this threat model. Post-bind ownership
-	 * verification still applies on every platform.
+	 * cannot be redirected by renaming or replacing the parent path. On Linux
+	 * that ancestor protection applies only after the parent has been opened
+	 * and pinned: canonical resolution and opening of the immediate parent
+	 * occur before it starts. The listener then binds through
+	 * /proc/self/fd/<dir_fd>/<leaf>, so socket creation stays in the pinned
+	 * directory and shared ancestors remain supported. On other platforms every
+	 * canonical ancestor must meet the same ownership/write policy before
+	 * canonical binding; untrusted UIDs cannot replace a validated ancestor,
+	 * but trusted root/effective-user filesystem changes remain outside this
+	 * threat model. Post-bind ownership verification still applies on every
+	 * platform.
 	 */
 	std::string unix_socket_path {};
 	std::string unix_socket_leaf {};

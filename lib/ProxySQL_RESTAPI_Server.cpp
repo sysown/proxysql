@@ -827,11 +827,10 @@ void ProxySQL_RESTAPI_Server::prepare_unix_socket() {
 		return;
 	}
 
-	// The canonical configured path is retained for logs and verification, but
-	// on Linux the actual bind goes through the already-pinned parent FD. This
-	// prevents a renamed/replaced ancestor from redirecting creation of the
-	// leaf outside the pinned directory. /proc must be available; otherwise the
-	// bind path is invalid and normal bind failure applies.
+	// On Linux, retained-FD binding protects against ancestor renames after
+	// the parent is opened and pinned; canonical resolution and opening occur
+	// first. Keep the canonical path for logs and check both pathname lengths:
+	// the /proc/self/fd/<dirfd>/ prefix can make a valid configured path too long.
 	const std::string canonical_path =
 		(canonical_parent == "/" ? canonical_parent : canonical_parent + "/") + unix_socket_leaf;
 	if (canonical_path.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
@@ -847,8 +846,8 @@ void ProxySQL_RESTAPI_Server::prepare_unix_socket() {
 	bind_path = "/proc/self/fd/" + std::to_string(unix_socket_dir_fd) + "/" + unix_socket_leaf;
 #endif
 	if (bind_path.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
-		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': Unix socket bind "
-			"path is too long: '%s'\n", bind_path.c_str());
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': effective Unix "
+			"socket bind path is too long: '%s'\n", bind_path.c_str());
 		cleanup_unix_socket();
 		return;
 	}
