@@ -5,7 +5,7 @@ import concurrent.futures
 from contextlib import contextmanager
 import hashlib
 import re
-from threading import Event
+from threading import Event, Lock
 import http.client
 import json
 import os
@@ -20,6 +20,8 @@ import zipfile
 import urllib.error
 import urllib.request
 from ci_tier_plan import validate_manifest, version_tuple
+from ci_github_transport import request as github_request
+from ci_github_transport import is_rate_limited, retry_delay, record_response, MAX_ATTEMPTS, MAX_WAIT_SECONDS
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -48,21 +50,90 @@ def artifact_location(url,token,deadline,cancelled):
         response=urllib.request.build_opener(NoRedirect()).open(
             request,timeout=download_timeout(deadline,cancelled))
     except urllib.error.HTTPError as error:
-        if error.code!=302:raise
+        if error.code!=302:
+            record_response('GET',url,error.code,error.headers,token=token)
+            raise
         response=error
     with response:
+        record_response('GET',url,response.code,response.headers,token=token)
         if response.code!=302:raise ValueError('artifact endpoint did not redirect')
         return response.headers['Location']
 
 
-def download_part(url,token,target,start,end,size,deadline,cancelled,parallel):
+class ArtifactLocation:
+    """Share one signed URL and refresh only the generation storage rejected."""
+    def __init__(self,url,token):
+        self.url=url
+        self.token=token
+        self.location=None
+        self.failure=None
+        self.lock=Lock()
+
+    def get(self,deadline,cancelled):
+        # Keep lock waiters responsive while another worker resolves the URL.
+        while not self.lock.acquire(timeout=0.1):
+            download_timeout(deadline,cancelled)
+        try:
+            if self.failure is not None:raise RuntimeError(self.failure)
+            if self.location is None:
+                try:
+                    self.location=self.resolve(deadline,cancelled)
+                except RuntimeError as error:
+                    # Cancellation belongs to this worker group; range fallback
+                    # reuses the resolver with a fresh cancellation event.
+                    if not cancelled.is_set():self.failure=str(error)
+                    raise
+            return self.location
+        finally:
+            self.lock.release()
+
+    def resolve(self,deadline,cancelled):
+        waited=0
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                return artifact_location(self.url,self.token,deadline,cancelled)
+            except (OSError,http.client.HTTPException) as error:
+                headers={}
+                limited=False
+                reason=type(error).__name__
+                retryable=True
+                if isinstance(error,urllib.error.HTTPError):
+                    reason=f'HTTP {error.code}'
+                    headers=error.headers
+                    # Secondary limits can have quota remaining and no retry
+                    # headers. Inspect a bounded body solely for classification.
+                    body=''
+                    if error.code==403:
+                        try:body=error.read(4096).decode(errors='replace')
+                        except (OSError,http.client.HTTPException):pass
+                    limited=is_rate_limited(error.code,headers,body)
+                    retryable=limited or error.code in (500,502,503,504)
+                    error.close()
+                diagnostic=f'Artifact redirect failed ({reason}) after {attempt+1} attempts'
+                remaining=deadline-time.monotonic()
+                if not retryable or attempt==MAX_ATTEMPTS-1 or remaining<=0:
+                    raise RuntimeError(diagnostic) from None
+                delay=retry_delay(headers,limited,attempt)
+                if delay>MAX_WAIT_SECONDS-waited or delay>=remaining:
+                    raise RuntimeError(diagnostic+': retry wait budget exceeded') from None
+                if cancelled.wait(delay):raise RuntimeError('artifact download cancelled') from None
+                waited+=delay
+
+    def invalidate(self,location):
+        with self.lock:
+            if self.location==location:self.location=None
+
+
+def download_part(url,token,target,start,end,size,deadline,cancelled,parallel,locations=None):
+    if locations is None:locations=ArtifactLocation(url,token)
     # Each worker owns a disjoint range and an independent file position.
     # Write into the final archive instead of assembling another copy later.
     with target.open('r+b') as out:
         out.seek(start)
         for attempt in range(6):
+            location=None
             try:
-                location=artifact_location(url,token,deadline,cancelled)
+                location=locations.get(deadline,cancelled)
                 offset=out.tell()
                 request=urllib.request.Request(location,headers={
                     'Range':f'bytes={offset}-{end if parallel else ""}'})
@@ -89,7 +160,9 @@ def download_part(url,token,target,start,end,size,deadline,cancelled,parallel):
             except (OSError,http.client.HTTPException) as error:
                 # Never log exceptions containing signed URLs or credentials.
                 reason=f'HTTP {error.code}' if isinstance(error,urllib.error.HTTPError) else type(error).__name__
-                if isinstance(error,urllib.error.HTTPError):error.close()
+                if isinstance(error,urllib.error.HTTPError):
+                    if location is not None and error.code in (401,403):locations.invalidate(location)
+                    error.close()
                 remaining=deadline-time.monotonic()
                 if attempt==5 or remaining<=0:
                     raise RuntimeError(f'Artifact download failed ({reason}); range {start}-{end} received {out.tell()-start} bytes') from None
@@ -98,20 +171,21 @@ def download_part(url,token,target,start,end,size,deadline,cancelled,parallel):
                     raise RuntimeError('artifact download cancelled') from None
 
 
-def download_parts(url,token,target,size,workers,deadline):
+def download_parts(url,token,target,size,workers,deadline,locations=None):
     started=time.monotonic()
     cancelled=Event()
+    if locations is None:locations=ArtifactLocation(url,token)
     chunk=(size+workers-1)//workers
     with target.open('wb'):
         pass
     try:
         if workers==1:
-            download_part(url,token,target,0,size-1,size,deadline,cancelled,False)
+            download_part(url,token,target,0,size-1,size,deadline,cancelled,False,locations)
             return
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
                 futures=[pool.submit(download_part,url,token,target,i*chunk,
-                    min(size-1,(i+1)*chunk-1),size,deadline,cancelled,True)
+                    min(size-1,(i+1)*chunk-1),size,deadline,cancelled,True,locations)
                     for i in range(workers)]
                 try:
                     for future in concurrent.futures.as_completed(futures):future.result()
@@ -122,53 +196,20 @@ def download_parts(url,token,target,size,workers,deadline):
         except RangeUnsupported:
             print('Artifact storage ignored ranges; falling back to one stream',flush=True)
             # All workers have stopped before the single-stream retry truncates.
-            download_parts(url,token,target,size,1,deadline)
+            download_parts(url,token,target,size,1,deadline,locations)
     finally:
         elapsed=time.monotonic()-started
         print(f'Artifact download completed in {elapsed:.1f}s ({size} bytes, {workers} workers)',flush=True)
 
 
 class GitHubAPI:
-    def __init__(self, repository, token=None):
+    def __init__(self, repository, token=None, *, cache_dir=None):
         self.repository=repository
         self.token=token
+        self.cache_dir=Path(cache_dir) if cache_dir is not None else None
     def request(self,path,method='GET',payload=None,raw=False,*,retry_safe=False,before_retry=None):
-        # Only callers assigning a stable check state may opt into replay.
-        # POST registration and all other unknown-outcome writes stay single-shot.
-        if retry_safe and method!='PATCH':raise ValueError('retry_safe requires PATCH')
-        args=['gh','api',path,'--method',method]
-        if payload is not None:args+=['--input','-']
-        attempts=6
-        for attempt in range(attempts):
-            if attempt and before_retry is not None:before_retry()
-            try:
-                result=subprocess.run(args,input=json.dumps(payload).encode() if payload is not None else None,
-                    capture_output=True,timeout=900 if raw else 60,
-                    env=dict(os.environ,GH_TOKEN=self.token) if self.token else None)
-            except subprocess.TimeoutExpired:
-                if (method!='GET' and not retry_safe) or attempt==attempts-1:
-                    raise RuntimeError(f'GitHub API {method} {path}: timed out after {attempt+1} attempts') from None
-                time.sleep(min(30,2**attempt))
-                continue
-            if not result.returncode:
-                return result.stdout if raw else json.loads(result.stdout or b'{}')
-            error=result.stderr.decode(errors='replace').lower()
-            transient=any(marker in error for marker in (
-                'rate limit','http 429','http 500','http 502','http 503','http 504',
-                'connection reset','i/o timeout','tls handshake timeout','unexpected eof',
-                'connection timed out','temporary failure in name resolution'))
-            # A rate-limit rejection did not perform the write; other write
-            # failures may have committed and must not be replayed.
-            rejected_limit='http 429' in error or ('http 403' in error and 'rate limit' in error)
-            retryable=transient if method=='GET' or retry_safe else rejected_limit
-            if not retryable or attempt==attempts-1:
-                diagnostic=result.stderr.decode(errors='replace')
-                for token in (self.token,os.environ.get('GH_TOKEN'),os.environ.get('GITHUB_TOKEN')):
-                    if token:diagnostic=diagnostic.replace(token,'[REDACTED]')
-                diagnostic=re.sub(r'(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+','[REDACTED]',diagnostic)
-                diagnostic=re.sub(r'[\r\n]+',' ',diagnostic).strip()[:1000]
-                raise RuntimeError(f'GitHub API {method} {path}: exit {result.returncode} after {attempt+1} attempts: {diagnostic}')
-            time.sleep(60 if 'rate limit' in error or '429' in error else min(30,2**attempt))
+        return github_request(path,method,payload,raw,token=self.token,
+            retry_safe=retry_safe,before_retry=before_retry)
 
     def download(self,path,destination,size,digest=None,verify=True):
         """Download up to eight resumable ranges directly into one archive."""
@@ -209,10 +250,34 @@ class GitHubAPI:
     def artifacts(self,run_id):
         return self.pages(f'repos/{self.repository}/actions/runs/{int(run_id)}/artifacts','artifacts')
     def json_artifact(self,run_id,name,filename):
+        # The runner cache is writable by product code. Authenticate its bytes
+        # against a fresh GitHub artifact digest before parsing any metadata.
         artifact=select_artifact(self.artifacts(run_id),name)
-        raw=self.request(f"repos/{self.repository}/actions/artifacts/{artifact['id']}/zip",raw=True)
+        digest=artifact.get('digest') or ''
+        cache=None
+        identity=[self.repository,int(run_id),name,filename]
+        if (self.cache_dir is not None and re.fullmatch(r'ci-(?:plan|manifest)-t\d+-a\d+-b\d+-a\d+',name)
+            and re.fullmatch(r'sha256:[0-9a-fA-F]{64}',digest)):
+            key=hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+            cache=self.cache_dir/(key+'.zip')
+        cached=cache is not None and cache.exists()
+        raw=cache.read_bytes() if cached else self.request(
+            f"repos/{self.repository}/actions/artifacts/{artifact['id']}/zip",raw=True)
+        if cache is not None and 'sha256:'+hashlib.sha256(raw).hexdigest()!=digest.lower():
+            raise ValueError('metadata artifact checksum mismatch')
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            return json.loads(archive.read(filename))
+            value=json.loads(archive.read(filename))
+        if cache is not None and not cached:
+            self.cache_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
+            temporary=None
+            try:
+                with tempfile.NamedTemporaryFile(mode='wb',dir=self.cache_dir,delete=False) as out:
+                    temporary=Path(out.name)
+                    out.write(raw)
+                temporary.replace(cache)
+            finally:
+                if temporary is not None:temporary.unlink(missing_ok=True)
+        return value
 
 def select_artifact(records,name):
     matches=[r for r in records if r['name']==name and not r.get('expired',False)]

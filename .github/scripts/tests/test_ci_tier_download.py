@@ -2,22 +2,26 @@
 import contextlib
 import hashlib
 import http.client
+import io
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
 import tempfile
+import time
 import threading
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ci_tier_artifacts import GitHubAPI
+from ci_tier_artifacts import ArtifactLocation, GitHubAPI
 
 
 @contextlib.contextmanager
-def artifact_server(mode, on_api_request=None, extra_payload=b''):
+def artifact_server(mode, on_api_request=None, extra_payload=b'', expiry_status=403,
+                    api_failures=(), api_headers=None, api_body=b''):
     payload = b''.join(bytes([n])*65536 for n in range(32))+extra_payload
     parallel_ready = threading.Event()
+    refreshed = threading.Event()
     barrier = threading.Barrier(8, action=parallel_ready.set)
     requests = []
     class Handler(BaseHTTPRequestHandler):
@@ -28,14 +32,38 @@ def artifact_server(mode, on_api_request=None, extra_payload=b''):
             if self.path == '/api':
                 if on_api_request:
                     on_api_request()
+                attempt = sum(path == '/api' for path, _, _ in requests)
+                if attempt <= len(api_failures):
+                    if api_failures[attempt-1] == 0:
+                        self.close_connection = True
+                        return
+                    self.send_response(api_failures[attempt-1])
+                    for name, value in (api_headers or {}).items():
+                        self.send_header(name, value)
+                    self.send_header('Content-Length', str(len(api_body)))
+                    self.end_headers()
+                    self.wfile.write(api_body)
+                    return
                 self.send_response(302)
-                self.send_header('Location', f'http://127.0.0.1:{self.server.server_port}/blob?secret')
+                for name, value in (api_headers or {}).items():
+                    self.send_header(name, value)
+                suffix = f'={2 if parallel_ready.is_set() else 1}' if mode == 'parallel-expiry' else ''
+                self.send_header('Location', f'http://127.0.0.1:{self.server.server_port}/blob?secret{suffix}')
                 self.end_headers()
                 return
             start, end = self.headers.get('Range', 'bytes=0-')[6:].split('-')
             offset = int(start)
             limit = int(end)+1 if end else len(payload)
             first = sum(path.startswith('/blob') for path, _, _ in requests) == 1
+            if mode == 'parallel-expiry' and self.path == '/blob?secret=1':
+                barrier.wait(timeout=5)
+                # Deliver one stale rejection after peers already use the new URL.
+                if offset == 0:
+                    refreshed.wait(timeout=5)
+                self.send_error(expiry_status)
+                return
+            if mode == 'parallel-expiry':
+                refreshed.set()
             if mode == 'denied' or (mode == 'parallel-failure' and offset == 0):
                 self.send_error(403)
                 return
@@ -84,6 +112,18 @@ def no_retry_delay_event():
 
 
 class DownloadTests(unittest.TestCase):
+    def test_redirect_metrics_include_quota_without_signed_url_or_token(self):
+        output = io.StringIO()
+        with artifact_server('plain', api_headers={'X-RateLimit-Remaining': '4999'}) as (url, payload, _), tempfile.TemporaryDirectory() as folder:
+            with contextlib.redirect_stderr(output):
+                GitHubAPI('repo', token='private-token').download(url, Path(folder)/'handoff.zip', len(payload))
+        metric = output.getvalue()
+        self.assertIn('GET /api status=302', metric)
+        self.assertIn('x-ratelimit-remaining=4999', metric)
+        self.assertNotIn('secret', metric)
+        self.assertNotIn('private-token', metric)
+        self.assertNotIn('127.0.0.1', metric)
+
     def test_broken_download_resumes_and_does_not_forward_api_token(self):
         with artifact_server('resume') as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
             target = Path(folder)/'handoff.zip'
@@ -94,6 +134,7 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(blob_requests[1][1], 'bytes=1048576-')
             self.assertTrue(all(auth is None for _, _, auth in blob_requests))
             self.assertTrue(all(auth == 'Bearer private-token' for path, _, auth in requests if path == '/api'))
+            self.assertEqual(sum(path == '/api' for path, _, _ in requests), 1)
 
     def test_range_ignored_restarts_instead_of_appending_duplicate_bytes(self):
         with artifact_server('ignore-range') as (url, payload, _), tempfile.TemporaryDirectory() as folder:
@@ -122,7 +163,8 @@ class DownloadTests(unittest.TestCase):
 
     def test_expired_deadline_does_not_start_api_request(self):
         with artifact_server('resume') as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
-            with patch('ci_tier_artifacts.time.monotonic', side_effect=[0, 3601, 3601]):
+            clock = iter([0])
+            with patch('ci_tier_artifacts.time.monotonic', side_effect=lambda: next(clock, 3601)):
                 with self.assertRaisesRegex(RuntimeError, 'TimeoutError'):
                     GitHubAPI('repo', token='token').download(url, Path(folder)/'handoff.zip', len(payload))
             self.assertEqual(requests, [])
@@ -147,6 +189,7 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), payload)
             ranges = [r for path, r, _ in requests if path.startswith('/blob')]
             self.assertEqual(len(ranges), 8)
+            self.assertEqual(sum(path == '/api' for path, _, _ in requests), 1)
             self.assertEqual(set(ranges), {f'bytes={i*262144}-{(i+1)*262144-1}' for i in range(8)})
             self.assertTrue(all(auth is None for path, _, auth in requests if path.startswith('/blob')))
             self.assertEqual(list(Path(folder).iterdir()), [target])
@@ -162,15 +205,90 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(len(ranges), 9)
             self.assertEqual(ranges.count('bytes=131072-262143'), 1)
             self.assertEqual(ranges.count('bytes=0-262143'), 1)
+            self.assertEqual(sum(path == '/api' for path, _, _ in requests), 1)
+
+    def test_concurrent_expired_urls_share_one_refresh(self):
+        for status in (401, 403):
+            with self.subTest(status=status), artifact_server('parallel-expiry', expiry_status=status) as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
+                target = Path(folder)/'handoff.zip'
+                with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536), \
+                     patch('ci_tier_artifacts.Event', side_effect=no_retry_delay_event):
+                    GitHubAPI('repo', token='private-token').download(url, target, len(payload))
+                self.assertEqual(target.read_bytes(), payload)
+                self.assertEqual(sum(path == '/api' for path, _, _ in requests), 2)
+                self.assertEqual(sum(path == '/blob?secret=1' for path, _, _ in requests), 8)
+                self.assertEqual(sum(path == '/blob?secret=2' for path, _, _ in requests), 8)
+                self.assertTrue(all(auth is None for path, _, auth in requests if path.startswith('/blob')))
+
+    def test_parallel_api_failure_is_shared_without_exposing_credentials(self):
+        cases = [(403, {}), (403, {'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': '9999999999'}),
+                 (429, {'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': '9999999999'})]
+        for status, headers in cases:
+            with self.subTest(status=status, headers=headers), artifact_server('plain',
+                    api_failures=(status,), api_headers=headers) as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
+                with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536), \
+                     patch('ci_tier_artifacts.Event', side_effect=no_retry_delay_event):
+                    with self.assertRaises(RuntimeError) as failure:
+                        GitHubAPI('repo', token='private-token').download(url, Path(folder)/'handoff.zip', len(payload))
+                self.assertEqual([path for path, _, _ in requests], ['/api'])
+                self.assertNotIn('secret', str(failure.exception))
+                self.assertNotIn('private-token', str(failure.exception))
+
+    def test_parallel_api_retry_is_shared_by_all_workers(self):
+        for status, headers in [(429, {'Retry-After': '0'}), (0, {})]:
+            with self.subTest(status=status), artifact_server('parallel', api_failures=(status,), api_headers=headers) as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
+                target = Path(folder)/'handoff.zip'
+                with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536), \
+                     patch('ci_tier_artifacts.Event', side_effect=no_retry_delay_event):
+                    GitHubAPI('repo', token='private-token').download(url, target, len(payload))
+                self.assertEqual(target.read_bytes(), payload)
+                self.assertEqual(sum(path == '/api' for path, _, _ in requests), 2)
+
+    def test_secondary_api_limit_without_retry_headers_retries_for_all_workers(self):
+        with artifact_server('parallel', api_failures=(403,), api_headers={'X-RateLimit-Remaining': '4999'},
+                api_body=b'{"message":"You have exceeded a secondary rate limit."}') as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
+            target = Path(folder)/'handoff.zip'
+            with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536), \
+                 patch('ci_tier_artifacts.Event', side_effect=no_retry_delay_event):
+                GitHubAPI('repo', token='private-token').download(url, target, len(payload))
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(sum(path == '/api' for path, _, _ in requests), 2)
+
+    def test_parallel_api_retries_stop_at_attempt_and_wait_limits(self):
+        for status, headers, expected in [(500, {}, 6), (429, {'Retry-After': '90'}, 4)]:
+            with self.subTest(status=status), artifact_server('plain', api_failures=(status,)*6,
+                    api_headers=headers) as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
+                with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536), \
+                     patch('ci_tier_artifacts.Event', side_effect=no_retry_delay_event):
+                    with self.assertRaisesRegex(RuntimeError, f'HTTP {status}'):
+                        GitHubAPI('repo', token='private-token').download(url, Path(folder)/'handoff.zip', len(payload))
+                self.assertEqual([path for path, _, _ in requests], ['/api']*expected)
+
+    def test_cancelled_redirect_retry_does_not_poison_fallback_location(self):
+        cancelled = threading.Event()
+        with artifact_server('plain', on_api_request=cancelled.set,
+                api_failures=(500,)) as (url, _, requests):
+            locations = ArtifactLocation(url, 'private-token')
+            deadline = time.monotonic()+60
+            with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+                locations.get(deadline, cancelled)
+            # Range fallback reuses this resolver with a fresh cancellation event.
+            try:
+                location = locations.get(deadline, threading.Event())
+            except RuntimeError as error:
+                self.fail(f'fallback resolver inherited an earlier cancellation: {error}')
+            self.assertTrue(location.endswith('/blob?secret'))
+            self.assertEqual([path for path, _, _ in requests], ['/api', '/api'])
 
     def test_parallel_range_ignored_falls_back_to_single_download(self):
-        with artifact_server('ignore-range') as (url, payload, _), tempfile.TemporaryDirectory() as folder:
+        with artifact_server('ignore-range') as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
             target = Path(folder)/'handoff.zip'
             with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536, create=True), patch('ci_tier_artifacts.Event', side_effect=no_retry_delay_event):
                 GitHubAPI('repo', token='token').download(url, target, len(payload),
                     digest='sha256:'+hashlib.sha256(payload).hexdigest())
             self.assertEqual(target.read_bytes(), payload)
             self.assertEqual(list(Path(folder).iterdir()), [target])
+            self.assertEqual(sum(path == '/api' for path, _, _ in requests), 1)
 
     def test_interrupted_nonzero_range_resumes_at_its_absolute_offset(self):
         with artifact_server('parallel-resume-nonzero') as (url, payload, requests), tempfile.TemporaryDirectory() as folder:

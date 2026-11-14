@@ -198,7 +198,9 @@ class RuntimeTests(unittest.TestCase):
  def test_source_artifact_token_is_separate_from_reporting_token(self):
   with patch.dict(os.environ,{'SOURCE_ARTIFACTS_TOKEN':'fixture-read-token'}),patch.object(runtime,'GitHubAPI') as api:
    runtime.api_for(self.ctx())
-   api.assert_called_once_with('sysown/proxysql',token='fixture-read-token')
+   api.assert_called_once()
+   self.assertEqual(api.call_args.args,('sysown/proxysql',))
+   self.assertEqual(api.call_args.kwargs['token'],'fixture-read-token')
 
  def test_delayed_consumers_use_trigger_acceptance_not_mutable_registration(self):
   plan=make_plan(self.ctx(),dict(tiers=['v40'],mode='normal'),{'consumers':[
@@ -220,7 +222,7 @@ class RuntimeTests(unittest.TestCase):
    finally:os.chdir(prior)
  def test_partial_producer_retry_preserves_published_artifacts(self):
   plan=make_plan(self.ctx(),dict(tiers=['v40'],mode='normal'),{'consumers':[]})
-  api=Mock();api.artifacts.return_value=[dict(name=plan['legs'][0]['artifact_name']),dict(name='ci-leg-'+plan['execution_id']+'-v40')]
+  api=Mock();api.artifacts.return_value=[dict(name=plan['legs'][0]['artifact_name']),dict(name=plan['legs'][0]['unit_artifact_name']),dict(name='ci-leg-'+plan['execution_id']+'-v40')]
   with patch.object(runtime,'read_plan',return_value=plan),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'emit') as output,patch.dict(os.environ,{'CI_LEG':json.dumps(plan['legs'][0])}):
    runtime.artifact_status()
    self.assertEqual(output.call_args.kwargs,dict(publish_metadata=False,publish_handoff=False))
