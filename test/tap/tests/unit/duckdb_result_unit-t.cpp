@@ -34,7 +34,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(40);
+	plan(44);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -282,6 +282,17 @@ int main() {
 
 	ok(duckdb_result_to_sqlite3(nullptr) == nullptr,
 	   "a null duckdb_result* converts to nullptr");
+	// New DuckDB 2.0 types must be rejected before conversion rather than
+	// silently turning non-NULL values into SQL NULLs.
+	for (const char* sql : {"SELECT NULL::GEOMETRY", "SELECT 42::VARIANT"}) {
+		duckdb_result res;
+		const bool queried = duckdb_query(conn, sql, &res) == DuckDBSuccess;
+		ok(queried, "DuckDB 2.0 type query succeeds: %s", sql);
+		ok(queried && duckdb_result_has_unrenderable_column(&res),
+		   "DuckDB 2.0 type is rejected before conversion: %s", sql);
+		duckdb_destroy_result(&res);
+	}
+
 	ok(duckdb_result_has_unrenderable_column(nullptr) == false,
 	   "predicate returns false for a null duckdb_result*");
 

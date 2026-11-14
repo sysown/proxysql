@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
 subject="${repo_root}/deps/libssl/verify-source.bash"
-production_archive="${repo_root}/deps/libssl/openssl-3.5.7.tar.gz"
+production_archive="${repo_root}/deps/libssl/openssl-3.5.9.tar.gz"
 production_checksum="${production_archive}.sha256"
 
 if [[ ! -x "${subject}" ]]; then
@@ -40,17 +40,17 @@ make_fixture_archive() {
 	local root_name=$2
 	mkdir -p "${case_dir}/source/${root_name}"
 	printf '%s\n' '#!/usr/bin/env perl' > "${case_dir}/source/${root_name}/Configure"
-	tar -C "${case_dir}/source" -czf "${case_dir}/openssl-3.5.7.tar.gz" "${root_name}"
+	tar -C "${case_dir}/source" -czf "${case_dir}/openssl-3.5.9.tar.gz" "${root_name}"
 	write_checksum \
-		"${case_dir}/openssl-3.5.7.tar.gz" \
-		"${case_dir}/openssl-3.5.7.tar.gz.sha256"
+		"${case_dir}/openssl-3.5.9.tar.gz" \
+		"${case_dir}/openssl-3.5.9.tar.gz.sha256"
 }
 
 make_unsafe_archive() {
 	local case_dir=$1
 	local member_name=$2
 	mkdir -p "${case_dir}"
-	python3 - "${case_dir}/openssl-3.5.7.tar.gz" "${member_name}" <<'PY'
+	python3 - "${case_dir}/openssl-3.5.9.tar.gz" "${member_name}" <<'PY'
 import io
 import sys
 import tarfile
@@ -63,8 +63,8 @@ with tarfile.open(archive, "w:gz") as output:
     output.addfile(member, io.BytesIO(payload))
 PY
 	write_checksum \
-		"${case_dir}/openssl-3.5.7.tar.gz" \
-		"${case_dir}/openssl-3.5.7.tar.gz.sha256"
+		"${case_dir}/openssl-3.5.9.tar.gz" \
+		"${case_dir}/openssl-3.5.9.tar.gz.sha256"
 }
 
 expect_failure() {
@@ -105,100 +105,100 @@ mkdir -p "${missing_dir}"
 expect_failure \
 	"missing archive is rejected" \
 	"source archive is missing" \
-	"${missing_dir}/openssl-3.5.7.tar.gz" \
-	"${missing_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${missing_dir}/openssl-3.5.9.tar.gz" \
+	"${missing_dir}/openssl-3.5.9.tar.gz.sha256"
 
 text_dir="${tmp_dir}/text"
 mkdir -p "${text_dir}"
-printf '%s\n' 'not a gzip archive' > "${text_dir}/openssl-3.5.7.tar.gz"
+printf '%s\n' 'not a gzip archive' > "${text_dir}/openssl-3.5.9.tar.gz"
 write_checksum \
-	"${text_dir}/openssl-3.5.7.tar.gz" \
-	"${text_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${text_dir}/openssl-3.5.9.tar.gz" \
+	"${text_dir}/openssl-3.5.9.tar.gz.sha256"
 expect_failure \
 	"plain text file is rejected as invalid gzip" \
 	"not valid gzip data" \
-	"${text_dir}/openssl-3.5.7.tar.gz" \
-	"${text_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${text_dir}/openssl-3.5.9.tar.gz" \
+	"${text_dir}/openssl-3.5.9.tar.gz.sha256"
 
 missing_checksum_dir="${tmp_dir}/missing-checksum"
-make_fixture_archive "${missing_checksum_dir}" openssl-3.5.7
-rm "${missing_checksum_dir}/openssl-3.5.7.tar.gz.sha256"
+make_fixture_archive "${missing_checksum_dir}" openssl-3.5.9
+rm "${missing_checksum_dir}/openssl-3.5.9.tar.gz.sha256"
 expect_failure \
 	"missing checksum file is rejected" \
 	"checksum file is missing" \
-	"${missing_checksum_dir}/openssl-3.5.7.tar.gz" \
-	"${missing_checksum_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${missing_checksum_dir}/openssl-3.5.9.tar.gz" \
+	"${missing_checksum_dir}/openssl-3.5.9.tar.gz.sha256"
 
 corrupt_dir="${tmp_dir}/corrupt"
-make_fixture_archive "${corrupt_dir}" openssl-3.5.7
-printf '%s\n' 'corruption' >> "${corrupt_dir}/openssl-3.5.7.tar.gz"
+make_fixture_archive "${corrupt_dir}" openssl-3.5.9
+printf '%s\n' 'corruption' >> "${corrupt_dir}/openssl-3.5.9.tar.gz"
 expect_failure \
 	"corrupt archive is rejected before extraction" \
 	"SHA-256 mismatch" \
-	"${corrupt_dir}/openssl-3.5.7.tar.gz" \
-	"${corrupt_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${corrupt_dir}/openssl-3.5.9.tar.gz" \
+	"${corrupt_dir}/openssl-3.5.9.tar.gz.sha256"
 
 wrong_name_dir="${tmp_dir}/wrong-checksum-name"
-make_fixture_archive "${wrong_name_dir}" openssl-3.5.7
+make_fixture_archive "${wrong_name_dir}" openssl-3.5.9
 write_checksum \
-	"${wrong_name_dir}/openssl-3.5.7.tar.gz" \
-	"${wrong_name_dir}/openssl-3.5.7.tar.gz.sha256" \
+	"${wrong_name_dir}/openssl-3.5.9.tar.gz" \
+	"${wrong_name_dir}/openssl-3.5.9.tar.gz.sha256" \
 	wrong-source.tar.gz
 expect_failure \
 	"checksum filename mismatch is rejected" \
 	"checksum entry names 'wrong-source.tar.gz'" \
-	"${wrong_name_dir}/openssl-3.5.7.tar.gz" \
-	"${wrong_name_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${wrong_name_dir}/openssl-3.5.9.tar.gz" \
+	"${wrong_name_dir}/openssl-3.5.9.tar.gz.sha256"
 
 traversal_dir="${tmp_dir}/traversal"
 make_unsafe_archive "${traversal_dir}" ../escape
 expect_failure \
 	"parent traversal archive member is rejected" \
 	"unsafe archive member '../escape'" \
-	"${traversal_dir}/openssl-3.5.7.tar.gz" \
-	"${traversal_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${traversal_dir}/openssl-3.5.9.tar.gz" \
+	"${traversal_dir}/openssl-3.5.9.tar.gz.sha256"
 
 absolute_dir="${tmp_dir}/absolute"
 make_unsafe_archive "${absolute_dir}" /absolute/escape
 expect_failure \
 	"absolute archive member is rejected" \
 	"unsafe archive member '/absolute/escape'" \
-	"${absolute_dir}/openssl-3.5.7.tar.gz" \
-	"${absolute_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${absolute_dir}/openssl-3.5.9.tar.gz" \
+	"${absolute_dir}/openssl-3.5.9.tar.gz.sha256"
 
 wrong_root_dir="${tmp_dir}/wrong-root"
 make_fixture_archive "${wrong_root_dir}" openssl-wrong-root
 expect_failure \
 	"wrong top-level directory is rejected" \
-	"outside required root 'openssl-3.5.7/'" \
-	"${wrong_root_dir}/openssl-3.5.7.tar.gz" \
-	"${wrong_root_dir}/openssl-3.5.7.tar.gz.sha256"
+	"outside required root 'openssl-3.5.9/'" \
+	"${wrong_root_dir}/openssl-3.5.9.tar.gz" \
+	"${wrong_root_dir}/openssl-3.5.9.tar.gz.sha256"
 
 missing_configure_dir="${tmp_dir}/missing-configure"
-mkdir -p "${missing_configure_dir}/source/openssl-3.5.7"
+mkdir -p "${missing_configure_dir}/source/openssl-3.5.9"
 printf '%s\n' 'fixture without Configure' \
-	> "${missing_configure_dir}/source/openssl-3.5.7/README.md"
+	> "${missing_configure_dir}/source/openssl-3.5.9/README.md"
 tar -C "${missing_configure_dir}/source" \
-	-czf "${missing_configure_dir}/openssl-3.5.7.tar.gz" openssl-3.5.7
+	-czf "${missing_configure_dir}/openssl-3.5.9.tar.gz" openssl-3.5.9
 write_checksum \
-	"${missing_configure_dir}/openssl-3.5.7.tar.gz" \
-	"${missing_configure_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${missing_configure_dir}/openssl-3.5.9.tar.gz" \
+	"${missing_configure_dir}/openssl-3.5.9.tar.gz.sha256"
 expect_failure \
 	"archive without Configure is rejected" \
-	"does not contain openssl-3.5.7/Configure" \
-	"${missing_configure_dir}/openssl-3.5.7.tar.gz" \
-	"${missing_configure_dir}/openssl-3.5.7.tar.gz.sha256"
+	"does not contain openssl-3.5.9/Configure" \
+	"${missing_configure_dir}/openssl-3.5.9.tar.gz" \
+	"${missing_configure_dir}/openssl-3.5.9.tar.gz.sha256"
 
 valid_dir="${tmp_dir}/valid"
-make_fixture_archive "${valid_dir}" openssl-3.5.7
+make_fixture_archive "${valid_dir}" openssl-3.5.9
 expect_success \
 	"valid fixture archive is accepted" \
-	"${valid_dir}/openssl-3.5.7.tar.gz" \
-	"${valid_dir}/openssl-3.5.7.tar.gz.sha256"
+	"${valid_dir}/openssl-3.5.9.tar.gz" \
+	"${valid_dir}/openssl-3.5.9.tar.gz.sha256"
 
 expect_success \
 	"one-argument mode uses the adjacent checksum file" \
-	"${valid_dir}/openssl-3.5.7.tar.gz"
+	"${valid_dir}/openssl-3.5.9.tar.gz"
 
 expect_success \
 	"production OpenSSL archive is accepted" \

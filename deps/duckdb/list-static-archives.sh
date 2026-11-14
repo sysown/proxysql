@@ -21,7 +21,7 @@ if ! printf '%s\n' "$archives" | grep -qx 'src/libduckdb_static.a'; then
 fi
 for archive in $archives; do
     case "$archive" in
-        src/*.a|third_party/*.a|extension/*.a) ;;
+        src/*.a|third_party/*.a|extension/*.a|tools/cpp/*.a) ;;
         *) echo "ERROR: unexpected DuckDB archive path: $archive" >&2; exit 1 ;;
     esac
     case "/$archive/" in

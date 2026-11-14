@@ -18,8 +18,8 @@ int main() {
     duckdb_result result {};
     if (duckdb_open(nullptr, &db) != DuckDBSuccess) return 1;
     if (duckdb_connect(db, &connection) != DuckDBSuccess) return 2;
-    if (duckdb_query(connection, "SELECT 42", &result) != DuckDBSuccess) return 3;
-    const bool correct = duckdb_value_int64(&result, 0, 0) == 42;
+    if (duckdb_query(connection, "SELECT count(*), current_setting('threads') FROM range(3)", &result) != DuckDBSuccess) return 3;
+    const bool correct = duckdb_value_int64(&result, 0, 0) == 3 && !duckdb_value_is_null(&result, 1, 0);
     duckdb_destroy_result(&result);
     duckdb_disconnect(&connection);
     duckdb_close(&db);
@@ -30,11 +30,13 @@ CPP
         while IFS= read -r archive; do archives+=("$archive"); done < <(
             sh "$repo_root/deps/duckdb/list-static-archives.sh" "$tree/build/release")
         [[ ${#archives[@]} -gt 0 ]] || exit 1
+        loader_sources=("$tree/build/release/src/duckdb_static_extension_loader.c"
+                        "$tree/extension/loader/static_extension_autoregister.cpp")
         if [[ $(uname -s) == Darwin ]]; then
-            "${compiler[@]}" -std=c++11 -I"$tree/src/include" "$temporary/probe.cpp" \
+            "${compiler[@]}" -std=c++17 -I"$tree/src/include" "$temporary/probe.cpp" "${loader_sources[@]}" \
                 "${archives[@]}" "${system_libraries[@]}" -o "$temporary/probe"
         else
-            "${compiler[@]}" -std=c++11 -I"$tree/src/include" "$temporary/probe.cpp" \
+            "${compiler[@]}" -std=c++17 -I"$tree/src/include" "$temporary/probe.cpp" "${loader_sources[@]}" \
                 -Wl,--start-group "${archives[@]}" -Wl,--end-group "${system_libraries[@]}" -o "$temporary/probe"
         fi
         ;;
