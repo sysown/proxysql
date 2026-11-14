@@ -12,6 +12,7 @@
 #include "test_init.h"
 
 #include "ProxySQL_ConfigurationAccess.h"
+#include "ProxySQL_Admin_Tables_Definitions.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -96,6 +97,18 @@ void create_server_save_schema(SQLite3DB& db) {
 	db.execute("CREATE TABLE pgsql_replication_hostgroups (writer_hostgroup INTEGER, reader_hostgroup INTEGER, check_type TEXT, comment TEXT)");
 	db.execute("CREATE TABLE pgsql_hostgroup_attributes (hostgroup_id INTEGER, max_num_online_servers INTEGER, autocommit INTEGER, free_connections_pct INTEGER, init_connect TEXT, multiplex INTEGER, connection_warming INTEGER, throttle_connections_per_sec INTEGER, ignore_session_variables TEXT, hostgroup_settings TEXT, servers_defaults TEXT, comment TEXT)");
 	db.execute("CREATE TABLE pgsql_servers_ssl_params (hostname TEXT, port INTEGER, username TEXT, ssl_ca TEXT, ssl_cert TEXT, ssl_key TEXT, ssl_crl TEXT, ssl_crlpath TEXT, ssl_protocol_version_range TEXT, comment TEXT)");
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS_SSL_PARAMS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_GALERA_HOSTGROUPS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_RDS_BGD_HOSTGROUPS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_SERVERS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_SERVERS_SSL_PARAMS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_REPLICATION_HOSTGROUPS);
+	db.execute(ADMIN_SQLITE_TABLE_RUNTIME_PGSQL_HOSTGROUP_ATTRIBUTES);
 }
 
 /** Inserts one configuration row into main.mysql_servers or main.pgsql_servers. */
@@ -229,6 +242,68 @@ std::vector<std::string> saved_servers(SQLite3DB& db, bool mysql) {
 	if (rows) for (const auto* row : rows->rows)
 		values.push_back(std::string(row->fields[0]) + ":" + row->fields[1]);
 	return values;
+}
+
+/** "hostgroup:hostname" of the live rows a runtime-table refresh wrote. */
+std::vector<std::string> saved_runtime_servers(SQLite3DB& db, bool mysql) {
+	char* error = nullptr;
+	int cols = 0, affected = 0;
+	SQLite3_result* raw = nullptr;
+	db.execute_statement(mysql
+		? "SELECT hostgroup_id, hostname FROM main.runtime_mysql_servers ORDER BY hostgroup_id, hostname"
+		: "SELECT hostgroup_id, hostname FROM main.runtime_pgsql_servers ORDER BY hostgroup_id, hostname",
+		&error, &cols, &affected, &raw);
+	if (error) { diag("saved_runtime_servers failed: %s", error); free(error); }
+	std::unique_ptr<SQLite3_result> rows(raw);
+	std::vector<std::string> values;
+	if (rows) for (const auto* row : rows->rows)
+		values.push_back(std::string(row->fields[0]) + ":" + row->fields[1]);
+	return values;
+}
+
+struct RetirementProbe {
+	int hook_calls {0};
+	bool active_claims_empty {false};
+	bool reload_lookup_empty {false};
+	std::vector<uint32_t> save_retained {};
+	std::vector<std::string> saved_rows {};
+	std::vector<std::string> runtime_rows {};
+};
+RetirementProbe retirement_probes[2];
+SQLite3DB* retirement_save_db[2] {nullptr, nullptr};
+
+/**
+ * Runs in the manager-retirement window, after the active manager is
+ * unpublished and before its controllers release their claims. The active-only
+ * lookups are empty here, while a SAVE must still preserve the claimed rows.
+ */
+void retirement_attempt_hook(ProxySQL_ServerProtocol protocol) {
+	const int index = protocol == ProxySQL_ServerProtocol::mysql ? 0 : 1;
+	RetirementProbe& probe = retirement_probes[index];
+	++probe.hook_calls;
+	probe.active_claims_empty = proxysql_active_server_hostgroup_claims(protocol).empty();
+	probe.reload_lookup_empty =
+		proxysql_server_reload_retained_hostgroups(protocol).empty();
+	probe.save_retained = proxysql_server_save_retained_hostgroups(protocol);
+	SQLite3DB* db = retirement_save_db[index];
+	if (db == nullptr) return;
+	SQLite3DB* admin_db = GloAdmin->admindb;
+	GloAdmin->admindb = db;
+	if (index == 0) {
+		GloAdmin->mysql_servers_wrlock();
+		GloAdmin->save_mysql_servers_runtime_to_database(false);
+		probe.saved_rows = saved_servers(*db, true);
+		GloAdmin->save_mysql_servers_runtime_to_database(true);
+		GloAdmin->mysql_servers_wrunlock();
+	} else {
+		GloAdmin->pgsql_servers_wrlock();
+		GloAdmin->save_pgsql_servers_runtime_to_database(false);
+		probe.saved_rows = saved_servers(*db, false);
+		GloAdmin->save_pgsql_servers_runtime_to_database(true);
+		GloAdmin->pgsql_servers_wrunlock();
+	}
+	GloAdmin->admindb = admin_db;
+	probe.runtime_rows = saved_runtime_servers(*db, index == 0);
 }
 
 /**
@@ -573,7 +648,7 @@ void test_merge_ignores_offline_hard(ProxySQL_ServerProtocol protocol, uint16_t 
 } // namespace
 
 int main() {
-	plan(9 + 1 + 2 * 5 + 2 * 2 + 2 * (18 + 5));
+	plan(9 + 1 + 2 * 5 + 2 * 2 + 2 * (18 + 5) + 2 * 3 + 1 + 2 * 5);
 	test_init_minimal();
 	test_retained_hostgroup_rules();
 	test_reload_counts_gtid_port_edit();
@@ -730,6 +805,82 @@ int main() {
 			"%s: controller retirement releases the claim, drops its rows and loads configuration rows", label);
 		admin_db.execute(mysql ? "DELETE FROM mysql_servers" : "DELETE FROM pgsql_servers");
 		load_servers(mysql);
+	}
+
+	// Retirement window: both controllers stay installed until one stop. The
+	// hook observes the unpublish-before-claim-release window, where a SAVE
+	// must still preserve the claimed configuration rows.
+	SQLite3DB retirement_mysql_db;
+	SQLite3DB retirement_pgsql_db;
+	char retirement_memory_db[] = ":memory:";
+	retirement_mysql_db.open(retirement_memory_db,
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	retirement_pgsql_db.open(retirement_memory_db,
+		SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	create_server_save_schema(retirement_mysql_db);
+	create_server_save_schema(retirement_pgsql_db);
+	insert_config_row(retirement_mysql_db, true, 901, "configured-writer.example", 3306, 1);
+	insert_config_row(retirement_mysql_db, true, 902, "configured-reader.example", 3306, 1);
+	insert_config_row(retirement_mysql_db, true, 99, "old-plain.example", 3306, 1);
+	insert_config_row(retirement_pgsql_db, false, 901, "configured-writer.example", 5432, 1);
+	insert_config_row(retirement_pgsql_db, false, 902, "configured-reader.example", 5432, 1);
+	insert_config_row(retirement_pgsql_db, false, 99, "old-plain.example", 5432, 1);
+	retirement_save_db[0] = &retirement_mysql_db;
+	retirement_save_db[1] = &retirement_pgsql_db;
+
+	Observed retirement_observed[2];
+	for (int index = 0; index < 2; ++index) {
+		const bool mysql = index == 0;
+		const auto protocol = mysql ? ProxySQL_ServerProtocol::mysql : ProxySQL_ServerProtocol::pgsql;
+		const char* label = mysql ? "MySQL" : "PostgreSQL";
+		const uint16_t port = mysql ? 3306 : 5432;
+		auto& observed = retirement_observed[index];
+		ok(manager->install_server_discovery_controller(protocol, new ManagedController(observed),
+			destroy_controller, dlopen(PROXYSQL_FAKE_PLUGIN_PATH, RTLD_NOW | RTLD_LOCAL)),
+			"%s: retirement probe controller installs", label);
+		insert_config_row(admin_db, mysql, 901, "configured-writer.example", port, 1);
+		insert_config_row(admin_db, mysql, 902, "configured-reader.example", port, 1);
+		insert_config_row(admin_db, mysql, 99, "runtime-plain.example", port, 1);
+		uint64_t generation = 0;
+		const auto claim = role_claim(protocol, 901, 902);
+		ProxySQL_ServerRow writer {901, "writer.example", port};
+		ProxySQL_ServerRow reader {902, "reader.example", port};
+		ok(install_claims(protocol, 100 + index, {claim}, generation) &&
+			apply_rows(*manager, observed, protocol, {901, 902}, {writer, reader}),
+			"%s: retirement probe installs a managed claim with live inventory", label);
+		load_servers(mysql);
+		ok(row_status(mysql, 99, "runtime-plain.example", port) == "ONLINE" &&
+			row_status(mysql, 901, "writer.example", port) == "ONLINE" &&
+			row_status(mysql, 902, "reader.example", port) == "ONLINE",
+			"%s: retirement probe has live inventory inside and outside the claim", label);
+	}
+
+	proxysql_server_discovery_retirement_attempt_for_test = &retirement_attempt_hook;
+	std::string stop_error;
+	const bool stopped = proxysql_stop_configured_plugins(manager, stop_error);
+	proxysql_server_discovery_retirement_attempt_for_test = nullptr;
+	if (!stopped) diag("plugin manager stop failed: %s", stop_error.c_str());
+	ok(stopped, "plugin manager stops once after both retirement probes");
+	for (int index = 0; index < 2; ++index) {
+		const bool mysql = index == 0;
+		const auto protocol = mysql ? ProxySQL_ServerProtocol::mysql : ProxySQL_ServerProtocol::pgsql;
+		const char* label = mysql ? "MySQL" : "PostgreSQL";
+		const RetirementProbe& probe = retirement_probes[index];
+		const std::vector<std::string> expected_saved {"99:runtime-plain.example",
+			"901:configured-writer.example", "902:configured-reader.example"};
+		const std::vector<std::string> expected_runtime {"99:runtime-plain.example",
+			"901:writer.example", "902:reader.example"};
+		ok(probe.hook_calls == 1 && probe.active_claims_empty && probe.reload_lookup_empty,
+			"%s: active claim and reload lookups are empty in the retirement window", label);
+		ok(as_set(probe.save_retained) == std::set<uint32_t>({901, 902}),
+			"%s: the SAVE helper retains the claimed hostgroups until claim release", label);
+		ok(probe.saved_rows == expected_saved,
+			"%s: a SAVE in the retirement window preserves claimed configuration rows and saves "
+			"the unclaimed runtime row", label);
+		ok(probe.runtime_rows == expected_runtime,
+			"%s: the runtime-table refresh still writes the live rows, claimed ones included", label);
+		ok(proxysql_server_save_retained_hostgroups(protocol).empty(),
+			"%s: the SAVE helper retains nothing after the claims are released", label);
 	}
 	return exit_status();
 }

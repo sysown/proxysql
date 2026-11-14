@@ -306,14 +306,19 @@ desired set replaces them.
 
 The runtime snapshot published to the controller still carries the
 configuration rows only; the live rows are not exposed through the plugin
-service table.
+service table. It is the accepted configuration/policy projection, not a live
+health or inventory view: a deliberate configuration-only snapshot may differ
+from the effective Hostgroups Manager retained managed inventory.
 
 A save from runtime into Admin MEMORY follows the same rule: discovered
 servers are runtime state, never configuration. `SAVE MYSQL|PGSQL SERVERS FROM
 RUNTIME` and the save that follows a Cluster v1 or v2 pull (with
 `cluster_mysql_servers_save_to_disk` / `cluster_pgsql_servers_save_to_disk`)
-leave the `mysql_servers` / `pgsql_servers` rows of hostgroups held by active
-claims as they are, and save the runtime rows of every other hostgroup. After a
+leave the `mysql_servers` / `pgsql_servers` rows of hostgroups held by the
+active manager's claims, or by a retiring manager's claims until its
+controllers release them, as they are, and save the runtime rows of every
+other hostgroup. A SAVE in the retirement window therefore preserves those
+rows, while a reload in that same window keeps nothing. After a
 v1 pull those hostgroups keep the node's own rows; after a v2 pull they keep the
 peer's configuration rows, which the pull wrote before loading. The
 `runtime_mysql_servers` / `runtime_pgsql_servers` tables still show the live

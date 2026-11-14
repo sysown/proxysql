@@ -8719,16 +8719,17 @@ bool save_memory_server_rows_to_disk_scoped(SQLite3DB* db, const char* table,
 
 /**
  * Hostgroups whose configuration rows a save from runtime leaves untouched
- * (sorted, unique): with PROXYSQL40, those of the active managed discovery
- * claims of `protocol`. Discovered servers are runtime state, never
- * configuration, and a server reload ignores configuration rows in these
- * hostgroups. Empty for a refresh of the runtime_* tables, which show the live
- * rows, and without PROXYSQL40.
+ * (sorted, unique): with PROXYSQL40, those of the managed discovery claims
+ * held by the active manager, or by a retiring manager until its controllers
+ * release them. Discovered servers are runtime state, never configuration, and
+ * a server reload ignores configuration rows in these hostgroups. Empty for a
+ * refresh of the runtime_* tables, which show the live rows, and without
+ * PROXYSQL40.
  */
 std::vector<uint32_t> server_save_excluded_hostgroups(bool runtime_tables, bool mysql) {
 #ifdef PROXYSQL40
 	if (runtime_tables) return {};
-	return normalized_hostgroups(proxysql_server_reload_retained_hostgroups(
+	return normalized_hostgroups(proxysql_server_save_retained_hostgroups(
 		mysql ? ProxySQL_ServerProtocol::mysql : ProxySQL_ServerProtocol::pgsql));
 #else
 	(void)runtime_tables;

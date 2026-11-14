@@ -3077,6 +3077,17 @@ std::vector<uint32_t> proxysql_server_reload_retained_hostgroups(ProxySQL_Server
 	return proxysql_server_reload_retained_hostgroups(claims, claims);
 }
 
+std::vector<uint32_t> proxysql_server_save_retained_hostgroups(ProxySQL_ServerProtocol protocol) {
+	ScopedActiveManagerPin pin;
+	ProxySQL_PluginManager* manager = pin.manager();
+	if (manager == nullptr && !pin.exclusive_owner_bypass()) {
+		manager = g_retiring_plugin_manager.load(std::memory_order_acquire);
+	}
+	if (manager == nullptr) return {};
+	const auto claims = manager->server_hostgroup_claims(protocol);
+	return proxysql_server_reload_retained_hostgroups(claims, claims);
+}
+
 bool proxysql_collect_server_reload_overrides(SQLite3DB& db, ProxySQL_ServerProtocol protocol,
 	const std::vector<uint32_t>& hostgroups, std::vector<ProxySQL_ServerReloadOverride>& overrides,
 	std::string& error) {

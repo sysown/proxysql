@@ -170,6 +170,10 @@ std::vector<uint32_t> proxysql_server_reload_retained_hostgroups(
 	const std::vector<ProxySQL_ServerHostgroupClaim>& next);
 // The same for the active claims of a protocol (empty without a plugin manager).
 std::vector<uint32_t> proxysql_server_reload_retained_hostgroups(ProxySQL_ServerProtocol protocol);
+// SAVE-only variant: the retained hostgroups of the active claims, or, while a
+// manager is retiring, of the claims it still holds until its controllers
+// release them. A reload in that window keeps nothing.
+std::vector<uint32_t> proxysql_server_save_retained_hostgroups(ProxySQL_ServerProtocol protocol);
 
 // Rows a reload ignores in one retained hostgroup.
 struct ProxySQL_ServerReloadOverride {
@@ -256,11 +260,13 @@ private:
 // protocol's ProxySQL_ServerRuntimeInstallLock.
 uint64_t proxysql_advance_server_runtime_generation(ProxySQL_ServerProtocol protocol);
 
-// Publishes a server configuration that core has already installed in the
-// Hostgroups Manager. Takes the install lock, tags the snapshot with a new
-// generation and notifies the discovery controller. Never fails: a controller
-// observes the installation but cannot reject it. Returns the published
-// generation.
+// Publishes accepted configuration/policy after core processes a configuration
+// install. The snapshot is not a live
+// health or inventory view: a deliberate configuration-only projection may
+// differ from the effective Hostgroups Manager retained managed inventory.
+// Takes the install lock, tags the snapshot with a new generation and notifies
+// the discovery controller. Never fails: a controller observes the
+// installation but cannot reject it. Returns the published generation.
 uint64_t proxysql_publish_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot);
 #endif
 
