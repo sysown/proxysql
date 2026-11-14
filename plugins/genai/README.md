@@ -36,6 +36,25 @@ For deeper architecture see `doc/MCP/Architecture.md` and
 covers only the **plugin lifecycle, configuration, and operational
 contract**.
 
+### Read-only query tools
+
+`run_sql_readonly` checks statement framing, modifying operations and known
+side-effecting function calls using dialect-aware tokens. String literals
+containing backslashes and PostgreSQL `U&` escape forms are rejected because
+their backend interpretation can differ from the tokenizer's interpretation.
+Ordinary literals and keyword aliases remain supported.
+
+PostgreSQL executions also run in a read-only transaction, followed by rollback
+before the pooled connection is reused. Connections with an existing transaction
+or an unsuccessful reset are discarded. The selected schema remains a persistent
+pool setting outside that transaction.
+
+These checks do not establish that arbitrary user-defined functions are free of
+side effects. PostgreSQL read-only transactions restrict persistent database
+writes, but do not prohibit every server operation or external effect. Configure
+backend roles and function privileges for the intended MCP access; the lexical
+function restrictions are not a substitute for those privileges.
+
 ## 2. Building
 
 ```bash

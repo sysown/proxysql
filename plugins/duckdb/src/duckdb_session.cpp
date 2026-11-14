@@ -690,6 +690,25 @@ bool apply_client_config_policy(const std::string& sql, std::string& to_prepare,
 		to_prepare = sql;
 		return true;
 	}
+	// DuckDB 2.0 expands these PRAGMAs into SET during prepare. Preserve the
+	// session-only aliases without admitting other unconfined configuration SETs.
+	if (keyword == "PRAGMA") {
+		const size_t name_at = skip_space_and_comments(sql, keyword_at + keyword.size());
+		const std::string name = read_lower_identifier(sql, name_at);
+		if (name == "enable_optimizer" || name == "disable_optimizer") {
+			size_t end = name_at + name.size();
+			if (name_at < sql.size() && sql[name_at] == '"') end += 2;
+			const size_t suffix_at = end;
+			end = skip_space_and_comments(sql, end);
+			if (end < sql.size() && sql[end] == ';') end = skip_space_and_comments(sql, end + 1);
+			if (end == sql.size()) {
+				to_prepare = std::string("SET SESSION enable_optimizer=") +
+				             (name == "enable_optimizer" ? "true" : "false") + sql.substr(suffix_at);
+				confined = true;
+				return true;
+			}
+		}
+	}
 	if (keyword != "SET" && keyword != "RESET") {
 		to_prepare = sql;
 		return true;
@@ -819,6 +838,18 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 	duckdb_prepared_statement exec_stmt = stmt;
 
 	if (needs_wrap) {
+		auto reject_unrepresentable = [&]() {
+			duckdb_destroy_prepare(&stmt);
+			outcome.ok = false;
+			outcome.error_type = DUCKDB_ERROR_NOT_IMPLEMENTED;
+			outcome.error = "DuckDB result cannot be represented by this protocol path; "
+				"cast unsupported result expressions explicitly to VARCHAR";
+			return finish();
+		};
+		// DML cannot be wrapped as a SELECT subquery. In DuckDB 2.0 the
+		// failed wrapper prepare also invalidates an explicit transaction.
+		// Reject using the bound statement type before attempting that prepare.
+		if (mutates_rows) return reject_unrepresentable();
 		// The subquery is wrapped with newlines around `effective`
 		// (`FROM (\n<sql>\n)`), not straight concatenation: a trailing
 		// `-- comment` immediately before a `)` would otherwise swallow
@@ -877,12 +908,7 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 			// before executing the original statement, so a RETURNING
 			// mutation cannot commit or evaluate defaults on this path.
 			duckdb_destroy_prepare(&wrap_stmt);
-			duckdb_destroy_prepare(&stmt);
-			outcome.ok = false;
-			outcome.error_type = DUCKDB_ERROR_NOT_IMPLEMENTED;
-			outcome.error = "DuckDB result cannot be represented by this protocol path; "
-				"cast unsupported result expressions explicitly to VARCHAR";
-			return finish();
+			return reject_unrepresentable();
 		}
 	}
 

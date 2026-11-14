@@ -65,6 +65,8 @@ bool proxysql_reconcile_mysql_server_desired_set(
 	const ProxySQL_ServerDesiredSet& desired_set, std::string& error);
 bool proxysql_reconcile_pgsql_server_desired_set(
 	const ProxySQL_ServerDesiredSet& desired_set, std::string& error);
+// Merges a desired set with the current runtime rows. Current rows in
+// OFFLINE_HARD (servers being removed) count as absent.
 bool proxysql_merge_server_desired_set(const ProxySQL_ServerRuntimeSnapshot& current,
 	const ProxySQL_ServerDesiredSet& desired_set,
 	std::vector<ProxySQL_ServerRow>& merged, std::string& error);
@@ -155,6 +157,49 @@ bool proxysql_is_server_inventory_managed(ProxySQL_ServerProtocol protocol,
 bool proxysql_is_server_inventory_managed_locked(ProxySQL_ServerProtocol protocol,
 	uint32_t writer_hostgroup, uint32_t reader_hostgroup,
 	uint8_t* writer_is_also_reader = nullptr);
+// A server reload (Admin LOAD, managed discovery install, Cluster pull) keeps
+// the live rows of hostgroups held by managed discovery claims instead of
+// replacing them, as a desired set keeps the rows of the other claims.
+// Returns the hostgroups of the claims present and unchanged in both sets:
+// same hostgroups (the green pair too for blue/green), monitor kind, writer
+// placement, and for Aurora claims the domain and port. Fields of another
+// monitor kind are ignored. A removed or changed claim keeps nothing; monitor
+// tuning alone is no change.
+std::vector<uint32_t> proxysql_server_reload_retained_hostgroups(
+	const std::vector<ProxySQL_ServerHostgroupClaim>& current,
+	const std::vector<ProxySQL_ServerHostgroupClaim>& next);
+// The same for the active claims of a protocol (empty without a plugin manager).
+std::vector<uint32_t> proxysql_server_reload_retained_hostgroups(ProxySQL_ServerProtocol protocol);
+// SAVE-only variant: the retained hostgroups of the active claims, or, while a
+// manager is retiring, of the claims it still holds until its controllers
+// release them. A reload in that window keeps nothing.
+std::vector<uint32_t> proxysql_server_save_retained_hostgroups(ProxySQL_ServerProtocol protocol);
+
+// Rows a reload ignores in one retained hostgroup.
+struct ProxySQL_ServerReloadOverride {
+	uint32_t hostgroup_id {0};
+	// Incoming servers that are not live (or live only as OFFLINE_HARD).
+	uint64_t ignored {0};
+	// Incoming servers that are live with another weight, compression,
+	// max_connections, max_replication_lag, use_ssl, max_latency_ms, comment,
+	// gtid_port (MySQL), or an OFFLINE_SOFT/OFFLINE_HARD status on either side. Other status
+	// differences (ONLINE/SHUNNED) belong to the monitors and are not counted.
+	uint64_t changed {0};
+};
+// Counts, per retained hostgroup in ascending order, the incoming rows a reload
+// will ignore. Only hostgroups with at least one ignored row are returned.
+bool proxysql_collect_server_reload_overrides(SQLite3DB& db, ProxySQL_ServerProtocol protocol,
+	const std::vector<uint32_t>& hostgroups, std::vector<ProxySQL_ServerReloadOverride>& overrides,
+	std::string& error);
+// Caller holds the HGM write lock and has just regenerated the HGM runtime
+// servers table from the live servers. Replaces the incoming rows of
+// `hostgroups` with their live rows, OFFLINE_HARD excluded, so the commit
+// finds every kept server unchanged, and logs the ignored rows once per
+// hostgroup; `source` names them ("configured" or "peer"). All or nothing:
+// on an SQLite error the incoming rows are rolled back, the error is logged
+// and false is returned, and the commit replaces the hostgroups as before.
+bool proxysql_retain_server_reload_rows(SQLite3DB& db, ProxySQL_ServerProtocol protocol,
+	const std::vector<uint32_t>& hostgroups, const char* source = "configured");
 #endif
 
 struct ProxySQL_ServerBuiltinTopologyInputs {
@@ -215,11 +260,13 @@ private:
 // protocol's ProxySQL_ServerRuntimeInstallLock.
 uint64_t proxysql_advance_server_runtime_generation(ProxySQL_ServerProtocol protocol);
 
-// Publishes a server configuration that core has already installed in the
-// Hostgroups Manager. Takes the install lock, tags the snapshot with a new
-// generation and notifies the discovery controller. Never fails: a controller
-// observes the installation but cannot reject it. Returns the published
-// generation.
+// Publishes accepted configuration/policy after core processes a configuration
+// install. The snapshot is not a live
+// health or inventory view: a deliberate configuration-only projection may
+// differ from the effective Hostgroups Manager retained managed inventory.
+// Takes the install lock, tags the snapshot with a new generation and notifies
+// the discovery controller. Never fails: a controller observes the
+// installation but cannot reject it. Returns the published generation.
 uint64_t proxysql_publish_server_runtime(ProxySQL_ServerRuntimeSnapshot snapshot);
 #endif
 

@@ -296,7 +296,11 @@ FlushVariableStats ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 		wrunlock();
 		{
 			load_http_server();
-			load_restapi_server();
+			// REST listener restarts are serialized on the dedicated
+			// lifecycle worker. This avoids stopping MHD from an admin
+			// session that may be serving a /sync handler which is waiting
+			// for this command. Non-forced so unchanged configs do not churn.
+			load_restapi_server(false);
 			// Update the admin variable for 'web_verbosity'
 			admin___web_verbosity = variables.web_verbosity;
 		}

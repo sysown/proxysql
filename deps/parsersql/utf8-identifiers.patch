@@ -1,0 +1,63 @@
+--- a/include/sql_parser/tokenizer.h
++++ b/include/sql_parser/tokenizer.h
+@@ -238,0 +239,19 @@
++    // Validate one UTF-8 scalar without reading past the input. High bytes
++    // participate in identifiers; do not split a name into ASCII keyword tokens.
++    size_t utf8_identifier_char_length(const char* p) const {
++        const size_t left = static_cast<size_t>(end_ - p);
++        const auto c = static_cast<unsigned char>(*p);
++        size_t n = c >= 0xc2 && c <= 0xdf ? 2 :
++                   c >= 0xe0 && c <= 0xef ? 3 :
++                   c >= 0xf0 && c <= 0xf4 ? 4 : 0;
++        if (n == 0 || left < n) return 0;
++        for (size_t i = 1; i < n; ++i) {
++            const auto b = static_cast<unsigned char>(p[i]);
++            if (b < 0x80 || b > 0xbf) return 0;
++        }
++        const auto second = static_cast<unsigned char>(p[1]);
++        if ((c == 0xe0 && second < 0xa0) || (c == 0xed && second >= 0xa0) ||
++            (c == 0xf0 && second < 0x90) || (c == 0xf4 && second >= 0x90)) return 0;
++        return n;
++    }
++
+@@ -242,0 +262,10 @@
++            if (static_cast<unsigned char>(c) >= 0x80) {
++                const size_t n = utf8_identifier_char_length(cursor_);
++                if (n == 0) {
++                    ++cursor_;
++                    return make_token(TokenType::TK_ERROR, start,
++                                      static_cast<uint32_t>(cursor_ - start));
++                }
++                cursor_ += n;
++                continue;
++            }
+@@ -616 +645,2 @@
+-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
++        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
++            static_cast<unsigned char>(c) >= 0x80) {
+--- a/tests/test_tokenizer.cpp
++++ b/tests/test_tokenizer.cpp
+@@ -355,0 +356,23 @@
++
++// ProxySQL #6630: UTF-8 identifiers must be single tokens, including when
++// adjacent ASCII bytes spell a SQL operation.
++template <Dialect D>
++static void check_utf8_identifiers() {
++    for (const char* sql : {"café", "日本語", "éDROP", "starté", "a😀z"}) {
++        Tokenizer<D> lexer;
++        lexer.reset(sql, strlen(sql));
++        Token token = lexer.next_token();
++        EXPECT_EQ(token.type, TokenType::TK_IDENTIFIER) << sql;
++        EXPECT_EQ(std::string(token.text.ptr, token.text.len), sql);
++        EXPECT_EQ(lexer.next_token().type, TokenType::TK_EOF);
++        EXPECT_FALSE(lexer.has_error());
++    }
++    for (const char* sql : {"\x80", "\xc0\xaf", "\xed\xa0\x80", "\xf4\x90\x80\x80", "a\xe2\x82"}) {
++        Tokenizer<D> lexer;
++        lexer.reset(sql, strlen(sql));
++        EXPECT_EQ(lexer.next_token().type, TokenType::TK_ERROR);
++        EXPECT_TRUE(lexer.has_error());
++    }
++}
++TEST_F(MySQLTokenizerTest, Utf8Identifiers) { check_utf8_identifiers<Dialect::MySQL>(); }
++TEST_F(PgSQLTokenizerTest, Utf8Identifiers) { check_utf8_identifiers<Dialect::PostgreSQL>(); }

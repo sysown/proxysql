@@ -680,6 +680,12 @@ void MySQL_Data_Stream::check_data_flow() {
 }
 
 int MySQL_Data_Stream::read_from_net() {
+	if (myds_type == MYDS_FRONTEND && (revents & POLLERR) && !(revents & POLLIN)) {
+		// An error-only event has no POLLIN to drive recv(). Deactivate the
+		// frontend now so paused sessions are reaped by the worker too.
+		shut_soft();
+		return -1;
+	}
 	if (encrypted) {
 		//proxy_info("Entering\n");
 	}

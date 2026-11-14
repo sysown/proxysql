@@ -35,16 +35,18 @@ case "$dependency" in
     openssl)
         version=$(sed -n 's/^OPENSSL_VERSION *:= *//p' "$repo_root/common_mk/openssl_flags.mk")
         directory=libssl
+        archive_suffix=tar.gz
         tree="$repo_root/deps/libssl/openssl-$version"
         ;;
     duckdb)
         version=$(sed -n 's/^DUCKDB_VERSION *:= *//p' "$repo_root/deps/duckdb/build.mk")
         directory=duckdb
+        archive_suffix=tar.xz
         tree="$repo_root/deps/duckdb/duckdb"
         ;;
     *) echo 'ERROR: unknown dependency' >&2; exit 1;;
 esac
-archive="$repo_root/deps/$directory/$dependency-$version.tar.gz"
+archive="$repo_root/deps/$directory/$dependency-$version.$archive_suffix"
 # Source integrity remains mandatory even when a completed tree is reusable.
 bash "$repo_root/deps/$directory/verify-source.bash" "$archive"
 signature=$({
@@ -67,7 +69,9 @@ source_outputs() (
         find include/openssl -type f -print
         find providers -type f \( -name '*.so' -o -name '*.dylib' \) -print
     else
-        printf '%s\n' build/release/DuckDBExports.cmake
+        printf '%s\n' build/release/DuckDBExports.cmake \
+            build/release/src/duckdb_static_extension_loader.c \
+            extension/loader/static_extension_autoregister.cpp
         find src/include -type f -print
         sh "$repo_root/deps/duckdb/list-static-archives.sh" build/release
         for directory in third_party extension; do
@@ -99,7 +103,9 @@ if [[ -f "$tree/.proxysql-source-signature" && -f "$tree/.proxysql-origin" &&
         if [[ -s "$tree/libssl.a" && -s "$tree/libcrypto.a" && -s "$tree/include/openssl/configuration.h" &&
               -s "$tree/include/openssl/ssl.h" && -s "$tree/include/openssl/opensslv.h" &&
               -f "$tree/.proxysql-build-complete" ]]; then valid=1; fi
-    elif [[ -s "$tree/src/include/duckdb.h" ]] &&
+    elif [[ -s "$tree/src/include/duckdb.h" && -s "$tree/src/include/duckdb_static_extension.h" &&
+            -s "$tree/build/release/src/duckdb_static_extension_loader.c" &&
+            -s "$tree/extension/loader/static_extension_autoregister.cpp" ]] &&
         sh "$repo_root/deps/duckdb/list-static-archives.sh" "$tree/build/release" >/dev/null; then valid=1; fi
 fi
 if [[ "$valid" == 0 ]]; then

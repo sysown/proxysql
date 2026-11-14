@@ -13,12 +13,17 @@ class DuckDBArchives(unittest.TestCase):
     def fixture(self, root, jemalloc=False):
         paths = ['src/libduckdb_static.a',
                  'extension/core_functions/libcore_functions_extension.a',
-                 'extension/parquet/libparquet_extension.a']
+                 'extension/parquet/libparquet_extension.a',
+                 'extension/json/libjson_extension.a',
+                 'extension/icu/libicu_extension.a',
+                 'src/main/extension/libduckdb_loadable_extensions.a',
+                 'src/main/http/libduckdb_httplib.a',
+                 'tools/cpp/libduckdb_cpp_api.a']
         paths += [f'third_party/{name}/libduckdb_{name}.a' for name in
-                  ('fastpforlib', 'fmt', 'fsst', 'hyperloglog', 'pg_query', 'mbedtls',
+                  ('fastpforlib', 'fmt', 'fsst', 'hyperloglog', 'mbedtls',
                    'miniz', 're2', 'skiplistlib', 'utf8proc', 'yyjson', 'zstd')]
         if jemalloc:
-            paths.append('extension/jemalloc/libjemalloc_extension.a')
+            paths.append('third_party/jemalloc/libduckdb_jemalloc.a')
         # A copied build cache may record its original absolute directory.
         (root / 'DuckDBExports.cmake').write_text('\n'.join(
             f'  IMPORTED_LOCATION_RELEASE "/original/build/release/{path}"'
@@ -27,6 +32,12 @@ class DuckDBArchives(unittest.TestCase):
             file = root / path
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_bytes(b'!<arch>\n')
+        if root.name == 'release' and root.parent.name == 'build':
+            for relative in ('src/duckdb_static_extension_loader.c',
+                             '../../extension/loader/static_extension_autoregister.cpp'):
+                loader = root / relative
+                loader.parent.mkdir(parents=True, exist_ok=True)
+                loader.write_text('// static loader fixture\n')
         return paths
 
     def run_validator(self, root):
@@ -43,7 +54,8 @@ class DuckDBArchives(unittest.TestCase):
                 self.assertEqual(set(result.stdout.splitlines()), {str(root / p) for p in paths})
 
     def test_missing_archive_cannot_be_hidden_by_unrelated_extra_archive(self):
-        for missing in ('third_party/re2/libduckdb_re2.a', 'extension/jemalloc/libjemalloc_extension.a'):
+        for missing in ('third_party/re2/libduckdb_re2.a', 'third_party/jemalloc/libduckdb_jemalloc.a',
+                        'tools/cpp/libduckdb_cpp_api.a'):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 self.fixture(root, jemalloc=True)
@@ -53,6 +65,20 @@ class DuckDBArchives(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(missing, result.stderr)
                 self.assertEqual(result.stdout, '')
+
+    def test_unexpected_tools_archive_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.fixture(root)
+            unexpected = root / 'tools/other/libunexpected.a'
+            unexpected.parent.mkdir(parents=True)
+            unexpected.write_bytes(b'!<arch>\n')
+            with (root / 'DuckDBExports.cmake').open('a') as manifest:
+                manifest.write(f'  IMPORTED_LOCATION_RELEASE "/original/build/release/tools/other/libunexpected.a"\n')
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('unexpected DuckDB archive path', result.stderr)
+            self.assertEqual(result.stdout, '')
 
     def test_missing_or_empty_manifest_fails_closed(self):
         for contents in (None, '', '  IMPORTED_LOCATION_RELEASE "/old/build/release/third_party/re2/libduckdb_re2.a"'):

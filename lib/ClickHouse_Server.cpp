@@ -477,9 +477,9 @@ typedef struct _main_args {
 	volatile int *shutdown;
 } main_args;
 
-typedef struct _ifaces_desc_t {
+typedef struct _clickhouse_ifaces_desc_t {
 		char **mysql_ifaces;
-} ifaces_desc_t;
+} clickhouse_ifaces_desc_t;
 
 #define MAX_IFACES	8
 #define MAX_SQLITE3SERVER_LISTENERS 16
@@ -508,7 +508,7 @@ class ifaces_desc {
 	}
 };
 
-class sqlite3server_main_loop_listeners {
+class clickhouseserver_main_loop_listeners {
 	private:
 	struct tokenizer_owner {
 		tokenizer_t value;
@@ -584,8 +584,8 @@ class sqlite3server_main_loop_listeners {
 		pthread_rwlock_unlock(&rwlock);
 	}
 	ifaces_desc *ifaces_mysql;
-	ifaces_desc_t descriptor_new;
-	sqlite3server_main_loop_listeners() {
+	clickhouse_ifaces_desc_t descriptor_new;
+	clickhouseserver_main_loop_listeners() {
 		pthread_rwlock_init(&rwlock, NULL);
 		ifaces_mysql=new ifaces_desc();
 		version=0;
@@ -645,7 +645,7 @@ class sqlite3server_main_loop_listeners {
 	}
 };
 
-static sqlite3server_main_loop_listeners S_amll;
+static clickhouseserver_main_loop_listeners S_amll;
 
 void ClickHouse_Server_session_handler(MySQL_Session* sess, void *_pa, PtrSize_t *pkt) {
 	char *error=NULL;

@@ -21,6 +21,9 @@ def fixture_tree(tree, dependency):
     files = {'LICENSE': b'license'}
     if dependency == 'duckdb':
         files.update({'src/include/duckdb.h': b'header',
+                      'src/include/duckdb_static_extension.h': b'static extension API',
+                      'build/release/src/duckdb_static_extension_loader.c': b'generated loader',
+                      'extension/loader/static_extension_autoregister.cpp': b'loader constructor',
                       'build/release/src/libduckdb_static.a': b'!<arch>\n',
                       'build/release/extension/parquet/libparquet_extension.a': b'!<arch>\n',
                       'build/release/DuckDBExports.cmake': (
@@ -32,7 +35,7 @@ def fixture_tree(tree, dependency):
                       'include/openssl/crypto.h': b'crypto header',
                       'include/openssl/configuration.h': b'generated configuration',
                       'include/openssl/opensslv.h': b'# define OPENSSL_VERSION_MAJOR 3\n'
-                      b'# define OPENSSL_VERSION_MINOR 5\n# define OPENSSL_VERSION_PATCH 7\n',
+                      b'# define OPENSSL_VERSION_MINOR 5\n# define OPENSSL_VERSION_PATCH 9\n',
                       'providers/legacy.so': b'provider', 'apps/openssl.cnf': b'configuration'})
     for relative, data in files.items():
         path = tree / relative
@@ -43,7 +46,7 @@ def fixture_tree(tree, dependency):
 
 def fixture_identity(dependency):
     return {'format_version': 1, 'dependency': dependency, 'eligible': True,
-            'version': '1.4.5' if dependency == 'duckdb' else '3.5.7'}
+            'version': '2.0.0' if dependency == 'duckdb' else '3.5.9'}
 
 
 class BundleTests(unittest.TestCase):
@@ -106,6 +109,9 @@ class BundleTests(unittest.TestCase):
 
     def test_missing_required_archive_or_generated_header_fails_packaging(self):
         for dep, missing in [('duckdb', 'build/release/extension/parquet/libparquet_extension.a'),
+                              ('duckdb', 'src/include/duckdb_static_extension.h'),
+                              ('duckdb', 'build/release/src/duckdb_static_extension_loader.c'),
+                              ('duckdb', 'extension/loader/static_extension_autoregister.cpp'),
                               ('openssl', 'include/openssl/configuration.h')]:
             tree = self.root / dep
             fixture_tree(tree, dep)
@@ -187,7 +193,7 @@ class BundleTests(unittest.TestCase):
         archive, entry = self.bundle('openssl', tree)
         link = self.root / 'libssl/openssl'
         link.parent.mkdir()
-        link.symlink_to('openssl-3.5.7')
+        link.symlink_to('openssl-3.5.9')
         self.api.restore_bundle(archive, entry, link)
         self.assertTrue(link.is_symlink())
         self.assertTrue((link / 'include/openssl/configuration.h').is_file())
@@ -200,7 +206,7 @@ class BundleTests(unittest.TestCase):
         directory.mkdir(parents=True)
         (self.root / 'checkout-link').symlink_to('checkout', target_is_directory=True)
         link = self.root / 'checkout-link/libssl/openssl'
-        link.symlink_to('openssl-3.5.7')
+        link.symlink_to('openssl-3.5.9')
         self.api.restore_bundle(archive, entry, link)
         self.assertTrue(link.is_symlink())
         self.assertTrue((link / 'include/openssl/configuration.h').is_file())
@@ -226,8 +232,8 @@ class BundleTests(unittest.TestCase):
         link.parent.mkdir()
         outside = self.root / 'outside'
         outside.mkdir()
-        (link.parent / 'openssl-3.5.7').symlink_to(outside)
-        link.symlink_to('openssl-3.5.7')
+        (link.parent / 'openssl-3.5.9').symlink_to(outside)
+        link.symlink_to('openssl-3.5.9')
         with self.assertRaisesRegex(ValueError, 'unexpected.*symlink'):
             self.api.restore_bundle(archive, entry, link)
         self.assertEqual([], list(outside.iterdir()))

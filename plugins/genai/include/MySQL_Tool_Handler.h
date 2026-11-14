@@ -88,23 +88,6 @@ private:
 	bool validate_readonly_query(const std::string& query);
 
 	/**
-	 * @brief Check if SQL contains dangerous keywords
-	 * @param query SQL to check
-	 * @return true if dangerous, false otherwise
-	 */
-	bool is_dangerous_query(const std::string& query);
-
-	/**
-	 * @brief Detect multi-statement payloads
-	 *
-	 * GHSA-7wh6-2vcc-gcm4: returns true if @p query contains a ';'
-	 * outside of string literals, identifier quoting (backticks), or
-	 * comments, followed by any non-whitespace content (i.e. a second
-	 * statement).  A bare trailing ';' is permitted.
-	 */
-	bool contains_multi_statement(const std::string& query);
-
-	/**
 	 * @brief Sanitize SQL to prevent injection
 	 * @param query SQL to sanitize
 	 * @return Sanitized query

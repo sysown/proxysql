@@ -8,9 +8,21 @@ The DuckDB plugin requires the ProxySQL v4.0 Plugin Chassis build tier:
 PROXYSQL40=1
 ```
 
-The current vendored engine is DuckDB 1.4.5. Its source archive is vendored
+The current vendored engine is DuckDB 2.0.0. Its source archive is vendored
 directly in git, so a source build only needs the usual ProxySQL C/C++
-build toolchain.
+build toolchain (C++17), CMake 3.14 or newer, and XZ-capable tar (GNU tar
+needs `xz` / `xz-utils`).
+
+DuckDB 2.0 creates new persistent database files in a format that DuckDB 1.x
+cannot read. Existing 1.x files keep their storage format when opened by 2.0.
+Back up database files before upgrading. For a rollback, restore the backup or
+export/import into a file explicitly created with an older `STORAGE_VERSION`;
+replacing the plugin alone does not downgrade a 2.0 database. See
+[storage compatibility](https://duckdb.org/docs/2.0/internals/storage).
+
+DuckDB 2.0 also switches to the PEG SQL parser and disables single-arrow lambda
+syntax by default. Test application SQL before upgrading; use `lambda x: ...`
+for lambdas. External DuckDB extensions require matching 2.0 builds.
 
 The plugin must be compiled with the same build mode as the ProxySQL core. In
 particular, a DEBUG plugin cannot load into a release core, and a release
