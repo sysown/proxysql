@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=${OPENSSL_BUILD_CONTRACT_ROOT:-$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)}
-source_dir="${repo_root}/deps/libssl/openssl-3.5.7"
+source_dir="${repo_root}/deps/libssl/openssl-3.5.9"
 tmp_dir=$(mktemp -d)
 created_source_stub=0
 
@@ -50,7 +50,7 @@ line_number() {
 }
 
 verify_line=$(line_number 'cd libssl && ./verify-source.bash')
-extract_line=$(line_number 'tar --no-same-owner -zxf openssl-3.5.7.tar.gz')
+extract_line=$(line_number 'tar --no-same-owner -zxf openssl-3.5.9.tar.gz')
 config_line=$(line_number './config no-shared no-tests -fPIC')
 ssl_check_line=$(line_number "test -f ${expected_path}/libssl.a")
 crypto_check_line=$(line_number "test -f ${expected_path}/libcrypto.a")

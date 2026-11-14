@@ -71,9 +71,9 @@ class TSANDependencyBuildTests(unittest.TestCase):
         # flag hidden in another definition must not disable TSAN or jemalloc's
         # exclusion; a later conflicting definition must not win either.
         cases = ('-DMETADATA=-DENABLE_THREAD_SANITIZER=ON',
-                 '-DMETADATA=-DSKIP_EXTENSIONS=jemalloc',
+                 '-DMETADATA=-DENABLE_JEMALLOC=OFF',
                  '-DENABLE_THREAD_SANITIZER=ON -DENABLE_THREAD_SANITIZER=OFF',
-                 '-DSKIP_EXTENSIONS=jemalloc -DSKIP_EXTENSIONS=other')
+                 '-DENABLE_JEMALLOC=OFF -DENABLE_JEMALLOC=ON')
         for flags in cases:
             with self.subTest(flags=flags), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -82,13 +82,13 @@ class TSANDependencyBuildTests(unittest.TestCase):
                 (source / 'CMakeLists.txt').write_text(
                     'cmake_minimum_required(VERSION 3.16)\nproject(options NONE)\n'
                     'option(ENABLE_THREAD_SANITIZER "Enable TSAN" OFF)\n'
-                    'set(SKIP_EXTENSIONS "" CACHE STRING "Excluded extensions")\n')
+                    'option(ENABLE_JEMALLOC "Enable allocator" ON)\n')
                 recipe = root / 'deps/duckdb/build.mk'
                 shutil.copy(ROOT / 'deps/duckdb/build.mk', recipe)
                 # Dry-run the real source recipe; only its configure command
                 # is executed, against a tiny real CMake project. This avoids
                 # pretending the probe builds DuckDB itself.
-                (source.parent / 'duckdb-1.4.5.tar.gz').touch()
+                (source.parent / 'duckdb-2.0.0.tar.xz').touch()
                 (source.parent / 'verify-source.bash').touch()
                 rendered = subprocess.run(
                     ['make', '-n', '-B', '-s', '-C', str(root / 'deps'), '-f', str(recipe),
@@ -104,7 +104,7 @@ class TSANDependencyBuildTests(unittest.TestCase):
                              (source / 'build/release/CMakeCache.txt').read_text().splitlines()
                              if line and not line.startswith(('//', '#')) and '=' in line)
                 self.assertEqual(cache['ENABLE_THREAD_SANITIZER:BOOL'], 'ON')
-                self.assertEqual(cache['SKIP_EXTENSIONS:STRING'], 'jemalloc')
+                self.assertEqual(cache['ENABLE_JEMALLOC:BOOL'], 'OFF')
 
     def test_tsan_make_rejects_invalid_mode_before_forcing_source(self):
         recipe = ('include ' + str(ROOT / 'common_mk/tsan_dependencies.mk') + '\n'

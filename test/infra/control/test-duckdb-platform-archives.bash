@@ -13,13 +13,16 @@ LINKER
 chmod +x "$fixture/linker"
 
 check_archives() {
-    local platform=$1 count=$2 expected=$3 result=0 required=16
-    [[ "$platform" == Darwin ]] && required=15
+    local platform=$1 count=$2 expected=$3 result=0 required=20
+    [[ "$platform" == Darwin ]] && required=19
     rm -rf "$fixture/build"
     mkdir -p "$fixture/build/release/src" "$fixture/build/release/third_party"
     printf '!<arch>\n' > "$fixture/build/release/src/libduckdb_static.a"
     printf '  IMPORTED_LOCATION_RELEASE "%s/build/release/src/libduckdb_static.a"\n' "$fixture" \
         > "$fixture/build/release/DuckDBExports.cmake"
+    mkdir -p "$fixture/extension/loader"
+    printf '// static loader fixture\n' > "$fixture/build/release/src/duckdb_static_extension_loader.c"
+    printf '// static loader fixture\n' > "$fixture/extension/loader/static_extension_autoregister.cpp"
     for ((i=1; i<required; i++)); do
         printf '  IMPORTED_LOCATION_RELEASE "%s/build/release/third_party/library%s.a"\n' "$fixture" "$i" \
             >> "$fixture/build/release/DuckDBExports.cmake"
@@ -51,8 +54,8 @@ check_archives() {
         fi
     fi
 }
-check_archives Darwin 15 pass
-check_archives Darwin 14 fail
-check_archives Linux 16 pass
-check_archives Linux 15 fail
+check_archives Darwin 19 pass
+check_archives Darwin 18 fail
+check_archives Linux 20 pass
+check_archives Linux 19 fail
 echo 'DuckDB platform archive checks passed'

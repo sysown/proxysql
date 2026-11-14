@@ -21,9 +21,9 @@ class AutomaticStoreTests(unittest.TestCase):
     def install_version(self, version):
         template = self.root / 'template' / ('openssl-' + version)
         if not template.exists():
-            shutil.copytree(str(self.root / 'template/openssl-3.5.7'), str(template))
+            shutil.copytree(str(self.root / 'template/openssl-3.5.9'), str(template))
         header = template / 'include/openssl/opensslv.h'
-        header.write_text(header.read_text().replace('OPENSSL_VERSION_PATCH 7',
+        header.write_text(header.read_text().replace('OPENSSL_VERSION_PATCH 9',
                                                    'OPENSSL_VERSION_PATCH ' + version.split('.')[-1]))
         archive = self.root / 'deps/libssl' / ('openssl-' + version + '.tar.gz')
         if not archive.exists():
@@ -42,12 +42,12 @@ class AutomaticStoreTests(unittest.TestCase):
     def test_version_a_b_a_uses_separate_bundles_without_recompiling_a(self):
         first = self.prepare()
         shutil.rmtree(str(self.tree))
-        self.install_version('3.5.8')
+        self.install_version('3.5.10')
         second = self.prepare()
         self.assertNotEqual(first['fingerprint'], second['fingerprint'])
         entry = self.root / '.cache/dependency-artifacts/bundles/openssl' / second['fingerprint'] / 'entry.json'
-        self.assertEqual('3.5.8', json.loads(entry.read_text())['identity']['version'])
-        self.install_version('3.5.7')
+        self.assertEqual('3.5.10', json.loads(entry.read_text())['identity']['version'])
+        self.install_version('3.5.9')
         self.assertEqual('prebuilt', self.prepare()['origin'])
         self.assertEqual(2, self.count())
 
@@ -56,11 +56,11 @@ class AutomaticStoreTests(unittest.TestCase):
         base.mkdir()
         for name in ('build.mk', 'verify-source.bash'):
             shutil.copyfile(str(preparation_fixture.ROOT / 'deps/duckdb' / name), str(base / name))
-        archive = base / 'duckdb-1.4.5.tar.gz'
+        archive = base / 'duckdb-2.0.0.tar.xz'
         archive.write_bytes(b'independent DuckDB source fixture')
         Path(str(archive) + '.sha256').write_text(self.identity.digest_file(archive) + '  ' + archive.name + '\n')
         before = self.identity.build_identity('duckdb', self.root, self.env)
-        self.install_version('3.5.8')
+        self.install_version('3.5.10')
         self.assertEqual(before, self.identity.build_identity('duckdb', self.root, self.env))
 
     def test_cold_miss_creates_bundle_and_clean_tree_reuses_it(self):

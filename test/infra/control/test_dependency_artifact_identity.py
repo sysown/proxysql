@@ -21,20 +21,20 @@ class IdentityTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.env = {'CC': 'cc', 'CXX': 'c++'}
-        for dep, directory, version in [('duckdb', 'duckdb', '1.4.5'),
-                                         ('openssl', 'libssl', '3.5.7')]:
+        for dep, directory, version in [('duckdb', 'duckdb', '2.0.0'),
+                                         ('openssl', 'libssl', '3.5.9')]:
             d = self.root / 'deps' / directory
             d.mkdir(parents=True)
-            source = d / (dep + '-' + version + '.tar.gz')
+            source = d / (dep + '-' + version + ('.tar.xz' if dep == 'duckdb' else '.tar.gz'))
             source.write_bytes(b'vendored source')
-            source.with_suffix('.gz.sha256').write_text(
+            Path(str(source) + '.sha256').write_text(
                 hashlib.sha256(source.read_bytes()).hexdigest() + '  ' + source.name + '\n')
             (d / 'build.mk').write_text(
-                'DUCKDB_VERSION := 1.4.5\nDUCKDB_CMAKE_FLAGS := -DCMAKE_BUILD_TYPE=Release\n'
+                'DUCKDB_VERSION := 2.0.0\nDUCKDB_CMAKE_FLAGS := -DCMAKE_BUILD_TYPE=Release\n'
                 if dep == 'duckdb' else 'OPENSSL_CONFIGURE_FLAGS := no-shared no-tests -fPIC\n')
             (d / 'verify-source.bash').write_text('# verifier\n')
         (self.root / 'common_mk').mkdir()
-        (self.root / 'common_mk/openssl_flags.mk').write_text('OPENSSL_VERSION := 3.5.7\n')
+        (self.root / 'common_mk/openssl_flags.mk').write_text('OPENSSL_VERSION := 3.5.9\n')
         self.facts = {'os': 'Linux', 'arch': 'x86_64', 'distro': ['ubuntu', '24.04'],
                       'libc': ['glibc', '2.39'], 'cc': 'gcc 13', 'cxx': 'gcc 13',
                       'target': 'x86_64-linux-gnu', 'runtime': 'libstdc++'}
@@ -94,19 +94,19 @@ class IdentityTests(unittest.TestCase):
         for key in ('CFLAGS', 'CXXFLAGS', 'LDFLAGS'):
             self.assertIn('-fsanitize=thread', tsan['flags'][key])
         self.assertIn('-DENABLE_THREAD_SANITIZER=ON', tsan['settings'])
-        self.assertIn('-DSKIP_EXTENSIONS=jemalloc', tsan['settings'])
+        self.assertIn('-DENABLE_JEMALLOC=OFF', tsan['settings'])
 
     def test_tsan_duckdb_identity_preserves_the_effective_final_overrides(self):
         self.env['WITHTSAN'] = '1'
         self.env['DUCKDB_CMAKE_FLAGS'] = (
             '-DENABLE_THREAD_SANITIZER=ON -DENABLE_THREAD_SANITIZER=OFF '
-            '-DSKIP_EXTENSIONS=jemalloc -DSKIP_EXTENSIONS=other')
+            '-DENABLE_JEMALLOC=OFF -DENABLE_JEMALLOC=ON')
         options = self.identity()['settings']
         self.assertEqual(options[-2:], ['-DENABLE_THREAD_SANITIZER=ON',
-                                       '-DSKIP_EXTENSIONS=jemalloc'])
+                                       '-DENABLE_JEMALLOC=OFF'])
 
     def test_actual_source_digest_is_checked(self):
-        (self.root / 'deps/duckdb/duckdb-1.4.5.tar.gz').write_bytes(b'corrupted')
+        (self.root / 'deps/duckdb/duckdb-2.0.0.tar.xz').write_bytes(b'corrupted')
         with self.assertRaisesRegex(ValueError, 'SHA-256'):
             self.identity()
 
