@@ -1396,3 +1396,468 @@ std::map<std::string, std::vector<std::string>> parsersql_parse_set_pgsql(
     tl_pgsql_parser.reset();
     return {};
 }
+
+// ---------------------------------------------------------------------------
+// set_config() classifier. Pure (query text in, verdict out) so that it and its tests can move
+// to the ParserSQL repository. Every rule below mirrors what PostgreSQL 16 was measured to do.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+bool sc_eq_ci(const char* a, size_t alen, const char* b) {
+    const size_t blen = strlen(b);
+    return alen == blen && strncasecmp(a, b, alen) == 0;
+}
+
+// One part of a name as written: quoted it must match exactly ("SET_CONFIG" is another
+// function), unquoted in any case.
+bool sc_name_part_is(const char* p, size_t len, const char* want) {
+    if (len >= 2 && p[0] == '"' && p[len - 1] == '"') {
+        return len - 2 == strlen(want) && memcmp(p + 1, want, len - 2) == 0;
+    }
+    return sc_eq_ci(p, len, want);
+}
+
+enum class ScName { OTHER, SET_CONFIG, PG_CATALOG_SET_CONFIG, ELSEWHERE_SET_CONFIG };
+
+// A FUNCTION_CALL's name: `set_config`, `"set_config"`, `pg_catalog.set_config` (any quoting).
+// set_config in another schema is someone else's function, which may call ours: LOCK.
+ScName sc_function_name(StringRef v) {
+    if (v.len == 0) return ScName::OTHER;
+    const char* last_dot = nullptr;
+    int dots = 0;
+    bool quoted = false;
+    for (uint32_t i = 0; i < v.len; i++) {
+        if (v.ptr[i] == '"') quoted = !quoted;
+        else if (v.ptr[i] == '.' && !quoted) { last_dot = v.ptr + i; dots++; }
+    }
+    const char* fn = last_dot ? last_dot + 1 : v.ptr;
+    if (!sc_name_part_is(fn, v.ptr + v.len - fn, "set_config")) return ScName::OTHER;
+    if (dots == 0) return ScName::SET_CONFIG;
+    if (dots == 1 && sc_name_part_is(v.ptr, last_dot - v.ptr, "pg_catalog")) return ScName::PG_CATALOG_SET_CONFIG;
+    return ScName::ELSEWHERE_SET_CONFIG;
+}
+
+// An identifier node naming `want`, quotes or not (an over-match only costs a lock).
+bool sc_ident_is(const AstNode* n, const char* want) {
+    StringRef v = n->value();
+    if (v.len >= 2 && v.ptr[0] == '"' && v.ptr[v.len - 1] == '"') { v.ptr++; v.len -= 2; }
+    return sc_eq_ci(v.ptr, v.len, want);
+}
+
+bool sc_subtree_has_ident(const AstNode* n, const char* want) {
+    for (; n; n = n->next_sibling) {
+        if (n->type == NodeType::NODE_IDENTIFIER && sc_ident_is(n, want)) return true;
+        if (sc_subtree_has_ident(n->first_child, want)) return true;
+    }
+    return false;
+}
+
+// `word` as a whole word anywhere in [p, p + len), any case: a DO body is only text to ParserSQL.
+bool sc_text_has_word(const char* p, size_t len, const char* word) {
+    const size_t wl = strlen(word);
+    auto ident = [](char c) { return isalnum((unsigned char)c) || c == '_' || c == '$'; };
+    for (size_t i = 0; i + wl <= len; i++) {
+        if ((i == 0 || !ident(p[i - 1])) && strncasecmp(p + i, word, wl) == 0 && (i + wl == len || !ident(p[i + wl]))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct ScWalk {
+    int calls = 0;                  // set_config calls and names seen anywhere
+    const AstNode* call = nullptr;  // the last FUNCTION_CALL naming set_config itself
+    bool qualified = false;         // ... written as pg_catalog.set_config
+    bool lock = false;              // a form that changes a setting and cannot be followed
+};
+
+void sc_walk(const AstNode* n, ScWalk& w) {
+    for (; n; n = n->next_sibling) {
+        switch (n->type) {
+            case NodeType::NODE_FUNCTION_CALL: {
+                const ScName k = sc_function_name(n->value());
+                if (k == ScName::SET_CONFIG || k == ScName::PG_CATALOG_SET_CONFIG) {
+                    w.calls++;
+                    w.call = n;
+                    w.qualified = (k == ScName::PG_CATALOG_SET_CONFIG);
+                } else if (k == ScName::ELSEWHERE_SET_CONFIG) {
+                    w.calls++;
+                    w.lock = true;
+                }
+                break;
+            }
+            case NodeType::NODE_IDENTIFIER:
+                // The table-function form (FROM set_config(...)), CALL set_config(...).
+                if (sc_ident_is(n, "set_config")) { w.calls++; w.lock = true; }
+                break;
+            case NodeType::NODE_BINARY_OP:
+                // U&"set\005fconfig"(...) reaches ParserSQL as U & "set\005fconfig"(...): its name
+                // cannot be read, so it counts as a call.
+                if (n->value_len == 1 && n->value_ptr[0] == '&' && n->first_child &&
+                    n->first_child->type == NodeType::NODE_COLUMN_REF && sc_ident_is(n->first_child, "u")) {
+                    w.calls++;
+                    w.lock = true;
+                }
+                break;
+            case NodeType::NODE_UPDATE_STMT:
+                // pg_settings is a view whose UPDATE rule calls set_config().
+                if (n->first_child && n->first_child->type == NodeType::NODE_TABLE_REF &&
+                    sc_subtree_has_ident(n->first_child->first_child, "pg_settings")) {
+                    w.lock = true;
+                }
+                break;
+            case NodeType::NODE_DO_STMT: {
+                const AstNode* body = n->first_child;
+                if (!body || body->type != NodeType::NODE_LITERAL_STRING ||
+                    sc_text_has_word(body->value_ptr, body->value_len, "set_config") ||
+                    sc_text_has_word(body->value_ptr, body->value_len, "pg_settings")) {
+                    w.lock = true;
+                }
+                break;
+            }
+            default:
+                break;
+        }
+        sc_walk(n->first_child, w);
+    }
+}
+
+// The last byte any node of the tree covers, by its value or its source text.
+const char* sc_rightmost(const AstNode* n, const char* qs, const char* qe) {
+    const char* best = nullptr;
+    for (; n; n = n->next_sibling) {
+        if (n->source_ptr && n->source_ptr >= qs && n->source_ptr + n->source_len <= qe) {
+            const char* e = n->source_ptr + n->source_len;
+            if (!best || e > best) best = e;
+        }
+        if (n->value_ptr && n->value_ptr >= qs && n->value_ptr + n->value_len <= qe) {
+            const char* e = n->value_ptr + n->value_len;
+            if (!best || e > best) best = e;
+        }
+        const char* c = sc_rightmost(n->first_child, qs, qe);
+        if (c && (!best || c > best)) best = c;
+    }
+    return best;
+}
+
+// Only spaces, comments and one ';' in [p, e). ParserSQL accepts `SELECT f(),` with the ','
+// outside the tree, so a reply built from the tree needs this.
+bool sc_rest_is_cosmetic(const char* p, const char* e) {
+    bool semicolon = false;
+    while (p < e) {
+        if (isspace((unsigned char)*p) || *p == '\0') { p++; continue; }
+        if (p + 1 < e && p[0] == '-' && p[1] == '-') {
+            while (p < e && *p != '\n') p++;
+            continue;
+        }
+        if (p + 1 < e && p[0] == '/' && p[1] == '*') {
+            int depth = 1;
+            p += 2;
+            while (p < e && depth > 0) {
+                if (p + 1 < e && p[0] == '/' && p[1] == '*') { depth++; p += 2; }
+                else if (p + 1 < e && p[0] == '*' && p[1] == '/') { depth--; p += 2; }
+                else p++;
+            }
+            if (depth > 0) return false;
+            continue;
+        }
+        if (*p == ';' && !semicolon) { semicolon = true; p++; continue; }
+        return false;
+    }
+    return true;
+}
+
+void sc_put_utf8(uint32_t cp, std::string& out) {
+    if (cp < 0x80) out += (char)cp;
+    else if (cp < 0x800) { out += (char)(0xC0 | (cp >> 6)); out += (char)(0x80 | (cp & 0x3F)); }
+    else if (cp < 0x10000) {
+        out += (char)(0xE0 | (cp >> 12)); out += (char)(0x80 | ((cp >> 6) & 0x3F)); out += (char)(0x80 | (cp & 0x3F));
+    } else {
+        out += (char)(0xF0 | (cp >> 18)); out += (char)(0x80 | ((cp >> 12) & 0x3F));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F)); out += (char)(0x80 | (cp & 0x3F));
+    }
+}
+
+// The bytes of a string literal as PostgreSQL reads them with standard_conforming_strings on:
+// '...', E'...' or $tag$...$tag$. False when ProxySQL cannot be sure of them: an escape giving
+// NUL or a lone byte >= 0x80, a bad or surrogate \u, or any other spelling.
+bool sc_decode_string(StringRef src, std::string& out) {
+    const char* p = src.ptr;
+    const size_t n = src.len;
+    out.clear();
+    if (n >= 2 && p[0] == '\'' && p[n - 1] == '\'') {
+        for (size_t i = 1; i + 1 < n; i++) {
+            out += p[i];
+            if (p[i] == '\'') i++; // '' inside is one quote
+        }
+        return true;
+    }
+    if (n >= 3 && (p[0] == 'E' || p[0] == 'e') && p[1] == '\'' && p[n - 1] == '\'') {
+        auto hexval = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        const size_t end = n - 1;
+        for (size_t i = 2; i < end; i++) {
+            char c = p[i];
+            if (c == '\'') { out += '\''; i++; continue; }
+            if (c != '\\') { out += c; continue; }
+            if (++i >= end) return false;
+            c = p[i];
+            uint32_t v = 0;
+            if (c >= '0' && c <= '7') {
+                int digits = 0;
+                while (digits < 3 && i < end && p[i] >= '0' && p[i] <= '7') { v = v * 8 + (p[i] - '0'); i++; digits++; }
+                i--;
+                if (v == 0 || v >= 0x80) return false;
+                out += (char)v;
+            } else if (c == 'x' && i + 1 < end && hexval(p[i + 1]) >= 0) {
+                int digits = 0;
+                while (digits < 2 && i + 1 < end && hexval(p[i + 1]) >= 0) { v = v * 16 + hexval(p[i + 1]); i++; digits++; }
+                if (v == 0 || v >= 0x80) return false;
+                out += (char)v;
+            } else if (c == 'u' || c == 'U') {
+                const int want = (c == 'u') ? 4 : 8;
+                for (int d = 0; d < want; d++) {
+                    if (i + 1 >= end || hexval(p[i + 1]) < 0) return false;
+                    v = v * 16 + hexval(p[++i]);
+                }
+                if (v == 0 || (v >= 0xD800 && v <= 0xDFFF) || v > 0x10FFFF) return false;
+                sc_put_utf8(v, out);
+            } else {
+                switch (c) {
+                    case 'b': out += '\b'; break;
+                    case 'f': out += '\f'; break;
+                    case 'n': out += '\n'; break;
+                    case 'r': out += '\r'; break;
+                    case 't': out += '\t'; break;
+                    default:
+                        if ((unsigned char)c >= 0x80) return false;
+                        out += c;
+                }
+            }
+        }
+        return true;
+    }
+    if (n >= 2 && p[0] == '$') {
+        const char* close = (const char*)memchr(p + 1, '$', n - 1);
+        if (!close) return false;
+        const size_t tag = close - p + 1;
+        if (n < 2 * tag || memcmp(p, p + n - tag, tag) != 0) return false;
+        out.assign(p + tag, n - 2 * tag);
+        return true;
+    }
+    return false;
+}
+
+// What an argument is, by how it is written, as PostgreSQL types it for function lookup.
+enum class ScType { UNKNOWN, BOOLEAN, INTEGER, BIGINT, NUMERIC };
+struct ScArg {
+    ScType type = ScType::UNKNOWN;
+    bool is_null = false;
+    bool truth = false;  // BOOLEAN
+    std::string text;    // UNKNOWN string, decoded
+};
+
+const char* sc_type_name(ScType t) {
+    switch (t) {
+        case ScType::UNKNOWN: return "unknown";
+        case ScType::BOOLEAN: return "boolean";
+        case ScType::INTEGER: return "integer";
+        case ScType::BIGINT: return "bigint";
+        case ScType::NUMERIC: return "numeric";
+    }
+    return "unknown";
+}
+
+// A whole number literal, sign included: integer, bigint or numeric by range.
+ScType sc_int_type(StringRef digits, bool negative) {
+    while (digits.len > 1 && digits.ptr[0] == '0') { digits.ptr++; digits.len--; }
+    if (digits.len > 19) return ScType::NUMERIC;
+    const unsigned long long v = strtoull(std::string(digits.ptr, digits.len).c_str(), nullptr, 10);
+    const unsigned long long int4 = negative ? 2147483648ULL : 2147483647ULL;
+    const unsigned long long int8 = negative ? 9223372036854775808ULL : 9223372036854775807ULL;
+    return v <= int4 ? ScType::INTEGER : v <= int8 ? ScType::BIGINT : ScType::NUMERIC;
+}
+
+bool sc_is_digits(StringRef v) {
+    if (v.len == 0) return false;
+    for (uint32_t i = 0; i < v.len; i++) if (!isdigit((unsigned char)v.ptr[i])) return false;
+    return true;
+}
+
+// False when the argument is not a plain literal (a parameter, a cast, an expression...).
+bool sc_read_arg(const AstNode* a, ScArg* out) {
+    switch (a->type) {
+        case NodeType::NODE_LITERAL_NULL:
+            out->is_null = true;
+            return true;
+        case NodeType::NODE_LITERAL_STRING:
+            return sc_decode_string(a->source(), out->text);
+        case NodeType::NODE_LITERAL_INT:
+            // ParserSQL gives the keywords true/false this node type, without a source text.
+            if (sc_eq_ci(a->value_ptr, a->value_len, "true") || sc_eq_ci(a->value_ptr, a->value_len, "false")) {
+                out->type = ScType::BOOLEAN;
+                out->truth = (a->value_ptr[0] | 0x20) == 't';
+                return true;
+            }
+            if (!sc_is_digits(a->value())) return false;
+            out->type = sc_int_type(a->value(), false);
+            return true;
+        case NodeType::NODE_LITERAL_FLOAT:
+            out->type = ScType::NUMERIC;
+            return true;
+        case NodeType::NODE_UNARY_OP: {
+            const AstNode* c = a->first_child;
+            if (a->value_len != 1 || (a->value_ptr[0] != '-' && a->value_ptr[0] != '+') || !c || c->next_sibling) return false;
+            if (c->type == NodeType::NODE_LITERAL_FLOAT) { out->type = ScType::NUMERIC; return true; }
+            if (c->type != NodeType::NODE_LITERAL_INT || !sc_is_digits(c->value())) return false;
+            out->type = sc_int_type(c->value(), a->value_ptr[0] == '-');
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+// PostgreSQL's boolean input (parse_bool_with_len) after trimming spaces: 1 true, 0 false,
+// -1 not a boolean.
+int sc_parse_bool(const std::string& raw) {
+    size_t b = 0, e = raw.size();
+    while (b < e && isspace((unsigned char)raw[b])) b++;
+    while (e > b && isspace((unsigned char)raw[e - 1])) e--;
+    const char* s = raw.data() + b;
+    const size_t len = e - b;
+    if (len == 0) return -1;
+    auto prefix_of = [&](const char* w) { return len <= strlen(w) && strncasecmp(s, w, len) == 0; };
+    // Lowercase letters only: '|0x20' alone would read the control bytes \x10 and \x11 as '0' and '1'.
+    switch ((s[0] >= 'A' && s[0] <= 'Z') ? (s[0] | 0x20) : s[0]) {
+        case 't': return prefix_of("true") ? 1 : -1;
+        case 'f': return prefix_of("false") ? 0 : -1;
+        case 'y': return prefix_of("yes") ? 1 : -1;
+        case 'n': return prefix_of("no") ? 0 : -1;
+        case 'o':
+            if (sc_eq_ci(s, len, "on")) return 1;
+            if (len >= 2 && prefix_of("off")) return 0;
+            return -1;
+        case '1': return len == 1 ? 1 : -1;
+        case '0': return len == 1 ? 0 : -1;
+        default: return -1;
+    }
+}
+
+PgSetConfigCall sc_verdict(PgSetConfigVerdict v) {
+    PgSetConfigCall c;
+    c.verdict = v;
+    return c;
+}
+
+PgSetConfigCall sc_error(PgSetConfigError e, std::string message) {
+    PgSetConfigCall c;
+    c.verdict = PgSetConfigVerdict::LOCAL_ERROR;
+    c.error = e;
+    c.message = std::move(message);
+    return c;
+}
+
+// The walk of a parsed tree; tl_pgsql_parser is reset by the caller.
+PgSetConfigCall sc_classify_tree(const AstNode* root, const char* q, size_t len) {
+    ScWalk w;
+    sc_walk(root, w);
+    if (w.lock) return sc_verdict(PgSetConfigVerdict::LOCK);
+    if (w.calls == 0) return sc_verdict(PgSetConfigVerdict::NOT_SET_CONFIG);
+
+    // The bare form: SELECT set_config(a, b, c) [[AS] alias], nothing else.
+    const AstNode* list = root->first_child;
+    const AstNode* item = list ? list->first_child : nullptr;
+    const AstNode* call = item ? item->first_child : nullptr;
+    const AstNode* alias = call ? call->next_sibling : nullptr;
+    const bool bare = root->type == NodeType::NODE_SELECT_STMT && w.calls == 1 &&
+        list && list->type == NodeType::NODE_SELECT_ITEM_LIST && !list->next_sibling &&
+        item->type == NodeType::NODE_SELECT_ITEM && !item->next_sibling &&
+        call == w.call && (call->flags & ~8u) == 0 && // 8: qualified name; others: DISTINCT, ...
+        (!alias || (alias->type == NodeType::NODE_ALIAS && !alias->next_sibling));
+    if (!bare) return sc_verdict(PgSetConfigVerdict::LOCK);
+    const char* covered = sc_rightmost(root, q, q + len);
+    if (!covered || !sc_rest_is_cosmetic(covered, q + len)) return sc_verdict(PgSetConfigVerdict::LOCK);
+
+    ScArg args[3];
+    int nargs = 0;
+    for (const AstNode* a = call->first_child; a; a = a->next_sibling) {
+        if (nargs == 3 || !sc_read_arg(a, &args[nargs])) return sc_verdict(PgSetConfigVerdict::LOCK);
+        nargs++;
+    }
+    if (nargs != 3) return sc_verdict(PgSetConfigVerdict::LOCK);
+    const ScArg& name = args[0];
+    const ScArg& value = args[1];
+    const ScArg& is_local = args[2];
+
+    // PostgreSQL's order: function lookup, is_local input, then the name.
+    if (name.type != ScType::UNKNOWN || value.type != ScType::UNKNOWN ||
+        (is_local.type != ScType::UNKNOWN && is_local.type != ScType::BOOLEAN)) {
+        return sc_error(PgSetConfigError::UNDEFINED_FUNCTION, std::string("function ") +
+            (w.qualified ? "pg_catalog." : "") + "set_config(" + sc_type_name(name.type) + ", " +
+            sc_type_name(value.type) + ", " + sc_type_name(is_local.type) + ") does not exist");
+    }
+    bool local = false;
+    if (is_local.type == ScType::BOOLEAN) {
+        local = is_local.truth;
+    } else if (!is_local.is_null) {
+        const int b = sc_parse_bool(is_local.text);
+        if (b < 0) {
+            return sc_error(PgSetConfigError::INVALID_BOOLEAN,
+                "invalid input syntax for type boolean: \"" + is_local.text + "\"");
+        }
+        local = (b == 1);
+    }
+    if (name.is_null) return sc_error(PgSetConfigError::NULL_NAME, "SET requires parameter name");
+    if (name.text.empty()) return sc_error(PgSetConfigError::EMPTY_NAME, "unrecognized configuration parameter \"\"");
+    if (local) return sc_verdict(PgSetConfigVerdict::LOCK); // transaction-scoped, as SET LOCAL
+
+    PgSetConfigCall c = sc_verdict(PgSetConfigVerdict::TRACK);
+    c.name = name.text;
+    c.value_null = value.is_null;
+    c.value = value.text;
+    c.column = "set_config";
+    if (alias) {
+        StringRef a = alias->source();
+        if (a.len >= 2 && a.ptr[0] == '"' && a.ptr[a.len - 1] == '"') {
+            c.column.clear();
+            for (uint32_t i = 1; i + 1 < a.len; i++) {
+                c.column += a.ptr[i];
+                if (a.ptr[i] == '"') i++; // "" inside is one quote
+            }
+        } else {
+            c.column.assign(alias->value_ptr, alias->value_len);
+            for (char& ch : c.column) ch = (char)tolower((unsigned char)ch);
+        }
+        // PostgreSQL cuts a longer name to 63 bytes with a NOTICE; leave that to it.
+        if (c.column.empty() || c.column.size() > 63) return sc_verdict(PgSetConfigVerdict::LOCK);
+    }
+    return c;
+}
+
+} // namespace
+
+PgSetConfigCall parsersql_classify_set_config_pgsql(const char* query, size_t len,
+    bool standard_conforming_strings)
+{
+    // With standard_conforming_strings off PostgreSQL reads '\' in a plain string as an escape
+    // and ParserSQL does not: the two can disagree on where a string ends.
+    if (!standard_conforming_strings || query == nullptr) return sc_verdict(PgSetConfigVerdict::LOCK);
+    // A Simple Query's length can include its terminating NUL: framing, not SQL.
+    if (len && query[len - 1] == '\0') --len;
+    if (memchr(query, '\0', len)) return sc_verdict(PgSetConfigVerdict::LOCK);
+
+    auto result = tl_pgsql_parser.parse(query, len);
+    PgSetConfigCall c = sc_verdict(PgSetConfigVerdict::LOCK);
+    // Not parsed in full (a multi-statement query lands here too): it cannot be followed.
+    if (result.status == ParseResult::OK && result.full_input && result.ast) {
+        c = sc_classify_tree(result.ast, query, len);
+    }
+    tl_pgsql_parser.reset();
+    return c;
+}

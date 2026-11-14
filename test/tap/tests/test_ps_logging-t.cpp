@@ -30,6 +30,7 @@
  *	   LOAD MYSQL VARIABLES TO RUNTIME.
 */
 
+#include <chrono>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -806,6 +807,15 @@ bool do_prepared_insert_full_types(MYSQL* conn,
 	return true;
 }
 
+// Keep the admin connection alive through the route guard's destructor retry.
+struct MysqlCloseOwner {
+	MYSQL* conn;
+	explicit MysqlCloseOwner(MYSQL* c) : conn(c) {}
+	~MysqlCloseOwner() { if (conn) mysql_close(conn); }
+	MysqlCloseOwner(const MysqlCloseOwner&) = delete;
+	MysqlCloseOwner& operator=(const MysqlCloseOwner&) = delete;
+};
+
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -851,6 +861,7 @@ int main(int argc, char** argv) {
 
    MYSQL* proxy = mysql_init(NULL);
    MYSQL* admin = mysql_init(NULL);
+	MysqlCloseOwner admin_owner{ admin };
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password,
 							  NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "Admin connect failed: %s\n", mysql_error(admin));
@@ -890,6 +901,163 @@ int main(int argc, char** argv) {
 		}
 		mysql_free_result(res);
 	}
+	// Parameter logging checks must read the writer that accepted the inserts,
+	// rather than relying on asynchronous replicas to catch up after a sleep.
+	//
+	// Query-rule SAVE/LOAD operate on both the rules and fast-routing tables.
+	// Keep the pre-install memory state and the runtime state in temporary
+	// tables so each can be restored independently, and without SAVE TO DISK.
+	struct WriterRouteGuard {
+		MYSQL* admin;
+		string rule_id;
+		const string backup_suffix = "_" + std::to_string(getpid()) + "_" +
+			std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+		const string ORIGINAL_RULES = "temp._ps_logging_original_rules" + backup_suffix;
+		const string ORIGINAL_FAST_ROUTING = "temp._ps_logging_original_fast_routing" + backup_suffix;
+		const string RUNTIME_RULES = "temp._ps_logging_runtime_rules" + backup_suffix;
+		const string RUNTIME_FAST_ROUTING = "temp._ps_logging_runtime_fast_routing" + backup_suffix;
+		vector<string> owned_backups;
+		bool installed = false;
+		bool memory_dirty = false;
+		bool runtime_may_change = false;
+		bool runtime_backup_ready = false;
+
+		bool execute(const string& sql) {
+			if (mysql_query(admin, sql.c_str())) {
+				diag("Command failed: `%s`: %s", sql.c_str(), mysql_error(admin));
+				return false;
+			}
+			return true;
+		}
+
+		bool snapshot(const string& temp_table, const char* table) {
+			if (!execute("CREATE TEMPORARY TABLE " + temp_table + " AS SELECT * FROM " + table)) return false;
+			owned_backups.push_back(temp_table);
+			return true;
+		}
+
+		bool replace_from(const char* table, const string& temp_table) {
+			return execute(string("DELETE FROM ") + table) &&
+				execute(string("INSERT INTO ") + table + " SELECT * FROM " + temp_table);
+		}
+
+		bool drop_backups() {
+			vector<string> remaining;
+			for (const string& table : owned_backups) {
+				if (!execute("DROP TABLE IF EXISTS " + table)) remaining.push_back(table);
+			}
+			owned_backups.swap(remaining);
+			return owned_backups.empty();
+		}
+
+		bool install(const string& escaped_user, const string& writer_hostgroup) {
+			// The shared admin SQLite handle outlives this test process. Use
+			// new names so failed-run snapshots remain available for recovery.
+			if (!snapshot(ORIGINAL_RULES, "mysql_query_rules") ||
+				!snapshot(ORIGINAL_FAST_ROUTING, "mysql_query_rules_fast_routing")) {
+				return false;
+			}
+			memory_dirty = true;
+
+			if (!execute("SAVE MYSQL QUERY RULES FROM RUNTIME")) return false;
+
+			// SAVE replaces both memory tables from runtime. Snapshot that
+			// runtime state; runtime itself is still unchanged here.
+			if (!snapshot(RUNTIME_RULES, "mysql_query_rules") ||
+				!snapshot(RUNTIME_FAST_ROUTING, "mysql_query_rules_fast_routing")) {
+				return false;
+			}
+			runtime_backup_ready = true;
+
+			const string insert_route =
+				"INSERT INTO mysql_query_rules(rule_id,active,username,destination_hostgroup,apply) VALUES("
+				+ rule_id + ",1,'" + escaped_user + "'," + writer_hostgroup + ",1)";
+			if (!execute(insert_route)) return false;
+
+			runtime_may_change = true;
+			if (!execute("LOAD MYSQL QUERY RULES TO RUNTIME")) return false;
+
+			installed = true;
+			return true;
+		}
+
+		bool restore() {
+			if (!memory_dirty && !runtime_may_change && !installed) return drop_backups();
+			bool ok = true;
+
+			if (runtime_may_change) {
+				// Stage the runtime snapshots into both memory tables, then
+				// LOAD only if staging fully succeeded.
+				const bool staged = runtime_backup_ready &&
+					replace_from("mysql_query_rules", RUNTIME_RULES) &&
+					replace_from("mysql_query_rules_fast_routing", RUNTIME_FAST_ROUTING);
+				if (!staged) {
+					diag("Failed to stage runtime query rules into memory; skipping LOAD");
+					ok = false;
+				} else if (!execute("LOAD MYSQL QUERY RULES TO RUNTIME")) {
+					ok = false;
+				}
+			}
+
+			// Always restore the original memory tables, without LOAD, even
+			// when runtime staging or LOAD failed.
+			if (memory_dirty) {
+				const bool rules_restored = replace_from("mysql_query_rules", ORIGINAL_RULES);
+				const bool fast_routing_restored =
+					replace_from("mysql_query_rules_fast_routing", ORIGINAL_FAST_ROUTING);
+				ok = rules_restored && fast_routing_restored && ok;
+			}
+
+			// Keep the dirty flags and temporary backups on failure so the
+			// destructor can retry; only clear them after a full restore.
+			if (ok) {
+				installed = false;
+				memory_dirty = false;
+				runtime_may_change = false;
+				runtime_backup_ready = false;
+				return drop_backups();
+			}
+			return false;
+		}
+
+		~WriterRouteGuard() noexcept {
+			try {
+				restore();
+			} catch (const std::exception& e) {
+				diag("Failed to restore test-local writer routing: %s", e.what());
+			} catch (...) {
+				diag("Failed to restore test-local writer routing: unknown exception");
+			}
+		}
+	} route_writer { admin, "" };
+
+	string escaped_user;
+	for (const char c : string(cl.username)) {
+		escaped_user += c;
+		if (c == '\'') escaped_user += '\'';
+	}
+	const string route_query =
+		"SELECT COALESCE((SELECT MIN(rule_id) FROM (SELECT rule_id FROM mysql_query_rules"
+		" UNION ALL SELECT rule_id FROM runtime_mysql_query_rules)),0)-1,default_hostgroup"
+		" FROM runtime_mysql_users WHERE username='" + escaped_user + "' AND frontend=1 AND active=1 LIMIT 1";
+	MYSQL_QUERY(admin, route_query.c_str());
+	MYSQL_RES* route_res = mysql_store_result(admin);
+	MYSQL_ROW route_row = route_res ? mysql_fetch_row(route_res) : nullptr;
+	if (!route_row || !route_row[0] || !route_row[1]) {
+		diag("Failed to determine the user's writer hostgroup and a free query-rule ID");
+		if (route_res) mysql_free_result(route_res);
+		return EXIT_FAILURE;
+	}
+	route_writer.rule_id = route_row[0];
+	const string writer_hostgroup = route_row[1];
+	mysql_free_result(route_res);
+	if (!route_writer.install(escaped_user, writer_hostgroup)) {
+		diag("Failed to install test-local writer routing rule");
+		route_writer.restore();
+		mysql_close(proxy);
+		return EXIT_FAILURE;
+	}
+
 	// Run test in two logging formats: BINARY and JSON.
    
 	for (auto mode : logging_modes) {
@@ -929,7 +1097,6 @@ int main(int argc, char** argv) {
 			ok(ins_ok, "Extended prepared INSERT executed");
 		}
 
-		sleep(2);
 		// For each non-key column, perform a prepared SELECT.
 		// We use the first inserted row's id (assumed to be 1) and the value from that column.
 		int sel_id = 1;
@@ -993,7 +1160,6 @@ int main(int argc, char** argv) {
 							  //"POINT(1 2)",		 // col_geometry in WKT
 							  &inserted_id);
 		ok(ins_ok, "Full prepared INSERT executed");
-		sleep(2);
 		vector<string> full_row;
 		bool sel_ok = do_prepared_select_full(proxy, inserted_id, full_row);
 		ok(sel_ok, "Full prepared SELECT executed");
@@ -1031,9 +1197,9 @@ int main(int argc, char** argv) {
 		diag("Inserted row id in test.prepared_log_test_full_types: %d", inserted_id_types);
 	}
 
+	const bool routing_restored = route_writer.restore();
 	mysql_close(proxy);
-	mysql_close(admin);
 
 
-	return exit_status();
+	return routing_restored ? exit_status() : EXIT_FAILURE;
 }
