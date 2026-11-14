@@ -338,12 +338,14 @@ ssize_t MysqlxDataStream::read_from_net() {
 
 		uint8_t plain_buf[65536];
 		int decrypted = 0;
+		bool received_plaintext = false;
 		while ((decrypted = SSL_read(ssl_, plain_buf, sizeof(plain_buf))) > 0) {
+			received_plaintext = true;
 			feed_bytes(plain_buf, static_cast<size_t>(decrypted));
 		}
 		if (decrypted == 0) {
-			// A final backend reply can share this read with close_notify.
-			return (type_ == XDS_BACKEND && has_complete_frame()) ? r : 0;
+			// Backend replies may make partial progress before close_notify.
+			return (type_ == XDS_BACKEND && (received_plaintext || has_complete_frame())) ? r : 0;
 		}
 		if (decrypted < 0) {
 			mysqlx_ssl_status st = get_ssl_status(ssl_, decrypted);

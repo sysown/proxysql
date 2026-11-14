@@ -1709,6 +1709,11 @@ void MysqlxSession::handler_waiting_server_msg() {
 		last_active_time_ = monotonic_time_ms();
 		status_ = WAITING_CLIENT_XMSG;
 		to_process = true;
+	} else {
+		// close_notify may follow a partial response without a TCP FIN.
+		// Run again to report EOF after draining the plaintext above.
+		SSL* ssl = server_ds().get_ssl();
+		if (ssl && (SSL_get_shutdown(ssl) & SSL_RECEIVED_SHUTDOWN)) to_process = true;
 	}
 }
 

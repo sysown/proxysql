@@ -45,6 +45,7 @@
 #include <vector>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <openssl/ssl.h>
@@ -966,6 +967,7 @@ static void test_mapped_plain_empty_secret_selection() {
 // registration for the pre-XDS_READY backend fds.
 // -----------------------------------------------------------------------
 struct BackendProbe {
+	std::atomic<bool> tcp_closed {false};
 	std::atomic<bool> ok { false };
 	std::atomic<bool> saw_execute { false };
 	std::string mechanism;
@@ -1073,7 +1075,8 @@ static bool ssl_write_frame(SSL* ssl, uint8_t type, const std::string& payload) 
 	return true;
 }
 
-static void backend_probe_thread(int listen_fd, SSL_CTX* server_ctx, BackendProbe* probe) {
+static void backend_probe_thread(int listen_fd, SSL_CTX* server_ctx, BackendProbe* probe,
+                                 bool partial, std::atomic<bool>* client_finished) {
 	// Bound the accept wait so a failed frontend/backend-progress run
 	// does not leave this helper blocked and force the caller's timeout
 	// to be the only failure detector.
@@ -1121,13 +1124,24 @@ static void backend_probe_thread(int listen_fd, SSL_CTX* server_ctx, BackendProb
 		}
 	}
 	// Buffer the final response and TLS shutdown together before writing to TCP.
-	BIO* final_output = BIO_new(BIO_s_mem());
-	SSL_set0_wbio(ssl, final_output);
+	BIO* final_output = nullptr;
+	if (!partial) {
+		final_output = BIO_new(BIO_s_mem());
+		SSL_set0_wbio(ssl, final_output);
+	}
 	if (ok) {
 		if (ssl_read_frame(ssl, &type, &payload) &&
 		    type == Mysqlx::ClientMessages_Type_SQL_STMT_EXECUTE) {
 			probe->saw_execute = true;
-			if (probe->terminal_response) {
+			if (partial) {
+#ifdef TCP_CORK
+				int cork = 1;
+				if (setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)))
+					BAIL_OUT("TCP cork failed");
+#endif
+				const uint8_t header[] = {1, 0, 0, 0}; // Incomplete X frame.
+				ok = SSL_write(ssl, header, sizeof(header)) == sizeof(header);
+			} else if (probe->terminal_response) {
 				ok = ssl_write_frame(ssl, Mysqlx::ServerMessages_Type_SQL_STMT_EXECUTE_OK, "");
 			} else {
 				Mysqlx::Notice::Frame notice;
@@ -1141,18 +1155,28 @@ static void backend_probe_thread(int listen_fd, SSL_CTX* server_ctx, BackendProb
 	}
 	probe->ok = ok;
 	SSL_shutdown(ssl);
-	std::vector<uint8_t> final_bytes;
-	uint8_t buffer[16384];
-	int n;
-	while ((n = BIO_read(final_output, buffer, sizeof(buffer))) > 0) {
-		final_bytes.insert(final_bytes.end(), buffer, buffer + n);
+	// Keep TCP open until the client observes the TLS EOF, so a later FIN
+	// cannot supply the missing worker wakeup.
+	if (partial) {
+#ifdef TCP_CORK
+		int cork = 0;
+		if (setsockopt(fd, IPPROTO_TCP, TCP_CORK, &cork, sizeof(cork)))
+			BAIL_OUT("TCP uncork failed");
+#endif
+		for (int i = 0; i < 7000 && !client_finished->load(); ++i) usleep(1000);
+	} else {
+		std::vector<uint8_t> final_bytes;
+		uint8_t buffer[16384];
+		int n;
+		while ((n = BIO_read(final_output, buffer, sizeof(buffer))) > 0) {
+			final_bytes.insert(final_bytes.end(), buffer, buffer + n);
+		}
+		probe->ok = ok && write_all(fd, final_bytes.data(), final_bytes.size());
+		// Retain the existing notice/terminal TCP-open gate.
+		probe->release_socket.get_future().wait_for(std::chrono::seconds(30));
 	}
-	probe->ok = ok && write_all(fd, final_bytes.data(), final_bytes.size());
-	// Receiving close_notify must suffice: the worker cannot rely on TCP EOF
-	// to finish an incomplete response. The client releases this socket after
-	// checking its result; the timeout only bounds a broken test fixture.
-	probe->release_socket.get_future().wait_for(std::chrono::seconds(30));
 	SSL_free(ssl);
+	probe->tcp_closed.store(true);
 	close(fd);
 }
 
@@ -1194,8 +1218,8 @@ static int start_tcp_listener(int* port_out) {
 	return fd;
 }
 
-static void test_worker_progress_without_frontend_wakeups(bool terminal_response) {
-	diag(">>> %s, terminal response %d", __func__, terminal_response);
+static void test_worker_progress_without_frontend_wakeups(bool terminal_response, bool partial = false) {
+	diag(">>> %s, terminal response %d, partial %d", __func__, terminal_response, partial);
 	// The route endpoint is the numeric address 127.0.0.1. The peer leaf
 	// carries an IP SAN for it and is in the shared context's trust store,
 	// so this positive worker test also proves start_connect() carries the
@@ -1234,7 +1258,8 @@ static void test_worker_progress_without_frontend_wakeups(bool terminal_response
 
 	BackendProbe probe;
 	probe.terminal_response = terminal_response;
-	std::thread backend_thread(backend_probe_thread, backend_listener, peer_ctx, &probe);
+	std::atomic<bool> client_finished {false};
+	std::thread backend_thread(backend_probe_thread, backend_listener, peer_ctx, &probe, partial, &client_finished);
 
 	MysqlxConfigStore store;
 	std::unordered_map<std::string, MysqlxRoute> routes;
@@ -1358,11 +1383,12 @@ static void test_worker_progress_without_frontend_wakeups(bool terminal_response
 			}
 		}
 	}
-	const bool expected_result = terminal_response ? got_result && !saw_error
+	const bool expected_result = partial ? saw_error && last_error_code == 2013 && !probe.tcp_closed.load()
+		: terminal_response ? got_result && !saw_error
 		: !got_result && saw_error && last_error_code == 2013;
 	ok(expected_result, "worker-progress: %s arrived without extra frontend events or TCP EOF",
-	   terminal_response ? "query result" : "incomplete-response error");
-	if (!terminal_response) {
+	   partial ? "partial-response error" : terminal_response ? "query result" : "incomplete-response error");
+	if (!terminal_response && !partial) {
 		ok(seen_count >= 2 && seen_types[0] == Mysqlx::ServerMessages_Type_NOTICE,
 		   "worker-progress: notice preceding shutdown was forwarded before the error");
 	}
@@ -1385,6 +1411,7 @@ static void test_worker_progress_without_frontend_wakeups(bool terminal_response
 		     last_error_state.empty() ? "-" : last_error_state.c_str());
 	}
 
+	client_finished.store(true);
 	probe.release_socket.set_value();
 	backend_thread.join();
 	ok(probe.ok.load() && probe.saw_execute.load(),
@@ -1417,6 +1444,9 @@ int main() {
 	test_mapped_plain_empty_secret_selection();
 	test_worker_progress_without_frontend_wakeups(true);
 	test_worker_progress_without_frontend_wakeups(false);
+#ifdef TCP_CORK
+	test_worker_progress_without_frontend_wakeups(false, true);
+#endif
 
 	test_cleanup_minimal();
 	return exit_status();

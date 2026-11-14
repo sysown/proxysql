@@ -96,6 +96,8 @@ bool MysqlxConnection::is_reusable() const {
 	// implies. Drop it instead — the next request gets a fresh
 	// connection.
 	if (needs_post_reset_rehandshake_) return false;
+	SSL* ssl = backend_ds_.get_ssl();
+	if (ssl && (SSL_get_shutdown(ssl) & SSL_RECEIVED_SHUTDOWN)) return false;
 	return reusable_;
 }
 
@@ -347,7 +349,10 @@ std::optional<MysqlxFrame> MysqlxConnection::read_auth_frame() {
 		// Treating a backend close as progress spins the worker on POLLHUP
 		// forever and never fails the client's auth attempt.
 		const ssize_t r = backend_ds_.read_from_net();
-		if (r == 0) {
+		SSL* ssl = backend_ds_.get_ssl();
+		// Authentication requires a live connection even if an Ok was
+		// delivered immediately before the peer's TLS shutdown.
+		if (r == 0 || (ssl && (SSL_get_shutdown(ssl) & SSL_RECEIVED_SHUTDOWN))) {
 			auth_state_ = BACKEND_AUTH_ERROR;
 			return std::nullopt;
 		}

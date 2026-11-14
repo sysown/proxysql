@@ -1,6 +1,6 @@
 # PostgreSQL session scheduling: previous order, current order, and the completion boundary
 
-**Status:** the request-boundary correction is implemented in `4facb95bf`. The diagrams distinguish the older phased scheduler, the superseded pre-write continuation design, and the current implementation. The diagnostic yield switch used during the investigation is not in the PR.
+**Status:** the request boundary introduced in `4facb95bf` is retained. Since #6570, workers process backend responses before new frontend requests, omit the early speculative pass, and batch terminal continuation cleanup. The diagrams below distinguish historical scheduling from the current order. The diagnostic yield switch used during the investigation is not production behavior.
 
 The current handler finishes request/protocol cleanup and attempts the nonblocking client reply write **before returning to the worker**. If releasing the backend found waiters, another buffered command from the same client is retained as runnable work rather than started immediately. The worker then dispatches released capacity to an eligible waiter.
 
@@ -29,7 +29,8 @@ For the completed simple-query case discussed here, there are three different bo
 | Upstream base of this PR | `f02fbf1bb` | After-poll socket processing performs reads. Backend-session scan precedes a separate waiter retry scan and the remaining backendless sessions. |
 | Previous phased implementation used as the benchmark control | `9dfe548bc` | Reads are deferred into handlers. Initial waiter service and early frontend dispatch precede backend-session processing. Releases dispatch waiters after a handler returns. No completion-continuation queue. |
 | Superseded completion split | `c94fbe056` | Keeps those phases, adds explicit step/checkout outcomes, and can return before completion writeout. A continuation queue finishes that work later. |
-| Current request boundary | `4facb95bf` | Complete the current request's response work, return before another buffered request, then select the next eligible session. |
+| Request boundary introduced | `4facb95bf` | Complete the current request's response work, return before another buffered request, then select the next eligible session. |
+| Current scheduling order | Since #6570 | Process backend responses and released capacity first; retry waiters, conditionally scan backendless sessions, then drain a bounded continuation snapshot and batch terminal cleanup. No early frontend speculation or free-capacity counting. |
 
 These are the development scheduling paths compiled with `PROXYSQL31`; the diagrams do not describe the stable build without that define.
 
@@ -59,16 +60,25 @@ flowchart LR
     subgraph C["Current request boundary"]
         direction TB
         C0["poll returns"] --> C1["Capture readiness, defer socket reads to handlers"]
-        C1 --> C2["Retry existing waiters using established-only checkout"]
-        C2 --> C3["Early frontend dispatch, stop at first established-backend miss"]
-        C3 --> C4["Scan backend sessions, finish cleanup and attempt reply write, return before buffered A2, dispatch waiter B"]
-        C4 --> C5["Waiter recovery / deadlines, remaining backendless sessions"]
+        C1 --> C2["Scan backend sessions, finish cleanup and attempt reply write, return before buffered A2"]
+        C2 --> C3["After each handler returns, dispatch releases to older waiters"]
+        C3 --> C4["Waiter recovery and expired deadlines"]
+        C4 --> C5["Scan backendless sessions only when work or terminal cleanup needs it"]
         C5 --> C6["Drain bounded buffered-next-command queue, respect pauses"]
-        C6 --> C7["Remaining outer-loop work, poll cannot block with eligible buffered work"]
+        C6 --> C7["Batch terminal cleanup and dispatch capacity released by deletion"]
+        C7 --> C8["Remaining outer-loop work, poll cannot block with eligible buffered work"]
     end
 ```
 
-All phased versions interleave waiter dispatch with backend-session processing. The boundary correction changes **where A returns**: its current reply write is attempted before B runs. A later queue visit is necessary only for an already-buffered next command. Release dispatch is also checked after initial waiter service, early frontend handlers, recovery, remaining backendless handlers and queued steps.
+All phased versions interleave waiter dispatch with backend-session processing. The boundary correction changes **where A returns**: its current reply write is attempted before B runs. A later queue visit is necessary only for an already-buffered next command. Current PostgreSQL scheduling also dispatches releases after waiter recovery, backendless handlers, the conditional late scan, queued steps and terminal cleanup. Deletion-generated releases are processed before the scheduler returns.
+
+### Waiter socket readiness and disconnects
+
+Query pauses and pool waits have different socket interests. A query-paused PostgreSQL session still consumes recorded readiness through its I/O-only handler, without executing buffered commands. An error-only frontend `POLLERR` deactivates the stream before the worker's cleanup check. When `POLLIN` is also present, the normal read path consumes available bytes first. This error handling also applies to Stable and MySQL; backend error handling remains with the backend connection state machine.
+
+In v3.1+ builds, MySQL and PostgreSQL pool waiters retain a frontend poll entry for disconnect/error events. Ordinary `POLLIN` and `POLLOUT` are disabled between periodic read rearms, so unread pipelined input cannot keep waking a starved worker. Where available, `POLLRDHUP` detects a peer shutdown even behind unread bytes; `POLLHUP`, `POLLERR` and `POLLNVAL` are reported without being requested. An invalid waiter descriptor is removed without closing it again. A terminal waiter event marks the session unhealthy, and normal worker cleanup unlinks and deletes it even behind a still-starved FIFO head or during a query pause.
+
+The existing 50 ms input rearm is retained, including as a fallback on platforms without `POLLRDHUP`. After each read window the frontend returns to disconnect-only interest. Leaving the waiter list restores ordinary readable/writable polling; unregistering or destroying a session removes the entry. Backend waiter streams remain outside poll until they acquire a connection. These waiter interests are gated by `PROXYSQL31`; the default Stable build retains its poll-time I/O and has no waiter lists.
 
 ## Previous phased order: finish the handler, then dispatch a waiter
 
@@ -207,7 +217,7 @@ This isolates the cost of the **whole yield path**, including queueing, handler 
 
 `run_step()` reports waiting for I/O, waiting for a backend, an established-only miss, runnable buffered work, or close. Consumed work clears `to_process`; an established-only miss remains eligible for ordinary recovery. The previous dispatched-session vector and its linear membership searches were removed.
 
-Established-only checkout can acquire a compatible, connected, idle backend. It cannot create, warm or evict a connection, park the session, impose a retry delay, or account an ordinary checkout failure. Initial and inline waiter dispatch use this policy; recovery/deadline processing retains normal acquisition. Early frontend dispatch retains its global stop on the first established-only miss.
+Established-only checkout can acquire a compatible, connected, idle backend. It cannot create, warm or evict a connection, park the session, impose a retry delay, or account an ordinary checkout failure. Inline PostgreSQL release dispatch uses this policy; recovery/deadline processing retains normal acquisition. New frontend requests receive an ordinary checkout in the late phase, after backend response processing and waiter recovery. MySQL retains its batched waiter phase rather than immediately reacquiring releases on the same worker.
 
 Retryable plaintext send errors (`EINTR`, `EAGAIN`, `EWOULDBLOCK`) preserve unsent output, including after `POLLOUT`: readiness is not a reservation of socket capacity. Fatal send errors still close the stream.
 

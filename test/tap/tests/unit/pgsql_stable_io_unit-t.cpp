@@ -169,6 +169,20 @@ static void test_send_after_writable_snapshot() {
 		"the next output attempt delivers retained bytes exactly once");
 }
 
+static void test_paused_pollerr() {
+	Frontend frontend;
+	frontend.session->pause_until = frontend.worker.curtime + 10000000;
+	const int idx = frontend.session->client_myds->poll_fds_idx;
+	frontend.worker.mypolls.fds[idx].events = POLLIN | POLLOUT;
+	// Exercise an error-only readiness snapshot: read_from_net must not skip
+	// the fatal error simply because there are no readable bytes to consume.
+	frontend.worker.mypolls.fds[idx].revents = POLLERR;
+	frontend.process_ready();
+	frontend.worker.process_all_sessions();
+	ok(frontend.worker.mysql_sessions->len == 0,
+		"an error-only frontend event is reaped despite a future query pause");
+}
+
 static void test_fatal_send() {
 	Frontend frontend;
 	auto* stream = frontend.session->client_myds;
@@ -183,12 +197,13 @@ static void test_fatal_send() {
 }
 
 int main() {
-	plan(11);
+	plan(12);
 	if (test_init_minimal() || test_init_auth() || test_init_query_processor() || test_init_hostgroups())
 		BAIL_OUT("frontend I/O test initialization failed");
 	GloPgSQL_Logger = new PgSQL_Logger();
 	test_poll_read_boundary();
 	test_paused_read_and_disconnect();
+	test_paused_pollerr();
 	test_send_after_writable_snapshot();
 	test_fatal_send();
 	delete GloPgSQL_Logger;

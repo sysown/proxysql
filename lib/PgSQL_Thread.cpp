@@ -3241,8 +3241,11 @@ void PgSQL_Thread::enter_waiter(PgSQL_Session *sess, unsigned hid) {
 	if (sess->waiter_node.session) return;
 	sess->waiter_node.session = sess;
 	sess->waiter_node.hid = hid;
-	if (sess->client_myds && sess->client_myds->poll_fds_idx >= 0)
-		drop_from_poll(sess->client_myds);
+	if (sess->client_myds && sess->client_myds->fd >= 0) {
+		const int idx = sess->client_myds->poll_fds_idx;
+		if (idx < 0) mypolls.add(waiter_client_poll_events(), sess->client_myds->fd, sess->client_myds, curtime);
+		else mypolls.fds[idx].events = waiter_client_poll_events();
+	}
 	if (sess->mybe) drop_from_poll(sess->mybe->server_myds);
 	waiter_lists.push_back(sess->waiter_node);
 }
@@ -3251,8 +3254,10 @@ void PgSQL_Thread::leave_waiter(PgSQL_Session *sess, bool restore_client) {
 	if (!sess->waiter_node.session) return;
 	waiter_lists.unlink(sess->waiter_node);
 	sess->waiter_node = PgSQL_Waiter_Node{};
-	if (restore_client && sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0) {
-		mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
+	if (restore_client && sess->client_myds && sess->client_myds->fd >= 0) {
+		const int idx = sess->client_myds->poll_fds_idx;
+		if (idx < 0) mypolls.add(POLLIN | POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
+		else mypolls.fds[idx].events = POLLIN | POLLOUT;
 	}
 }
 #endif // PROXYSQL31
@@ -3335,8 +3340,8 @@ int PgSQL_Thread::run_ComputePollTimeout() {
 	}
 
 	if (!waiter_lists.empty()) {
-		// Off-poll streams cannot republish their timeout after an unrelated
-		// wake. Preserve the configured retry interval and the client rearm.
+		// Waiters cannot republish their backend timeout on a client-only
+		// wake. Preserve the configured retry interval and input read rearm.
 		const auto elapsed = curtime >= last_b_rearm_us ? curtime - last_b_rearm_us : 0;
 		const int rearm_ms = elapsed < 50000 ? (50000 - elapsed + 999) / 1000 : 50;
 		ttw = std::min(ttw, std::min(std::max(1, pgsql_thread___poll_timeout_on_failure), rearm_ms));
@@ -3484,13 +3489,16 @@ void PgSQL_Thread::run() {
 			if (b_rearm) {
 				last_b_rearm_us = curtime;
 				waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
-					// Bound the scan by the real list size: a fixed cap would
-					// permanently skip the tail (never re-armed, never noticing a
-					// client disconnect) once a list grew past it.
+					// Periodically allow input reads for every waiter. Between
+					// these windows only terminal events should wake the worker.
 					for (auto *n = head; n; n = n->next) {
 						auto *sess = static_cast<PgSQL_Session*>(n->session);
-						if (sess->client_myds && sess->client_myds->fd >= 0 && sess->client_myds->poll_fds_idx < 0)
-							mypolls.add(POLLIN, sess->client_myds->fd, sess->client_myds, curtime);
+						if (sess->client_myds && sess->client_myds->fd >= 0) {
+							const int idx = sess->client_myds->poll_fds_idx;
+							const short events = POLLIN | waiter_client_poll_events();
+							if (idx < 0) mypolls.add(events, sess->client_myds->fd, sess->client_myds, curtime);
+							else mypolls.fds[idx].events = events;
+						}
 					}
 					(void)waiter_count;
 				});
@@ -3632,12 +3640,11 @@ void PgSQL_Thread::run() {
 #ifdef PROXYSQL31
 		if (last_b_rearm_us == pre_poll_time) {
 			waiter_lists.for_each_hid([&](unsigned, PgSQL_Waiter_Node *head, size_t waiter_count) {
-				// Bound the scan by the real list size: a fixed cap would
-				// permanently skip the tail (never dropped from the poll set)
-				// once a list grew past it.
+				// End the read window without losing the disconnect watch.
 				for (auto *n = head; n; n = n->next) {
 					auto *sess = static_cast<PgSQL_Session*>(n->session);
-					drop_from_poll(sess->client_myds);
+					if (sess->client_myds && sess->client_myds->poll_fds_idx >= 0)
+						mypolls.fds[sess->client_myds->poll_fds_idx].events = waiter_client_poll_events();
 				}
 				(void)waiter_count;
 			});
@@ -3894,6 +3901,19 @@ void PgSQL_Thread::process_poll_housekeeping() {
 #endif
 
 bool PgSQL_Thread::process_data_on_data_stream(PgSQL_Data_Stream * myds, unsigned int n) {
+#ifdef PROXYSQL31
+	assert(myds->sess);
+	if (myds->myds_type == MYDS_FRONTEND && myds->sess->waiter_node.session &&
+		waiter_client_terminal(mypolls.fds[n].revents)) {
+		if (mypolls.fds[n].revents & POLLNVAL) {
+			myds->fd = -1; // Already closed; destruction must not close it again.
+			if (myds->myconn) myds->myconn->fd = -1;
+		}
+		myds->shut_soft();
+		myds->sess->set_unhealthy();
+		return true;
+	}
+#endif
 	if (mypolls.fds[n].revents) {
 #ifdef IDLE_THREADS
 		if (myds->myds_type == MYDS_FRONTEND) {
@@ -4338,9 +4358,9 @@ void PgSQL_Thread::process_all_sessions() {
 			//sess->active_transactions = -1;
 		}
 #ifdef PROXYSQL31
-		// Pauses and pool starvation stop query execution, not socket I/O.
-		// POLLIN stays armed during a pause; drain it (including disconnects)
-		// here instead of repeatedly waking poll until the query delay expires.
+		// A query pause still drains recorded socket readiness. Pool waiters
+		// watch disconnects continuously and rearm input reads periodically;
+		// consume those reads without executing another client command.
 		if (sess->healthy && !sess->killed && sess->to_process &&
 			(sess->pause_until > curtime || sess->waiter_node.session)) {
 			if (scheduler.run_session(sess, PgSQL_Pool_Acquire_Mode::Normal, true) == PgSQL_Session_Run_Result::Close) sess->healthy = 0;
