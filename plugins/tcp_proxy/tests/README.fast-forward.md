@@ -24,25 +24,20 @@ simulated SQL server, fake result, or fallback.
 
 ## Build
 
-The immutable host is `/tmp/tcp-four-table/core-final/proxysql` and the
-immutable plugin is
-`/tmp/tcp-four-table/plugin-final/binaries/proxysql_tcp_proxy-release.so`.
-Their expected SHA-256 values are checked before any run.
+Build ProxySQL 4.0 and the benchmark client from the repository root:
 
 ```sh
-cd /home/rene/.codex/worktrees/483d/proxysql
-make -f plugins/tcp_proxy/tests/Makefile.fast-forward \
-     DEPS_PATH=/mnt/data/rene/proxysql5/proxysql/deps \
-     OUT_DIR=/tmp/tcp-ff-benchmark
+make PROXYSQL40=1 -j8 NPROCS=8
+make -f plugins/tcp_proxy/tests/Makefile.fast-forward
 /tmp/tcp-ff-benchmark/fast_forward_bench_client --help
 python3 plugins/tcp_proxy/tests/fast_forward_benchmark.py --help
 ```
 
-The MariaDB client uses the donor's matching headers and
-`libmariadbclient.a`. PostgreSQL uses the donor public headers with the system
-`/lib/x86_64-linux-gnu/libpq.so.5`. Donor trees are read-only inputs. The
-Makefile anchors its source and makefile paths, so invoking `-f` from the
-repository root and `-C plugins/tcp_proxy/tests` both work.
+The benchmark uses `src/proxysql`, `plugins/tcp_proxy/proxysql_tcp_proxy.so`,
+and the repository's built dependencies by default. It records hashes of its
+inputs at startup and verifies them again after the run. The host, plugin,
+dependency directory, client and output directory can be overridden by flags.
+PostgreSQL client linking defaults to the system `libpq.so.5`.
 
 ## Safety and fixture policy
 
@@ -108,9 +103,6 @@ The measured defaults are the approved design values:
 `smoke` overrides only to a tiny profile: one round, at most 2 clients, 2
 warmups, 5 RTT samples per client and 0.5-second phases. Its report says
 `SMOKE` explicitly and is not a measurement.
-`smoke` overrides only to a tiny profile: one round, at most 2 clients, 2
-warmups, 5 RTT samples per client and 0.5-second phases. Its report says
-`SMOKE` explicitly and is not a measurement.
 
 ### Exact `SELECT 1` workload
 
@@ -136,8 +128,8 @@ python3 plugins/tcp_proxy/tests/fast_forward_benchmark.py smoke \
 
 python3 plugins/tcp_proxy/tests/fast_forward_benchmark.py measure \
   --workload select1 \
-  --proxysql /tmp/tcp-four-table/core-final/proxysql \
-  --plugin /tmp/tcp-four-table/plugin-final/binaries/proxysql_tcp_proxy-release.so \
+  --proxysql src/proxysql \
+  --plugin plugins/tcp_proxy/proxysql_tcp_proxy.so \
   --client /tmp/tcp-select1-benchmark/fast_forward_bench_client \
   --work-dir /tmp/tcp-select1-benchmark \
   --measurement-ready /tmp/tcp-select1-benchmark/measurement-ready.json
@@ -178,7 +170,6 @@ Focused selfcheck (real task-owned servers; negative credentials, wrong payload,
 slow-query timeout propagation and FF-proof refusal):
 
 ```sh
-cd /home/rene/.codex/worktrees/483d/proxysql
 python3 plugins/tcp_proxy/tests/fast_forward_benchmark.py selfcheck \
   --client /tmp/tcp-ff-benchmark/fast_forward_bench_client \
   --work-dir /tmp/tcp-ff-benchmark
@@ -198,8 +189,8 @@ Full measurement is intentionally gated. It refuses to run unless
 
 ```sh
 python3 plugins/tcp_proxy/tests/fast_forward_benchmark.py measure \
-  --proxysql /tmp/tcp-four-table/core-final/proxysql \
-  --plugin /tmp/tcp-four-table/plugin-final/binaries/proxysql_tcp_proxy-release.so \
+  --proxysql src/proxysql \
+  --plugin plugins/tcp_proxy/proxysql_tcp_proxy.so \
   --client /tmp/tcp-ff-benchmark/fast_forward_bench_client \
   --work-dir /tmp/tcp-ff-benchmark \
   --measurement-ready /tmp/tcp-ff-benchmark/measurement-ready.json

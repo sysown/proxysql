@@ -52,16 +52,13 @@ HOST = "127.0.0.1"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TESTS_DIR = Path(__file__).resolve().parent
 DEFAULT_WORK_DIR = Path("/tmp/tcp-ff-benchmark")
-DEFAULT_HOST = Path("/tmp/tcp-four-table/core-final/proxysql")
-DEFAULT_PLUGIN = Path("/tmp/tcp-four-table/plugin-final/binaries/proxysql_tcp_proxy-release.so")
+DEFAULT_HOST = REPO_ROOT / "src/proxysql"
+DEFAULT_PLUGIN = REPO_ROOT / "plugins/tcp_proxy/proxysql_tcp_proxy.so"
 DEFAULT_CLIENT = DEFAULT_WORK_DIR / "fast_forward_bench_client"
 DEFAULT_MYSQL = Path(shutil.which("mysql") or "/usr/bin/mysql")
 DEFAULT_MYSQLD = Path(shutil.which("mysqld") or "/usr/sbin/mysqld")
 DEFAULT_PG_BIN = Path("/usr/lib/postgresql/16/bin")
-DEFAULT_DEPS = Path("/mnt/data/rene/proxysql5/proxysql/deps")
-
-EXPECTED_HOST_SHA256 = "81c4f518f15e05af5de94a14ac445570ffbd0845e9f7bd4a2e9a85b281800d02"
-EXPECTED_PLUGIN_SHA256 = "f4111f8949276645977d9ee917eed9784c574017d3a00709050b614ca527b9c4"
+DEFAULT_DEPS = REPO_ROOT / "deps"
 
 PROTOCOLS = {"mysql": "MYSQL", "pgsql": "PGSQL"}
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -115,14 +112,8 @@ def host_info() -> dict:
 
 
 def source_provenance() -> dict:
-    refs = [
-        Path("/tmp/tcp-four-table/core-final/manifest.json"),
-        Path("/tmp/tcp-four-table/core-final/all-core-source-hashes.json"),
-        Path("/tmp/tcp-four-table/plugin-final/manifest.json"),
-        Path("/tmp/tcp-four-table/plugin-final/SHA256SUMS"),
-        Path("/tmp/tcp-ff-benchmark/ff-mode-evidence.md"),
-        Path("/tmp/tcp-ff-benchmark/benchmark-design.md"),
-    ]
+    refs = [REPO_ROOT / "src/main.cpp", REPO_ROOT / "include/ProxySQL_Plugin.h",
+            TESTS_DIR / "../src/engine.cpp"]
     result = {}
     for path in refs:
         if path.is_file():
@@ -1630,15 +1621,9 @@ class Experiment:
     def freeze_manifest(self) -> dict:
         host = Path(self.args.proxysql).resolve()
         plugin = Path(self.args.plugin).resolve()
-        for label, path, expected in (
-            ("host", host, EXPECTED_HOST_SHA256),
-            ("plugin", plugin, EXPECTED_PLUGIN_SHA256),
-        ):
+        for label, path in (("host", host), ("plugin", plugin)):
             if not path.is_file():
                 raise RunnerError(f"{label} not found: {path}")
-            actual = sha256_file(path)
-            if actual != expected:
-                raise RunnerError(f"{label} SHA256 mismatch: {actual} != {expected}")
         inputs = [
             host, plugin, Path(self.args.client),
             Path(__file__), TESTS_DIR / "fast_forward_bench_client.cpp",
@@ -1677,10 +1662,8 @@ class Experiment:
             "created_utc": utc_now(),
             "profile": self.profile,
             "repo_root": str(REPO_ROOT),
-            "host": {"path": str(host), "sha256": sha256_file(host),
-                     "expected_sha256": EXPECTED_HOST_SHA256},
-            "plugin": {"path": str(plugin), "sha256": sha256_file(plugin),
-                       "expected_sha256": EXPECTED_PLUGIN_SHA256},
+            "host": {"path": str(host), "sha256": artifacts[str(host)]["sha256"]},
+            "plugin": {"path": str(plugin), "sha256": artifacts[str(plugin)]["sha256"]},
             "client": {"path": str(self.args.client),
                        "sha256": sha256_file(self.args.client),
                        "library_versions": client_versions,
@@ -1697,7 +1680,7 @@ class Experiment:
                 "cppflags": (
                     f"-I{self.args.deps}/mariadb-client-library/mariadb_client/include "
                     f"-I{self.args.deps}/postgresql/postgresql/src/interfaces/libpq "
-                    f"-I{self.args.deps}/postgresql/postgres-REL_16_10/src/include"
+                    f"-I{self.args.deps}/postgresql/postgresql/src/include"
                 ),
                 "ldlibs": (
                     f"{self.args.deps}/mariadb-client-library/mariadb_client/"
@@ -1718,10 +1701,6 @@ class Experiment:
             path = Path(path_text)
             if not path.is_file() or sha256_file(path) != item["sha256"]:
                 raise RunnerError(f"frozen input changed during run: {path}")
-        if sha256_file(Path(self.args.proxysql)) != EXPECTED_HOST_SHA256:
-            raise RunnerError("immutable host changed during run")
-        if sha256_file(Path(self.args.plugin)) != EXPECTED_PLUGIN_SHA256:
-            raise RunnerError("immutable plugin changed during run")
 
     def cleanup(self) -> dict:
         result: dict[str, Any] = {"daemons": [], "fixtures": []}
@@ -2584,9 +2563,9 @@ def run_selfcheck(args: argparse.Namespace) -> int:
         checks.append({"name": name, "ok": bool(ok), "detail": clip(detail)})
 
     try:
-        check("immutable host hash", sha256_file(Path(args.proxysql)) == EXPECTED_HOST_SHA256,
+        check("host executable", Path(args.proxysql).is_file() and os.access(args.proxysql, os.X_OK),
               args.proxysql)
-        check("immutable plugin hash", sha256_file(Path(args.plugin)) == EXPECTED_PLUGIN_SHA256,
+        check("plugin present", Path(args.plugin).is_file(),
               args.plugin)
         help_cp = run_process([str(args.client), "--help"], timeout=10)
         check("native client --help", help_cp.returncode == 0 and "Modes:" in help_cp.stdout,

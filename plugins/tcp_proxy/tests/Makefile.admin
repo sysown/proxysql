@@ -8,7 +8,7 @@
 #
 # Typical invocation from the repository root:
 #   make -f plugins/tcp_proxy/tests/Makefile.admin \
-#        DEPS_PATH=/mnt/data/rene/proxysql5/proxysql/deps
+#        test
 
 HERE := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PLUGIN_DIR := $(abspath $(HERE)/..)

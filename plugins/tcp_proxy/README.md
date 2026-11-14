@@ -102,9 +102,7 @@ canonical user guide: [`doc/tcp-proxy-plugin.md`](../../doc/tcp-proxy-plugin.md)
 ## Focused tests
 
 ```sh
-make -f plugins/tcp_proxy/tests/Makefile.admin \
-     DEPS_PATH=/path/to/proxysql/deps
-./plugins/tcp_proxy/tests/admin_unit-t
+make -f plugins/tcp_proxy/tests/Makefile.admin test
 ```
 
 The target verifies descriptor/schema registration without DB access in Phase B,
@@ -130,7 +128,15 @@ cd ../../..
 python3 plugins/tcp_proxy/tests/daemon_admin_smoke.py \
     --proxysql "$PWD/src/proxysql" --plugin "$PWD/plugins/tcp_proxy/proxysql_tcp_proxy.so" \
     --case all
+python3 plugins/tcp_proxy/tests/daemon_mapped_smoke.py \
+    --proxysql "$PWD/src/proxysql" --plugin "$PWD/plugins/tcp_proxy/proxysql_tcp_proxy.so" \
+    --converter "$PWD/plugins/tcp_proxy/tools/migrate_tcp_config.py" --case all
 ```
+
+The mapped suite covers MySQL and PostgreSQL connection accounting, status,
+remapping, shared limits, monitor fixtures and upgrades. Monitor cases require
+a local `mysqld` and supported fixture dependencies. Each test reports PASS,
+FAIL or BLOCKED.
 
 The socket harness needs the repository JSON dependency. The daemon checks need
 a matching release v4 core and the MySQL command-line client. See the
@@ -140,7 +146,7 @@ Final matching-artifact validation on 2026-11-11: Admin **5/5 PASS**, mapped
 **15/15 PASS** including the complete portable upgrade case with **86 checks**,
 and the retained actual Engine suite is **36/36 PASS** equivalence. The
 [four-mode measured report](../../docs/benchmarks/2026-11-11-tcp-four-table-daemon.md)
-is current; historical reports remain historical.
+records that earlier run; see the [latest sysbench report](../../docs/benchmarks/2026-11-13-tcp-sysbench-v4.html) for the standard 4.0 build.
 
 Historical only (earlier six-table/mapped/static implementations):
 
