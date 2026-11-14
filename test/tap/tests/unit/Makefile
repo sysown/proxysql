@@ -602,6 +602,7 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR) FORCE
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
+	backend_unplug_unit-t \
 	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
 	pgsql_stable_io_unit-t \
@@ -632,13 +633,13 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_decompress_payload_unit-t \
 	mysql_resolution_unit-t \
 	mariadb_tls_server_name_unit-t \
-	pgsql_variables_validator_unit-t \
+	pgsql_variables_validator_unit-t pgsql_startup_options_escape_unit-t \
 	pgsql_set_tracked_vars_regexp_unit-t \
 	pgsql_set_transaction_regexp_unit-t \
-	proxysql_utils_unit-t startup_gate_unit-t cluster_plugin_set_hash_unit-t \
+	proxysql_utils_unit-t startup_gate_unit-t startup_gate_admin_lock_unit-t cluster_plugin_set_hash_unit-t \
 	gen_utils_unit-t \
 	proxy_protocol_unit-t \
-	pgsql_txn_state_unit-t \
+	pgsql_txn_state_unit-t pgsql_txn_end_classifier_unit-t \
 	pgsql_midbatch_reset_refused_unit-t \
 	pgsql_local_error_txn_state_unit-t \
 	pgsql_poison_rollback_cancel_unit-t \
@@ -670,6 +671,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	log_utils_unit-t \
 	log_filename_variables_unit-t \
 	listen_validator_unit-t \
+	listeners_manager_identity_unit-t \
 	c_tokenizer_unit-t \
 	pgsql_tokenizer_unit-t \
 	pgsql_digest_bounds_unit-t \
@@ -687,8 +689,8 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	glovars_unit-t \
 	pgsql_servers_ssl_params_unit-t \
 	connection_unhealthy_unit-t \
-	connection_max_age_unit-t \
-	cluster_sync_unit-t \
+	connection_max_age_unit-t latency_awareness_selection_unit-t \
+	cluster_sync_unit-t cluster_admin_lock_order_unit-t \
 	parsersql_unit-t parsersql_v30_flow_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
@@ -804,6 +806,7 @@ UNIT_TESTS += \
 	mysqlx_backend_auth_unit-t \
 	mysqlx_credential_verify_unit-t \
 	mysqlx_robustness_unit-t \
+	mysqlx_frontend_tls_unit-t \
 	mysqlx_tls_unit-t \
 	mysqlx_compression_unit-t
 
@@ -1268,6 +1271,12 @@ mysqlx_robustness_unit-t: mysqlx_robustness_unit-t.cpp $(PROXYSQL_PATH)/plugins/
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
 
+mysqlx_frontend_tls_unit-t: mysqlx_frontend_tls_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_session.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_connection.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_thread.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_stats.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
+		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) $(PROTOBUF_LIB) $(ALLOW_MULTI_DEF) -lpthread -o $@
+
 mysqlx_tls_unit-t: mysqlx_tls_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_data_stream.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_protocol.cpp $(MYSQLX_PROTO_OBJS) $(TEST_HELPERS_OBJ) \
 		-I$(PROXYSQL_PATH)/plugins/mysqlx/include -I$(MYSQLX_PROTO_DIR) \
@@ -1523,6 +1532,15 @@ pgsql_result_flush_allocation_unit-t: pgsql_result_flush_allocation_unit-t.cpp \
 	$(CXX) $< $(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ) $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
+
+# Instrument the real call sites: remove_index_fast(-1) can otherwise hide a
+# null member call. Static linking leaves the archive's stream objects unused.
+backend_unplug_unit-t: backend_unplug_unit-t.cpp \
+	$(PROXYSQL_PATH)/lib/mysql_data_stream.cpp $(PROXYSQL_PATH)/lib/PgSQL_Data_Stream.cpp \
+	$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/lib/mysql_data_stream.cpp $(PROXYSQL_PATH)/lib/PgSQL_Data_Stream.cpp \
+		$(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) -fsanitize=null -fno-sanitize-recover=null \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

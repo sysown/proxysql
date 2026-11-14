@@ -163,6 +163,7 @@ PgSQL_Listeners_Manager::~PgSQL_Listeners_Manager() {
 }
 
 int PgSQL_Listeners_Manager::add(const char* iface, unsigned int num_threads, int** perthrsocks) {
+	const std::string original_iface { iface };
 	for (unsigned int i = 0; i < ifaces->len; i++) {
 		iface_info* ifi = (iface_info*)ifaces->index(i);
 		if (strcmp(ifi->iface, iface) == 0) {
@@ -207,7 +208,7 @@ int PgSQL_Listeners_Manager::add(const char* iface, unsigned int num_threads, in
 			for (i = 0; i < num_threads; i++) {
 				s = listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN, true);
 				ioctl_FIONBIO(s, 1);
-				iface_info* ifi = new iface_info((char*)iface, address, atoi(port), s);
+				iface_info* ifi = new iface_info((char*)original_iface.c_str(), address, atoi(port), s);
 				ifaces->add(ifi);
 				l_perthrsocks[i] = s;
 			}
@@ -228,7 +229,7 @@ int PgSQL_Listeners_Manager::add(const char* iface, unsigned int num_threads, in
 	}
 	if (s > 0) {
 		ioctl_FIONBIO(s, 1);
-		iface_info* ifi = new iface_info((char*)iface, address, atoi(port), s);
+		iface_info* ifi = new iface_info((char*)original_iface.c_str(), address, atoi(port), s);
 		ifaces->add(ifi);
 	}
 	if (is_ipv6 == false) {

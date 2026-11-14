@@ -6863,6 +6863,9 @@ void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds,
 void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 	if (myds->myconn) {
 		myds->myconn->reduce_auto_increment_delay_token();
+		// Failed statements can leave a transaction open without setting IN_TRANS (#6611).
+		if (transaction_persistent && transaction_persistent_hostgroup == -1 && myconn->IsActiveTransaction())
+			transaction_persistent_hostgroup = current_hostgroup;
 		if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 			myds->DSS=STATE_NOT_INITIALIZED;
 			if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
@@ -9572,6 +9575,18 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					// rather than acknowledge a statement that nothing applied (#6420).
 					unable_to_parse_set_statement(lock_hostgroup);
 					return false;
+				}
+
+				// Reject locally before changing either next-transaction characteristic (#6612).
+				if (set.begin()->first[0] == ':' && nTrx != 0 && command_type == _MYSQL_COM_QUERY &&
+					prepare_stmt_type == ps_type_not_set) {
+					client_myds->DSS = STATE_QUERY_SENT_NET;
+					client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr, 1,
+						ER_CANT_CHANGE_TX_CHARACTERISTICS, "25001",
+						"Transaction characteristics can't be changed while a transaction is in progress");
+					RequestEnd(nullptr, ER_CANT_CHANGE_TX_CHARACTERISTICS);
+					l_free(pkt->size, pkt->ptr);
+					return true;
 				}
 
 				for(auto it = std::begin(set); it != std::end(set); ++it) {

@@ -15,7 +15,7 @@ jobs:
       pull-requests: read
   build-and-unit-smoke:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
     - name: Checkout repository

@@ -546,11 +546,18 @@ char* escape_string_single_quotes_and_backslashes(char* input, bool free_it) {
 
 
 void pg_append_escaped_option_value(std::string& out, const char* input) {
+	// The backend splits 'options' with pg_split_opts() (postinit.c), which ends a token at
+	// ANY isspace() character -- tab, newline, vertical tab, form feed and carriage return as
+	// well as space -- unless it is preceded by a backslash. Every one of them must therefore
+	// be escaped here, or a value such as "UTC\t-c\tstatement_timeout=1" would reach the
+	// backend as an extra, untracked "-c" option that then outlives this client on a pooled
+	// connection. fast_isspace() matches exactly the C-locale isspace() set.
+	//
 	// Scan for the first character that needs escaping. Values like "on", "GMT" or
 	// "postgres" have none, and are appended with a single copy: one pass over the input,
 	// no strlen(), no temporary and no allocation of its own.
 	const char* p = input;
-	while (*p != '\0' && *p != ' ' && *p != '\\') p++;
+	while (*p != '\0' && !fast_isspace(static_cast<unsigned char>(*p)) && *p != '\\') p++;
 	if (*p == '\0') {
 		out.append(input, static_cast<size_t>(p - input));
 		return;
@@ -561,7 +568,7 @@ void pg_append_escaped_option_value(std::string& out, const char* input) {
 	out.reserve(out.size() + len * 2);
 	const char* run = input;
 	for (const char* c = p; *c != '\0'; c++) {
-		if (*c == ' ' || *c == '\\') {
+		if (fast_isspace(static_cast<unsigned char>(*c)) || *c == '\\') {
 			out.append(run, static_cast<size_t>(c - run));
 			out += '\\';
 			run = c;
