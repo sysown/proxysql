@@ -122,6 +122,11 @@ rg -n "$old_version|openssl-$old_version" \
 deps/libssl/verify-source.bash
 ```
 
+Review matches rather than expecting zero results. Historical artifact
+registrations in `deps/artifacts/lock.json`, negative system-library fixtures,
+and historical notes intentionally retain old versions. Do not retag old
+artifacts: their version and source identity prevent reuse for the new pin.
+
 Review `git diff --cached` and commit the archive, digest, pin, symlink,
 verifier, tests, and documentation together.
 
