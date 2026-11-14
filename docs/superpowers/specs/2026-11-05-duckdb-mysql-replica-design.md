@@ -8,15 +8,14 @@ Base: `v3.0` at `e2f317aba`
 
 ## 1. Goal
 
-Compete with [MyDuck Server](https://github.com/apecloud/myduckserver) by
-putting the analytical MySQL replica inside ProxySQL instead of beside it.
+Provide a recoverable analytical replica of selected MySQL tables within
+ProxySQL's existing DuckDB plugin. Load a consistent initial snapshot, apply
+subsequent changes from the MySQL binlog, and persist the replication checkpoint
+with the applied data so replication can resume after a restart.
 
-MyDuck's published HTAP demo uses ProxySQL as a router in front of a separate
-MyDuck hostgroup: `SELECT ... FOR UPDATE` and all DML go to MySQL, plain
-`SELECT`s go to MyDuck. The target here is the same topology with the second
-server deleted. ProxySQL keeps one client listener, one set of credentials,
-one query-rule table, and one Admin interface. An embedded DuckDB replica is
-fed from the MySQL binlog and is addressable from the same query rules.
+MySQL remains the source for writes and transactional reads. Existing ProxySQL
+query rules can route analytical reads to the DuckDB listener, with replica
+configuration, lifecycle commands, and status available through the Admin interface.
 
 This document covers **sub-project 1: the MySQL replica applier**. Existing
 query rules can route analytical reads to a backend hostgroup pointing to the
