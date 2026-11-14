@@ -33,6 +33,21 @@ static void test_connection_multiplexing() {
 	ok(!conn.is_reusable(), "transaction disables reuse");
 }
 
+static void test_tls_shutdown_disables_reuse() {
+	MysqlxConnection conn;
+	SSL_CTX* ctx = SSL_CTX_new(TLS_method());
+	if (!ctx) BAIL_OUT("TLS context allocation failed");
+	conn.backend_ds().init_ssl_connect(ctx);
+	SSL_CTX_free(ctx);
+	if (!conn.backend_ds().get_ssl()) BAIL_OUT("SSL allocation failed");
+	conn.set_reusable(true);
+	ok(conn.is_reusable(), "TLS connection is reusable before shutdown");
+	SSL_set_shutdown(conn.backend_ds().get_ssl(), SSL_RECEIVED_SHUTDOWN);
+	ok(!conn.is_reusable(), "peer TLS shutdown prevents connection reuse");
+	conn.reset();
+	ok(!conn.is_reusable(), "reset does not revive a TLS connection closed by its peer");
+}
+
 // Issue #5697: post-Session::Reset rehandshake flag invalidates the
 // connection for pool reuse. Default-constructed connections have the
 // flag clear; setting it forces is_reusable() to false even on an
@@ -75,6 +90,7 @@ int main() {
 	test_connection_creation();
 	test_connection_multiplexing();
 	test_connection_post_reset_rehandshake_flag();
+	test_tls_shutdown_disables_reuse();
 
 	return exit_status();
 }
