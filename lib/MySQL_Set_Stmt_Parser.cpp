@@ -110,6 +110,32 @@ static bool consumed_assignment_delimiter(
 	return end > begin && end[-1] == ',';
 }
 
+// Bound legacy ordinary matches after a connector assignment. Its value grammar
+// allows commas and can otherwise swallow the following assignment's name.
+// Only commas outside quoted values and function arguments are delimiters.
+static re2::StringPiece first_assignment(re2::StringPiece input) {
+	char quote = 0;
+	unsigned depth = 0;
+	for (size_t i = 0; i < input.size(); ++i) {
+		const char c = input[i];
+		if (quote) {
+			if (c == '\\' && i + 1 < input.size()) ++i;
+			else if (c == quote) {
+				if (i + 1 < input.size() && input[i + 1] == quote) ++i;
+				else quote = 0;
+			}
+		} else if (c == '\'' || c == '"' || c == '`') quote = c;
+		else if (c == '(') ++depth;
+		else if (c == ')' && depth) --depth;
+		else if (c == ',' && depth == 0) {
+			size_t end = i + 1;
+			while (end < input.size() && isspace(static_cast<unsigned char>(input[end]))) ++end;
+			return input.substr(0, end);
+		}
+	}
+	return input;
+}
+
 /**
  * Consumes one connector-shaped session_track_system_variables assignment from
  * @p input. On success advances @p input past the assignment and its optional
@@ -242,6 +268,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	std::string value1, value2, value3, value4, value5;
 	re2::StringPiece input(query);
 	bool connector_boundary_allowed = true;
+	bool connector_seen = false;
 	while (true) {
 		std::string session_track_value;
 		bool session_track_schema = false;
@@ -252,15 +279,24 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			if (session_track_schema) {
 				result["session_track_schema"] = { "1" };
 			}
+			connector_seen = true;
 			connector_boundary_allowed = connector_boundary_allowed && has_following;
 			continue;
 		}
 		re2::StringPiece before = input;
-		if (!re2::RE2::Consume(&input, re, &value1, &value2, &value3, &value4, &value5)) {
+		re2::StringPiece assignment = connector_seen ? first_assignment(input) : input;
+		const size_t assignment_size = assignment.size();
+		if (!re2::RE2::Consume(&assignment, re, &value1, &value2, &value3, &value4, &value5)) {
 			break;
 		}
-		connector_boundary_allowed = connector_boundary_allowed &&
+		input.remove_prefix(assignment_size - assignment.size());
+		const bool delimiter_consumed =
 			consumed_assignment_delimiter(before, input);
+		connector_boundary_allowed = connector_boundary_allowed &&
+			delimiter_consumed;
+		if (connector_seen && !delimiter_consumed && !input.empty()) {
+			break;
+		}
 		std::vector<std::string> op;
 #ifdef DEBUG
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", value1.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
@@ -539,6 +575,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	std::string value1, value2, value3, value4, value5;
 	re2::StringPiece input(query);
 	bool connector_boundary_allowed = true;
+	bool connector_seen = false;
 	while (true) {
 		std::string session_track_value;
 		bool session_track_schema = false;
@@ -549,6 +586,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			if (session_track_schema) {
 				result["session_track_schema"] = { "1" };
 			}
+			connector_seen = true;
 			connector_boundary_allowed = connector_boundary_allowed && has_following;
 			continue;
 		}
@@ -556,8 +594,13 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		if (!re2::RE2::Consume(&input, *parse1v2_re, &value1, &value2, &value3, &value4, &value5)) {
 			break;
 		}
-		connector_boundary_allowed = connector_boundary_allowed &&
+		const bool delimiter_consumed =
 			consumed_assignment_delimiter(before, input);
+		connector_boundary_allowed = connector_boundary_allowed &&
+			delimiter_consumed;
+		if (connector_seen && !delimiter_consumed && !input.empty()) {
+			break;
+		}
 		// FIXME: verify if we reached end of query. Did we parse everything?
 		std::vector<std::string> op;
 #ifdef DEBUG

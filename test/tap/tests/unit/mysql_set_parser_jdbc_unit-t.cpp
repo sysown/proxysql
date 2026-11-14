@@ -238,6 +238,13 @@ int main() {
 		// assignments, the connector helper stays disabled for the statement.
 		std::string("SET autocommit=0 sql_mode='',") + connector_assignment,
 		std::string("SET NAMES utf8mb4 sql_mode='ANSI',") + connector_assignment,
+		// Once the connector expression succeeds, a following ordinary
+		// assignment that leaves input without consuming a delimiter must
+		// reject the whole parse.
+		std::string("SET session_track_system_variables=") + SESSION_TRACK_VALUE +
+			",autocommit=0 sql_mode='ANSI'",
+		std::string("SET session_track_system_variables=") + SESSION_TRACK_VALUE +
+			",autocommit=0 sql_mode='ANSI',sql_mode='ANSI'",
 	};
 	for (const std::string& query : missing_comma_sets) {
 		check_rejected(query, "a connector expression without an assignment delimiter");
@@ -255,6 +262,26 @@ int main() {
 		"parse1 keeps the pre-existing plain-value handling for a user-variable RHS");
 	ok(current_user_parser.parse1v2() == legacy_user,
 		"parse1v2 keeps the pre-existing plain-value handling for a user-variable RHS");
+
+	// Keep commas within quoted values and nested function arguments while
+	// bounding the legacy parser's otherwise greedy ordinary value match.
+	for (const std::string& sql_mode : {std::string("'ANSI'"),
+		std::string("'ANSI,STRICT_TRANS_TABLES'"),
+		std::string("CONCAT(@@sql_mode,',ANSI')")}) {
+		const std::string query =
+			std::string("SET session_track_system_variables=") + SESSION_TRACK_VALUE +
+			",autocommit=0,sql_mode=" + sql_mode;
+		MySQL_Set_Stmt_Parser legacy(query);
+		MySQL_Set_Stmt_Parser current(query);
+		const auto legacy_result = legacy.parse1();
+		const auto current_result = current.parse1v2();
+		for (const auto& parsed : {legacy_result, current_result}) {
+			ok(parsed.size() == 3 && parsed.count("session_track_system_variables") &&
+				parsed.count("autocommit") && parsed.at("autocommit") == std::vector<std::string>{"0"} &&
+				parsed.count("sql_mode"),
+				"both parsers preserve comma-separated neighbours after the connector (%s)", sql_mode.c_str());
+		}
+	}
 
 	test_cleanup_minimal();
 	return exit_status();

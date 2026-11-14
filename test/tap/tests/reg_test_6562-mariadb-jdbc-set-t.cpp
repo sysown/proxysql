@@ -29,6 +29,9 @@
  *     hostgroup, as does an unrelated unknown variable.
  */
 
+#include <chrono>
+#include <memory>
+#include <unistd.h>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -357,8 +360,8 @@ void check_still_locks(const CommandLine& cl, const char* set_query,
  * @param set_query Unsupported SET statement to forward.
  * @param label Human-readable case label used in TAP output.
  */
-void check_forwarded_not_tracked(const CommandLine& cl, const char* set_query,
-	const char* label)
+void check_forwarded_not_tracked(const CommandLine& cl, MYSQL* admin,
+	const char* set_query, const char* label, int destination)
 {
 	MYSQL* client = connect_client(cl);
 	if (!client) {
@@ -370,11 +373,30 @@ void check_forwarded_not_tracked(const CommandLine& cl, const char* set_query,
 	ok(set_rc != 0, "%s: backend rejects the unsupported RHS (rc=%d, err=%s)",
 		label, set_rc, mysql_error(client));
 
+	if (set_rc != 0) {
+		// Backend errors leave transaction status unknown, which pins routing
+		// before query rules apply. Clear that state on this fresh connection
+		// so the marker tests the hostgroup lock itself.
+		const int rollback_rc = mysql_query(client, "ROLLBACK");
+		ok(rollback_rc == 0, "%s: ROLLBACK clears the rejected SET's transaction state (%s)",
+			label, mysql_error(client));
+	}
+
 	std::string marker;
+	unsigned long long queries_before = 0;
+	unsigned long long queries_after = 0;
+	const bool before_ok = hostgroup_queries(admin, destination, queries_before);
 	const bool marker_ok = run_scalar(client, ROUTE_MARKER, marker);
-	ok(marker_ok && marker == "6562",
-		"%s: the session is not locked and can still route elsewhere",
-		label);
+	const bool after_ok = hostgroup_queries(admin, destination, queries_after);
+	int current_hostgroup = -2;
+	int locked_hostgroup = -2;
+	const bool state_ok = read_session_route_state(client, current_hostgroup,
+		locked_hostgroup);
+	ok(marker_ok && marker == "6562" && before_ok && after_ok &&
+		queries_after > queries_before && state_ok && locked_hostgroup == -1,
+		"%s: the unlocked session executes the marker on hostgroup %d "
+		"(Queries %llu -> %llu, marker='%s', locked_on_hostgroup=%d)",
+		label, destination, queries_before, queries_after, marker.c_str(), locked_hostgroup);
 
 	mysql_close(client);
 }
@@ -410,6 +432,75 @@ void check_session_state(const CommandLine& cl, const char* label) {
 	mysql_close(client);
 }
 
+// LOAD applies an entire scope, so preserve independent memory/runtime baselines.
+class routing_snapshot {
+	MYSQL* admin;
+	std::string prefix;
+	std::vector<std::string> created;
+	bool ready { false };
+	bool state_restored { false };
+	bool finished { false };
+
+	std::string name(const char* suffix) const { return prefix + suffix; }
+	bool capture(const char* suffix, const std::string& select) {
+		const std::string table = name(suffix);
+		if (!admin_exec(admin, "CREATE TEMP TABLE " + table + " AS " + select)) return false;
+		created.push_back(table);
+		return true;
+	}
+	bool restore_variables(const char* suffix) {
+		bool ok = admin_exec(admin,
+			"DELETE FROM global_variables WHERE variable_name LIKE 'mysql-%'");
+		return admin_exec(admin, "INSERT INTO global_variables SELECT * FROM " + name(suffix)) && ok;
+	}
+	bool restore_table(const char* table, const char* suffix) {
+		bool ok = admin_exec(admin, std::string("DELETE FROM main.") + table);
+		return admin_exec(admin, std::string("INSERT INTO main.") + table +
+			" SELECT * FROM " + name(suffix)) && ok;
+	}
+public:
+	explicit routing_snapshot(MYSQL* connection) : admin(connection) {
+		prefix = "temp.test_6562_" + std::to_string(getpid()) + "_" +
+			std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_";
+	}
+	bool snapshot() {
+		ready = capture("memory_servers", "SELECT * FROM main.mysql_servers") &&
+			capture("runtime_servers", "SELECT * FROM runtime_mysql_servers") &&
+			capture("memory_rules", "SELECT * FROM main.mysql_query_rules") &&
+			capture("runtime_rules", "SELECT * FROM runtime_mysql_query_rules") &&
+			capture("memory_variables", "SELECT * FROM global_variables WHERE variable_name LIKE 'mysql-%'") &&
+			capture("runtime_variables", "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%'");
+		return ready;
+	}
+	bool restore() {
+		if (finished) return true;
+		if (ready && !state_restored) {
+			bool ok = restore_variables("runtime_variables");
+			if (ok) ok = admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+			ok = restore_variables("memory_variables") && ok;
+			bool servers_ok = restore_table("mysql_servers", "runtime_servers");
+			if (servers_ok) servers_ok = admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+			ok = restore_table("mysql_servers", "memory_servers") && servers_ok && ok;
+			bool rules_ok = restore_table("mysql_query_rules", "runtime_rules");
+			if (rules_ok) rules_ok = admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+			ok = restore_table("mysql_query_rules", "memory_rules") && rules_ok && ok;
+			if (!ok) return false;
+			state_restored = true;
+		}
+		// A partial snapshot never authorizes restoration or a runtime LOAD.
+		bool ok = true;
+		for (auto it = created.begin(); it != created.end();) {
+			if (admin_exec(admin, "DROP TABLE " + *it)) it = created.erase(it);
+			else { ok = false; ++it; }
+		}
+		finished = ok;
+		return ok;
+	}
+	~routing_snapshot() {
+		if (!finished && !restore()) diag("Fallback routing fixture cleanup failed");
+	}
+};
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -441,12 +532,7 @@ int main(int argc, char** argv) {
 		"SELECT MAX(hostgroup_id)+1 FROM ("
 		"SELECT hostgroup_id FROM main.mysql_servers "
 		"UNION SELECT hostgroup_id FROM runtime_mysql_servers)");
-	const std::string saved_algorithm = admin_scalar(admin,
-		"SELECT variable_value FROM global_variables WHERE variable_name='mysql-set_parser_algorithm'");
-	const std::string saved_qp_parser = admin_scalar(admin,
-		"SELECT variable_value FROM global_variables WHERE variable_name='mysql-query_processor_parser'");
-	if (source_text.empty() || destination_text.empty() ||
-		saved_algorithm.empty() || saved_qp_parser.empty()) {
+	if (source_text.empty() || destination_text.empty()) {
 		ok(false, "routing fixture prerequisites are available");
 		mysql_close(admin);
 		return exit_status();
@@ -454,20 +540,14 @@ int main(int argc, char** argv) {
 	const int source = std::atoi(source_text.c_str());
 	const int destination = std::atoi(destination_text.c_str());
 
-	const bool snapshot_created =
-		admin_exec(admin, "DROP TABLE IF EXISTS temp.test_6562_rules") &&
-		admin_exec(admin,
-			"CREATE TEMP TABLE temp.test_6562_rules "
-			"AS SELECT * FROM main.mysql_query_rules");
-	bool config_ok = snapshot_created;
-	bool destination_inserted = false;
+	auto backup = std::make_unique<routing_snapshot>(admin);
+	bool config_ok = backup->snapshot();
 	if (config_ok) {
 		config_ok = admin_exec(admin,
 			"INSERT INTO main.mysql_servers(hostgroup_id,hostname,port,use_ssl) "
 			"SELECT " + std::to_string(destination) + ",hostname,port,use_ssl "
 			"FROM runtime_mysql_servers WHERE status='ONLINE' AND hostgroup_id=" +
 			std::to_string(source) + " LIMIT 1");
-		destination_inserted = config_ok;
 	}
 	if (config_ok) {
 		config_ok =
@@ -506,35 +586,15 @@ int main(int argc, char** argv) {
 				set_case.backend_error);
 		}
 		for (const char* set_query : FORWARDED_SETS) {
-			check_forwarded_not_tracked(cl, set_query, "forwarded non-connector SET");
+			check_forwarded_not_tracked(cl, admin, set_query,
+				"forwarded non-connector SET", destination);
 		}
 	}
 
-	bool restored = true;
-	if (!saved_algorithm.empty()) {
-		restored = admin_exec(admin,
-			"SET mysql-set_parser_algorithm=" + saved_algorithm + ";") && restored;
-	}
-	if (!saved_qp_parser.empty()) {
-		restored = admin_exec(admin,
-			"SET mysql-query_processor_parser=" + saved_qp_parser + ";") && restored;
-	}
-	restored = admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME") && restored;
-	if (snapshot_created) {
-		restored = admin_exec(admin, "DELETE FROM main.mysql_query_rules") && restored;
-		restored = admin_exec(admin,
-			"INSERT INTO main.mysql_query_rules "
-			"SELECT * FROM temp.test_6562_rules") && restored;
-		restored = admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME") && restored;
-		restored = admin_exec(admin, "DROP TABLE temp.test_6562_rules") && restored;
-	}
-	if (destination_inserted) {
-		restored = admin_exec(admin,
-			"DELETE FROM main.mysql_servers WHERE hostgroup_id=" +
-			std::to_string(destination)) && restored;
-		restored = admin_exec(admin, "LOAD MYSQL SERVERS TO RUNTIME") && restored;
-	}
+	const bool restored = backup->restore();
 	ok(restored, "routing fixture is restored");
+	// Retry failed restoration while the admin connection is still valid.
+	backup.reset();
 
 	mysql_close(admin);
 	return exit_status();
