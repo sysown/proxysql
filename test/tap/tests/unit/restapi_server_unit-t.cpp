@@ -79,7 +79,7 @@ static void test_lifecycle_and_endpoint() {
 	int port = find_free_port();
 	if (port <= 0) {
 		ok(0, "RESTAPI: failed to find free port");
-		skip(7, "RESTAPI port unavailable");
+		skip(8, "RESTAPI port unavailable");
 		return;
 	}
 	ok(port > 0, "RESTAPI: found free port %d", port);
@@ -103,9 +103,7 @@ static void test_lifecycle_and_endpoint() {
 	endpoints.push_back({"/api/unit-test-startup-probe", startup_probe(probe)});
 	probe->armed = true;
 
-	// Intentionally not deleted: ~ProxySQL_RESTAPI_Server() joins the
-	// server thread and can hang when stop() does not unblock start()
-	// under the unit-test harness. Process exit cleans up the thread.
+	// The listener starts non-blocking; the destructor below stops the daemon.
 	// Move the vector so the armed callable is first copied inside the server.
 	ProxySQL_RESTAPI_Server* server = new ProxySQL_RESTAPI_Server(port, std::move(endpoints));
 	ok(server != nullptr, "RESTAPI: constructor with custom endpoint succeeds");
@@ -133,10 +131,13 @@ static void test_lifecycle_and_endpoint() {
 	snprintf(url, sizeof(url), "http://127.0.0.1:%d/api/unit-test-startup-probe", port);
 	http_code = curl_http_code(url);
 	ok(http_code == 200, "RESTAPI: last custom endpoint is ready when listener starts (got %d)", http_code);
+
+	delete server;
+	ok(1, "RESTAPI: destructor stops the listener without hanging");
 }
 
 int main() {
-	plan(9);
+	plan(10);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 

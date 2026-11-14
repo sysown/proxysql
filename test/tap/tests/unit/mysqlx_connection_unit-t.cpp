@@ -33,6 +33,21 @@ static void test_connection_multiplexing() {
 	ok(!conn.is_reusable(), "transaction disables reuse");
 }
 
+static void test_tls_shutdown_disables_reuse() {
+	MysqlxConnection conn;
+	SSL_CTX* ctx = SSL_CTX_new(TLS_method());
+	if (!ctx) BAIL_OUT("TLS context allocation failed");
+	conn.backend_ds().init_ssl_connect(ctx);
+	SSL_CTX_free(ctx);
+	if (!conn.backend_ds().get_ssl()) BAIL_OUT("SSL allocation failed");
+	conn.set_reusable(true);
+	ok(conn.is_reusable(), "TLS connection is reusable before shutdown");
+	SSL_set_shutdown(conn.backend_ds().get_ssl(), SSL_RECEIVED_SHUTDOWN);
+	ok(!conn.is_reusable(), "peer TLS shutdown prevents connection reuse");
+	conn.reset();
+	ok(!conn.is_reusable(), "reset does not revive a TLS connection closed by its peer");
+}
+
 // Issue #5697: post-Session::Reset rehandshake flag invalidates the
 // connection for pool reuse. Default-constructed connections have the
 // flag clear; setting it forces is_reusable() to false even on an
@@ -64,6 +79,20 @@ static void test_connection_post_reset_rehandshake_flag() {
 	   "after reset(): is_reusable() == true (reset re-enables)");
 }
 
+static void test_connection_tls_shutdown_disables_reuse() {
+	MysqlxConnection conn;
+	SSL_CTX* ctx = SSL_CTX_new(TLS_method());
+	if (!ctx) BAIL_OUT("TLS context creation failed");
+	conn.backend_ds().init_ssl_connect(ctx);
+	SSL_CTX_free(ctx);
+	SSL* ssl = conn.backend_ds().get_ssl();
+	if (!ssl) BAIL_OUT("backend TLS initialization failed");
+	conn.set_reusable(true);
+	ok(conn.is_reusable(), "live TLS connection may be reused");
+	SSL_set_shutdown(ssl, SSL_RECEIVED_SHUTDOWN);
+	ok(!conn.is_reusable(), "TLS close_notify disables backend reuse");
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	// Plan derives from ok() count; new test_connection_post_reset_*
@@ -72,9 +101,11 @@ int main() {
 	plan(0);
 	diag("=== mysqlx_connection_unit-t starting ===");
 
+	test_connection_tls_shutdown_disables_reuse();
 	test_connection_creation();
 	test_connection_multiplexing();
 	test_connection_post_reset_rehandshake_flag();
+	test_tls_shutdown_disables_reuse();
 
 	return exit_status();
 }

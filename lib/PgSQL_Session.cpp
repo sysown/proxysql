@@ -62,6 +62,34 @@ static bool backend_stmt_is_stale(const PgSQL_Connection* conn, const PgSQL_Conn
 		client->var_hash[PGSQL_SEARCH_PATH]) == s->hash;
 }
 
+// set_config() is followed only with the ParserSQL SET walker; the legacy SET parsers do not.
+static inline bool set_config_tracking_on() {
+	return pgsql_thread___set_parser_algorithm == 3 || pgsql_thread___query_processor_parser == 1;
+}
+
+// Retained with prepared statements so a later search_path change cannot hide Parse-time ambiguity.
+static constexpr uint32_t PGSQL_SCAN_SET_CONFIG_SHADOWABLE = 1u << 31;
+
+static bool set_config_search_path_ambiguous(PgSQL_Session* session) {
+	const char* path = pgsql_variables.client_get_value(session, PGSQL_SEARCH_PATH);
+	// A substring match is conservative for quoted identifiers and unusual schema names.
+	return path == nullptr || strcasestr(path, "pg_catalog") != nullptr;
+}
+
+static uint32_t session_query_scan(PgSQL_Session* session, const char* digest, const char* query,
+	uint32_t targets = PGSQL_SCAN_ALL) {
+	const uint32_t found = pgsql_query_scan(digest, query, targets);
+	return found | ((found & PGSQL_SCAN_SET_CONFIG) && set_config_search_path_ambiguous(session) ?
+		PGSQL_SCAN_SET_CONFIG_SHADOWABLE : 0);
+}
+
+// What a Simple Query is scanned for. With tracking off only LISTEN is used: a query too long for
+// its digest is then digested in full only when it holds the word LISTEN, as before set_config.
+// A Parse scans for every target: the bits stay with the statement after tracking is turned on.
+static inline uint32_t simple_query_scan_targets() {
+	return set_config_tracking_on() ? PGSQL_SCAN_ALL : PGSQL_SCAN_LISTEN;
+}
+
 /*
 static inline char is_digit(char c) {
 	if (c >= '0' && c <= '9')
@@ -240,6 +268,8 @@ void PgSQL_Query_Info::begin(unsigned char *_p, int len, bool header, const PgSQ
 	PgQueryCmd=PGSQL_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
+	simple_cache_seed = 0;
+	scan_found = 0;
 	memset(&QueryParserArgs, 0, sizeof(QueryParserArgs));
 	start_time=sess->thread->curtime;
 	init(_p, len, header);
@@ -287,6 +317,8 @@ void PgSQL_Query_Info::swap(PgSQL_Query_Info& o) noexcept {
 	std::swap(stmt_cache_key, o.stmt_cache_key);
 	std::swap(stmt_cache_valid, o.stmt_cache_valid);
 #endif
+	std::swap(simple_cache_seed, o.simple_cache_seed);
+	std::swap(scan_found, o.scan_found);
 	std::swap(QueryPointer, o.QueryPointer);
 	std::swap(QueryLength, o.QueryLength);
 	std::swap(PgQueryCmd, o.PgQueryCmd);
@@ -1386,6 +1418,11 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 		if (set_transaction == false) {
 			if (no_quote) {
 				q = (char*)"SET %s TO %s";
+				// An empty list (search_path from '-c search_path=') would send a SET with no value,
+				// a syntax error that fails the client's query. '' is PostgreSQL's empty list.
+				if (var_value[strspn(var_value, " \t\r\n")] == '\0') {
+					q = (char*)"SET %s TO ''"; // the unused value argument is ignored by sprintf
+				}
 			}
 			else {
 				q = (char*)"SET %s TO '%s'"; // default
@@ -2453,8 +2490,9 @@ __implicit_flush:
 								// holding the word is digested in full for this check. Leading
 								// comments are skipped: the digest keeps them with
 								// query_digests_keep_comment.
-								listen_pending = pgsql_query_has_stmt_keyword(CurrentQuery.get_digest_text(),
-									query_ptr, "LISTEN");
+								CurrentQuery.scan_found = session_query_scan(this, CurrentQuery.get_digest_text(), query_ptr,
+									simple_query_scan_targets());
+								listen_pending = (CurrentQuery.scan_found & PGSQL_SCAN_LISTEN) != 0;
 								if (listen_pending && listen_can_be_supported() == false) {
 									listen_pending = false;
 									handler_refuse_listen(&pkt);
@@ -4890,6 +4928,9 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt) {
 
 		CurrentQuery.query_parser_free();
 		CurrentQuery.begin(reinterpret_cast<unsigned char*>(pkt->ptr), pkt->size, true);
+		// begin() clears the scan: without it a rewritten set_config() goes untracked.
+		CurrentQuery.scan_found = session_query_scan(this, CurrentQuery.get_digest_text(),
+			reinterpret_cast<const char*>(CurrentQuery.QueryPointer), simple_query_scan_targets());
 
 		delete qpo->new_query;
 		stop_timer(begint);
@@ -4937,6 +4978,8 @@ void PgSQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t* pkt) {
 		CurrentQuery.query_parser_free();
 		CurrentQuery.begin((unsigned char*)new_data.query_string,
 			strlen(new_data.query_string) + 1, false);
+		// As for a Simple Query: the statement keeps the scan of its rewritten text.
+		CurrentQuery.scan_found = session_query_scan(this, CurrentQuery.get_digest_text(), new_data.query_string);
 		CurrentQuery.extended_query_info.stmt_client_name = new_data.stmt_name;
 
 		if (new_data.num_param_types > 0) {
@@ -5032,7 +5075,7 @@ bool PgSQL_Session::is_multi_statement_command(const char* cmd) {
 #endif
 	if (index(dig, ';') && (index(dig, ';') != dig + strlen(dig) - 1)) {
 		std::string nqn;
-		if (pgsql_thread___parse_failure_logs_digest)
+		if (pgsql_thread___parse_failure_logs_digest && CurrentQuery.get_digest_text())
 			nqn = std::string(CurrentQuery.get_digest_text());
 		else
 			nqn = std::string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
@@ -5045,6 +5088,69 @@ bool PgSQL_Session::is_multi_statement_command(const char* cmd) {
 	}
 
 	return false;
+}
+
+PgSQL_Apply_Result PgSQL_Session::apply_tracked_variable(int idx, std::string value,
+	std::vector<std::pair<std::string, std::string>>& param_status) {
+	const char* name = pgsql_tracked_variables[idx].set_variable_name;
+	// An INTERVAL time zone cannot be applied again on another backend connection, so the statement
+	// goes to the backend as written and the client keeps that connection.
+	if (idx == PGSQL_TIMEZONE && strncasecmp(value.c_str(), "INTERVAL", 8) == 0 &&
+	    (value.size() == 8 || (!isalnum((unsigned char)value[8]) && value[8] != '_'))) {
+		return PgSQL_Apply_Result::LOCK;
+	}
+
+	char* transformed_value = nullptr;
+	if (pgsql_tracked_variables[idx].validator && pgsql_tracked_variables[idx].validator->validate &&
+		(
+			*pgsql_tracked_variables[idx].validator->validate)(
+				value.c_str(), &pgsql_tracked_variables[idx].validator->params, this, &transformed_value) == false
+		) {
+		char* m = NULL;
+		char* errmsg = NULL;
+		proxy_error("invalid value for parameter \"%s\": \"%s\"\n", name, value.c_str());
+		m = (char*)"invalid value for parameter \"%s\": \"%s\"";
+		errmsg = (char*)malloc(value.length() + strlen(name) + strlen(m));
+		snprintf(errmsg, value.length() + strlen(name) + strlen(m), m, name, value.c_str());
+
+		client_myds->DSS = STATE_QUERY_SENT_NET;
+
+		const char txn_state = txn_state_for_local_error();
+		const bool send_ready_packet = extq_flush_segment == false;
+		client_myds->myprot.generate_error_packet(true, send_ready_packet, errmsg,
+			PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, false, true, NULL, txn_state);
+		free(errmsg);
+		return PgSQL_Apply_Result::ERROR_SENT;
+	}
+
+	if (transformed_value) {
+		value = transformed_value;
+		free(transformed_value);
+	}
+
+	// PostgreSQL keeps the DateStyle it has. Recorded, '' would leave no current style, and the
+	// next DateStyle SET fails the validator's assert.
+	if (idx == PGSQL_DATESTYLE && value.empty()) {
+		return PgSQL_Apply_Result::UNCHANGED;
+	}
+
+	uint32_t var_hash_int = SpookyHash::Hash32(value.c_str(), value.length(), 10);
+	if (pgsql_variables.client_get_hash(this, idx) != var_hash_int) {
+		proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection %s to %s\n", name, value.c_str());
+		if (!pgsql_variables.client_set_value(this, idx, value.c_str(), true)) {
+			return PgSQL_Apply_Result::FAILED;
+		}
+		if (idx == PGSQL_DATESTYLE) {
+			// always set current_datestyle
+			current_datestyle = PgSQL_DateStyle_Util::parse_datestyle(value);
+		}
+		// Only for the settings PostgreSQL reports, and with the stored value: a DateStyle such
+		// as 'DMY' is stored completed ('ISO, DMY'), as PostgreSQL reports it.
+		if (IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(pgsql_tracked_variables[idx])) {
+			param_status.emplace_back(name, value);
+		}
+	}
+	return PgSQL_Apply_Result::APPLIED;
 }
 
 PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(const char* dig, bool* lock_hostgroup) {
@@ -5097,17 +5203,14 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		bool unknown_var = false;
 		for (auto it = std::begin(set); it != std::end(set); ++it) {
 			std::string var = it->first;
-			// Declared per iteration on purpose. PostgreSQL announces only some of these
-			// settings, so a statement carrying two would otherwise let the first one's
-			// answer decide the second and announce a setting that is never reported.
-			bool send_param_status = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
 			if (it->second.size() < 1) {
 				// error not enough arguments
 				string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
-				string digest_str = string(CurrentQuery.get_digest_text());
+				const char* _digest_text = CurrentQuery.get_digest_text();
+				string digest_str = _digest_text ? string(_digest_text) : query_str;
 				string nqn;
-				if (pgsql_thread___parse_failure_logs_digest)
+				if (pgsql_thread___parse_failure_logs_digest && _digest_text)
 					nqn = digest_str;
 				else
 					nqn = query_str;
@@ -5152,14 +5255,12 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 					// "datestyle" message leaves their cached "DateStyle" untouched and stale.
 					var = pgsql_tracked_variables[idx].set_variable_name;
 
+					// Only the bare keyword DEFAULT resets. Checked before unquoting: PostgreSQL reads a
+					// quoted 'DEFAULT' as a value, refused for TimeZone, a schema name for search_path.
+					const bool default_keyword = strcasecmp(value1.c_str(), "DEFAULT") == 0;
+
 					if (IS_PGTRACKED_VAR_OPTION_SET_NO_STRIP_VALUE(pgsql_tracked_variables[idx]) == 0) {
 						PgSQL_Set_Stmt_Parser::unquote_if_quoted(value1);
-					}
-
-					// The string form, SET TimeZone = 'INTERVAL ''+02:30''', is forwarded the same way.
-					if (idx == PGSQL_TIMEZONE && strncasecmp(value1.c_str(), "INTERVAL", 8) == 0) {
-						unable_to_parse_set_statement(lock_hostgroup, true);
-						return PgSQL_Local_Reply::NONE;
 					}
 
 					// SET TIME ZONE LOCAL means SET TIME ZONE DEFAULT. Sent to the backend it would reset to the
@@ -5168,8 +5269,7 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 					const bool time_zone_local = idx == PGSQL_TIMEZONE && RE2::PartialMatch(nq, re_set_time_zone_local);
 
 					uint32_t current_hash = pgsql_variables.client_get_hash(this, idx);
-					if (time_zone_local ||
-						((value1.size() == sizeof("DEFAULT") - 1) && strncasecmp(value1.c_str(), "DEFAULT", sizeof("DEFAULT") - 1) == 0)) {
+					if (time_zone_local || default_keyword) {
 						auto [value, hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
 						if (hash == 0) {
 							if (current_hash != 0) {
@@ -5189,39 +5289,18 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 						value1 = value;
 					}
 
-					char* transformed_value = nullptr;
-					if (pgsql_tracked_variables[idx].validator && pgsql_tracked_variables[idx].validator->validate &&
-						(
-							*pgsql_tracked_variables[idx].validator->validate)(
-								value1.c_str(), &pgsql_tracked_variables[idx].validator->params, this, &transformed_value) == false
-						) {
-						char* m = NULL;
-						char* errmsg = NULL;
-						proxy_error("invalid value for parameter \"%s\": \"%s\"\n", pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
-						m = (char*)"invalid value for parameter \"%s\": \"%s\"";
-						errmsg = (char*)malloc(value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m));
-						snprintf(errmsg, value1.length() + strlen(pgsql_tracked_variables[idx].set_variable_name) + strlen(m), m, pgsql_tracked_variables[idx].set_variable_name, value1.c_str());
-
-						client_myds->DSS = STATE_QUERY_SENT_NET;
-
-						// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
-						// the backend still holding this statement, and a transaction open on it with it.
-						const char txn_state = txn_state_for_local_error();
-						const bool send_ready_packet = extq_flush_segment == false;
-						client_myds->myprot.generate_error_packet(true, send_ready_packet, errmsg,
-							PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, false, true, NULL, txn_state);
-						free(errmsg);
-						RequestEnd(NULL, true);
-						return PgSQL_Local_Reply::SENT_ERROR;
-					}
-
-					if (transformed_value) {
-						value1 = transformed_value;
-						free(transformed_value);
-					}
-
-					if (idx == PGSQL_DATESTYLE) {
-						if (value1.empty()) {
+					switch (apply_tracked_variable(idx, value1, param_status)) {
+						case PgSQL_Apply_Result::LOCK:
+							unable_to_parse_set_statement(lock_hostgroup, true);
+							return PgSQL_Local_Reply::NONE;
+						case PgSQL_Apply_Result::ERROR_SENT:
+							// Returning SENT_ERROR has the caller end the unit. Discarding the frame here would drop
+							// the backend still holding this statement, and a transaction open on it with it.
+							RequestEnd(NULL, true);
+							return PgSQL_Local_Reply::SENT_ERROR;
+						case PgSQL_Apply_Result::FAILED:
+							return PgSQL_Local_Reply::NONE;
+						case PgSQL_Apply_Result::UNCHANGED:
 							// In pipeline mode, don't short-circuit - fall through to backend execution
 							if (extended_query_phase == EXTQ_PHASE_IDLE) {
 								client_myds->DSS = STATE_QUERY_SENT_NET;
@@ -5231,26 +5310,9 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 								RequestEnd(NULL, false);
 								return PgSQL_Local_Reply::SENT;
 							}
-						}
-					}
-
-					uint32_t var_hash_int = SpookyHash::Hash32(value1.c_str(), value1.length(), 10);
-					if (current_hash != var_hash_int) {
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
-						if (!pgsql_variables.client_set_value(this, idx, value1.c_str(), true)) {
-							return PgSQL_Local_Reply::NONE;
-						}
-						if (idx == PGSQL_DATESTYLE) {
-							// always set current_datestyle
-							current_datestyle = PgSQL_DateStyle_Util::parse_datestyle(value1);
-							// No need to set send_param_status to true, as the original DateStyle value may have been modified.  
-							// When send_param_status is true, it always sends the original value provided by the user in the SET statement.  
-							if (IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(pgsql_tracked_variables[idx])) {
-								param_status.emplace_back(var, value1);
-							}
-						} else {
-							send_param_status = IS_PGTRACKED_VAR_OPTION_SET_PARAM_STATUS(pgsql_tracked_variables[idx]);
-						}
+							break;
+						case PgSQL_Apply_Result::APPLIED:
+							break;
 					}
 				}
 			} else if (std::find(pgsql_variables.ignore_vars.begin(), pgsql_variables.ignore_vars.end(), var) != pgsql_variables.ignore_vars.end()) {
@@ -5266,8 +5328,6 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 				unknown_var = true;
 			}
 
-			if (send_param_status)
-				param_status.emplace_back(var, value1);
 		}
 
 		if (unknown_var) {
@@ -5747,6 +5807,184 @@ bool PgSQL_Session::txn_failed_on_backend() {
 	return false;
 }
 
+
+PgSQL_Local_Reply PgSQL_Session::handle_set_config(const char* dig, bool* lock_hostgroup) {
+	if (!set_config_tracking_on()) return PgSQL_Local_Reply::NONE;
+	// At Execute the bits come from the statement being executed. The session's copy is the last
+	// Parse's, possibly another statement's: a portal run in a later round trip went untracked.
+	const PgSQL_STMT_Global_info* exec_stmt = CurrentQuery.extended_query_info.stmt_info;
+	const uint32_t scan_found = ((extended_query_phase & EXTQ_PHASE_PROCESSING_EXECUTE) && exec_stmt) ?
+		exec_stmt->scan_found : CurrentQuery.scan_found;
+	const char* query = (const char*)CurrentQuery.QueryPointer;
+	const size_t query_len = CurrentQuery.QueryLength;
+	if (query == nullptr || query_len == 0) return PgSQL_Local_Reply::NONE;
+	const uint32_t targets = PGSQL_SCAN_SET_CONFIG | PGSQL_SCAN_PG_SETTINGS;
+
+	// With standard_conforming_strings off PostgreSQL reads '\' in plain strings as an escape,
+	// and neither the digest nor ParserSQL does. That is the setting's only effect, so only a
+	// query holding a '\' is read from its text: any mention locks. Stored as exactly "off".
+	const char* scs = pgsql_variables.client_get_value(this, PGSQL_STANDARD_CONFORMING_STRINGS);
+	if (scs != nullptr && strcmp(scs, "off") == 0 && memchr(query, '\\', query_len) != nullptr) {
+		if ((pgsql_text_find_words(query, query_len) & targets) || (scan_found & (targets | PGSQL_SCAN_DO))) {
+			unable_to_parse_set_statement(lock_hostgroup, true);
+		}
+		return PgSQL_Local_Reply::NONE;
+	}
+	if ((scan_found & (targets | PGSQL_SCAN_DO)) == 0) return PgSQL_Local_Reply::NONE;
+	// A DO body is a literal, '?' in the digest: only one that mentions set_config or pg_settings
+	// in its text is looked at.
+	if ((scan_found & targets) == 0 && (pgsql_text_find_words(query, query_len) & targets) == 0) {
+		return PgSQL_Local_Reply::NONE;
+	}
+
+	const PgSetConfigCall call = parsersql_classify_set_config_pgsql(query, query_len, true);
+	if (!call.qualified &&
+		(call.verdict == PgSetConfigVerdict::TRACK || call.verdict == PgSetConfigVerdict::LOCAL_ERROR) &&
+		((scan_found & PGSQL_SCAN_SET_CONFIG_SHADOWABLE) || set_config_search_path_ambiguous(this))) {
+		unable_to_parse_set_statement(lock_hostgroup, true);
+		return PgSQL_Local_Reply::NONE;
+	}
+	switch (call.verdict) {
+		case PgSetConfigVerdict::NOT_SET_CONFIG:
+			return PgSQL_Local_Reply::NONE;
+		case PgSetConfigVerdict::LOCK:
+			unable_to_parse_set_statement(lock_hostgroup, true);
+			return PgSQL_Local_Reply::NONE;
+		case PgSetConfigVerdict::LOCAL_ERROR: {
+			// Over the extended protocol PostgreSQL raises these at Parse, which it has already seen.
+			if (extended_query_phase != EXTQ_PHASE_IDLE && (call.error == PgSetConfigError::UNDEFINED_FUNCTION ||
+				call.error == PgSetConfigError::INVALID_BOOLEAN)) {
+				return PgSQL_Local_Reply::NONE;
+			}
+			PGSQL_ERROR_CODES code = PGSQL_ERROR_CODES::ERRCODE_UNDEFINED_FUNCTION;
+			switch (call.error) {
+				case PgSetConfigError::INVALID_BOOLEAN: code = PGSQL_ERROR_CODES::ERRCODE_INVALID_TEXT_REPRESENTATION; break;
+				case PgSetConfigError::NULL_NAME: code = PGSQL_ERROR_CODES::ERRCODE_NULL_VALUE_NOT_ALLOWED; break;
+				case PgSetConfigError::EMPTY_NAME: code = PGSQL_ERROR_CODES::ERRCODE_UNDEFINED_OBJECT; break;
+				default: break;
+			}
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_error_packet(true, extq_flush_segment == false, call.message.c_str(), code,
+				false, true, NULL, txn_state_for_local_error());
+			RequestEnd(NULL, true);
+			return PgSQL_Local_Reply::SENT_ERROR;
+		}
+		case PgSetConfigVerdict::TRACK:
+			break;
+	}
+
+	// PostgreSQL's names only: 'names' and 'TIME ZONE' are SET syntax, unknown to set_config().
+	int idx = PGSQL_NAME_LAST_HIGH_WM;
+	for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
+		if (i != PGSQL_NAME_LAST_LOW_WM && strcasecmp(pgsql_tracked_variables[i].set_variable_name, call.name.c_str()) == 0) {
+			idx = i;
+			break;
+		}
+	}
+	if (idx == PGSQL_NAME_LAST_HIGH_WM) {
+		for (const auto& ignored : pgsql_variables.ignore_vars) {
+			if (strcasecmp(ignored.c_str(), call.name.c_str()) == 0) return PgSQL_Local_Reply::NONE;
+		}
+		unable_to_parse_set_statement(lock_hostgroup, true);
+		return PgSQL_Local_Reply::NONE;
+	}
+
+	std::string value = call.value;
+	if (call.value_null) {
+		// Over the extended protocol a NULL value is not tracked: PostgreSQL resets the backend
+		// to its own default, which ProxySQL cannot reconcile here. Refuse it as unsupported.
+		if (extended_query_phase != EXTQ_PHASE_IDLE) {
+			client_myds->DSS = STATE_QUERY_SENT_NET;
+			client_myds->myprot.generate_error_packet(true, extq_flush_segment == false,
+				"set_config with a NULL value is not supported over the extended protocol",
+				PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED, false, true, NULL, txn_state_for_local_error());
+			RequestEnd(NULL, true);
+			return PgSQL_Local_Reply::SENT_ERROR;
+		}
+		// Back to the default, as SET ... TO DEFAULT: the client's connect-time value. Without
+		// one PostgreSQL resets to the default of whichever client opened this backend.
+		auto [startup_value, startup_hash] = client_myds->myconn->get_startup_parameter_and_hash((enum pgsql_variable_name)idx);
+		if (startup_hash == 0) {
+			unable_to_parse_set_statement(lock_hostgroup, true);
+			return PgSQL_Local_Reply::NONE;
+		}
+
+		value = startup_value;
+	} else if (idx == PGSQL_SEARCH_PATH) {
+		std::string list;
+		switch (PgSQL_Set_Stmt_Parser::guc_list_to_set_list(value, &list)) {
+			case PgSQL_Set_Stmt_Parser::GucListResult::UNSUPPORTED:
+				unable_to_parse_set_statement(lock_hostgroup, true);
+				return PgSQL_Local_Reply::NONE;
+			case PgSQL_Set_Stmt_Parser::GucListResult::INVALID: {
+				const std::string msg = "invalid value for parameter \"search_path\": \"" + value + "\"";
+				client_myds->DSS = STATE_QUERY_SENT_NET;
+				client_myds->myprot.generate_error_packet(true, extq_flush_segment == false, msg.c_str(),
+					PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE, false, true, NULL, txn_state_for_local_error());
+				RequestEnd(NULL, true);
+				return PgSQL_Local_Reply::SENT_ERROR;
+			}
+			case PgSQL_Set_Stmt_Parser::GucListResult::OK:
+				value = list;
+				break;
+		}
+	}
+
+	// A TimeZone set_config() cannot be recorded safely: ProxySQL cannot prove a zone name
+	// exists, and an invalid one would otherwise poison a pooled backend connection. Forward
+	// the statement and pin the session on its hostgroup, as for an untracked call.
+	if (idx == PGSQL_TIMEZONE && !call.value_null) {
+		unable_to_parse_set_statement(lock_hostgroup, true);
+		return PgSQL_Local_Reply::NONE;
+	}
+
+	std::vector<std::pair<std::string, std::string>> param_status;
+	switch (apply_tracked_variable(idx, value, param_status)) {
+		case PgSQL_Apply_Result::LOCK:
+			unable_to_parse_set_statement(lock_hostgroup, true);
+			return PgSQL_Local_Reply::NONE;
+		case PgSQL_Apply_Result::ERROR_SENT:
+			RequestEnd(NULL, true);
+			return PgSQL_Local_Reply::SENT_ERROR;
+		case PgSQL_Apply_Result::FAILED:
+			return PgSQL_Local_Reply::NONE;
+		case PgSQL_Apply_Result::APPLIED:
+		case PgSQL_Apply_Result::UNCHANGED:
+			break;
+	}
+
+	if (extended_query_phase != EXTQ_PHASE_IDLE) {
+		// As extended SET: forwarded, PostgreSQL builds the row. The backend already holds the value
+		// after the sync, so it reports no change: ProxySQL sends the ParameterStatus.
+		if (param_status.empty() == false) {
+			client_myds->myprot.generate_ok_packet(true, false, NULL, 0, NULL, 'I', NULL, param_status);
+		}
+		return PgSQL_Local_Reply::NONE;
+	}
+
+	// The row PostgreSQL would send: the setting's value after the call, here the stored one.
+	client_myds->DSS = STATE_QUERY_SENT_NET;
+	const char* stored = pgsql_variables.client_get_value(this, idx);
+	std::unique_ptr<SQLite3_result> resultset = std::make_unique<SQLite3_result>(1);
+	resultset->add_column_definition(SQLITE_TEXT, call.column.c_str());
+	char* pta[1] = { (char*)(stored ? stored : "") };
+	resultset->add_row(pta);
+	const char txn_state = NumActiveTransactions() ? 'T' : 'I';
+	SQLite3_to_Postgres(client_myds->PSarrayOUT, resultset.get(), nullptr, 0, "SELECT", false, txn_state);
+	// ParameterStatus, then ReadyForQuery, as PostgreSQL orders them.
+	const bool send_ready_packet = local_reply_gets_ready();
+	if (send_ready_packet || param_status.empty() == false) {
+		client_myds->myprot.generate_ok_packet(true, send_ready_packet, NULL, 0, NULL, txn_state, NULL, param_status);
+	}
+	if (mirror == false) {
+		RequestEnd(NULL, false);
+	} else {
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+	}
+	return PgSQL_Local_Reply::SENT;
+}
+
 PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(const char* dig, bool* lock_hostgroup) {
 	if (!dig) return PgSQL_Local_Reply::NONE;
 
@@ -5828,6 +6066,10 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	}
 
 	if (locked_on_hostgroup == -1) {
+		const PgSQL_Local_Reply sc = handle_set_config(dig, lock_hostgroup);
+		if (sc != PgSQL_Local_Reply::NONE || *lock_hostgroup) {
+			return sc;
+		}
 		if (strncasecmp(dig, "SET ", 4) == 0) {
 			if (is_multi_statement_command("SET") == true) {
 				*lock_hostgroup = true;
@@ -5889,6 +6131,14 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	}
 	// If we reach here, it means the command was not handled
 	return PgSQL_Local_Reply::NONE;
+}
+
+// Seed for the simple-query cache key: user and database plus every tracked setting.
+// Without the settings, a result cached under one search_path or TimeZone is served
+// to a client using another. Uses the hashes computed at SET time, not the strings.
+static inline uint64_t simple_query_cache_seed(const PgSQL_Connection* c) {
+	const uint64_t h = SpookyHash::Hash64(c->var_hash.data(), sizeof(c->var_hash), c->userinfo->hash);
+	return SpookyHash::Hash64(c->startup_parameters_hash.data(), sizeof(c->startup_parameters_hash), h);
 }
 
 PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___PGSQL_QUERY_qpo(PtrSize_t* pkt, bool* lock_hostgroup, PgSQL_Extended_Query_Type stmt_type) {
@@ -5970,6 +6220,16 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		goto __exit_set_destination_hostgroup;
 	}
 
+	// Handle set_config() tracking even when there is no digest (query digests and commands_stats
+	// both off): the classifier works from the query text, not the digest.
+	if (!mirror && locked_on_hostgroup == -1 && CurrentQuery.QueryParserArgs.digest_text == nullptr) {
+		const PgSQL_Local_Reply sc = handle_set_config(nullptr, lock_hostgroup);
+		if (sc != PgSQL_Local_Reply::NONE) {
+			l_free(pkt->size, pkt->ptr);
+			return sc;
+		}
+	}
+
 	// Handle special commands
 	if (CurrentQuery.QueryParserArgs.digest_text) {
 		const char* dig = CurrentQuery.QueryParserArgs.digest_text;
@@ -5994,10 +6254,13 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 		}
 	}
 
-	// Query cache handling
-	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET) {
+	// Query cache handling. A session locked on a hostgroup ran a change ProxySQL could not
+	// track (SET SCHEMA, SET LOCAL, a SET inside a multi-statement query, ...), so the key
+	// does not describe its settings: a cached entry may not fit it. Same rule as the extended cache.
+	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && locked_on_hostgroup < 0) {
+		CurrentQuery.simple_cache_seed = simple_query_cache_seed(client_myds->myconn);
 		const std::shared_ptr<PgSQL_QC_entry_t> pgsql_qc_entry = GloPgQC->get(
-			client_myds->myconn->userinfo->hash,
+			CurrentQuery.simple_cache_seed,
 			(const unsigned char*)CurrentQuery.QueryPointer,
 			CurrentQuery.QueryLength,
 			thread->curtime / 1000,
@@ -6342,8 +6605,10 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 			// extended-query cache above, this path does not test MultiplexDisabled(), so
 			// being on a LISTEN-pinned connection does not by itself keep it out.
 			// The native path has no multi-statement flag; several replies in one result mean one.
+			// A session locked on a hostgroup has settings the key cannot see: its result,
+			// stored under the plain key, would be served to clients without them.
 			if (qpo && qpo->cache_ttl > 0 && is_tuple == true &&
-				multi_result == false &&
+				multi_result == false && locked_on_hostgroup < 0 &&
 				_conn->native_result_had_notification == false) { // the resultset should be cached
 				
 				if (_conn->is_error_present() == false &&
@@ -6376,7 +6641,8 @@ void PgSQL_Session::PgSQL_Result_to_PgSQL_wire(PgSQL_Connection* _conn, PgSQL_Da
 						unsigned char* buff = PgSQL_Data_Stream::copy_array_to_buffer(client_myds->PSarrayOUT, 
 							resultset_size, false);
 						GloPgQC->set(
-							client_myds->myconn->userinfo->hash,
+							CurrentQuery.simple_cache_seed ? CurrentQuery.simple_cache_seed :
+								simple_query_cache_seed(client_myds->myconn),
 							CurrentQuery.QueryPointer,
 							CurrentQuery.QueryLength,
 							buff, 
@@ -6562,7 +6828,25 @@ void PgSQL_Session::handle_transaction_state() {
 		switch (status) {
 		case PROCESSING_STMT_EXECUTE:
 		case PROCESSING_QUERY: {
-			const char* digest_text = CurrentQuery.get_digest_text();
+			const char* digest_text = nullptr;
+			std::string query_holder;
+			std::unique_ptr<char, decltype(&free)> aux_digest(nullptr, &free);
+			if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.extended_query_info.stmt_info) {
+				digest_text = CurrentQuery.extended_query_info.stmt_info->digest_text;
+				if (!digest_text && CurrentQuery.extended_query_info.stmt_info->query) {
+					query_holder.assign(CurrentQuery.extended_query_info.stmt_info->query,
+						CurrentQuery.extended_query_info.stmt_info->query_length);
+					aux_digest.reset(pgsql_query_full_digest(query_holder.c_str()));
+					digest_text = aux_digest.get();
+				}
+			} else {
+				digest_text = CurrentQuery.get_digest_text();
+				if (!digest_text && CurrentQuery.QueryPointer && CurrentQuery.QueryLength > 0) {
+					query_holder.assign((const char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+					aux_digest.reset(pgsql_query_full_digest(query_holder.c_str()));
+					digest_text = aux_digest.get();
+				}
+			}
 			if (!digest_text) return;
 			transaction_state_manager->handle_transaction(digest_text);
 		}
@@ -6644,6 +6928,16 @@ __cleanup:
 		}
 		myds->free_pgsql_real_query();
 	}
+
+	if (mybes) {
+		for (unsigned int i = 0; i < mybes->len; i++) {
+			PgSQL_Backend* be = (PgSQL_Backend*)mybes->index(i);
+			if (be->server_myds) {
+				be->server_myds->max_connect_time = 0;
+			}
+		}
+	}
+
 	if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
 		// An implicit prepare still pending here failed: on its own Parse, or on the variable sync of
 		// a connection it was retried on. The statuses it saved are over with the request. Left on
@@ -7160,8 +7454,9 @@ bool PgSQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 void PgSQL_Session::unable_to_parse_set_statement(bool* lock_hostgroup, bool known) {
 	// we couldn't parse the query
 	string query_str = string((char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
-	string digest_str = string(CurrentQuery.get_digest_text());
-	const string& nqn = (pgsql_thread___parse_failure_logs_digest == true ? digest_str : query_str);
+	const char* digest_text = CurrentQuery.get_digest_text();
+	string digest_str = digest_text ? string(digest_text) : query_str;
+	const string& nqn = (pgsql_thread___parse_failure_logs_digest == true && digest_text ? digest_str : query_str);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
 	// A SET the caller forwards on purpose is no parse failure: it is logged as a lock, not as a bug to report.
 	known = known || known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest);
@@ -7330,10 +7625,23 @@ void PgSQL_Session::sync_txn_tracker_with_backend(PgSQL_Connection* myconn, bool
 			// with a rollback (a failed COMMIT does); otherwise the last transaction end among
 			// its statements ('SELECT 1; ROLLBACK'). In any other case it is not known.
 			const char* digest = NULL;
+			std::string query_holder;
+			std::unique_ptr<char, decltype(&free)> aux_digest(nullptr, &free);
 			if (status == PROCESSING_QUERY) {
 				digest = CurrentQuery.get_digest_text();
+				if (!digest && CurrentQuery.QueryPointer && CurrentQuery.QueryLength > 0) {
+					query_holder.assign((const char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
+					aux_digest.reset(pgsql_query_full_digest(query_holder.c_str()));
+					digest = aux_digest.get();
+				}
 			} else if (status == PROCESSING_STMT_EXECUTE && CurrentQuery.extended_query_info.stmt_info) {
 				digest = CurrentQuery.extended_query_info.stmt_info->digest_text;
+				if (!digest && CurrentQuery.extended_query_info.stmt_info->query) {
+					query_holder.assign(CurrentQuery.extended_query_info.stmt_info->query,
+						CurrentQuery.extended_query_info.stmt_info->query_length);
+					aux_digest.reset(pgsql_query_full_digest(query_holder.c_str()));
+					digest = aux_digest.get();
+				}
 			}
 			char ended_by = 0;
 			if (failed) {
@@ -7454,7 +7762,8 @@ bool PgSQL_Session::poisoned_flush() {
 					stmt_info = GloPgStmt->add_prepared_statement(hash, client_myds->myconn->userinfo->username,
 						client_myds->myconn->userinfo->dbname, (const char*)CurrentQuery.QueryPointer, CurrentQuery.QueryLength,
 						Parse_Param_Types(), CurrentQuery.QueryParserArgs.first_comment, CurrentQuery.QueryParserArgs.digest_text,
-						CurrentQuery.QueryParserArgs.digest, CurrentQuery.PgQueryCmd);
+						CurrentQuery.QueryParserArgs.digest, CurrentQuery.PgQueryCmd,
+						pgsql_query_scan(CurrentQuery.get_digest_text(), d.query_string));
 				}
 				// The unnamed statement may already exist: it is replaced, its count moved to the new one.
 				auto it = local_stmts->stmt_name_to_global_info.find(d.stmt_name);
@@ -7827,8 +8136,8 @@ int PgSQL_Session::handle_post_sync_parse_message(PgSQL_Parse_Message* parse_msg
 	// Recomputed per statement; see the simple-query path. PostgreSQL rejects a Parse holding
 	// more than one statement, but the digest still goes through the same scan: it skips the
 	// comments kept by query_digests_keep_comment, including one cut short of its terminator.
-	listen_pending = pgsql_query_has_stmt_keyword(CurrentQuery.get_digest_text(),
-		parse_data.query_string, "LISTEN");
+	CurrentQuery.scan_found = session_query_scan(this, CurrentQuery.get_digest_text(), parse_data.query_string);
+	listen_pending = (CurrentQuery.scan_found & PGSQL_SCAN_LISTEN) != 0;
 	if (listen_pending && listen_can_be_supported() == false) {
 		listen_pending = false;
 		proxy_warning("LISTEN command is not supported\n");
@@ -8760,23 +9069,31 @@ int PgSQL_Session::handle_post_sync_execute_message(PgSQL_Execute_Message* execu
 		}
 
 		assert(previous_hostgroup != -1); // previous_hostgroup should be set before 
-		if (CurrentQuery.QueryParserArgs.digest_text && txn_failed == false) {
-			const char* dig = CurrentQuery.QueryParserArgs.digest_text;
-			const PgSQL_Local_Reply reply = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(dig, &lock_hostgroup);
-			if (reply != PgSQL_Local_Reply::NONE) {
-				// if we are here, it means we have handled the special command
-				return reply == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
-			}
+		if (txn_failed == false) {
+			if (CurrentQuery.QueryParserArgs.digest_text) {
+				const char* dig = CurrentQuery.QueryParserArgs.digest_text;
+				const PgSQL_Local_Reply reply = handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_special_commands(dig, &lock_hostgroup);
+				if (reply != PgSQL_Local_Reply::NONE) {
+					// if we are here, it means we have handled the special command
+					return reply == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
+				}
 
-			PGSQL_QUERY_command pg_query_cmd = extended_query_info.stmt_info->PgQueryCmd;
-			if (pg_query_cmd == PGSQL_QUERY_CANCEL_BACKEND ||
-				pg_query_cmd == PGSQL_QUERY_TERMINATE_BACKEND) {
-				CurrentQuery.PgQueryCmd = pg_query_cmd;
-				auto execute_pkt = execute_msg->get_raw_pkt(); // detach the packet from the describe message
-				const PgSQL_Local_Reply kill_reply = handle_command_query_kill(&execute_pkt);
-				if (kill_reply != PgSQL_Local_Reply::NONE) {
-					execute_msg->detach(); // detach the packet from the execute message
-					return kill_reply == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
+				PGSQL_QUERY_command pg_query_cmd = extended_query_info.stmt_info->PgQueryCmd;
+				if (pg_query_cmd == PGSQL_QUERY_CANCEL_BACKEND ||
+					pg_query_cmd == PGSQL_QUERY_TERMINATE_BACKEND) {
+					CurrentQuery.PgQueryCmd = pg_query_cmd;
+					auto execute_pkt = execute_msg->get_raw_pkt(); // detach the packet from the describe message
+					const PgSQL_Local_Reply kill_reply = handle_command_query_kill(&execute_pkt);
+					if (kill_reply != PgSQL_Local_Reply::NONE) {
+						execute_msg->detach(); // detach the packet from the execute message
+						return kill_reply == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
+					}
+				}
+			} else if (!mirror && locked_on_hostgroup == -1) {
+				// Classify set_config() from the query text even without a digest.
+				const PgSQL_Local_Reply sc = handle_set_config(nullptr, &lock_hostgroup);
+				if (sc != PgSQL_Local_Reply::NONE) {
+					return sc == PgSQL_Local_Reply::SENT_ERROR ? 2 : 0;
 				}
 			}
 		}
@@ -8978,7 +9295,10 @@ static bool extq_special_text(const char* text) {
 }
 
 static bool extq_special_stmt(const PgSQL_STMT_Global_info& s) {
+	// While tracked, set_config() is handled at Execute like SET: batched, its value would not be
+	// recorded. Untracked, it is an ordinary statement and stays in the batch.
 	return s.PgQueryCmd == PGSQL_QUERY_CANCEL_BACKEND || s.PgQueryCmd == PGSQL_QUERY_TERMINATE_BACKEND ||
+		(set_config_tracking_on() && (s.scan_found & (PGSQL_SCAN_SET_CONFIG | PGSQL_SCAN_PG_SETTINGS | PGSQL_SCAN_DO))) ||
 		extq_special_text(s.digest_text ? s.digest_text : s.query);
 }
 
@@ -9107,6 +9427,7 @@ void PgSQL_Session::extq_buffer_message() {
 				n->digest = CurrentQuery.QueryParserArgs.digest;
 			}
 			n->PgQueryCmd = CurrentQuery.PgQueryCmd;
+			n->scan_found = CurrentQuery.scan_found;
 			n->calculate_mem_usage();
 			s = n;
 		}
@@ -9592,7 +9913,7 @@ bool PgSQL_Session::extq_settle(PgSQL_Data_Stream* myds) {
 			const PgSQL_STMT_Global_info* s = e.stmt.get();
 			std::shared_ptr<const PgSQL_STMT_Global_info> reg = GloPgStmt->add_prepared_statement(s->hash,
 				client_myds->myconn->userinfo->username, client_myds->myconn->userinfo->dbname, s->query, s->query_length,
-				Parse_Param_Types(s->parse_param_types), s->first_comment, s->digest_text, s->digest, s->PgQueryCmd);
+				Parse_Param_Types(s->parse_param_types), s->first_comment, s->digest_text, s->digest, s->PgQueryCmd, s->scan_found);
 			if (s->statement_id == 0) {
 				for (PgSQL_Extq_Entry& x : extq_entries) {
 					if (x.stmt.get() != s) continue;
@@ -10181,7 +10502,8 @@ bool PgSQL_Session::handler___rc0_PROCESSING_STMT_PREPARE(enum session_status& s
 		CurrentQuery.QueryParserArgs.first_comment,
 		CurrentQuery.QueryParserArgs.digest_text,
 		CurrentQuery.QueryParserArgs.digest,
-		CurrentQuery.PgQueryCmd
+		CurrentQuery.PgQueryCmd,
+		CurrentQuery.scan_found // from the Parse handler's scan
 		);
 	assert(stmt_info); // GloPgStmt->add_prepared_statement() should always return a valid pointer
 
@@ -10330,11 +10652,12 @@ std::vector<std::string> PgSQL_DateStyle_Util::split_datestyle(std::string_view 
 	return result;
 }
 
-PgSQL_DateStyle_t PgSQL_DateStyle_Util::parse_datestyle(std::string_view input) {
+PgSQL_DateStyle_t PgSQL_DateStyle_Util::parse_datestyle(std::string_view input, const PgSQL_DateStyle_t* reset_datestyle) {
     PgSQL_DateStyleFormat_t newDateStyle = DATESTYLE_FORMAT_NONE;
     PgSQL_DateStyleOrder_t newDateOrder = DATESTYLE_ORDER_NONE;
     bool have_style = false;
     bool have_order = false;
+    bool have_default = false;
     bool ok = true;
 
     auto split_tokens = split_datestyle(input);
@@ -10393,10 +10716,22 @@ PgSQL_DateStyle_t PgSQL_DateStyle_Util::parse_datestyle(std::string_view input) 
             newDateOrder = DATESTYLE_ORDER_MDY;
             have_order = true;
         }
+        else if (reset_datestyle && strcasecmp(tok, "DEFAULT") == 0) {
+            // As in PostgreSQL: DEFAULT fills what no earlier word set, from the session's reset
+            // value, and a later word still overrides it. Without this, 'DEFAULT, DMY' is refused.
+            if (!have_style)
+                newDateStyle = reset_datestyle->format;
+            if (!have_order)
+                newDateOrder = reset_datestyle->order;
+            have_default = true;
+        }
+        else {
+            ok = false;     /* unrecognized key word, refused by PostgreSQL */
+        }
     }
 
 	// if the provided datestyle includes both style and order, ensure both values are valid.
-	if (split_tokens.size() == 2 && (have_style && have_order) == false) {
+	if (split_tokens.size() == 2 && have_default == false && (have_style && have_order) == false) {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Invalid \"datestyle\" value. %s\n", input.data());
 		return { DATESTYLE_FORMAT_NONE, DATESTYLE_ORDER_NONE };
 	}

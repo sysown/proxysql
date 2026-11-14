@@ -21,8 +21,8 @@ extern "C" const char* __asan_default_options() {
 /** @brief Empty and unfinished-number ranges must not manufacture a preceding character. */
 static void test_digest_end() {
 	char buffer[64] = {};
-	shared_st shared = {};
-	stage_1_st first = {};
+	pgsql_shared_st shared = {};
+	pgsql_stage_1_st first = {};
 	shared.res_init_pos = buffer;
 	shared.res_cur_pos = buffer;
 	ok(get_stage_digest_end(&shared, &first) == nullptr, "empty result has no last complete character");
@@ -42,7 +42,7 @@ static void test_digest_end() {
 /** @brief Restarts outside the completed range must fall back before any pointer is formed. */
 static void test_restart_positions() {
 	char buffer[64] = {};
-	shared_st shared = {};
+	pgsql_shared_st shared = {};
 	shared.res_init_pos = buffer;
 	shared.res_it_init_pos = buffer + 1;
 	struct RestartCase { int previous; int lookback; int expected; };
@@ -69,11 +69,11 @@ static void test_empty_compression_ranges() {
 	for (bool number : {false, true}) {
 		char buffer[16] = {};
 		if (number) strcpy(buffer, "1234");
-		shared_st shared = {};
+		pgsql_shared_st shared = {};
 		shared.res_init_pos = shared.res_it_init_pos = buffer;
 		shared.res_cur_pos = shared.res_pre_pos = buffer + (number ? 4 : 0);
 		shared.st = number ? st_literal_number : st_no_mark_found;
-		stage_1_st first = {};
+		pgsql_stage_1_st first = {};
 		if (number) {
 			first.literal_dig_st.start_pos = buffer;
 			first.new_end_pos = buffer + 4;
@@ -87,9 +87,9 @@ static void test_empty_compression_ranges() {
 				stage.c_offset == 0 && stage.pre_it_pos == buffer,
 				"stage %d preserves %s without compression", n, number ? "unfinished leading digits" : "an empty result");
 		};
-		check(stage_2_st{}, stage_2_parsing, 2);
-		check(stage_3_st{}, stage_3_parsing, 3);
-		check(stage_4_st{}, stage_4_parsing, 4);
+		check(pgsql_stage_2_st{}, stage_2_parsing, 2);
+		check(pgsql_stage_3_st{}, stage_3_parsing, 3);
+		check(pgsql_stage_4_st{}, stage_4_parsing, 4);
 	}
 }
 
@@ -98,19 +98,19 @@ static void test_compression_restarts() {
 	options opts = {true, true, true, false, 1, 2, 64};
 	auto check = [&](auto stage, auto parse, int n, const char* expected) {
 		char buffer[64] = "(?,?,?)";
-		shared_st shared = {};
+		pgsql_shared_st shared = {};
 		shared.res_init_pos = buffer;
 		shared.res_it_init_pos = buffer + 1;
 		shared.res_cur_pos = shared.res_pre_pos = buffer + 7;
-		stage_1_st first = {};
+		pgsql_stage_1_st first = {};
 		stage.pre_it_pos = buffer + 1;
 		parse(&shared, &first, &stage, &opts);
 		ok(strcmp(buffer, expected) == 0 && shared.res_cur_pos == buffer + strlen(expected),
 			"stage %d clamps an oversized restart lookback and preserves its digest (got '%s')", n, buffer);
 	};
-	check(stage_2_st{}, stage_2_parsing, 2, "(?,?,?)");
-	check(stage_3_st{}, stage_3_parsing, 3, "(?,...)");
-	check(stage_4_st{}, stage_4_parsing, 4, "(?,?,?)");
+	check(pgsql_stage_2_st{}, stage_2_parsing, 2, "(?,?,?)");
+	check(pgsql_stage_3_st{}, stage_3_parsing, 3, "(?,...)");
+	check(pgsql_stage_4_st{}, stage_4_parsing, 4, "(?,?,?)");
 }
 
 /** @brief Verify small-buffer results and group compression through the public digest entry point. */

@@ -37,6 +37,14 @@ class PgSQL_Set_Stmt_Parser {
 	void generateRE_parse1v2();
 	std::string remove_comments(const std::string& q);
 	static void unquote_if_quoted(std::string& v);
+
+	// set_config('search_path', ...) takes a raw GUC list, not SQL: only double quotes are
+	// special, an unquoted name ends at ',' or a space and is lowercased. Rewrites it the way SET
+	// writes it -- every name double-quoted, joined by ", " -- so the SET path can take it.
+	// INVALID: PostgreSQL refuses the list (22023). UNSUPPORTED: PostgreSQL takes it, SET cannot
+	// write it (an empty "" name, or one longer than 63 bytes that PostgreSQL cuts).
+	enum class GucListResult { OK, INVALID, UNSUPPORTED };
+	static GucListResult guc_list_to_set_list(const std::string& raw, std::string* out);
 };
 
 #endif /* PROXYSQL_PGSQL_SET_STMT_PARSER_H */

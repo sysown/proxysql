@@ -320,6 +320,11 @@ ssize_t MysqlxDataStream::read_from_net() {
 	}
 
 	if (encrypted_ && ssl_) {
+		// Drain backend replies before EOF; a frontend close must not dispatch
+		// a final request whose response cannot drain.
+		if (SSL_get_shutdown(ssl_) & SSL_RECEIVED_SHUTDOWN) {
+			return (type_ == XDS_BACKEND && has_complete_frame()) ? 1 : 0;
+		}
 		uint8_t net_buf[65536];
 		ssize_t r;
 		do {
@@ -333,13 +338,14 @@ ssize_t MysqlxDataStream::read_from_net() {
 
 		uint8_t plain_buf[65536];
 		int decrypted = 0;
+		bool received_plaintext = false;
 		while ((decrypted = SSL_read(ssl_, plain_buf, sizeof(plain_buf))) > 0) {
+			received_plaintext = true;
 			feed_bytes(plain_buf, static_cast<size_t>(decrypted));
 		}
 		if (decrypted == 0) {
-			// SSL_read returning 0 is a clean TLS shutdown (close_notify).
-			// Surface it as a connection close, not as WANT_IO.
-			return 0;
+			// Backend replies may make partial progress before close_notify.
+			return (type_ == XDS_BACKEND && (received_plaintext || has_complete_frame())) ? r : 0;
 		}
 		if (decrypted < 0) {
 			mysqlx_ssl_status st = get_ssl_status(ssl_, decrypted);

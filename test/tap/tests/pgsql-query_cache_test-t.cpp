@@ -69,7 +69,8 @@ enum ConnType {
     BACKEND
 };
 
-PGConnPtr createNewConnection(ConnType conn_type, bool with_ssl) {
+// 'extra' is appended to the conninfo, e.g. "options='-c TimeZone=UTC'".
+PGConnPtr createNewConnection(ConnType conn_type, bool with_ssl, const char* extra = "") {
     std::stringstream ss;
     const char* host = (conn_type == BACKEND) ? cl.pgsql_host : cl.pgsql_admin_host;
     int port = (conn_type == BACKEND) ? cl.pgsql_port : cl.pgsql_admin_port;
@@ -79,6 +80,7 @@ PGConnPtr createNewConnection(ConnType conn_type, bool with_ssl) {
     ss << "host=" << host << " port=" << port;
     ss << " user=" << username << " password=" << password;
     ss << (with_ssl ? " sslmode=require" : " sslmode=disable");
+    ss << " " << extra;
 
     PGconn* conn = PQconnectdb(ss.str().c_str());
     if (PQstatus(conn) != CONNECTION_OK) {
@@ -1050,6 +1052,429 @@ void execute_prepared_test(PGconn* admin_conn, PGconn* conn) {
     executeQueries(conn, { "DEALLOCATE ps_select_1" });
 }
 
+// Escapes control and non-ASCII bytes, so a LATIN1 result does not reach the log raw.
+static std::string show(const std::string& s) {
+    std::string out;
+    char buf[5];
+    for (unsigned char ch : s) {
+        if (ch >= 0x20 && ch < 0x7f) out += ch;
+        else { snprintf(buf, sizeof(buf), "\\x%02x", ch); out += buf; }
+    }
+    return out;
+}
+
+// The single value a query returns, or the error text.
+static std::string single_value(PGconn* conn, const char* query) {
+    PGresult* res = PQexec(conn, query);
+    std::string v = (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1) ?
+        PQgetvalue(res, 0, 0) : PQerrorMessage(conn);
+    PQclear(res);
+    return v;
+}
+
+// Runs one SELECT under two values of a setting. The second value must get its own
+// result, not the one cached under the first; the first must then still hit the cache.
+static void check_setting_in_cache_key(PGconn* admin_conn, PGconn* conn, const char* set1,
+    const char* set2, const char* query, const std::string& exp1, const std::string& exp2) {
+    // A rejected SET would otherwise read as a cache failure in the checks below.
+    const auto run = [&](const char* set) {
+        if (!executeQueries(conn, { set })) return std::string("<SET failed>");
+        return single_value(conn, query);
+    };
+
+    std::string v = run(set1);
+    ok(v == exp1, "[%s] %s returns '%s'. Got '%s'", set1, query, show(exp1).c_str(), show(v).c_str());
+    v = run(set2);
+    ok(v == exp2, "[%s] %s is not served the result cached under [%s]. Expected '%s', got '%s'",
+        set2, query, set1, show(exp2).c_str(), show(v).c_str());
+
+    metrics.before = getQueryCacheMetrics(admin_conn);
+    v = run(set1);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == exp1, "[%s] again: %s returns '%s'. Got '%s'", set1, query, show(exp1).c_str(), show(v).c_str());
+    checkMetricDelta<>("Query_Cache_count_GET_OK", 1, std::equal_to<int>());
+    metrics.swap();
+}
+
+// The same SELECT text under two search_paths reads two different tables. The cache
+// key must include search_path, or the second read gets the first schema's row.
+void execute_search_path_test(PGconn* admin_conn, PGconn* conn) {
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_soft_ttl_pct'",
+        "LOAD PGSQL VARIABLES TO RUNTIME"
+        }))
+        return;
+
+    if (!executeQueries(conn, {
+        "DROP SCHEMA IF EXISTS qc_sp_a CASCADE",
+        "DROP SCHEMA IF EXISTS qc_sp_b CASCADE",
+        "CREATE SCHEMA qc_sp_a",
+        "CREATE SCHEMA qc_sp_b",
+        "CREATE TABLE qc_sp_a.t (v TEXT)",
+        "CREATE TABLE qc_sp_b.t (v TEXT)",
+        "INSERT INTO qc_sp_a.t VALUES ('a')",
+        "INSERT INTO qc_sp_b.t VALUES ('b')"
+        }))
+        return;
+
+    check_setting_in_cache_key(admin_conn, conn, "SET search_path TO qc_sp_a",
+        "SET search_path TO qc_sp_b", "SELECT v FROM t", "a", "b");
+
+    executeQueries(conn, {
+        "SET search_path TO \"$user\", public",
+        "DROP SCHEMA IF EXISTS qc_sp_a CASCADE",
+        "DROP SCHEMA IF EXISTS qc_sp_b CASCADE"
+        });
+    executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "LOAD PGSQL QUERY RULES TO RUNTIME"
+        });
+}
+
+// Each setting below changes the bytes a SELECT returns, so each must be part of the
+// cache key. Every case ends on its first value, which is the PostgreSQL default.
+void execute_result_settings_test(PGconn* admin_conn, PGconn* conn) {
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_soft_ttl_pct'",
+        "LOAD PGSQL VARIABLES TO RUNTIME"
+        }))
+        return;
+
+    struct Case { const char* set1; const char* set2; const char* query; const char* exp1; const char* exp2; };
+    const Case cases[] = {
+        // the server converts the result to the client's encoding: e-acute is 2 bytes in UTF8, 1 in LATIN1
+        { "SET client_encoding TO UTF8", "SET client_encoding TO LATIN1",
+          "SELECT chr(233)", "\xc3\xa9", "\xe9" },
+        { "SET DateStyle TO 'ISO, MDY'", "SET DateStyle TO 'SQL, DMY'",
+          "SELECT DATE '2026-11-05'", "2026-11-05", "05/11/2026" },
+        { "SET IntervalStyle TO postgres", "SET IntervalStyle TO iso_8601",
+          "SELECT INTERVAL '1 day 2 hours'", "1 day 02:00:00", "P1DT2H" },
+        // with standard_conforming_strings off, \t in an ordinary literal is a TAB
+        { "SET standard_conforming_strings TO on", "SET standard_conforming_strings TO off",
+          "SELECT 'a\\tb'", "a\\tb", "a\tb" },
+        { "SET TimeZone TO 'UTC'", "SET TimeZone TO 'Asia/Kolkata'",
+          "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00'", "2026-11-05 10:00:00+00", "2026-11-05 15:30:00+05:30" },
+        { "SET bytea_output TO hex", "SET bytea_output TO escape",
+          "SELECT 'ab'::bytea", "\\x6162", "ab" },
+        { "SET extra_float_digits TO 1", "SET extra_float_digits TO 0",
+          "SELECT 0.1::float8 + 0.2::float8", "0.30000000000000004", "0.3" },
+    };
+    for (const auto& c : cases)
+        check_setting_in_cache_key(admin_conn, conn, c.set1, c.set2, c.query, c.exp1, c.exp2);
+
+    executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "LOAD PGSQL QUERY RULES TO RUNTIME"
+        });
+}
+
+// Runs query on conn and checks both its value and how many cache hits it took.
+static void check_value_hits(PGconn* admin_conn, PGconn* conn, const char* query,
+    const std::string& expected, int hits, const char* what) {
+    metrics.before = getQueryCacheMetrics(admin_conn);
+    const std::string v = single_value(conn, query);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == expected, "%s: %s returns '%s'. Got '%s'", what, query, show(expected).c_str(), show(v).c_str());
+    checkMetricDelta<>("Query_Cache_count_GET_OK", hits, std::equal_to<int>());
+    metrics.swap();
+}
+
+// Edge cases of the settings in the cache key: values sent at connect time, the ways a
+// setting goes back to its default, transactions, SET aliases, and clients that differ
+// from the start. Each case uses its own query text, so no case can hit another's entry.
+void execute_settings_edge_test(PGconn* admin_conn, PGconn*) {
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_soft_ttl_pct'",
+        "LOAD PGSQL VARIABLES TO RUNTIME",
+        "PROXYSQL FLUSH PGSQL QUERY CACHE"
+        }))
+        return;
+
+    const char* utc = "2026-11-05 10:00:00+00";
+    const char* kol = "2026-11-05 15:30:00+05:30";
+    const char* kol_opt = "options='-c TimeZone=Asia/Kolkata'";
+    PGConnPtr plain = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr start = createNewConnection(ConnType::BACKEND, false, kol_opt);
+    PGConnPtr start2 = createNewConnection(ConnType::BACKEND, false, kol_opt);
+    PGConnPtr c = createNewConnection(ConnType::BACKEND, false);
+    if (!plain || !start || !start2 || !c)
+        return;
+
+    // TimeZone sent at connect time is part of the key, and is shared by clients that sent the same.
+    const char* q1 = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS e1";
+    check_value_hits(admin_conn, start.get(), q1, kol, 0, "connect-time TimeZone");
+    check_value_hits(admin_conn, plain.get(), q1, utc, 0, "plain client after a connect-time TimeZone");
+    check_value_hits(admin_conn, start2.get(), q1, kol, 1, "second client with the same connect-time TimeZone");
+
+    // SET away from the connect-time value, then RESET back to it.
+    executeQueries(start.get(), { "SET TimeZone TO 'UTC'" });
+    check_value_hits(admin_conn, start.get(), q1, utc, 0, "SET away from the connect-time TimeZone");
+    executeQueries(start.get(), { "RESET TimeZone" });
+    check_value_hits(admin_conn, start.get(), q1, kol, 1, "RESET back to the connect-time TimeZone");
+
+    // Every way back to the default reaches the plain client's key again.
+    const char* q3 = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS e3";
+    check_value_hits(admin_conn, plain.get(), q3, utc, 0, "plain client");
+    for (const char* back : { "SET TimeZone TO DEFAULT", "RESET TimeZone", "RESET ALL", "DISCARD ALL" }) {
+        executeQueries(c.get(), { "SET TimeZone TO 'Asia/Kolkata'", back });
+        check_value_hits(admin_conn, c.get(), q3, utc, 1, back);
+    }
+
+    // A SET undone by ROLLBACK or ROLLBACK TO SAVEPOINT takes the key back with it.
+    executeQueries(c.get(), { "BEGIN", "SET TimeZone TO 'Asia/Kolkata'", "ROLLBACK" });
+    check_value_hits(admin_conn, c.get(), q3, utc, 1, "SET then ROLLBACK");
+    check_value_hits(admin_conn, c.get(), "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS rollback_uncached", utc, 0, "backend after ROLLBACK");
+    executeQueries(c.get(), { "BEGIN", "SAVEPOINT s", "SET TimeZone TO 'Asia/Kolkata'", "ROLLBACK TO SAVEPOINT s" });
+    check_value_hits(admin_conn, c.get(), q3, utc, 1, "SET then ROLLBACK TO SAVEPOINT, inside the transaction");
+    check_value_hits(admin_conn, c.get(), "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS savepoint_uncached", utc, 0, "backend after ROLLBACK TO SAVEPOINT");
+    executeQueries(c.get(), { "COMMIT" });
+
+    // Other spellings of a tracked SET change the key too.
+    const char* q5a = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS e5a";
+    const char* q5b = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS e5b";
+    const char* q5c = "SELECT chr(233) AS e5c";
+    check_value_hits(admin_conn, plain.get(), q5a, utc, 0, "plain client");
+    check_value_hits(admin_conn, plain.get(), q5b, utc, 0, "plain client");
+    check_value_hits(admin_conn, plain.get(), q5c, "\xc3\xa9", 0, "plain client");
+    {
+        PGConnPtr a1 = createNewConnection(ConnType::BACKEND, false);
+        PGConnPtr a2 = createNewConnection(ConnType::BACKEND, false);
+        PGConnPtr a3 = createNewConnection(ConnType::BACKEND, false);
+        executeQueries(a1.get(), { "SET TIME ZONE 'Asia/Kolkata'" });
+        check_value_hits(admin_conn, a1.get(), q5a, kol, 0, "SET TIME ZONE");
+        executeQueries(a2.get(), { "SET SESSION timezone = 'Asia/Kolkata'" });
+        check_value_hits(admin_conn, a2.get(), q5b, kol, 0, "SET SESSION timezone =");
+        executeQueries(a3.get(), { "SET NAMES 'LATIN1'" });
+        check_value_hits(admin_conn, a3.get(), q5c, "\xe9", 0, "SET NAMES");
+    }
+
+    // Two clients that differ from their first query on.
+    const char* q6 = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS e6";
+    {
+        PGConnPtr ny = createNewConnection(ConnType::BACKEND, false);
+        PGConnPtr in = createNewConnection(ConnType::BACKEND, false);
+        executeQueries(ny.get(), { "SET TimeZone TO 'America/New_York'" });
+        executeQueries(in.get(), { "SET TimeZone TO 'Asia/Kolkata'" });
+        check_value_hits(admin_conn, ny.get(), q6, "2026-11-05 05:00:00-05", 0, "New York client");
+        check_value_hits(admin_conn, in.get(), q6, kol, 0, "Kolkata client");
+        check_value_hits(admin_conn, plain.get(), q6, utc, 0, "plain client");
+    }
+
+    // Value-only check, where a cache miss is acceptable and only the result matters.
+    const auto check_value = [](PGconn* conn, const char* query, const std::string& expected, const char* what) {
+        const std::string v = single_value(conn, query);
+        ok(v == expected, "%s: %s returns '%s'. Got '%s'", what, query, show(expected).c_str(), show(v).c_str());
+    };
+
+    // A setting in the startup packet itself (the client_encoding conninfo keyword), not via options.
+    const char* s1 = "SELECT chr(233) AS s1";
+    {
+        PGConnPtr enc = createNewConnection(ConnType::BACKEND, false, "client_encoding=LATIN1");
+        PGConnPtr enc2 = createNewConnection(ConnType::BACKEND, false, "client_encoding=LATIN1");
+        check_value_hits(admin_conn, plain.get(), s1, "\xc3\xa9", 0, "plain client");
+        check_value_hits(admin_conn, enc.get(), s1, "\xe9", 0, "startup client_encoding=LATIN1");
+        check_value_hits(admin_conn, plain.get(), s1, "\xc3\xa9", 1, "plain client again");
+        check_value_hits(admin_conn, enc2.get(), s1, "\xe9", 1, "second client with startup client_encoding=LATIN1");
+    }
+
+    // Settings above PGSQL_NAME_LAST_LOW_WM given at connect time.
+    const char* s2a = "SELECT 'ab'::bytea AS s2a";
+    const char* s2b = "SELECT 0.1::float8 + 0.2::float8 AS s2b";
+    {
+        PGConnPtr bo = createNewConnection(ConnType::BACKEND, false, "options='-c bytea_output=escape'");
+        PGConnPtr fd = createNewConnection(ConnType::BACKEND, false, "options='-c extra_float_digits=0'");
+        check_value_hits(admin_conn, plain.get(), s2a, "\\x6162", 0, "plain client");
+        check_value_hits(admin_conn, bo.get(), s2a, "ab", 0, "connect-time bytea_output=escape");
+        check_value_hits(admin_conn, plain.get(), s2a, "\\x6162", 1, "plain client again");
+        check_value_hits(admin_conn, plain.get(), s2b, "0.30000000000000004", 0, "plain client");
+        check_value_hits(admin_conn, fd.get(), s2b, "0.3", 0, "connect-time extra_float_digits=0");
+        check_value_hits(admin_conn, plain.get(), s2b, "0.30000000000000004", 1, "plain client again");
+    }
+
+    // A setting above PGSQL_NAME_LAST_LOW_WM that was never set, set to its default, set and
+    // then RESET. RESET with no connect-time value makes it "never set" again: plain's entry.
+    const char* s3 = "SELECT 'ab'::bytea AS s3";
+    {
+        PGConnPtr x = createNewConnection(ConnType::BACKEND, false);
+        PGConnPtr y = createNewConnection(ConnType::BACKEND, false);
+        check_value_hits(admin_conn, plain.get(), s3, "\\x6162", 0, "plain client, bytea_output never set");
+        executeQueries(x.get(), { "SET bytea_output TO hex" });
+        check_value(x.get(), s3, "\\x6162", "bytea_output set to its default");
+        executeQueries(y.get(), { "SET bytea_output TO escape" });
+        check_value_hits(admin_conn, y.get(), s3, "ab", 0, "bytea_output set to escape");
+        executeQueries(y.get(), { "RESET bytea_output" });
+        check_value_hits(admin_conn, y.get(), s3, "\\x6162", 1, "bytea_output RESET with no connect-time value");
+    }
+
+    // The same value given at connect time or set later: both correct.
+    const char* s5 = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS s5";
+    {
+        PGConnPtr z = createNewConnection(ConnType::BACKEND, false, "options='-c TimeZone=Asia/Tokyo'");
+        PGConnPtr w = createNewConnection(ConnType::BACKEND, false);
+        executeQueries(w.get(), { "SET TimeZone TO 'Asia/Tokyo'" });
+        check_value(z.get(), s5, "2026-11-05 19:00:00+09", "connect-time TimeZone=Asia/Tokyo");
+        check_value(w.get(), s5, "2026-11-05 19:00:00+09", "TimeZone set to Asia/Tokyo after connecting");
+    }
+
+    executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "LOAD PGSQL QUERY RULES TO RUNTIME"
+        });
+}
+
+// plain runs query first and caches its result. locked must then read its own value without
+// a cache lookup or store, and plain's entry must still answer plain.
+static void check_locked_session(PGconn* admin_conn, PGconn* locked, PGconn* plain,
+    const char* query, const std::string& own, const char* what) {
+    const std::string pv = single_value(plain, query);
+    ok(pv != own, "%s: plain client reads another value ('%s'), so a wrong hit would show", what, pv.c_str());
+    metrics.before = getQueryCacheMetrics(admin_conn);
+    const std::string v = single_value(locked, query);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == own, "%s: locked session reads its own value '%s'. Got '%s'", what, own.c_str(), v.c_str());
+    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+    metrics.swap();
+    const std::string v2 = single_value(plain, query);
+    ok(v2 == pv, "%s: plain client still reads '%s'. Got '%s'", what, pv.c_str(), v2.c_str());
+}
+
+// A session locked on a hostgroup ran a change ProxySQL does not track, so the cache key does
+// not describe its settings. Its results must not be cached, and it must not get cached entries.
+void execute_locked_session_test(PGconn* admin_conn, PGconn*) {
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_soft_ttl_pct'",
+        "LOAD PGSQL VARIABLES TO RUNTIME",
+        "PROXYSQL FLUSH PGSQL QUERY CACHE"
+        }))
+        return;
+
+    PGConnPtr locked = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr plain = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr multi = createNewConnection(ConnType::BACKEND, false);
+    if (!locked || !plain || !multi)
+        return;
+
+    // SET SCHEMA is the search_path alias ProxySQL does not track: it locks the session.
+    if (!executeQueries(locked.get(), { "CREATE SCHEMA IF NOT EXISTS qc_lk", "SET SCHEMA 'qc_lk'" }))
+        return;
+    const char* q = "SELECT current_schema()";
+
+    metrics.before = getQueryCacheMetrics(admin_conn);
+    std::string v = single_value(locked.get(), q);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == "qc_lk", "Locked session reads its own schema. Expected 'qc_lk', got '%s'", v.c_str());
+    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+    metrics.swap();
+
+    v = single_value(plain.get(), q);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == "public", "Plain session is not served the locked session's result. Expected 'public', got '%s'", v.c_str());
+    checkMetricDelta<>("Query_Cache_count_SET", 1, std::equal_to<int>());
+    metrics.swap();
+
+    // The plain session's result is cached now: the locked session must not be served it.
+    v = single_value(locked.get(), q);
+    metrics.after = getQueryCacheMetrics(admin_conn);
+    ok(v == "qc_lk", "Locked session is not served the cached plain result. Expected 'qc_lk', got '%s'", v.c_str());
+    checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+    metrics.swap();
+
+    // A SET inside a multi-statement query is not tracked either and locks the session.
+    const char* ts = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00'";
+    executeQueries(multi.get(), { "SET TimeZone TO 'Asia/Kolkata'; SELECT 1" });
+    v = single_value(multi.get(), ts);
+    ok(v == "2026-11-05 15:30:00+05:30", "Session with a multi-statement SET reads its own TimeZone. Expected '2026-11-05 15:30:00+05:30', got '%s'", v.c_str());
+    v = single_value(plain.get(), ts);
+    ok(v == "2026-11-05 10:00:00+00", "Plain session is not served the multi-statement session's result. Expected '2026-11-05 10:00:00+00', got '%s'", v.c_str());
+
+    // Other changes that lock: SET LOCAL, a SET of a setting ProxySQL does not track, and an
+    // unknown connect option. The last one is checked on the session's first query: the lock
+    // is only applied after that query's cache lookup.
+    {
+        PGConnPtr sl = createNewConnection(ConnType::BACKEND, false);
+        PGConnPtr us = createNewConnection(ConnType::BACKEND, false);
+        PGConnPtr uo = createNewConnection(ConnType::BACKEND, false, "options='-c work_mem=16MB'");
+        executeQueries(sl.get(), { "BEGIN", "SET LOCAL TimeZone TO 'Asia/Kolkata'" });
+        check_locked_session(admin_conn, sl.get(), plain.get(),
+            "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS l1", "2026-11-05 15:30:00+05:30", "SET LOCAL");
+        executeQueries(sl.get(), { "COMMIT" });
+        executeQueries(us.get(), { "SET work_mem TO '8MB'" });
+        check_locked_session(admin_conn, us.get(), plain.get(),
+            "SELECT current_setting('work_mem') AS l2", "8MB", "SET of an untracked setting");
+        check_locked_session(admin_conn, uo.get(), plain.get(),
+            "SELECT current_setting('work_mem') AS l3", "16MB", "unknown connect option");
+    }
+
+    executeQueries(plain.get(), { "DROP SCHEMA IF EXISTS qc_lk" });
+    executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "LOAD PGSQL QUERY RULES TO RUNTIME"
+        });
+}
+
+// set_config() changes a setting in the cache key like SET does. With the ParserSQL SET parser
+// it is tracked, so later SELECTs key on the new value; the call itself is never cached, and a
+// set_config() ProxySQL cannot follow locks the session, which then skips the cache.
+#define SC_ALGO "3" // the ParserSQL SET parser: the only one that tracks set_config()
+void execute_set_config_test(PGconn* admin_conn, PGconn*) {
+    const std::string saved_algo = single_value(admin_conn,
+        "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
+    if (!executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "INSERT INTO pgsql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=0 WHERE variable_name='pgsql-query_cache_soft_ttl_pct'",
+        "UPDATE global_variables SET variable_value=" SC_ALGO " WHERE variable_name='pgsql-set_parser_algorithm'",
+        "LOAD PGSQL VARIABLES TO RUNTIME",
+        "PROXYSQL FLUSH PGSQL QUERY CACHE"
+        }))
+        return;
+
+    const char* utc = "2026-11-05 10:00:00+00";
+    const char* q = "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS sc1";
+    PGConnPtr a = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr b = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr locked = createNewConnection(ConnType::BACKEND, false);
+    if (a && b && locked) {
+        check_value_hits(admin_conn, a.get(), q, utc, 0, "set_config: client A before the call");
+        metrics.before = getQueryCacheMetrics(admin_conn);
+        const std::string v = single_value(a.get(), "SELECT set_config('TimeZone','Asia/Tokyo',false)");
+        metrics.after = getQueryCacheMetrics(admin_conn);
+        ok(v == "Asia/Tokyo", "set_config: the call returns 'Asia/Tokyo'. Got '%s'", v.c_str());
+        checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+        checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+        metrics.swap();
+        check_value_hits(admin_conn, a.get(), q, "2026-11-05 19:00:00+09", 0, "set_config: client A after the call");
+        check_value_hits(admin_conn, b.get(), q, utc, 1, "set_config: client B keeps its own entry");
+
+        // Not the bare call: the session is locked and must neither read nor store entries.
+        executeQueries(locked.get(), { "SELECT set_config('TimeZone','Asia/Kolkata',false), 1" });
+        check_locked_session(admin_conn, locked.get(), b.get(),
+            "SELECT TIMESTAMPTZ '2026-11-05 10:00:00+00' AS sc2", "2026-11-05 15:30:00+05:30", "locked set_config");
+    }
+
+    executeQueries(admin_conn, {
+        "DELETE FROM pgsql_query_rules",
+        "LOAD PGSQL QUERY RULES TO RUNTIME",
+        "UPDATE global_variables SET variable_value=" + saved_algo + " WHERE variable_name='pgsql-set_parser_algorithm'",
+        "LOAD PGSQL VARIABLES TO RUNTIME"
+        });
+}
+
 std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
 	{ "Basic Test", execute_basic_test },
 	{ "Data Manipulation Test", execute_data_manipulation_test },
@@ -1061,6 +1486,11 @@ std::vector<std::pair<std::string, void (*)(PGconn*, PGconn*)>> tests = {
     { "Query Cache Store Empty Result Test", execute_query_cache_store_empty_result_test },
     { "Query Cache Store Notice Result Test", execute_query_cache_notice_test },
 	{ "Prepared Statement Test", execute_prepared_test },
+	{ "Search Path Test", execute_search_path_test },
+	{ "Result Settings Test", execute_result_settings_test },
+	{ "Settings Edge Test", execute_settings_edge_test },
+	{ "Locked Session Test", execute_locked_session_test },
+	{ "Set Config Test", execute_set_config_test },
 };
 
 void execute_tests(bool with_ssl, bool diff_conn) {
@@ -1114,9 +1544,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
 	if (cl.use_noise) {
-		plan(206*2 + 3);
+		plan(351*2 + 3);
 	} else {
-		plan(206*2);
+		plan(351*2);
 	}
 
     execute_tests(false, false);

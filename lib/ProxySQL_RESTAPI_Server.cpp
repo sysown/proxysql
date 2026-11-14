@@ -7,10 +7,28 @@ using json = nlohmann::json;
 #include "httpserver.hpp"
 
 #include <functional>
+#include <cerrno>
+#include <cstddef>
+#include <cstring>
+#include <limits>
+#include <string>
+
+#include <gnutls/gnutls.h>
+#include <gnutls/x509.h>
+
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <sys/wait.h>
+#include <strings.h>
+#include <unistd.h>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 #include "ProxySQL_Statistics.hpp"
 #include "proxysql_utils.h"
+#include <atomic>
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -217,13 +235,14 @@ private:
 					script_errno
 				);
 			} else {
+				const int exit_code = WIFSIGNALED(script_err) ? 128 + WTERMSIG(script_err) : script_err;
 				json j_err_resp {
 					{ "type", "out" },
 					{ "error", "Terminated without exit code. Child exit status reported in 'error_code'" },
-					{ "error_code", std::to_string(script_err) }
+					{ "error_code", std::to_string(exit_code) }
 				};
 				str_response_err = j_err_resp.dump();
-				proxy_error("Error while executing script '%s'. Child exit status: '%d'.\n", script.c_str(), script_err);
+				proxy_error("Error while executing script '%s'. Child exit status: '%d'.\n", script.c_str(), exit_code);
 			}
 		}
 		// script returned and empty output, invalid output, no need to parse it.
@@ -488,47 +507,578 @@ public:
 	}
 };
 
-void * restapi_server_thread(void *arg) {
-	set_thread_name("RESTAPI_Server", GloVars.set_thread_name);
-	httpserver::webserver * ws = (httpserver::webserver *)arg;
-    ws->start(true);
-	return NULL;
-}
+/*
+ * MHD begins accepting requests inside start(), before the constructor has
+ * verified that a Unix socket was created in the pinned parent. Resources are
+ * therefore registered through this wrapper: until the gate is released every
+ * method answers 503 without entering the wrapped handler. The wrapper keeps
+ * the wrapped resource's constructor behavior, including its allowed-method
+ * policy, by constructing the original resource as its base class.
+ */
+template <typename Resource>
+class dispatch_gated_resource : public Resource {
+public:
+	template <typename... Args>
+	explicit dispatch_gated_resource(std::shared_ptr<std::atomic<bool>> gate, Args&&... args)
+		: Resource(std::forward<Args>(args)...), dispatch_gate_(std::move(gate)) {}
+
+	const std::shared_ptr<http_response> render(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render(req); });
+	}
+	const std::shared_ptr<http_response> render_GET(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_GET(req); });
+	}
+	const std::shared_ptr<http_response> render_POST(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_POST(req); });
+	}
+	const std::shared_ptr<http_response> render_PUT(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_PUT(req); });
+	}
+	const std::shared_ptr<http_response> render_HEAD(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_HEAD(req); });
+	}
+	const std::shared_ptr<http_response> render_DELETE(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_DELETE(req); });
+	}
+	const std::shared_ptr<http_response> render_TRACE(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_TRACE(req); });
+	}
+	const std::shared_ptr<http_response> render_OPTIONS(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_OPTIONS(req); });
+	}
+	const std::shared_ptr<http_response> render_PATCH(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_PATCH(req); });
+	}
+	const std::shared_ptr<http_response> render_CONNECT(const http_request& req) override {
+		return dispatch_or_503([this, &req]() { return Resource::render_CONNECT(req); });
+	}
+
+private:
+	template <typename Handler>
+	const std::shared_ptr<http_response> dispatch_or_503(Handler handler) {
+		if (!dispatch_gate_->load(std::memory_order_acquire)) {
+			return std::shared_ptr<http_response>(new string_response(
+				"{\"error\": \"REST API listener is not ready\"}",
+				http::http_utils::http_service_unavailable));
+		}
+		return handler();
+	}
+
+	const std::shared_ptr<std::atomic<bool>> dispatch_gate_;
+};
 
 using std::vector;
 using std::pair;
 using std::function;
 using std::shared_ptr;
 
+static std::string trim_restapi_interface(const std::string& value) {
+	size_t first = value.find_first_not_of(" \t\r\n");
+	if (first == std::string::npos) {
+		return {};
+	}
+	size_t last = value.find_last_not_of(" \t\r\n");
+	return value.substr(first, last - first + 1);
+}
+
+bool ProxySQL_RESTAPI_parse_bind_address(
+	const std::string& interface_name,
+	int port,
+	bool& has_bind_address,
+	struct sockaddr_storage& addr,
+	socklen_t& addr_len,
+	std::string& unix_socket_path,
+	std::string& error
+) {
+	has_bind_address = false;
+	addr = sockaddr_storage {};
+	addr_len = 0;
+	unix_socket_path.clear();
+	error.clear();
+
+	std::string value = trim_restapi_interface(interface_name);
+	if (value.empty()) {
+		if (port < 0 || port > 65535) {
+			error = "Invalid TCP port " + std::to_string(port) +
+				" for admin-restapi_interface";
+			return false;
+		}
+		return true;
+	}
+
+	bool unix_prefixed = false;
+	if (value.size() > 5 && strncasecmp(value.c_str(), "unix:", 5) == 0) {
+		unix_prefixed = true;
+		value = trim_restapi_interface(value.substr(5));
+	}
+
+	if (!value.empty() && value[0] == '/') {
+		if (value.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
+			error = "Unix socket path is too long: '" + value + "'";
+			return false;
+		}
+		struct sockaddr_un un {};
+		un.sun_family = AF_UNIX;
+		memcpy(un.sun_path, value.c_str(), value.size() + 1);
+		memcpy(&addr, &un, sizeof(un));
+		addr_len = static_cast<socklen_t>(
+			offsetof(struct sockaddr_un, sun_path) + value.size() + 1);
+		has_bind_address = true;
+		unix_socket_path = value;
+		return true;
+	}
+	if (unix_prefixed) {
+		error = "admin-restapi_interface 'unix:' requires an absolute socket path";
+		return false;
+	}
+
+	if (port < 0 || port > 65535) {
+		error = "Invalid TCP port " + std::to_string(port) +
+			" for admin-restapi_interface";
+		return false;
+	}
+
+	std::string host = value;
+	if (host.size() >= 2 && host.front() == '[' && host.back() == ']') {
+		host = host.substr(1, host.size() - 2);
+	}
+
+	struct sockaddr_in addr4 {};
+	if (inet_pton(AF_INET, host.c_str(), &addr4.sin_addr) == 1) {
+		addr4.sin_family = AF_INET;
+		addr4.sin_port = htons(port);
+		memcpy(&addr, &addr4, sizeof(addr4));
+		addr_len = sizeof(addr4);
+		has_bind_address = true;
+		return true;
+	}
+
+	struct sockaddr_in6 addr6 {};
+	if (inet_pton(AF_INET6, host.c_str(), &addr6.sin6_addr) == 1) {
+		addr6.sin6_family = AF_INET6;
+		addr6.sin6_port = htons(port);
+		memcpy(&addr, &addr6, sizeof(addr6));
+		addr_len = sizeof(addr6);
+		has_bind_address = true;
+		return true;
+	}
+
+	error = "Invalid admin-restapi_interface '" + interface_name +
+		"': expected a numeric IPv4/IPv6 address or an absolute Unix socket path";
+	return false;
+}
+
+// Unix listeners are bound by MHD, which closes but cannot unlink the pathname
+// when startup fails after bind. Ownership is therefore proven by: a pinned,
+// trusted parent directory; the leaf being absent before startup; and a socket
+// inode belonging to this process afterwards. Cleanup never resolves the
+// absolute path again.
+static bool trusted_unix_parent(const struct stat& st, std::string& error) {
+	if (st.st_uid != 0 && st.st_uid != geteuid()) {
+		error = "Unix socket parent directory is not owned by root or the effective user";
+		return false;
+	}
+	if ((st.st_mode & (S_IWGRP | S_IWOTH)) && !(st.st_mode & S_ISVTX)) {
+		error = "Unix socket parent directory is group/world writable without the sticky bit";
+		return false;
+	}
+	return true;
+}
+
+// Validate every ancestor of an already-canonicalized absolute parent path
+// and return a pinned FD to its final component. This is the stricter policy
+// used where the listener cannot bind through a retained parent FD: an
+// untrusted UID must not be able to replace any ancestor of the socket path.
+[[maybe_unused]] static int open_trusted_unix_ancestor_chain(
+	const std::string& canonical_parent, std::string& error
+) {
+	if (canonical_parent.empty() || canonical_parent[0] != '/') {
+		error = "Unix socket parent path must be absolute: '" + canonical_parent + "'";
+		return -1;
+	}
+
+	std::vector<std::string> components;
+	if (canonical_parent != "/") {
+		size_t start = 1;
+		while (start < canonical_parent.size()) {
+			size_t slash = canonical_parent.find('/', start);
+			std::string component;
+			if (slash == std::string::npos) {
+				component = canonical_parent.substr(start);
+				start = canonical_parent.size();
+			} else {
+				component = canonical_parent.substr(start, slash - start);
+				start = slash + 1;
+			}
+			if (component.empty() || component == "." || component == "..") {
+				error = "Invalid Unix socket parent path: '" + canonical_parent + "'";
+				return -1;
+			}
+			components.push_back(component);
+			if (slash == std::string::npos) break;
+		}
+	}
+
+	int fd = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	if (fd < 0) {
+		error = "Cannot open Unix socket ancestor '/': " + std::string(strerror(errno));
+		return -1;
+	}
+	struct stat st {};
+	if (fstat(fd, &st) != 0 || !trusted_unix_parent(st, error)) {
+		if (error.empty()) {
+			error = "Cannot inspect Unix socket ancestor '/': " + std::string(strerror(errno));
+		}
+		close(fd);
+		return -1;
+	}
+
+	for (const auto& component : components) {
+		int next = openat(fd, component.c_str(),
+			O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+		if (next < 0) {
+			error = "Cannot open Unix socket ancestor '" + component + "': " +
+				std::string(strerror(errno));
+			close(fd);
+			return -1;
+		}
+		struct stat next_st {};
+		if (fstat(next, &next_st) != 0 || !trusted_unix_parent(next_st, error)) {
+			if (error.empty()) {
+				error = "Cannot inspect Unix socket ancestor '" + component + "': " +
+					std::string(strerror(errno));
+			}
+			close(next);
+			close(fd);
+			return -1;
+		}
+		close(fd);
+		fd = next;
+	}
+	return fd;
+}
+
+// Pin the immediate parent and validate who can modify its entries. Earlier
+// ancestors may be shared on Linux, where binding goes through the retained
+// parent FD. On other platforms every canonical ancestor is validated by
+// open_trusted_unix_ancestor_chain before the canonical pathname is bound.
+static int open_trusted_unix_parent(
+	const std::string& parent, std::string& canonical, std::string& error
+) {
+	char* resolved = realpath(parent.c_str(), nullptr);
+	if (resolved == nullptr) {
+		error = "Cannot resolve Unix socket parent '" + parent + "': " + strerror(errno);
+		return -1;
+	}
+	canonical.assign(resolved);
+	free(resolved);
+
+#if defined(__linux__)
+	int fd = open(canonical.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	if (fd < 0) {
+		error = "Cannot open Unix socket parent '" + canonical + "': " + strerror(errno);
+		return -1;
+	}
+	struct stat st {};
+	if (fstat(fd, &st) != 0 || !trusted_unix_parent(st, error)) {
+		if (error.empty()) {
+			error = "Cannot inspect Unix socket parent: " + std::string(strerror(errno));
+		}
+		close(fd);
+		return -1;
+	}
+	return fd;
+#else
+	return open_trusted_unix_ancestor_chain(canonical, error);
+#endif
+}
+
+void ProxySQL_RESTAPI_Server::prepare_unix_socket() {
+	const size_t slash = unix_socket_path.find_last_of('/');
+	if (slash == std::string::npos || slash + 1 >= unix_socket_path.size()) {
+		proxy_error("Unix socket path '%s' has no file name\n", unix_socket_path.c_str());
+		return;
+	}
+	const std::string parent = slash == 0 ? "/" : unix_socket_path.substr(0, slash);
+	unix_socket_leaf = unix_socket_path.substr(slash + 1);
+
+	std::string error;
+	std::string canonical_parent;
+	unix_socket_dir_fd = open_trusted_unix_parent(parent, canonical_parent, error);
+	if (unix_socket_dir_fd < 0) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': %s\n", error.c_str());
+		return;
+	}
+
+	struct stat st {};
+	if (fstatat(unix_socket_dir_fd, unix_socket_leaf.c_str(), &st,
+			AT_SYMLINK_NOFOLLOW) == 0) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': Unix socket path '%s' "
+			"already exists; refusing to replace it\n", unix_socket_path.c_str());
+		cleanup_unix_socket();
+		return;
+	}
+	if (errno != ENOENT) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': cannot inspect Unix socket "
+			"path '%s': %s\n", unix_socket_path.c_str(), strerror(errno));
+		cleanup_unix_socket();
+		return;
+	}
+
+	// On Linux, retained-FD binding protects against ancestor renames after
+	// the parent is opened and pinned; canonical resolution and opening occur
+	// first. Keep the canonical path for logs and check both pathname lengths:
+	// the /proc/self/fd/<dirfd>/ prefix can make a valid configured path too long.
+	const std::string canonical_path =
+		(canonical_parent == "/" ? canonical_parent : canonical_parent + "/") + unix_socket_leaf;
+	if (canonical_path.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': canonical Unix socket "
+			"path is too long: '%s'\n", canonical_path.c_str());
+		cleanup_unix_socket();
+		return;
+	}
+	unix_socket_path = canonical_path;
+
+	std::string bind_path = canonical_path;
+#if defined(__linux__)
+	bind_path = "/proc/self/fd/" + std::to_string(unix_socket_dir_fd) + "/" + unix_socket_leaf;
+#endif
+	if (bind_path.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': effective Unix "
+			"socket bind path is too long: '%s'\n", bind_path.c_str());
+		cleanup_unix_socket();
+		return;
+	}
+
+	struct sockaddr_un un {};
+	un.sun_family = AF_UNIX;
+	memcpy(un.sun_path, bind_path.c_str(), bind_path.size() + 1);
+	memcpy(&bind_addr, &un, sizeof(un));
+	bind_addr_len = static_cast<socklen_t>(
+		offsetof(struct sockaddr_un, sun_path) + bind_path.size() + 1);
+	has_bind_address = true;
+}
+
+bool ProxySQL_RESTAPI_Server::capture_unix_socket_ownership() {
+	if (unix_socket_dir_fd < 0 || unix_socket_leaf.empty()) return false;
+	struct stat st {};
+	if (fstatat(unix_socket_dir_fd, unix_socket_leaf.c_str(), &st,
+			AT_SYMLINK_NOFOLLOW) == 0 && S_ISSOCK(st.st_mode) &&
+		st.st_uid == geteuid()) {
+		unix_socket_dev = st.st_dev;
+		unix_socket_ino = st.st_ino;
+		unix_socket_path_owned = true;
+		return true;
+	} else {
+		proxy_error("Unable to verify Unix socket '%s' after listener start\n",
+			unix_socket_path.c_str());
+	}
+	return false;
+}
+
+void ProxySQL_RESTAPI_Server::cleanup_unix_socket() {
+	if (unix_socket_dir_fd >= 0) {
+		if (unix_socket_path_owned && !unix_socket_leaf.empty()) {
+			struct stat st {};
+			if (fstatat(unix_socket_dir_fd, unix_socket_leaf.c_str(), &st,
+					AT_SYMLINK_NOFOLLOW) == 0 && S_ISSOCK(st.st_mode) &&
+				st.st_uid == geteuid() &&
+				st.st_dev == unix_socket_dev && st.st_ino == unix_socket_ino) {
+				unlinkat(unix_socket_dir_fd, unix_socket_leaf.c_str(), 0);
+			}
+		}
+		close(unix_socket_dir_fd);
+		unix_socket_dir_fd = -1;
+	}
+	unix_socket_path_owned = false;
+}
+
+// PEM prevalidation rejects bad TLS material before bind, but it cannot prove
+// every later MHD start step succeeds (listen, nonblocking setup, epoll, TLS
+// initialization or thread creation). The pinned-parent ownership check above
+// is what makes post-bind failures clean up their Unix pathname.
+static bool validate_restapi_tls_material(
+	const ProxySQL_RESTAPI_Config& config,
+	std::string& error
+) {
+	// libmicrohttpd consumes these as NUL-terminated C strings. Measure the
+	// same prefix it will parse so embedded NUL bytes cannot make prevalidation
+	// inspect a longer PEM than MHD later installs.
+	const size_t key_len = std::strlen(config.ssl_key_pem.c_str());
+	const size_t cert_len = std::strlen(config.ssl_cert_pem.c_str());
+	const size_t ca_len = std::strlen(config.ssl_ca_pem.c_str());
+	if (key_len > std::numeric_limits<unsigned int>::max() ||
+		cert_len > std::numeric_limits<unsigned int>::max() ||
+		ca_len > std::numeric_limits<unsigned int>::max()) {
+		error = "REST TLS material is too large";
+		return false;
+	}
+
+	gnutls_certificate_credentials_t credentials = nullptr;
+	int rc = gnutls_certificate_allocate_credentials(&credentials);
+	if (rc != GNUTLS_E_SUCCESS) {
+		error = "cannot allocate TLS credentials: " + std::string(gnutls_strerror(rc));
+		return false;
+	}
+
+	bool valid = true;
+	if (config.verify_client) {
+		gnutls_datum_t trust {};
+		trust.data = reinterpret_cast<unsigned char*>(
+			const_cast<char*>(config.ssl_ca_pem.data()));
+		trust.size = static_cast<unsigned int>(ca_len);
+
+		rc = gnutls_certificate_set_x509_trust_mem(
+			credentials, &trust, GNUTLS_X509_FMT_PEM);
+		if (rc < 0) {
+			error = "admin-restapi_ssl_ca is not valid PEM: " +
+				std::string(gnutls_strerror(rc));
+			valid = false;
+		} else if (rc == 0) {
+			error = "admin-restapi_ssl_ca contains no trust anchors";
+			valid = false;
+		}
+	}
+
+	if (valid) {
+		gnutls_datum_t key {};
+		key.data = reinterpret_cast<unsigned char*>(
+			const_cast<char*>(config.ssl_key_pem.data()));
+		key.size = static_cast<unsigned int>(key_len);
+
+		gnutls_datum_t cert {};
+		cert.data = reinterpret_cast<unsigned char*>(
+			const_cast<char*>(config.ssl_cert_pem.data()));
+		cert.size = static_cast<unsigned int>(cert_len);
+
+		rc = gnutls_certificate_set_x509_key_mem(
+			credentials, &cert, &key, GNUTLS_X509_FMT_PEM);
+		if (rc < 0) {
+			error = "REST TLS certificate/key pair is invalid: " +
+				std::string(gnutls_strerror(rc));
+			valid = false;
+		}
+	}
+
+	gnutls_certificate_free_credentials(credentials);
+	return valid;
+}
+
+static ProxySQL_RESTAPI_Config make_default_restapi_config(int port) {
+	ProxySQL_RESTAPI_Config config {};
+	config.port = port;
+	return config;
+}
+
 ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	int p,
 	vector<pair<std::string, function<shared_ptr<http_response>(const http_request&)>>> endpoints
-) {
-	// NOTE: Right now ProxySQL is using the simplest mode of 'libhttpserver' for serving 'REST' queries,
-	// in the current mode concurrency on serving requests is low, and throughput is directly related with
-	// the time required to execute the target script, since each of the calls are blocking.
+) : ProxySQL_RESTAPI_Server(make_default_restapi_config(p), std::move(endpoints)) {
+}
+
+ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
+	const ProxySQL_RESTAPI_Config& config_,
+	vector<pair<std::string, function<shared_ptr<http_response>(const http_request&)>>> endpoints
+) : port(config_.port) {
+	std::string parse_error;
+	if (!ProxySQL_RESTAPI_parse_bind_address(
+			config_.interface_name, config_.port,
+			has_bind_address, bind_addr, bind_addr_len, unix_socket_path, parse_error)) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': %s\n", parse_error.c_str());
+		return;
+	}
+
+	if (config_.verify_client && !config_.use_ssl) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': "
+			"admin-restapi_ssl_verify_client=true requires admin-restapi_use_ssl=true. "
+			"Refusing to serve plain HTTP.\n"
+		);
+		return;
+	}
+	if (config_.use_ssl && (config_.ssl_key_pem.empty() || config_.ssl_cert_pem.empty())) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': SSL certificates are not loaded. "
+			"Refusing to fall back to plain HTTP.\n"
+		);
+		return;
+	}
+	if (config_.verify_client && config_.ssl_ca_pem.empty()) {
+		proxy_error(
+			"Unable to start 'ProxySQL_RestAPI_Server': client certificate verification "
+			"requires a non-empty CA (admin-restapi_ssl_ca or ProxySQL's CA PEM).\n"
+		);
+		return;
+	}
+	if (config_.use_ssl) {
+		std::string tls_error;
+		if (!validate_restapi_tls_material(config_, tls_error)) {
+			proxy_error(
+				"Unable to start 'ProxySQL_RestAPI_Server': %s\n", tls_error.c_str()
+			);
+			return;
+		}
+	}
+
+	if (!unix_socket_path.empty()) {
+		prepare_unix_socket();
+		if (unix_socket_dir_fd < 0) {
+			return;
+		}
+	}
+
+	try {
+		// NOTE: Right now ProxySQL is using the simplest mode of 'libhttpserver' for serving 'REST' queries,
+		// in the current mode concurrency on serving requests is low, and throughput is directly related with
+		// the time required to execute the target script, since each of the calls are blocking.
 #if defined(__FreeBSD__) || defined(__APPLE__)
-	ws = std::unique_ptr<httpserver::webserver>(new webserver(
-		create_webserver(p)
+		auto server_config = create_webserver(port)
 			.no_post_process()
-			.start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION)
-	));
+			.start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION);
 #else
-	ws = std::unique_ptr<httpserver::webserver>(new webserver(
-		create_webserver(p).no_post_process()
-	));
+		auto server_config = create_webserver(port).no_post_process();
 #endif
-	// NOTE: Enable for benchmarking purposes. In this mode each request will be served by it's own thread.
-	// ws = std::unique_ptr<httpserver::webserver>(new webserver(create_webserver(p).start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION)));
-	auto sr = new sync_resource();
+		if (config_.use_ssl) {
+			server_config.use_ssl()
+				.raw_https_mem_key(config_.ssl_key_pem)
+				.raw_https_mem_cert(config_.ssl_cert_pem);
+			if (config_.verify_client) {
+				// Only mTLS listeners install a trust store; ordinary HTTPS
+				// must not request a client certificate.
+				server_config.raw_https_mem_trust(config_.ssl_ca_pem)
+					.require_client_cert();
+			}
+		} else {
+			server_config.no_ssl();
+		}
+		if (has_bind_address) {
+			if (bind_addr.ss_family == AF_INET6) {
+				server_config.use_ipv6();
+			}
+			server_config.bind_address(
+				reinterpret_cast<const struct sockaddr*>(&bind_addr), bind_addr_len);
+		}
 
-	endpoint = std::unique_ptr<httpserver::http_resource>(sr);
+		ws = std::unique_ptr<httpserver::webserver>(new webserver(server_config));
+	} catch (const std::exception& e) {
+		proxy_error("Unable to create 'ProxySQL_RestAPI_Server': %s\n", e.what());
+		cleanup_unix_socket();
+		return;
+	}
 
-    ws->register_resource("/sync", endpoint.get(), true);
+	// Each resource owns the per-listener gate through shutdown.
+	auto dispatch_ready = std::make_shared<std::atomic<bool>>(false);
+
+	endpoint = std::unique_ptr<httpserver::http_resource>(
+		new dispatch_gated_resource<sync_resource>(dispatch_ready));
+
+	ws->register_resource("/sync", endpoint.get(), true);
 
 #ifdef PROXYSQLTSDB
-	auto tsdb_res = new tsdb_resource();
-	tsdb_endpoint = std::unique_ptr<httpserver::http_resource>(tsdb_res);
+	tsdb_endpoint = std::unique_ptr<httpserver::http_resource>(
+		new dispatch_gated_resource<tsdb_resource>(dispatch_ready));
 	ws->register_resource("/api/tsdb/metrics", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/query", tsdb_endpoint.get(), true);
 	ws->register_resource("/api/tsdb/status", tsdb_endpoint.get(), true);
@@ -536,8 +1086,10 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	/* Serve the dashboard HTML and its Chart.bundle.js asset on the
 	 * same port as the API, so the dashboard's relative fetch() calls
 	 * are same-origin. See issue #5684. */
-	tsdb_dashboard_endpoint = std::unique_ptr<httpserver::http_resource>(new tsdb_dashboard_resource());
-	tsdb_chart_js_endpoint = std::unique_ptr<httpserver::http_resource>(new tsdb_chart_js_resource());
+	tsdb_dashboard_endpoint = std::unique_ptr<httpserver::http_resource>(
+		new dispatch_gated_resource<tsdb_dashboard_resource>(dispatch_ready));
+	tsdb_chart_js_endpoint = std::unique_ptr<httpserver::http_resource>(
+		new dispatch_gated_resource<tsdb_chart_js_resource>(dispatch_ready));
 	ws->register_resource("/tsdb", tsdb_dashboard_endpoint.get(), true);
 	ws->register_resource("/Chart.bundle.js", tsdb_chart_js_endpoint.get(), true);
 #endif
@@ -545,24 +1097,61 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 		const std::string& endpoint_route = id_endpoint.first;
 		auto endpoint_fn = id_endpoint.second;
 		std::unique_ptr<httpserver::http_resource> endpoint_res =
-			std::unique_ptr<httpserver::http_resource>(new gen_get_endpoint(endpoint_fn));
+			std::unique_ptr<httpserver::http_resource>(
+				new dispatch_gated_resource<gen_get_endpoint>(dispatch_ready, endpoint_fn));
 
 		ws->register_resource(endpoint_route, endpoint_res.get(), true);
 		_endpoints.push_back({endpoint_route, std::move(endpoint_res)});
 	}
 
 	// Finish constructing and registering resources before requests can read them.
-	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws.get()) !=0 ) {
-		perror("Thread creation");
-		exit(EXIT_FAILURE);
+	// Start non-blocking so bind/TLS/CA failures are reported here instead of
+	// escaping a thread and calling std::terminate. MHD accepts connections as
+	// soon as start() returns, so handlers stay gated (503) until the post-bind
+	// Unix ownership verification below succeeds.
+	try {
+		ws->start(false);
+	} catch (const std::exception& e) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server' on port %d: %s\n", port, e.what());
+		ws.reset();
+		capture_unix_socket_ownership();
+		cleanup_unix_socket();
+		return;
 	}
+	if (!ws->is_running()) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server' on port %d\n", port);
+		ws.reset();
+		capture_unix_socket_ownership();
+		cleanup_unix_socket();
+		return;
+	}
+	if (!unix_socket_path.empty() && !capture_unix_socket_ownership()) {
+		// A renamed ancestor may have routed bind outside the pinned directory.
+		// Stop serving; never claim or unlink a path outside that directory.
+		ws->stop();
+		ws.reset();
+		cleanup_unix_socket();
+		return;
+	}
+	dispatch_ready->store(true, std::memory_order_release);
+	proxy_info(
+		"Started 'ProxySQL_RestAPI_Server' on %s (%s%s)\n",
+		unix_socket_path.empty() ? std::to_string(port).c_str() : unix_socket_path.c_str(),
+		config_.use_ssl ? "HTTPS" : "HTTP",
+		config_.verify_client ? ", client certificates required" : ""
+	);
 }
 
 ProxySQL_RESTAPI_Server::~ProxySQL_RESTAPI_Server() {
+	// Stop dispatching before resources and the gate are destroyed.
 	if (ws) {
-    	ws->stop();
-		pthread_join(thread_id, NULL);
+		ws->stop();
 	}
+	cleanup_unix_socket();
+}
+
+bool ProxySQL_RESTAPI_Server::is_running() const {
+	return ws && ws->is_running();
 }
 
 void ProxySQL_RESTAPI_Server::init() {

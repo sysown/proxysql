@@ -2,6 +2,10 @@
 #include "cpp.h"
 #include "openssl/x509v3.h"
 
+// Declared in proxysql_admin.h. Kept as a free function to avoid pulling the
+// admin class into this file; it only queues the listener reload.
+extern void ProxySQL_request_restapi_reload();
+
 static long
 get_file_size (const char *filename) {
 	FILE *fp;
@@ -519,6 +523,12 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		GloVars.global.tls_load_count++;
 		GloVars.global.tls_last_load_timestamp = time(NULL);
 		GloVars.global.tls_last_load_ok = false;
+	}
+	if (ret == 0 && !bootstrap) {
+		// Queue the REST listener restart on its lifecycle worker. A /sync
+		// handler may itself be the caller of PROXYSQL RELOAD TLS, so waiting
+		// for the listener here would deadlock MHD_stop_daemon.
+		ProxySQL_request_restapi_reload();
 	}
 	X509_free(x509);
 	EVP_PKEY_free(pkey);

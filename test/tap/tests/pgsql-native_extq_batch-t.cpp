@@ -211,18 +211,68 @@ static void dropRules(PGconn* admin) {
 	exec(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 }
 
+struct PgsqlVariableSnapshots {
+	PGconn* admin;
+	std::string memory;
+	std::string runtime;
+	bool memory_created = false;
+	bool runtime_created = false;
+	bool state_restored = false;
+
+	bool capture() {
+		memory_created = exec(admin, "CREATE TEMP TABLE temp." + memory +
+			" AS SELECT * FROM global_variables WHERE variable_name LIKE 'pgsql-%'");
+		if (!memory_created) return false;
+		runtime_created = exec(admin, "CREATE TEMP TABLE temp." + runtime +
+			" AS SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'");
+		return runtime_created;
+	}
+
+	bool drop_owned() {
+		bool cleaned = true;
+		if (memory_created) {
+			if (exec(admin, "DROP TABLE IF EXISTS temp." + memory)) memory_created = false;
+			else cleaned = false;
+		}
+		if (runtime_created) {
+			if (exec(admin, "DROP TABLE IF EXISTS temp." + runtime)) runtime_created = false;
+			else cleaned = false;
+		}
+		return cleaned;
+	}
+
+	bool restore() {
+		if (!state_restored) {
+			if (!memory_created || !runtime_created) return false;
+			const bool staged = exec(admin, "UPDATE global_variables SET variable_value=(SELECT variable_value FROM temp." + runtime +
+				" WHERE variable_name=global_variables.variable_name) WHERE variable_name LIKE 'pgsql-%'");
+			const bool loaded = staged && exec(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+			const bool memory_restored = exec(admin, "UPDATE global_variables SET variable_value=(SELECT variable_value FROM temp." + memory +
+				" WHERE variable_name=global_variables.variable_name) WHERE variable_name LIKE 'pgsql-%'");
+			if (!staged || !loaded || !memory_restored) return false;
+			state_restored = true;
+		}
+		return drop_owned();
+	}
+};
+
 int main(int, char**) {
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-	plan(61);
+	plan(64);
 	tag = std::to_string(getpid()) + "_" + std::to_string(time(nullptr) % 100000);
 
 	PGConnPtr admin = openConn(cl.pgsql_admin_host, cl.pgsql_admin_port, cl.admin_username, cl.admin_password, nullptr);
 	PGConnPtr be = openConn(cl.pgsql_server_host, cl.pgsql_server_port, cl.pgsql_server_username, cl.pgsql_server_password, cl.pgsql_username);
 	if (PQstatus(admin.get()) != CONNECTION_OK || PQstatus(be.get()) != CONNECTION_OK)
 		BAIL_OUT("cannot reach the admin interface or the backend");
+	PgsqlVariableSnapshots snapshots {admin.get(), "batch_pg_memory_" + tag, "batch_pg_runtime_" + tag};
+	if (!snapshots.capture()) {
+		const bool cleaned = snapshots.drop_owned();
+		BAIL_OUT("cannot snapshot PGSQL memory/runtime variables%s", cleaned ? "" : "; owned TEMP cleanup failed");
+	}
 	dropRules(admin.get());
 	const char* mode_name[2] = { "libpq", "native" };
 	std::string r[2];
@@ -486,6 +536,49 @@ int main(int, char**) {
 			ok(command == "Execute batch" && out == "1 2 D= C 1 2 D=1 C Z(I)",
 				"%s: the unit runs as one batch [%s, %s]", label[k], command.c_str(), out.c_str());
 		}
+	}
+
+	// --- A statement naming set_config() is kept out of the batch only while set_config()
+	// tracking is on (pgsql-set_parser_algorithm=3): with it off nothing records the call.
+	{
+		setNativeMode(admin.get(), true);
+		const std::string saved = execScalar(admin.get(),
+			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
+		const std::string saved_parser = execScalar(admin.get(),
+			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-query_processor_parser'");
+		const std::string saved_parser_runtime = execScalar(admin.get(),
+			"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-query_processor_parser'");
+		exec(admin.get(), "SET pgsql-query_processor_parser=0");
+		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		const char* algo[2] = { "2", "3" };
+		for (int k = 0; k < 2; k++) {
+			exec(admin.get(), std::string("SET pgsql-set_parser_algorithm=") + algo[k]);
+			exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+			const std::string mark = "scbatch_" + tag + "_" + algo[k];
+			std::string command;
+			run([&]() {
+				auto c = client();
+				pbe(*c, "", "SELECT pg_sleep(1.5) AS " + mark + ", set_config('extq_batch.flag', 'x', false)");
+				pbe(*c, "", "SELECT 1 AS " + mark + "_b");
+				c->sendSync();
+				usleep(600000);
+				const std::string pid = execScalar(be.get(), "SELECT pid FROM pg_stat_activity WHERE query LIKE '%" + mark
+					+ "%' AND pid <> pg_backend_pid()");
+				command = pid.empty() ? "no backend found" :
+					execScalar(admin.get(), "SELECT command FROM stats_pgsql_processlist WHERE backend_pid=" + pid);
+				return replies(*c);
+			});
+			if (k == 0) {
+				ok(command == "Execute batch", "set_config tracking off: a set_config() statement is batched [%s]", command.c_str());
+			} else {
+				ok(command == "Execute",
+					"set_config tracking on: a set_config() statement runs on its own [%s]", command.c_str());
+			}
+		}
+		exec(admin.get(), "SET pgsql-set_parser_algorithm=" + saved);
+		exec(admin.get(), "SET pgsql-query_processor_parser=" + saved_parser_runtime);
+		exec(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
+		exec(admin.get(), "SET pgsql-query_processor_parser=" + saved_parser);
 	}
 
 	// --- A multiplex=0 rule pins the connection to the session after a batched unit.
@@ -996,5 +1089,8 @@ int main(int, char**) {
 
 	dropRules(admin.get());
 	setNativeMode(admin.get(), false);
+	// Qualify every snapshot reference and DROP with temp. so an absent temp table can never resolve to a
+	// persistent table of the same name; short-circuiting retains the backups when restoration fails.
+	ok(snapshots.restore(), "PGSQL memory and runtime variables restored separately");
 	return exit_status();
 }

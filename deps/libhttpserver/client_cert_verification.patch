@@ -1,0 +1,202 @@
+--- a/src/httpserver/create_webserver.hpp	2020-09-13 04:58:48.000000000 +0000
++++ b/src/httpserver/create_webserver.hpp	2026-11-09 00:18:39.559650670 +0000
+@@ -106,7 +106,11 @@
+         }
+         create_webserver& bind_address(const struct sockaddr* bind_address)
+         {
+-            _bind_address = bind_address; return *this;
++            _bind_address = bind_address; _bind_address_len = 0; return *this;
++        }
++        create_webserver& bind_address(const struct sockaddr* bind_address, socklen_t bind_address_len)
++        {
++            _bind_address = bind_address; _bind_address_len = bind_address_len; return *this;
+         }
+         create_webserver& bind_socket(int bind_socket)
+         {
+@@ -118,6 +122,7 @@
+         }
+         create_webserver& use_ssl() { _use_ssl = true; return *this; }
+         create_webserver& no_ssl() { _use_ssl = false; return *this; }
++        create_webserver& require_client_cert(bool require = true) { _require_client_cert = require; return *this; }
+         create_webserver& use_ipv6() { _use_ipv6 = true; return *this; }
+         create_webserver& no_ipv6() { _use_ipv6 = false; return *this; }
+         create_webserver& use_dual_stack() { _use_dual_stack = true; return *this; }
+@@ -271,9 +276,11 @@
+         validator_ptr _validator = 0x0;
+         unescaper_ptr _unescaper = 0x0;
+         const struct sockaddr* _bind_address = 0x0;
++        socklen_t _bind_address_len = 0;
+         int _bind_socket = 0;
+         int _max_thread_stack_size = 0;
+         bool _use_ssl = false;
++        bool _require_client_cert = false;
+         bool _use_ipv6 = false;
+         bool _use_dual_stack = false;
+         bool _debug = false;
+--- a/src/httpserver/webserver.hpp	2020-09-13 04:58:48.000000000 +0000
++++ b/src/httpserver/webserver.hpp	2026-11-09 00:18:42.704656509 +0000
+@@ -145,11 +145,13 @@
+         validator_ptr validator;
+         unescaper_ptr unescaper;
+         const struct sockaddr* bind_address;
++        const socklen_t bind_address_len;
+         /* Changed type to MHD_socket because this type will always reflect the
+         platform's actual socket type (e.g. SOCKET on windows, int on unixes)*/
+         MHD_socket bind_socket;
+         const int max_thread_stack_size;
+         const bool use_ssl;
++        const bool require_client_cert;
+         const bool use_ipv6;
+         const bool use_dual_stack;
+         const bool debug;
+--- a/src/webserver.cpp	2020-09-13 04:58:48.000000000 +0000
++++ b/src/webserver.cpp	2026-11-09 00:18:54.279677984 +0000
+@@ -48,6 +48,9 @@
+ #include <utility>
+ #include <vector>
+-
++
++#include <gnutls/gnutls.h>
++#include <gnutls/x509.h>
++
+ #include "gettext.h"
+ #include "httpserver/create_webserver.hpp"
+ #include "httpserver/details/http_endpoint.hpp"
+@@ -136,9 +139,11 @@
+     validator(params._validator),
+     unescaper(params._unescaper),
+     bind_address(params._bind_address),
++    bind_address_len(params._bind_address_len),
+     bind_socket(params._bind_socket),
+     max_thread_stack_size(params._max_thread_stack_size),
+     use_ssl(params._use_ssl),
++    require_client_cert(params._require_client_cert),
+     use_ipv6(params._use_ipv6),
+     use_dual_stack(params._use_dual_stack),
+     debug(params._debug),
+@@ -247,6 +252,16 @@
+     iov.push_back(gen(MHD_OPTION_CONNECTION_TIMEOUT, connection_timeout));
+     if(bind_socket != 0)
+         iov.push_back(gen(MHD_OPTION_LISTEN_SOCKET, bind_socket));
++    if(bind_address != 0x0)
++    {
++        if(bind_address_len != 0)
++            iov.push_back(gen(MHD_OPTION_SOCK_ADDR_LEN,
++                        (intptr_t)bind_address_len,
++                        (void*)bind_address));
++        else
++            iov.push_back(gen(MHD_OPTION_SOCK_ADDR, 0,
++                        (void*)bind_address));
++    }
+     if(start_method == http_utils::THREAD_PER_CONNECTION && (max_threads != 0 || max_thread_stack_size != 0))
+     {
+         throw std::invalid_argument("Cannot specify maximum number of threads when using a thread per connection");
+@@ -317,21 +332,12 @@
+ #endif
+-
++
+     daemon = NULL;
+-    if(bind_address == 0x0) {
+-        daemon = MHD_start_daemon
+-        (
+-                start_conf, port, &policy_callback, this,
+-                &answer_to_connection, this, MHD_OPTION_ARRAY,
+-                &iov[0], MHD_OPTION_END
+-        );
+-    } else {
+-        daemon = MHD_start_daemon
+-        (
+-                start_conf, 1, &policy_callback, this,
+-                &answer_to_connection, this, MHD_OPTION_ARRAY,
+-                &iov[0], MHD_OPTION_SOCK_ADDR, bind_address, MHD_OPTION_END
+-        );
+-    }
++    daemon = MHD_start_daemon
++    (
++            start_conf, port, &policy_callback, this,
++            &answer_to_connection, this, MHD_OPTION_ARRAY,
++            &iov[0], MHD_OPTION_END
++    );
+-
++
+     if(daemon == NULL)
+     {
+@@ -748,6 +754,48 @@
+     return finalize_answer(connection, mr, method);
+ }
+-
++
++/**
++ * Validate the client certificate of the real GnuTLS session. libmicrohttpd
++ * only *requests* a client certificate when a trust PEM is configured; it
++ * never verifies the presented chain. This check runs in the request path
++ * before any resource lookup, so every handler (including /sync and
++ * /metrics) is behind the same gate.
++ *
++ * gnutls_certificate_verify_peers() verifies the peer chain against the
++ * session trust store (issuer/trust, validity period, signature) and, through
++ * GNUTLS_DT_KEY_PURPOSE_OID, the TLS client-authentication purpose. A return
++ * value >= 0 is NOT sufficient: status must also be zero.
++ */
++static bool client_certificate_is_valid(MHD_Connection* connection)
++{
++    const MHD_ConnectionInfo* info = MHD_get_connection_info(
++        connection, MHD_CONNECTION_INFO_GNUTLS_SESSION);
++    if (info == nullptr || info->tls_session == nullptr)
++        return false;
++
++    gnutls_session_t session =
++        static_cast<gnutls_session_t>(info->tls_session);
++    if (gnutls_certificate_type_get(session) != GNUTLS_CRT_X509)
++        return false;
++
++    unsigned int peers_size = 0;
++    const gnutls_datum_t* peers =
++        gnutls_certificate_get_peers(session, &peers_size);
++    if (peers == nullptr || peers_size == 0)
++        return false;
++
++    gnutls_typed_vdata_st vdata {};
++    vdata.type = GNUTLS_DT_KEY_PURPOSE_OID;
++    vdata.data = reinterpret_cast<unsigned char*>(
++        const_cast<char*>(GNUTLS_KP_TLS_WWW_CLIENT));
++    vdata.size = 0;
++
++    unsigned int status = 0;
++    const int rc = gnutls_certificate_verify_peers(
++        session, &vdata, 1, &status);
++    return rc >= 0 && status == 0;
++}
++
+ MHD_Result webserver::answer_to_connection(void* cls, MHD_Connection* connection,
+     const char* url, const char* method,
+     const char* version, const char* upload_data,
+@@ -757,6 +805,27 @@
+     struct details::modded_request* mr =
+         static_cast<struct details::modded_request*>(*con_cls);
+-
++
++    if (static_cast<webserver*>(cls)->require_client_cert &&
++        !client_certificate_is_valid(connection))
++    {
++        static const char forbidden[] =
++            "Forbidden: a valid client certificate is required";
++        struct MHD_Response* raw = MHD_create_response_from_buffer(
++            sizeof(forbidden) - 1, const_cast<char*>(forbidden),
++            MHD_RESPMEM_PERSISTENT);
++        bool queued = false;
++        if (raw != nullptr)
++        {
++            MHD_add_response_header(
++                raw, MHD_HTTP_HEADER_CONTENT_TYPE, "text/plain");
++            queued = (MHD_YES ==
++                MHD_queue_response(connection, MHD_HTTP_FORBIDDEN, raw));
++            MHD_destroy_response(raw);
++        }
++        /* Fail closed: if the 403 cannot be queued, drop the connection. */
++        return queued ? MHD_YES : MHD_NO;
++    }
++
+     if(mr->second != false)
+     {
+         return static_cast<webserver*>(cls)->
