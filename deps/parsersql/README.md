@@ -22,6 +22,13 @@ related dialect-aware parsing paths.
 the tarball (renaming `ParserSQL-*` → `parsersql-*` for case-insensitive
 filesystem friendliness) and runs `make lib` inside it.
 
+## Local patches
+
+`utf8-identifiers.patch` adds validated UTF-8 identifier tokenization and
+regression tests to ParserSQL 1.1.1. The dependency recipe applies it before
+building; the upstream release tarball remains unchanged. This fixes non-ASCII
+identifiers in MCP read-only validation without suppressing lexer errors.
+
 ## Upstream
 
 - Repository: **https://github.com/ProxySQL/ParserSQL**

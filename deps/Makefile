@@ -500,10 +500,11 @@ libscram/lib/libscram.a: postgresql/postgresql/src/interfaces/libpq/libpq.a $(OP
 libscram: libscram/lib/libscram.a
 
 
-parsersql/parsersql/libsqlparser.a:
+parsersql/parsersql/libsqlparser.a: parsersql/utf8-identifiers.patch
 	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 	cd parsersql && tar -zxf parsersql-*.tar.gz
 	cd parsersql && for d in ParserSQL-*/; do [ -d "$$d" ] && mv "$$d" "parsersql-$${d#ParserSQL-}"; done || true
+	cd parsersql/parsersql && patch -p1 < ../utf8-identifiers.patch
 	cd parsersql/parsersql && CC=${CC} CXX=${CXX} ${MAKE} lib
 
 parsersql: parsersql/parsersql/libsqlparser.a
