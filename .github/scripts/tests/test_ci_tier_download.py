@@ -7,12 +7,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
 import tempfile
+import time
 import threading
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ci_tier_artifacts import GitHubAPI
+from ci_tier_artifacts import ArtifactLocation, GitHubAPI
 
 
 @contextlib.contextmanager
@@ -262,6 +263,22 @@ class DownloadTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, f'HTTP {status}'):
                         GitHubAPI('repo', token='private-token').download(url, Path(folder)/'handoff.zip', len(payload))
                 self.assertEqual([path for path, _, _ in requests], ['/api']*expected)
+
+    def test_cancelled_redirect_retry_does_not_poison_fallback_location(self):
+        cancelled = threading.Event()
+        with artifact_server('plain', on_api_request=cancelled.set,
+                api_failures=(500,)) as (url, _, requests):
+            locations = ArtifactLocation(url, 'private-token')
+            deadline = time.monotonic()+60
+            with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+                locations.get(deadline, cancelled)
+            # Range fallback reuses this resolver with a fresh cancellation event.
+            try:
+                location = locations.get(deadline, threading.Event())
+            except RuntimeError as error:
+                self.fail(f'fallback resolver inherited an earlier cancellation: {error}')
+            self.assertTrue(location.endswith('/blob?secret'))
+            self.assertEqual([path for path, _, _ in requests], ['/api', '/api'])
 
     def test_parallel_range_ignored_falls_back_to_single_download(self):
         with artifact_server('ignore-range') as (url, payload, requests), tempfile.TemporaryDirectory() as folder:

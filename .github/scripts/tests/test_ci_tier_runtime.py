@@ -198,6 +198,7 @@ class RuntimeTests(unittest.TestCase):
  def test_source_artifact_token_is_separate_from_reporting_token(self):
   with patch.dict(os.environ,{'SOURCE_ARTIFACTS_TOKEN':'fixture-read-token'}),patch.object(runtime,'GitHubAPI') as api:
    runtime.api_for(self.ctx())
+   api.assert_called_once()
    self.assertEqual(api.call_args.args,('sysown/proxysql',))
    self.assertEqual(api.call_args.kwargs['token'],'fixture-read-token')
 

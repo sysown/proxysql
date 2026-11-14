@@ -77,6 +77,21 @@ class TransportTests(unittest.TestCase):
         _, _, _, log = self.invoke([reply], raw=True)
         self.assertIn('x-ratelimit-remaining=39', log)
 
+    def test_final_rate_limit_quota_overrides_redirect_quota(self):
+        reply = response(302, ['X-RateLimit-Remaining: 42',
+                               'X-RateLimit-Reset: 1000'], body=b'')
+        reply.stdout += response(403, ['X-RateLimit-Remaining: 0',
+                                       'X-RateLimit-Reset: 1030']).stdout
+        reply.returncode = 1
+        try:
+            result, calls, waits, log = self.invoke([reply, response()])
+        except RuntimeError as error:
+            self.fail(f'Final quota must allow the rate-limit retry: {error}')
+        self.assertEqual(result, {'id': 7})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(waits, [30])
+        self.assertIn('status=403 x-ratelimit-remaining=0 x-ratelimit-reset=1030', log)
+
     def test_http_status_is_available_in_safe_failure_message(self):
         with self.assertRaisesRegex(RuntimeError, 'HTTP 422'):
             self.invoke([response(422, code=1)])

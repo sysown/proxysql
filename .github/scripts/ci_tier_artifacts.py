@@ -79,7 +79,9 @@ class ArtifactLocation:
                 try:
                     self.location=self.resolve(deadline,cancelled)
                 except RuntimeError as error:
-                    self.failure=str(error)
+                    # Cancellation belongs to this worker group; range fallback
+                    # reuses the resolver with a fresh cancellation event.
+                    if not cancelled.is_set():self.failure=str(error)
                     raise
             return self.location
         finally:
@@ -248,28 +250,30 @@ class GitHubAPI:
     def artifacts(self,run_id):
         return self.pages(f'repos/{self.repository}/actions/runs/{int(run_id)}/artifacts','artifacts')
     def json_artifact(self,run_id,name,filename):
-        # Freeze only attempt-qualified plans/manifests within this job. Mutable
-        # selections, registrations and artifact inventories must stay fresh.
+        # The runner cache is writable by product code. Authenticate its bytes
+        # against a fresh GitHub artifact digest before parsing any metadata.
+        artifact=select_artifact(self.artifacts(run_id),name)
+        digest=artifact.get('digest') or ''
         cache=None
         identity=[self.repository,int(run_id),name,filename]
-        if self.cache_dir is not None and re.fullmatch(r'ci-(?:plan|manifest)-t\d+-a\d+-b\d+-a\d+',name):
+        if (self.cache_dir is not None and re.fullmatch(r'ci-(?:plan|manifest)-t\d+-a\d+-b\d+-a\d+',name)
+            and re.fullmatch(r'sha256:[0-9a-fA-F]{64}',digest)):
             key=hashlib.sha256(json.dumps(identity).encode()).hexdigest()
-            cache=self.cache_dir/(key+'.json')
-            if cache.exists():
-                record=json.loads(cache.read_text())
-                if record['identity']!=identity:raise ValueError('metadata cache identity mismatch')
-                return record['value']
-        artifact=select_artifact(self.artifacts(run_id),name)
-        raw=self.request(f"repos/{self.repository}/actions/artifacts/{artifact['id']}/zip",raw=True)
+            cache=self.cache_dir/(key+'.zip')
+        cached=cache is not None and cache.exists()
+        raw=cache.read_bytes() if cached else self.request(
+            f"repos/{self.repository}/actions/artifacts/{artifact['id']}/zip",raw=True)
+        if cache is not None and 'sha256:'+hashlib.sha256(raw).hexdigest()!=digest.lower():
+            raise ValueError('metadata artifact checksum mismatch')
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             value=json.loads(archive.read(filename))
-        if cache is not None:
+        if cache is not None and not cached:
             self.cache_dir.mkdir(parents=True,exist_ok=True,mode=0o700)
             temporary=None
             try:
-                with tempfile.NamedTemporaryFile(mode='w',dir=self.cache_dir,delete=False) as out:
+                with tempfile.NamedTemporaryFile(mode='wb',dir=self.cache_dir,delete=False) as out:
                     temporary=Path(out.name)
-                    json.dump(dict(identity=identity,value=value),out)
+                    out.write(raw)
                 temporary.replace(cache)
             finally:
                 if temporary is not None:temporary.unlink(missing_ok=True)

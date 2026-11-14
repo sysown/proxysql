@@ -43,7 +43,7 @@ def api_for(plan):
     options={}
     scope=[os.environ.get(key) for key in ('GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_JOB')]
     if os.environ.get('RUNNER_TEMP') and all(scope):
-        # Separate subprocess steps reuse metadata, but other jobs/reruns cannot.
+        # Reuse verified archive bytes across steps, scoped to this job attempt.
         key=hashlib.sha256(json.dumps(scope).encode()).hexdigest()
         options['cache_dir']=Path(os.environ['RUNNER_TEMP'])/'ci-tier-metadata'/key
     return GitHubAPI(plan['repository'],token=os.environ.get('SOURCE_ARTIFACTS_TOKEN') or None,**options)

@@ -35,7 +35,8 @@ def _response(data):
             name, sep, value = line.partition(b':')
             if sep:
                 headers[name.decode('ascii', errors='ignore').lower()] = value.decode('latin1').strip()
-        headers.update(quota)
+        for name, value in quota.items():
+            headers.setdefault(name, value)
         data = data[end.end():]
         if not (100 <= status < 200 or 300 <= status < 400):
             return status, headers, data
