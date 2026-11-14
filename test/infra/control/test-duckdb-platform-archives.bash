@@ -5,6 +5,8 @@ repo_root=$(CDPATH='' cd -- "${script_dir}/../../.." && pwd)
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
 
+printf '!<arch>\n' > "$fixture/libmariadbclient.a"
+
 # Exercise the real plugin link recipe without compiling DuckDB or the plugin.
 cat > "$fixture/linker" <<'LINKER'
 #!/usr/bin/env bash
@@ -30,7 +32,7 @@ check_archives() {
     make --no-print-directory -s -C "$repo_root/plugins/duckdb" \
         UNAME_S="$platform" PROXYSQL_PATH="$repo_root" \
         DUCKDB_PATH="$fixture" DUCKDB_LDIR="$fixture/build/release/src" \
-        PLUGIN_SO="$fixture/plugin.so" OBJS= CXX="$fixture/linker" \
+        MARIADB_LDIR="$fixture" PLUGIN_SO="$fixture/plugin.so" OBJS= CXX="$fixture/linker" \
         > "$fixture/output" 2>&1 || result=$?
     if [[ "$expected" == pass ]]; then
         if [[ "$result" != 0 ]] || ! grep -q 'plugin linker reached' "$fixture/output"; then

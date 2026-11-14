@@ -98,7 +98,7 @@ CXXFLAGS += -fstack-protector-strong
 DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
 DUCKDB_ARCHIVE_LISTER := $(PROXYSQL_PATH)/deps/duckdb/list-static-archives.sh
 
-SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp $(PLUGIN_DIR)/src/duckdb_listener.cpp
+SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp $(PLUGIN_DIR)/src/duckdb_listener.cpp $(PLUGIN_DIR)/src/duckdb_replica.cpp $(PLUGIN_DIR)/src/duckdb_replica_types.cpp $(PLUGIN_DIR)/src/duckdb_replica_admin.cpp $(PLUGIN_DIR)/src/duckdb_replica_snapshot.cpp $(PLUGIN_DIR)/src/duckdb_replica_values.cpp $(PLUGIN_DIR)/src/duckdb_replica_binlog.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
@@ -214,11 +214,12 @@ endif
 check-duckdb-archives: $(DUCKDB_AR)
 	@sh $(DUCKDB_ARCHIVE_LISTER) $(DUCKDB_PATH)/build/release >/dev/null
 
-$(PLUGIN_SO): $(OBJS) $(DUCKDB_AR) $(DUCKDB_ARCHIVE_LISTER) Makefile | check-duckdb-archives
+$(PLUGIN_SO): $(OBJS) $(DUCKDB_AR) $(DUCKDB_ARCHIVE_LISTER) $(MARIADB_LDIR)/libmariadbclient.a Makefile | check-duckdb-archives
 	@duckdb_archives=$$(sh $(DUCKDB_ARCHIVE_LISTER) $(DUCKDB_PATH)/build/release) || exit $$?; \
 	$(CXX) $(SHARED_FLAGS) -o $@ $(OBJS) $(CXXFLAGS) -pthread \
 		$(DUCKDB_LINK_GROUP_START) $$duckdb_archives $(DUCKDB_LINK_GROUP_END) \
-		-L$(SSL_LDIR) -lssl -lcrypto $(PLUGIN_LDFLAGS) $(PLUGIN_SYSTEM_LIBS)
+		-L$(SSL_LDIR) -lssl -lcrypto \
+		-L$(MARIADB_LDIR) -lmariadbclient $(PLUGIN_LDFLAGS) $(PLUGIN_SYSTEM_LIBS)
 
 .PHONY: all
 all: $(PLUGIN_SO)

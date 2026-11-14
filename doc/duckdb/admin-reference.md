@@ -101,6 +101,69 @@ ORDER BY m.variable_name;
 Runtime memory units are DuckDB's canonical readback; DuckDB 1.4.5 reports an
 input of `512MB` as `488.2 MiB`.
 
+## Replica
+
+The replica is part of this plugin. It is not a separate process and it does
+not reuse `proxysql_binlog_reader`. `START DUCKDB REPLICA` checks one MySQL
+source, takes a short `FLUSH TABLES WITH READ LOCK`, copies the opted-in
+tables into DuckDB, and then follows the binary log from that position.
+Committed source transactions are applied in batches. A restart resumes from
+`proxysql_replica.position`; it does not snapshot again unless the position is
+missing.
+
+```sql
+INSERT INTO duckdb_replica_sources
+  (source_id, hostname, port, username, password, server_id, enabled)
+VALUES ('oltp', '10.0.0.8', 3306, 'repl', 'secret', 100, 1);
+
+INSERT INTO duckdb_replica_tables (source_id, schema_name, table_name, active)
+VALUES ('oltp', 'app', 'events', 1);
+
+LOAD DUCKDB REPLICA TO RUNTIME;
+SAVE DUCKDB REPLICA TO DISK;
+START DUCKDB REPLICA;
+```
+
+`START DUCKDB REPLICA` reads the Main tables, so `LOAD` is optional before
+start. The source address is the MySQL server itself, not a ProxySQL
+listener. A file-backed read-write DuckDB database is required. At most one
+source may be enabled.
+
+`stats_duckdb_replica` is projected from the replica thread. `applying`
+means the dump is being followed; `seconds_behind_source` is the age of the
+last applied event. `error` is sticky until `STOP`. `RESET DUCKDB REPLICA` is
+legal only while stopped. It drops the snapshot tables and
+`proxysql_replica.position`, not the source definition.
+
+The source user needs `REPLICATION CLIENT`, `REPLICATION SLAVE`, `SELECT` on
+the opted-in tables, and `RELOAD` for the snapshot lock. A table without a
+primary key, or a column outside the supported type and charset set, fails
+the snapshot. JSON, `ENUM`, and `SET` columns are refused: the vendored
+replication API either does not decode them or would return a different
+representation than the snapshot. Non-transactional tables are not
+supported.
+
+Source tables affected by foreign-key `CASCADE` or `SET NULL` actions are not
+supported. InnoDB's internally cascaded child changes are not emitted as row
+events, and this replica does not reproduce foreign-key actions. Current
+snapshot validation does **not** reject those schemas yet; they can diverge even
+with ROW/FULL logging. See the
+[MySQL 8.4 replication manual](https://dev.mysql.com/doc/refman/8.4/en/innodb-and-mysql-replication.html).
+Metadata-based admission checks and live regression coverage remain follow-up
+work under #6289.
+
+v1 stops on any DDL in the binlog (`ALTER`, `RENAME`, and so on) rather than
+applying it. Stop the replica, `RESET DUCKDB REPLICA`, and `START` again to
+resnapshot. Online schema-change tools therefore require an explicit
+resnapshot. `TRUNCATE` and `DROP`/`CREATE` are also treated as DDL in v1.
+
+`STOP DUCKDB REPLICA` can take up to the dump read timeout (5 seconds) when
+the source is idle, and longer if the thread is waiting on the snapshot lock.
+It releases the Admin query mutex while it waits.
+
+Passwords are stored in the admin database in the clear, same as monitor
+credentials. Do not put a superuser here.
+
 ## Failure contract
 
 LOAD validates before mutation and has no warning-style partial success.
@@ -111,3 +174,5 @@ The operation is not advertised as atomic across Admin SQLite and DuckDB. If
 an error occurs after a setting changed, the error identifies that fact. The
 next Runtime query reconstructs effective state from the engine rather than
 repeating cached intent.
+
+Changing the active replicated table set after a snapshot requires `RESET DUCKDB REPLICA` and a fresh snapshot. START rejects a table set that differs from the durable snapshot manifest, so skipped tables cannot silently resume after their changes have been discarded. RESET retains ownership of every snapshotted table until it removes the snapshot.

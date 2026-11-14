@@ -7,7 +7,7 @@
 #include <vector>
 
 int main() {
-	plan(25);
+	plan(26);
 
 	// --- iface parsing -------------------------------------------------
 	std::vector<DuckDBIface> ifaces;
@@ -117,5 +117,6 @@ int main() {
 	ok(cfg.set("enable_external_access", "not-a-bool", err) == false && !err.empty(),
 	   "non-boolean enable_external_access is rejected with a message");
 
+	ok(!cfg.set("mysql_compatibility", "true", err), "retired custom-lexer compatibility setting is rejected");
 	return exit_status();
 }
