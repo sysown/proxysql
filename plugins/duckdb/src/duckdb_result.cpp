@@ -19,6 +19,28 @@
 
 namespace {
 
+bool requires_mysql_text(duckdb_type type, duckdb_vector vector, idx_t row) {
+	auto* validity = duckdb_vector_get_validity(vector);
+	if (validity && !duckdb_validity_row_is_valid(validity, row)) return false;
+	void* data = duckdb_vector_get_data(vector);
+	if (!data) return false;
+	if (type == DUCKDB_TYPE_FLOAT) return !std::isfinite(static_cast<float*>(data)[row]);
+	if (type == DUCKDB_TYPE_DOUBLE) return !std::isfinite(static_cast<double*>(data)[row]);
+	if (type == DUCKDB_TYPE_DATE) {
+		const auto value = static_cast<duckdb_date*>(data)[row];
+		if (!duckdb_is_finite_date(value)) return true;
+		const int year = duckdb_from_date(value).year;
+		return year < 1 || year > 9999;
+	}
+	if (type == DUCKDB_TYPE_TIMESTAMP) {
+		const auto value = static_cast<duckdb_timestamp*>(data)[row];
+		if (!duckdb_is_finite_timestamp(value)) return true;
+		const int year = duckdb_from_timestamp(value).date.year;
+		return year < 1 || year > 9999;
+	}
+	return false;
+}
+
 bool cell_is_valid(uint64_t* validity, idx_t row) {
 	return validity == nullptr || duckdb_validity_row_is_valid(validity, row);
 }
@@ -27,13 +49,21 @@ void assign_string_t(duckdb_string_t str, std::string& out) {
 	out.assign(duckdb_string_t_data(&str), static_cast<size_t>(duckdb_string_t_length(str)));
 }
 
-std::string format_double(double v) {
+std::string format_double(double v, int precision = std::numeric_limits<double>::max_digits10) {
 	if (std::isnan(v)) return "nan";
 	if (std::isinf(v)) return v > 0 ? "inf" : "-inf";
 	char buf[64];
-	// Preserve the binary64 value when a client parses the text response.
-	std::snprintf(buf, sizeof(buf), "%.*g", std::numeric_limits<double>::max_digits10, v);
+	// Preserve the floating-point value when a client parses the text response.
+	std::snprintf(buf, sizeof(buf), "%.*g", precision, v);
 	return buf;
+}
+
+std::string format_float_for(double v, int precision, DuckDBResultProtocol protocol) {
+	if (protocol == DuckDBResultProtocol::pgsql) {
+		if (std::isnan(v)) return "NaN";
+		if (std::isinf(v)) return v > 0 ? "Infinity" : "-Infinity";
+	}
+	return format_double(v, precision);
 }
 
 bool render_native_value(duckdb_value raw, std::string& out, std::string& error) {
@@ -187,10 +217,10 @@ bool render_cell(duckdb_type type, duckdb_vector vector, idx_t row, std::string&
 		out = std::to_string(static_cast<uint64_t*>(data)[row]);
 		return true;
 	case DUCKDB_TYPE_FLOAT:
-		out = format_double(static_cast<float*>(data)[row]);
+		out = format_float_for(static_cast<float*>(data)[row], std::numeric_limits<float>::max_digits10, protocol);
 		return true;
 	case DUCKDB_TYPE_DOUBLE:
-		out = format_double(static_cast<double*>(data)[row]);
+		out = format_float_for(static_cast<double*>(data)[row], std::numeric_limits<double>::max_digits10, protocol);
 		return true;
 	// Native value conversion does not prepare or execute another statement.
 	case DUCKDB_TYPE_TIME_NS:
@@ -451,6 +481,12 @@ SQLite3_result* duckdb_result_to_sqlite3(duckdb_result* res, std::string* error,
 				if (!render_cell(render_type, vectors[c], r, rendered[c], protocol, row_error)) {
 					if (!row_error.empty()) break;
 					continue;
+				}
+				if (column_types) {
+					auto& column = (*column_types)[c];
+					if (protocol == DuckDBResultProtocol::mysql && requires_mysql_text(types[c], vectors[c], r))
+						column.type = DUCKDB_TYPE_VARCHAR;
+					column.max_length = std::max(column.max_length, static_cast<uint32_t>(std::min<size_t>(rendered[c].size(), UINT32_MAX)));
 				}
 				fields[c] = rendered[c].data();
 				sizes[c] = static_cast<unsigned long>(rendered[c].size());

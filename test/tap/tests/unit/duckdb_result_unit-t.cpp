@@ -42,7 +42,7 @@ bool field_equals(const SQLite3_result* result, size_t row, size_t column,
 } // namespace
 
 int main() {
-	plan(109);
+	plan(112);
 
 	duckdb_database db = nullptr;
 	duckdb_connection conn = nullptr;
@@ -322,7 +322,7 @@ int main() {
 		// VARCHAR cast, the prior wire representation. Record relative cost
 		// without a flaky timing threshold in the regression assertion.
 		const std::string sql = "SELECT CASE WHEN i%7=0 THEN NULL ELSE "
-			"'2024-03-10 06:59:59+00'::TIMESTAMPTZ + i * INTERVAL 1 SECOND END AS t FROM range(100000) r(i)";
+			"to_timestamp(1710053999+i) END AS t FROM range(100000) r(i)";
 		const auto start = std::chrono::steady_clock::now();
 		std::unique_ptr<SQLite3_result> direct(run(conn, sql.c_str()));
 		const auto converted = std::chrono::steady_clock::now();
@@ -536,6 +536,29 @@ int main() {
 	   "a null duckdb_result* converts to nullptr");
 	ok(duckdb_result_has_unrenderable_column(nullptr) == false,
 	   "predicate returns false for a null duckdb_result*");
+
+	{
+		duckdb_result res;
+		duckdb_query(conn,"SELECT x,d FROM (VALUES (1.5::DOUBLE,DATE '2026-11-05'),('NaN'::DOUBLE,DATE 'infinity')) v(x,d)",&res);
+		std::vector<DuckDBColumnType> columns;
+		std::unique_ptr<SQLite3_result> r(duckdb_result_to_sqlite3(&res,nullptr,&columns,DuckDBResultProtocol::mysql,conn));
+		ok(r && columns.size()==2 && columns[0].type==DUCKDB_TYPE_VARCHAR && columns[1].type==DUCKDB_TYPE_VARCHAR &&
+		   std::string(r->rows[0]->fields[0])=="1.5" && std::string(r->rows[1]->fields[0])=="nan",
+		   "MySQL exceptional values change the whole column to text without losing earlier values");
+		duckdb_destroy_result(&res);
+		duckdb_query(conn,"SELECT 'NaN'::DOUBLE",&res);
+		r.reset(duckdb_result_to_sqlite3(&res,nullptr,&columns,DuckDBResultProtocol::pgsql,conn));
+		ok(r && columns.size()==1 && columns[0].type==DUCKDB_TYPE_DOUBLE &&
+		   field_equals(r.get(), 0, 0, "NaN"),
+		   "PostgreSQL keeps its native floating type and NaN spelling for a supported nonfinite value");
+		duckdb_destroy_result(&res);
+		duckdb_query(conn,"SELECT 'Infinity'::DOUBLE, '-Infinity'::DOUBLE",&res);
+		r.reset(duckdb_result_to_sqlite3(&res,nullptr,&columns,DuckDBResultProtocol::pgsql,conn));
+		ok(r && columns.size()==2 && columns[0].type==DUCKDB_TYPE_DOUBLE && columns[1].type==DUCKDB_TYPE_DOUBLE &&
+		   field_equals(r.get(), 0, 0, "Infinity") && field_equals(r.get(), 0, 1, "-Infinity"),
+		   "PostgreSQL renders Infinity and -Infinity with native float metadata");
+		duckdb_destroy_result(&res);
+	}
 
 	duckdb_disconnect(&conn);
 	duckdb_close(&db);

@@ -92,13 +92,15 @@ class DuckDBArchives(unittest.TestCase):
                 [make, '-s', '-f', 'Makefile', '-f', '-', 'inspect-objects'],
                 cwd=directory, text=True, capture_output=True, check=True,
                 input="inspect-objects:\n\t@echo '$(OBJS)'\n").stdout.split()
+            connector = root / 'libmariadbclient.a'
+            connector.write_bytes(b'fixture archive')
             output = root / 'already-built.so'
             output.write_bytes(b'previously linked plugin')
             # Suppress compilation of real source objects. The compiler must
             # not run: this output is newer than every link prerequisite.
             skip = [arg for obj in objects for arg in ('-o', obj)]
             cmd = [make, '-s', str(output), f'PLUGIN_SO={output}', f'DUCKDB_PATH={root}',
-                   'CXX=false', *skip]
+                   'CXX=false', f'MARIADB_LDIR={root}', *skip]
             result = subprocess.run(cmd, cwd=directory, text=True, capture_output=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
             (build / 'extension/parquet/libparquet_extension.a').unlink()

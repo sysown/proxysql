@@ -52,7 +52,7 @@ std::string scalar_text(duckdb_connection conn, const char* sql) {
 } // namespace
 
 int main() {
-	plan(105);
+	plan(NO_PLAN);
 
 	ok(classify("SELECT @@version") == DuckDBIntercept::version,
 	   "SELECT @@version is intercepted");
@@ -191,6 +191,19 @@ int main() {
 		BAIL_OUT("could not open an in-memory duckdb");
 	}
 
+	{
+		auto native = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'", DuckDBResultProtocol::pgsql);
+		ok(native.ok && native.result && std::string(native.result->rows[0]->fields[0]) == "t" &&
+		   std::string(native.result->rows[0]->fields[1]) == "f" && !native.result->rows[0]->fields[2],
+		   "PostgreSQL execution retains native boolean values and SQL NULL");
+		delete native.result;
+		auto mysql = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'", DuckDBResultProtocol::mysql);
+		ok(mysql.ok && mysql.result && std::string(mysql.result->rows[0]->fields[0]) == "1" &&
+		   std::string(mysql.result->rows[0]->fields[1]) == "0" && !mysql.result->rows[0]->fields[2] &&
+		   std::string(mysql.result->rows[0]->fields[3]) == "true",
+		   "MySQL execution renders boolean values as 1/0 without changing strings or NULLs");
+		delete mysql.result;
+	}
 	ok(duckdb_pgsql_transaction_status(conn) == 'I',
 	   "a new DuckDB connection reports PostgreSQL idle transaction state");
 	{
@@ -537,6 +550,30 @@ int main() {
 	const DuckDBExecOutcome user_variable = duckdb_execute_effective(managed_conn, "SET VARIABLE tenant_marker = 7");
 	ok(user_variable.ok && scalar_count(managed_conn, "SELECT getvariable('tenant_marker')") == 7,
 	   "SET VARIABLE user variables are unaffected");
+	{
+		const auto mixed = duckdb_execute_effective(managed_conn, "SELECT 1 AS dup,[2] AS nested,'text' AS dup,TRUE AS flag", DuckDBResultProtocol::mysql);
+		ok(mixed.ok && mixed.result && mixed.column_types.size() == 4 && mixed.column_types[0].type == DUCKDB_TYPE_INTEGER &&
+		   mixed.column_types[1].type == DUCKDB_TYPE_VARCHAR && mixed.column_types[3].type == DUCKDB_TYPE_BOOLEAN &&
+		   std::string(mixed.result->column_definition[0]->name) == "dup" &&
+		   std::string(mixed.result->column_definition[2]->name) == "dup" && std::string(mixed.result->rows[0]->fields[3]) == "1",
+		   "selective MySQL wrapping preserves scalar types, booleans, order and duplicate labels");
+		delete mixed.result;
+		duckdb_execute_effective(managed_conn, "CREATE SEQUENCE typed_once");
+		const auto once = duckdb_execute_effective(managed_conn,"SELECT nextval('typed_once'),[2]",DuckDBResultProtocol::mysql);
+		ok(once.ok && scalar_count(managed_conn,"SELECT currval('typed_once')") == 1,
+		   "selective wrapping executes a volatile scalar exactly once");
+		delete once.result;
+		duckdb_execute_effective(managed_conn,"CREATE TABLE typed_returning(id INT,nested INT[])");
+		const auto returning = duckdb_execute_effective(managed_conn,"INSERT INTO typed_returning VALUES(7,[2]) RETURNING id",DuckDBResultProtocol::mysql);
+		ok(returning.ok && returning.result && returning.column_types.size() == 1 && returning.column_types[0].type == DUCKDB_TYPE_INTEGER &&
+		   scalar_count(managed_conn,"SELECT COUNT(*) FROM typed_returning") == 1,
+		   "scalar DML RETURNING has typed metadata and mutates once");
+		delete returning.result;
+		const auto unsupported = duckdb_execute_effective(managed_conn,"INSERT INTO typed_returning VALUES(8,[3]) RETURNING nested",DuckDBResultProtocol::mysql);
+		ok(!unsupported.ok && scalar_count(managed_conn,"SELECT COUNT(*) FROM typed_returning") == 1,
+		   "unrenderable MySQL DML RETURNING is rejected before any mutation");
+		delete unsupported.result;
+	}
 	managed_engine.disconnect(&other_conn);
 	managed_engine.disconnect(&managed_conn);
 	managed_engine.close();

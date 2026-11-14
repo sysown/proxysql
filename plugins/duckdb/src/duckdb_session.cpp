@@ -737,8 +737,7 @@ bool check_prepared_config_policy(const std::string& sql, duckdb_statement_type 
 
 } // namespace
 
-DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
-                                         DuckDBResultProtocol protocol) {
+DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective, DuckDBResultProtocol protocol) {
 	DuckDBExecOutcome outcome;
 	const DuckDBTxnVerb verb = classify_txn_verb(effective);
 	DuckDBSessionState& session_state = duckdb_session_state();
@@ -827,8 +826,38 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 		// client sends one) is stripped first for the same reason -- a
 		// `;` inside the subquery is itself a parser error.
 		const std::string trimmed = trim_trailing_semicolons(effective);
-		const std::string wrapped =
-			"SELECT COLUMNS(*)::VARCHAR FROM (\n" + trimmed + "\n)";
+		std::string wrapped;
+		{
+			auto quote_ident = [](const std::string& name) {
+				std::string out = "\"";
+				for (char c : name) {
+					out += c;
+					if (c == '"')
+						out += c;
+				}
+				return out + '"';
+			};
+			wrapped = "SELECT ";
+			std::string aliases;
+			for (idx_t c = 0; c < ncols; ++c) {
+				if (c) {
+					wrapped += ",";
+					aliases += ",";
+				}
+				const std::string positional = "__c" + std::to_string(c);
+				aliases += quote_ident(positional);
+				const std::string value = "\"__proxysql_result\"." + quote_ident(positional);
+				duckdb_logical_type logical = duckdb_prepared_statement_column_logical_type(stmt, c);
+				const bool renderable = duckdb_type_renders_as_text(duckdb_result_type_id(logical));
+				duckdb_destroy_logical_type(&logical);
+				wrapped += renderable ? value : "CAST(" + value + " AS VARCHAR)";
+				const char* name = duckdb_prepared_statement_column_name(stmt, c);
+				wrapped += " AS " + quote_ident(name ? name : "");
+				if (name)
+					duckdb_free(const_cast<char*>(name));
+			}
+			wrapped += " FROM (\n" + trimmed + "\n) AS \"__proxysql_result\"(" + aliases + ")";
+		}
 
 		duckdb_prepared_statement wrap_stmt = nullptr;
 		if (duckdb_prepare(conn, wrapped.c_str(), &wrap_stmt) == DuckDBSuccess) {
@@ -839,7 +868,8 @@ DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::st
 			// position (confirmed by probe: "syntax error at or near
 			// INTO") and this build has no writable-CTE support either.
 			// Discard the original prepared statement WITHOUT ever
-			// executing it, and run the wrap instead.
+			// executing it, and run the wrap instead. Both protocols cast only
+			// unsupported positional columns.
 			duckdb_destroy_prepare(&stmt);
 			exec_stmt = wrap_stmt;
 		} else {
@@ -959,9 +989,9 @@ namespace {
 struct MySQLColumnType {
 	uint8_t type { MYSQL_TYPE_VAR_STRING };
 	uint16_t flags { 0 }; // expression nullability is unknown
-	uint16_t charset { 33 };
-	uint32_t length { 15 };
-	uint8_t decimals { 0x1f };
+	uint16_t charset { 45 };
+	uint32_t length { 0 };
+	uint8_t decimals { 0 };
 };
 
 MySQLColumnType mysql_column_type(const DuckDBColumnType& column) {
@@ -985,9 +1015,9 @@ MySQLColumnType mysql_column_type(const DuckDBColumnType& column) {
 	case DUCKDB_TYPE_BIGINT:
 		out.type = MYSQL_TYPE_LONGLONG; out.length = 20; break;
 	case DUCKDB_TYPE_FLOAT:
-		out.type = MYSQL_TYPE_FLOAT; out.length = 12; out.decimals = 0x1f; break;
+		out.type = MYSQL_TYPE_FLOAT; out.length = 15; out.decimals = 0x1f; break;
 	case DUCKDB_TYPE_DOUBLE:
-		out.type = MYSQL_TYPE_DOUBLE; out.length = 22; out.decimals = 0x1f; break;
+		out.type = MYSQL_TYPE_DOUBLE; out.length = 24; out.decimals = 0x1f; break;
 	case DUCKDB_TYPE_DECIMAL:
 		out.type = MYSQL_TYPE_NEWDECIMAL;
 		out.length = column.precision + 1 + (column.scale != 0);
@@ -997,13 +1027,20 @@ MySQLColumnType mysql_column_type(const DuckDBColumnType& column) {
 		out.type = MYSQL_TYPE_NEWDECIMAL; out.length = 39; out.flags |= UNSIGNED_FLAG; break;
 	case DUCKDB_TYPE_HUGEINT:
 		out.type = MYSQL_TYPE_NEWDECIMAL; out.length = 40; break;
+	case DUCKDB_TYPE_DATE:
+		out.type = MYSQL_TYPE_DATE; out.length = 10; out.flags = 0; break;
+	case DUCKDB_TYPE_TIME:
+		out.type = MYSQL_TYPE_TIME; out.length = 15; out.decimals = 6; out.flags = 0; break;
+	case DUCKDB_TYPE_TIMESTAMP:
+		out.type = MYSQL_TYPE_DATETIME; out.length = 26; out.decimals = 6; out.flags = 0; break;
 	case DUCKDB_TYPE_BLOB:
 		out.type = MYSQL_TYPE_LONG_BLOB;
 		out.flags = BLOB_FLAG | BINARY_FLAG;
-		out.length = UINT32_MAX;
+		out.length = column.max_length;
 		break;
-	default:
-		return MySQLColumnType {};
+	default: {
+		MySQLColumnType text; text.length = column.max_length; return text;
+	}
 	}
 	return out;
 }
@@ -1066,7 +1103,8 @@ void duckdb_send_result(MySQL_Session* sess, SQLite3_result* r, char* err,
 	PtrSizeArray* packets = sess->client_myds->PSarrayOUT;
 	const unsigned int first = packets->len;
 	MySQL_Protocol& protocol = sess->client_myds->myprot;
-	sess->SQLite3_to_MySQL(r, err, affected, &protocol, false, deprecate_eof_active);
+	sess->SQLite3_to_MySQL(r, err, affected, &protocol,
+		duckdb_pgsql_transaction_status(duckdb_session_state().conn) != 'I', deprecate_eof_active);
 	if (!r || !columns || columns->size() != static_cast<size_t>(r->columns) ||
 	    packets->len - first < columns->size() + 1) return;
 	for (int i = 0; i < r->columns; ++i) {
@@ -1265,9 +1303,8 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		return;
 	}
 
-	// Managed global settings are deliberately executed through the engine's
-	// dedicated control connection, never inside an application's session or
-	// transaction. Unmanaged SET statements stay on the normal DuckDB path.
+	// Reject client changes to Admin-managed global settings. Session-local
+	// SET statements stay on the normal DuckDB path.
 	if (st.engine != nullptr) {
 		bool handled = false;
 		std::string managed_error;
@@ -1286,7 +1323,7 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 	}
 
 	// All DDL/DML/QUERY_RESULT dispatch (C2) and the unrenderable-column
-	// re-query with its double-execution safety gate (C3) live in
+	// execute-once fallback conversion (C3) live in
 	// duckdb_execute_effective(), which is protocol-agnostic and directly
 	// testable against a live duckdb_connection. `sql` (the ORIGINAL
 	// client text), not `effective`, is what goes to duckdb_send_result:

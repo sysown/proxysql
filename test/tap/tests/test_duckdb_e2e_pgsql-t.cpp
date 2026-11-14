@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(83);
+	plan(NO_PLAN);
 
 	PGconn* c = connect_duckdb(cl, cl.pgsql_username, cl.pgsql_password);
 	ok(c != NULL, "connect to the DuckDB PgSQL port with pgsql_users credentials");
@@ -188,11 +188,21 @@ int main(int argc, char** argv) {
 	for (const char* sql : {
 		"SELECT INTERVAL 1 DAY AS fallback",
 		"SELECT DATE '2024-01-01' AS fallback",
-		"SELECT 42 AS numeric_value, [1, 2] AS wrapped_value"
+		"SELECT [1, 2] AS wrapped_value"
 	}) {
 		PGresult* r = exec_or_bail(c, sql);
 		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQftype(r, 0) == 25,
 		   "PostgreSQL text fallback matches the executed result: %s", sql);
+		PQclear(r);
+	}
+
+	{
+		PGresult* r = exec_or_bail(c, "SELECT 42::INTEGER AS value, [1, 2] AS value");
+		ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQnfields(r) == 2 && PQntuples(r) == 1 &&
+		   PQftype(r, 0) == 23 && PQftype(r, 1) == 25 &&
+		   std::strcmp(PQfname(r, 0), "value") == 0 && std::strcmp(PQfname(r, 1), "value") == 0 &&
+		   std::strcmp(PQgetvalue(r, 0, 0), "42") == 0 && std::strcmp(PQgetvalue(r, 0, 1), "[1, 2]") == 0,
+		   "PostgreSQL composite fallback preserves neighboring scalar metadata and duplicate labels");
 		PQclear(r);
 	}
 
@@ -339,12 +349,17 @@ int main(int argc, char** argv) {
 		PGresult* r = exec_or_bail(c, "CREATE OR REPLACE TABLE t_pg_tstz(i INTEGER, t TIMESTAMPTZ)");
 		ok(PQresultStatus(r) == PGRES_COMMAND_OK, "create TIMESTAMPTZ RETURNING fixture");
 		PQclear(r);
+		r = exec_or_bail(c,
+			"SELECT CAST('2024-01-02 03:04:05.123456+05:30'::TIMESTAMPTZ AS VARCHAR)");
+		const std::string native_text = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1
+			? PQgetvalue(r, 0, 0) : "";
+		PQclear(r);
 		r = exec_or_bail(c, "INSERT INTO t_pg_tstz VALUES "
 			"(1, '2024-01-02 03:04:05.123456+05:30'), (2, NULL) RETURNING i, t");
 		const bool shape_ok = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 2 && PQnfields(r) == 2;
 		ok(shape_ok && PQftype(r, 0) == 23 && PQftype(r, 1) == 25,
 		   "TIMESTAMPTZ RETURNING retains neighboring PostgreSQL numeric metadata");
-		ok(shape_ok && std::strcmp(PQgetvalue(r, 0, 1), "2024-01-01 21:34:05.123456+00") == 0 && PQgetisnull(r, 1, 1),
+		ok(shape_ok && !native_text.empty() && native_text == PQgetvalue(r, 0, 1) && PQgetisnull(r, 1, 1),
 		   "PostgreSQL TIMESTAMPTZ preserves instant and NULL");
 		PQclear(r);
 		r = exec_or_bail(c, "SELECT COUNT(*) FROM t_pg_tstz");

@@ -287,7 +287,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
-mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP) mariadb-client-library/x509cache.patch
+mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP) mariadb-client-library/x509cache.patch mariadb-client-library/mariadb_rpl_rows.patch
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
@@ -340,6 +340,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../x509cache.patch
 	# patches for replication testing
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_rpl.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_rpl_rows.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../cmakelists.txt.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.metadata_column_check.patch
 	# new compilers fix

@@ -113,12 +113,9 @@ struct DuckDBExecOutcome {
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
                                          DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql);
 
-// Recognizes client SET statements that target the Admin-managed engine-wide
-// settings (memory_limit, threads, enable_external_access, access_mode) and
-// refuses them with an error naming the duckdb-* Admin variable to use instead
-// (issue #6320): returns false with `handled=true` and `err` set. Any other
-// statement returns true with `handled=false` and continues to DuckDB, where
-// duckdb_execute_effective() confines SET/RESET to session scope.
+// Rejects client SET statements for Admin-managed engine-global settings.
+// Returns false with an error for a rejected statement; unhandled session SET
+// statements return true with `handled=false`.
 bool duckdb_execute_managed_set(const std::string& sql, DuckDBEngine& engine,
                                bool& handled, std::string& err);
 

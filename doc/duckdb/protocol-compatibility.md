@@ -14,7 +14,7 @@ not attempt complete dialect or wire-feature compatibility.
 | Extended-query protocol | N/A | Rejected with SQLSTATE `0A000` |
 | Multiple statements in one request | Rejected | Rejected |
 | Transaction status | Protocol OK/status behavior | `ReadyForQuery` I/T/E |
-| Result metadata | All columns are strings | All columns are `TEXTOID` |
+| Result metadata | Typed numeric, binary and core temporal columns | Typed numeric, boolean and BYTEA columns |
 
 ## Simple-query requirement
 
@@ -26,7 +26,11 @@ This follows PostgreSQL error-resynchronization rules without pretending that
 prepared execution is available.
 
 For MySQL, use `COM_QUERY`-based APIs. `COM_STMT_PREPARE` and
-`COM_STMT_EXECUTE` are outside the initial plugin surface.
+`COM_STMT_EXECUTE` are outside the current plugin surface. The shared frontend
+framework is owned by [#6298](https://github.com/sysown/proxysql/issues/6298);
+[#6282](https://github.com/sysown/proxysql/issues/6282) supplies the DuckDB adapter
+once that contract is available. The plugin must not add an independent
+prepared-statement protocol state machine.
 
 ## One statement per request
 
@@ -75,6 +79,16 @@ connection uses that product's wire protocol. Client libraries may also issue
 session initialization SQL automatically; only the narrow compatibility list
 above is guaranteed to be absorbed or translated.
 
+Following [#6280](https://github.com/sysown/proxysql/issues/6280), new SQL
+recognition must use the currently vendored ParserSQL. Missing grammar is
+deferred upstream; a new lexer or syntax recognizer is not an alternative.
+The branch's experimental custom SELECT translator and
+`duckdb-mysql_compatibility` setting have been removed. Native DuckDB analytical
+SELECTs remain available. Scoped dialect work belongs to
+[#6284](https://github.com/sysown/proxysql/issues/6284); autocommit work in
+[#6281](https://github.com/sysown/proxysql/issues/6281) waits for ParserSQL #68/#69.
+Inherited discovery/configuration guards remain in place.
+
 ## Result metadata and conversion
 
 Numeric, boolean, and binary results carry native type metadata on both endpoints. Values still use
@@ -92,12 +106,19 @@ transfer support.
 | FLOAT / DOUBLE | FLOAT / DOUBLE | REAL / DOUBLE PRECISION |
 | DECIMAL(p,s) | NEWDECIMAL with precision and scale | NUMERIC(p,s) |
 | BLOB | LONG_BLOB, binary charset and flag | BYTEA, hex text encoding |
+| DATE / TIME / TIMESTAMP (microseconds) | DATE / TIME / DATETIME | TEXT |
 
 MySQL expression nullability is reported as unknown rather than claiming
 NOT NULL. Typed NULLs and zero-row results retain their numeric metadata.
-Temporal and other unmapped types currently retain text metadata.
-If a VARCHAR wrapper is needed, metadata describes the wrapped result: all its
-columns are text, including any originally numeric columns.
+MySQL columns containing nonfinite floating-point values, infinite dates or
+timestamps, or dates outside years 1..9999 use text metadata for the whole
+column. PostgreSQL floating-point NaN and infinity retain numeric metadata.
+Other temporal variants and unmapped types retain text metadata. Text uses
+UTF-8 metadata; unbounded text/blob lengths describe the largest returned byte
+length rather than an invented declared bound.
+
+A VARCHAR wrapper casts only unsupported columns. Supported neighboring
+columns keep their types, order and original labels, including duplicate labels.
 
 BLOB values preserve arbitrary bytes, including embedded NUL and non-UTF-8
 bytes. MySQL receives the raw bytes with length information. PostgreSQL receives
@@ -139,10 +160,11 @@ characters with leading zeroes intact. These columns retain text metadata;
 SQL NULL and neighboring numeric metadata are preserved.
 
 Other DuckDB types are detected from the prepared statement before execution.
-The plugin attempts to execute a wrapper equivalent to:
+For a two-column result whose second type needs fallback, the plugin attempts
+to execute a positional wrapper equivalent to:
 
 ```sql
-SELECT COLUMNS(*)::VARCHAR FROM (<original query>)
+SELECT col_0, col_1::VARCHAR FROM (<original query>) AS result(col_0, col_1)
 ```
 
 This commonly renders `LIST`, `STRUCT`, `MAP`, `ARRAY`, and `UNION` as
@@ -178,7 +200,6 @@ Text `BEGIN`, `COMMIT`, and `ROLLBACK` commands execute in DuckDB. PostgreSQL
 
 - No client-visible prepared statements.
 - No query timeout or `duckdb_interrupt()` policy.
-- No typed result metadata.
 - No general MySQL/PostgreSQL dialect translation.
 - No structured protocol error when the connection cap rejects a newly
   accepted socket.

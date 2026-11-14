@@ -12,6 +12,7 @@ struct DuckDBColumnType {
 	duckdb_type type;
 	uint8_t precision { 0 };
 	uint8_t scale { 0 };
+	uint32_t max_length { 0 }; // largest returned byte length; text/blob metadata
 };
 
 enum class DuckDBResultProtocol { mysql, pgsql };

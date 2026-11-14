@@ -111,8 +111,10 @@ as a compatibility no-op.
 Numeric columns carry MySQL/PostgreSQL type metadata, but the wire transfer
 format is still text. Client APIs such as `mysql_fetch_row` and `PQgetvalue`
 return textual values; use their column metadata to choose a conversion.
-Temporal, other unmapped columns, and results requiring a VARCHAR wrapper retain text
-metadata; see [Protocol compatibility](protocol-compatibility.md).
+MySQL DATE/TIME/microsecond TIMESTAMP have native temporal metadata. Unsupported
+columns and exceptional scalar values use text fallback; supported columns next
+to a wrapped column keep their own types. See
+[Protocol compatibility](protocol-compatibility.md).
 
 ## An unsupported result type produces SQLSTATE 0A000
 
@@ -166,3 +168,18 @@ lower `duckdb-memory_limit`, choose a conservative `duckdb-threads` value, and
 reduce `duckdb-max_connections`; all three apply live. If a live query must be stopped and the client cannot cancel it,
 controlled process recovery may be required; assess the impact on normal
 ProxySQL traffic before acting.
+
+## An old development configuration contains mysql_compatibility
+
+The experimental `duckdb-mysql_compatibility` switch and custom SQL translator
+were removed to follow #6280's ParserSQL requirement. This is an unpublished
+branch migration. Before restarting a previously configured development
+instance, remove the stale variable from Main and Disk through Admin:
+
+```sql
+DELETE FROM global_variables WHERE variable_name='duckdb-mysql_compatibility';
+DELETE FROM disk.global_variables WHERE variable_name='duckdb-mysql_compatibility';
+```
+
+Unknown DuckDB variables fail configuration validation. There is no replacement
+switch; use native DuckDB SQL pending ParserSQL-based compatibility.

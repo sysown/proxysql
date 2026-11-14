@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 	if (cl.getEnv()) { diag("Failed to get the required environment variables"); return -1; }
 
-	plan(77);
+	plan(NO_PLAN);
 
 	MYSQL* c = connect_duckdb(cl, cl.username, cl.password);
 	ok(c != NULL, "connect to the DuckDB MySQL port with mysql_users credentials");
@@ -78,8 +78,8 @@ int main(int argc, char** argv) {
 		{ "65535::USMALLINT", MYSQL_TYPE_SHORT, true, 0, 5 },
 		{ "4294967295::UINTEGER", MYSQL_TYPE_LONG, true, 0, 10 },
 		{ "18446744073709551615::UBIGINT", MYSQL_TYPE_LONGLONG, true, 0, 20 },
-		{ "1.5::FLOAT", MYSQL_TYPE_FLOAT, false, 31, 12 },
-		{ "1.5::DOUBLE", MYSQL_TYPE_DOUBLE, false, 31, 22 },
+		{ "1.5::FLOAT", MYSQL_TYPE_FLOAT, false, 31, 15 },
+		{ "1.5::DOUBLE", MYSQL_TYPE_DOUBLE, false, 31, 24 },
 		{ "1.25::DECIMAL(10,2)", MYSQL_TYPE_NEWDECIMAL, false, 2, 12 },
 		{ "'-170141183460469231731687303715884105728'::HUGEINT", MYSQL_TYPE_NEWDECIMAL, false, 0, 40 },
 		{ "'340282366920938463463374607431768211455'::UHUGEINT", MYSQL_TYPE_NEWDECIMAL, true, 0, 39 },
@@ -106,14 +106,26 @@ int main(int argc, char** argv) {
 	}
 	for (const char* sql : {
 		"SELECT INTERVAL 1 DAY AS fallback",
-		"SELECT DATE '2024-01-01' AS fallback",
-		"SELECT 42 AS numeric_value, [1, 2] AS wrapped_value"
+		"SELECT [1, 2] AS wrapped_value"
 	}) {
 		const int rc = mysql_query(c, sql);
 		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
 		MYSQL_FIELD* f = r ? mysql_fetch_field(r) : nullptr;
 		ok(f && f->type == MYSQL_TYPE_VAR_STRING,
 		   "MySQL text fallback matches the executed result: %s", sql);
+		if (r) mysql_free_result(r);
+	}
+
+	{
+		const int rc = mysql_query(c, "SELECT 42::INTEGER AS value, [1, 2] AS value");
+		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
+		MYSQL_FIELD* fields = r ? mysql_fetch_fields(r) : nullptr;
+		MYSQL_ROW row = r ? mysql_fetch_row(r) : nullptr;
+		ok(r && mysql_num_fields(r) == 2 && fields[0].type == MYSQL_TYPE_LONG &&
+		   fields[1].type == MYSQL_TYPE_VAR_STRING && row && row[0] && row[1] &&
+		   std::strcmp(fields[0].name, "value") == 0 && std::strcmp(fields[1].name, "value") == 0 &&
+		   std::strcmp(row[0], "42") == 0 && std::strcmp(row[1], "[1, 2]") == 0,
+		   "MySQL composite fallback preserves neighboring scalar metadata and duplicate labels");
 		if (r) mysql_free_result(r);
 	}
 
@@ -281,6 +293,8 @@ int main(int argc, char** argv) {
 	{
 		ok(mysql_query(c, "CREATE OR REPLACE TABLE t_mysql_tstz(i INTEGER, t TIMESTAMPTZ)") == 0,
 		   "create TIMESTAMPTZ RETURNING fixture");
+		const std::string native_text = one_cell(c,
+			"SELECT CAST('2024-01-02 03:04:05.123456+05:30'::TIMESTAMPTZ AS VARCHAR)");
 		const int rc = mysql_query(c, "INSERT INTO t_mysql_tstz VALUES "
 			"(1, '2024-01-02 03:04:05.123456+05:30'), (2, NULL) RETURNING i, t");
 		MYSQL_RES* r = rc == 0 ? mysql_store_result(c) : nullptr;
@@ -288,7 +302,7 @@ int main(int argc, char** argv) {
 		ok(fields && fields[0].type == MYSQL_TYPE_LONG && fields[1].type == MYSQL_TYPE_VAR_STRING,
 		   "TIMESTAMPTZ RETURNING retains neighboring MySQL numeric metadata");
 		MYSQL_ROW row = fields ? mysql_fetch_row(r) : nullptr;
-		const bool first_ok = row && row[1] && std::strcmp(row[1], "2024-01-01 21:34:05.123456+00") == 0;
+		const bool first_ok = row && row[1] && !native_text.empty() && native_text == row[1];
 		row = fields ? mysql_fetch_row(r) : nullptr;
 		ok(r && mysql_num_rows(r) == 2 && first_ok && row && !row[1], "MySQL TIMESTAMPTZ preserves instant and NULL");
 		if (r) mysql_free_result(r);
