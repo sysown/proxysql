@@ -12,11 +12,13 @@
 #include "mysqlx_connection.pb.h"
 #include "mysqlx_session.pb.h"
 #include "mysqlx_datatypes.pb.h"
+#include "mysqlx_notice.pb.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <vector>
 
@@ -1608,11 +1610,76 @@ static void test_route_passthrough_full_entry_path() {
 	close(client_fds[0]); close(client_fds[1]);
 }
 
+
+// Reset failure must answer the client even when no terminal backend frame arrived.
+static void test_reset_backend_loss_reports_error() {
+	for (int scenario = 0; scenario < 4; ++scenario) {
+		int client_fds[2] { -1, -1 }, backend_fds[2] { -1, -1 };
+		if (socketpair(AF_UNIX, SOCK_STREAM, 0, client_fds) != 0 ||
+		    (scenario && socketpair(AF_UNIX, SOCK_STREAM, 0, backend_fds) != 0)) {
+			BAIL_OUT("reset EOF socketpair setup failed");
+		}
+		set_nonblocking_fd(client_fds[0]);
+		if (scenario) set_nonblocking_fd(backend_fds[0]);
+		timeval timeout { 0, 250000 };
+		if (setsockopt(client_fds[1], SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)))
+			BAIL_OUT("reset EOF receive timeout setup failed");
+
+		Mysqlx_Thread thr;
+		thr.init(0);
+		MysqlxSession sess;
+		sess.init(client_fds[0], &thr);
+		auto* conn = new MysqlxConnection();
+		conn->set_fd(backend_fds[0]);
+		conn->set_state(MysqlxConnection::IDLE);
+		conn->set_reusable(true);
+		sess.backend_conn() = conn;
+		sess.server_ds().init(XDS_BACKEND, backend_fds[0]);
+		sess.set_status(MysqlxSession::X_SESSION_RESET_WAITING);
+		sess.set_response_state_for_test(RESP_WAITING_SESS_RESET);
+
+		if (scenario == 2) {
+			Mysqlx::Notice::Frame notice;
+			notice.set_type(Mysqlx::Notice::Frame_Type_WARNING);
+			std::string body;
+			notice.SerializeToString(&body);
+			write_x_frame(backend_fds[1], Mysqlx::ServerMessages_Type_NOTICE,
+				reinterpret_cast<const uint8_t*>(body.data()), body.size());
+		} else if (scenario == 3) {
+			const uint8_t partial[] { 1, 0, 0, 0 };
+			if (write(backend_fds[1], partial, sizeof(partial)) != sizeof(partial))
+				BAIL_OUT("reset EOF partial frame write failed");
+		}
+		if (scenario) shutdown(backend_fds[1], SHUT_WR);
+		for (int tick = 0; tick < 2; ++tick) {
+			sess.to_process = true;
+			sess.handler();
+		}
+
+		uint8_t response[512] {};
+		if (scenario == 2) {
+			const ssize_t n = read_x_frame(client_fds[1], response, sizeof(response));
+			ok(n >= 5 && response[4] == Mysqlx::ServerMessages_Type_NOTICE,
+			   "reset EOF forwards a completed notice before the terminal error");
+		}
+		const ssize_t n = read_x_frame(client_fds[1], response, sizeof(response));
+		Mysqlx::Error error;
+		ok(n > 5 && response[4] == Mysqlx::ServerMessages_Type_ERROR &&
+		   error.ParseFromArray(response + 5, static_cast<int>(n - 5)) && error.code() == 2013,
+		   "reset backend loss scenario %d reports terminal ERROR 2013", scenario);
+		ok(sess.backend_conn() == nullptr && thr.get_cached_connection_count() == 0 &&
+		   sess.get_status() == MysqlxSession::WAITING_CLIENT_XMSG,
+		   "reset backend loss scenario %d evicts the backend and returns to client wait", scenario);
+		close(client_fds[1]);
+		if (scenario) close(backend_fds[1]);
+	}
+}
+
 int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	// Includes two regression assertions proving mysqlx-connect_timeout is
 	// applied to regular and TLS-passthrough backend connections.
-	plan(114);
+	plan(123);
 	diag("=== mysqlx_session_unit-t starting ===");
 
 	test_session_init();
@@ -1633,6 +1700,7 @@ int main() {
 	test_sess_close_in_main_loop();
 	test_con_close_in_main_loop();
 	test_reset();
+	test_reset_backend_loss_reports_error();
 	test_parse_error_detection();
 	test_session_timestamps();
 

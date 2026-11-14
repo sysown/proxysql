@@ -1,6 +1,7 @@
 
 #include "PgSQL_Variables_Validator.h"
 #include "PgSQL_Session.h"
+#include "PgSQL_Data_Stream.h"
 #include "cpp.h"
 #include <cmath>
 #include <string_view>
@@ -45,29 +46,26 @@ bool pgsql_variable_validate_bool(const char* value, const params_t* params, PgS
     return result;
 }
 
-/**
-* @brief Validates an float variable for PostgreSQL.
-*
-* This function checks if the provided value is a valid float representation
-* and falls within the specified range. The range is defined by the params
-* parameter.
-*
-* @param value The value to validate.
-* @param params The parameter structure containing the float range.
-* @param session Unused parameter.
-* @param transformed_value If not null, will be set to null.
-* @return true if the value is a valid float representation within the specified range, false otherwise.
-*/
-bool pgsql_variable_validate_float(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
-   (void)session;
-   if (transformed_value) *transformed_value = nullptr;
-   char* end = nullptr;
-   //long num = strtol(value, &end, 10);
-   double num = strtod(value, &end);  
-   if (end == value || *end != '\0') return false;
-   if (num < params->float_range.min || num > params->float_range.max) return false;
-   return true;
+// The number at the start of a value, read as PostgreSQL's parse_int() reads it: a whole number
+// in decimal, octal (leading 0) or hex (0x), else a decimal fraction or exponent. Read any other
+// way, ProxySQL records a value the backend does not hold ('-010' is -8 to PostgreSQL).
+// *rest is set past the spaces that follow the number.
+static bool pg_parse_number(const char* value, double* out, const char** rest) {
+	char* end = nullptr;
+	errno = 0;
+	double v = (double)strtol(value, &end, 0);
+	if (*end == '.' || *end == 'e' || *end == 'E' || errno == ERANGE) {
+		errno = 0;
+		v = strtod(value, &end);
+	}
+	if (end == value || errno == ERANGE || std::isnan(v)) return false;
+	while (fast_isspace((unsigned char)*end)) end++;
+	*out = v;
+	*rest = end;
+	return true;
 }
+
+bool pgsql_variable_validate_integer(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value);
 
 /**
  * @brief Validates a string variable for PostgreSQL.
@@ -146,10 +144,18 @@ bool pgsql_variable_validate_datestyle(const char* value, const params_t* params
 	}
 	//------------------------------------------------------------------------------------------------------
 
+	// The word DEFAULT in the list means the session's reset value, as in PostgreSQL: the client's
+	// connect-time DateStyle, or pgsql-default_datestyle while the client is still logging in.
+	const PgSQL_Connection* client_conn = session->client_myds ? session->client_myds->myconn : nullptr;
+	const char* reset_text = (client_conn && client_conn->startup_parameters_hash[PGSQL_DATESTYLE] != 0)
+		? client_conn->startup_parameters[PGSQL_DATESTYLE] : pgsql_thread___default_variables[PGSQL_DATESTYLE];
+	const PgSQL_DateStyle_t reset_datestyle = PgSQL_DateStyle_Util::parse_datestyle(reset_text);
+
 	// Convert DateStyle to a string. Any missing parts will be filled using the current DateStyle value.
 	// For example:
 	// If current DateStyle is 'ISO, MDY' and the user sets 'DMY' the resulting DateStyle will be 'ISO, DMY'
-	const std::string& value_tmp = PgSQL_DateStyle_Util::datestyle_to_string(value, current_datestyle);
+	const std::string& value_tmp = PgSQL_DateStyle_Util::datestyle_to_string(
+		PgSQL_DateStyle_Util::parse_datestyle(value, &reset_datestyle), current_datestyle);
 	// if something goes wrong, the value will be empty
 	if (value_tmp.empty()) {
 		return false;
@@ -335,100 +341,42 @@ bool pgsql_variable_validate_maintenance_work_mem_v2(const char* value, const pa
 
 bool pgsql_variable_validate_maintenance_work_mem_v3(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
 	(void)session;
+	if (transformed_value) *transformed_value = nullptr;
 
-	// Trim leading whitespace
-	while (fast_isspace((unsigned char)*value)) value++;
+	// PostgreSQL's memory units in kB, largest first. Matched in any case, as ProxySQL always
+	// did (PostgreSQL wants the exact case); the stored value carries PostgreSQL's spelling.
+	static const struct { const char* name; double kb; } units[] = {
+		{ "TB", 1024.0 * 1024 * 1024 }, { "GB", 1024.0 * 1024 }, { "MB", 1024.0 }, { "kB", 1.0 }, { "B", 1.0 / 1024 },
+	};
+	const size_t n_units = sizeof(units) / sizeof(units[0]);
 
-	char* endptr;
-	const char* num_start = value;
-	errno = 0;
-	double number = strtod(value, &endptr);
-
-	// Basic numeric validation
-	if (endptr == num_start || errno == ERANGE || number <= 0)
-		return false;
-
-	// Validate numeric format (digits and single decimal point)
-	int dot_count = 0;
-	const char* p = num_start;
-	while (p < endptr) {
-		if (*p == '.') {
-			if (++dot_count > 1) return false;
-		}
-		else if (!isdigit((unsigned char)*p)) {
-			return false;
-		}
-		p++;
+	double kb = 0;
+	const char* rest = nullptr;
+	if (!pg_parse_number(value, &kb, &rest)) return false;
+	if (*rest != '\0') {
+		size_t len = 0;
+		while (rest[len] && !fast_isspace((unsigned char)rest[len])) len++;
+		const char* tail = rest + len;
+		while (fast_isspace((unsigned char)*tail)) tail++;
+		if (*tail != '\0') return false;
+		size_t u = 0;
+		while (u < n_units && (strlen(units[u].name) != len || strncasecmp(rest, units[u].name, len) != 0)) u++;
+		if (u == n_units) return false;
+		kb *= units[u].kb;
+		// As PostgreSQL: a fraction ('1.5GB') is rounded to a whole number of the next smaller unit.
+		if (u + 1 < n_units) kb = rint(kb / units[u + 1].kb) * units[u + 1].kb;
 	}
+	kb = rint(kb);
+	if (kb < params->uint_range.min || kb > params->uint_range.max) return false;
 
-	// Parse unit
-	const char* unit_ptr = endptr;
-	uint64_t multiplier;
-	const char* unit = "kB"; // default unit
-	size_t unit_len = strlen(unit_ptr);
-	size_t actual_unit_len = 2;
-
-	// Default to kB if no unit specified
-	if (unit_len == 0) {
-		multiplier = 1024;
+	// Stored as PostgreSQL prints it, in the largest unit that divides it exactly: '1024MB' and
+	// '1GB' are one value and must hash alike, or pooled connections carrying them never match.
+	if (transformed_value) {
+		const uint64_t v = (uint64_t)kb;
+		size_t u = 0;
+		while (units[u].kb > 1.0 && v % (uint64_t)units[u].kb != 0) u++;
+		*transformed_value = strdup((std::to_string(v / (uint64_t)units[u].kb) + units[u].name).c_str());
 	}
-	else {
-		// Convert unit to lowercase for validation
-		char u[3] = { 0 };
-		for (int i = 0; i < 2 && unit_ptr[i]; i++) {
-			u[i] = ::tolower((unsigned char)unit_ptr[i]);
-		}
-
-		// Validate units and set multipliers
-		if (unit_len == 1 && u[0] == 'b') {
-			unit = "B";
-			actual_unit_len = 1;
-			multiplier = 1;
-		}
-		else if (strcmp(u, "kb") == 0) {
-			unit = "kB";
-			multiplier = 1024;
-		}
-		else if (strcmp(u, "mb") == 0) {
-			unit = "MB";
-			actual_unit_len = 2;
-			multiplier = 1024 * 1024;
-		}
-		else if (strcmp(u, "gb") == 0) {
-			unit = "GB";
-			actual_unit_len = 2;
-			multiplier = 1024ULL * 1024 * 1024;
-		}
-		else if (strcmp(u, "tb") == 0) {
-			unit = "TB";
-			actual_unit_len = 2;
-			multiplier = 1024ULL * 1024 * 1024 * 1024;
-		}
-		else {
-			return false;
-		}
-
-		// Validate unit length matches parsed characters
-		if (std::string_view(unit_ptr).size() != actual_unit_len) {
-			return false;
-		}
-	}
-
-	// Calculate total bytes with floating point
-	uint64_t total_bytes = (uint64_t)number * multiplier;
-
-	/* Validate PostgreSQL's requirements */
-	if ((total_bytes / 1024ULL) < params->uint_range.min || (total_bytes / 1024ULL) > params->uint_range.max)
-		return false;
-
-	char output[128];
-	/* Format output without leading zeros */
-	int needed = snprintf(output, sizeof(output), "%.15g%s", number, unit);
-
-	if (needed < 0 || needed >= (int)sizeof(output)) return false;
-
-	if (transformed_value)
-		*transformed_value = strdup(output);
 	return true;
 }
 
@@ -478,7 +426,8 @@ bool pgsql_variable_validate_timezone(const char* value, const params_t* params,
 	// and keeps its connection, but at login or as pgsql-default_timezone it is refused.
 	if (strncasecmp(value, "INTERVAL", 8) == 0) return false;
 	// LOCAL is only a keyword of SET TIME ZONE, meaning DEFAULT; as a value PostgreSQL refuses it.
-	if (strcasecmp(value, "LOCAL") == 0) return false;
+	// So is a quoted 'DEFAULT': it is no zone, and stored it would fail every later sync.
+	if (strcasecmp(value, "LOCAL") == 0 || strcasecmp(value, "DEFAULT") == 0) return false;
 	for (const char* c = value; *c; c++) {
 		if (!isalnum((unsigned char)*c) && strchr("/_-+,.:<>", *c) == nullptr) return false;
 	}
@@ -631,10 +580,10 @@ const pgsql_variable_validator pgsql_variable_validator_bool = {
 };
 
 const pgsql_variable_validator pgsql_variable_validator_extra_float_digits = {
-	.type = VARIABLE_TYPE_FLOAT,
-	.validate = &pgsql_variable_validate_float,
+	.type = VARIABLE_TYPE_INT,
+	.validate = &pgsql_variable_validate_integer,
 	.params = {
-		.float_range = { .min = -15.0, .max = 3.0 }
+		.int_range = { .min = -15, .max = 3 }
 	}
 };
 
@@ -712,18 +661,21 @@ const pgsql_variable_validator pgsql_variable_validator_timezone = {
  * @param value The value to validate.
  * @param params The parameter structure containing the integer range.
  * @param session Unused parameter.
- * @param transformed_value If not null, will be set to null.
+ * @param transformed_value If not null, will be set to the integer as PostgreSQL prints it.
  * @return true if the value is a valid integer representation within the specified range, false otherwise.
  */
 bool pgsql_variable_validate_integer(const char* value, const params_t* params, PgSQL_Session* session, char** transformed_value) {
-   (void)session;
-   if (transformed_value) *transformed_value = nullptr;
-   char* end = nullptr;
-   errno = 0;
-   long num = strtol(value, &end, 10);
-   if (end == value || *end != '\0' || errno == ERANGE) return false;
-   if (num < params->int_range.min || num > params->int_range.max) return false;
-   return true;
+	(void)session;
+	if (transformed_value) *transformed_value = nullptr;
+	double num = 0;
+	const char* rest = nullptr;
+	// No unit: anything after the number and its spaces is refused, as PostgreSQL does.
+	if (!pg_parse_number(value, &num, &rest) || *rest != '\0') return false;
+	num = rint(num); // a fraction is rounded half to even, as PostgreSQL does
+	if (num < params->int_range.min || num > params->int_range.max) return false;
+	// Stored as PostgreSQL prints it: '03' and '3' are one value and must hash alike.
+	if (transformed_value) *transformed_value = strdup(std::to_string((long long)num).c_str());
+	return true;
 }
 
 const pgsql_variable_validator pgsql_variable_validator_integer = {

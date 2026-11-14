@@ -602,6 +602,7 @@ $(PROXYSQL_BINARY): $(LIBPROXYSQLAR) FORCE
 # ===========================================================================
 
 UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
+	backend_unplug_unit-t \
 	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
 	pgsql_stable_io_unit-t \
@@ -694,6 +695,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
 	query_digest_parser_parity_unit-t \
+	mysql_set_parser_jdbc_unit-t \
 	mysql_set_transaction_characteristics_unit-t \
 	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
@@ -706,6 +708,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
+	restapi_tls_config_unit-t \
 	mcp_client_unit-t \
 	pgsql_waiter_list_unit-t
 
@@ -849,6 +852,7 @@ ifneq ($(UNAME_S),Darwin)
 endif
 
 ifeq ($(UNAME_S),Linux)
+restapi_tls_config_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=listen -Wl,--wrap=lstat -Wl,--wrap=fstatat
 ifneq ($(PROXYSQL31),1)
 parsersql_v30_flow_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_query_digest_and_first_comment -Wl,--wrap=pgsql_query_digest_and_first_comment -Wl,--wrap=_Z28parsersql_command_type_mysqlPKci -Wl,--wrap=_Z28parsersql_command_type_pgsqlPKci
 endif
@@ -1489,7 +1493,7 @@ STATIC_LIBPROXYSQL_TESTS := genai_thread_unit-t pgsql_result_flush_allocation_un
 	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
-STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t
+STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t restapi_tls_config_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive
 
@@ -1531,6 +1535,15 @@ pgsql_result_flush_allocation_unit-t: pgsql_result_flush_allocation_unit-t.cpp \
 	$(CXX) $< $(PGSQL_RESULT_LIBPQ_FIXTURE_OBJ) $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) \
 		$(ALLOW_MULTI_DEF) -o $@
+
+# Instrument the real call sites: remove_index_fast(-1) can otherwise hide a
+# null member call. Static linking leaves the archive's stream objects unused.
+backend_unplug_unit-t: backend_unplug_unit-t.cpp \
+	$(PROXYSQL_PATH)/lib/mysql_data_stream.cpp $(PROXYSQL_PATH)/lib/PgSQL_Data_Stream.cpp \
+	$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR)
+	$(CXX) $< $(PROXYSQL_PATH)/lib/mysql_data_stream.cpp $(PROXYSQL_PATH)/lib/PgSQL_Data_Stream.cpp \
+		$(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) -fsanitize=null -fno-sanitize-recover=null \
+		$(LIBPROXYSQLAR_FULL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 # Pattern rule: all unit tests use the same compile + link flags.
 # Each test binary is built from its .cpp source, linked against

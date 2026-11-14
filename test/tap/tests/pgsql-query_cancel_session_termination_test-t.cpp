@@ -11,6 +11,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <sys/socket.h>
 #include "libpq-fe.h"
 #include "command_line.h"
 #include "tap.h"
@@ -58,18 +59,112 @@ struct TestSync {
     bool query_started = false;
     bool cancel_requested = false;
     bool query_completed = false;
+    int socket_fd = -1;
 };
 
-// Test query that runs for a long time
-const char* LONG_RUNNING_QUERY = "SELECT pg_sleep(10), generate_series(1, 1000000)";
+// Sleep once so a missed cancellation cannot sleep once per generated row.
+const char* LONG_RUNNING_QUERY = "SELECT pg_sleep(10) AS pgsql_query_cancel_sleep";
+const char* LONG_RUNNING_QUERY_MARKER = "pgsql_query_cancel_sleep";
+
+const char* EXTENDED_QUERY_TEXT = "SELECT pg_sleep(5), $1::text AS pgsql_query_cancel_extended";
+const char* EXTENDED_QUERY_MARKER = "pgsql_query_cancel_extended";
+
+// Thread entry precedes dispatch. Observe a matching active backend query
+// before sending a cancellation for the frontend SessionID.
+constexpr int ACTIVE_QUERY_WAIT_MS = 5000;
+constexpr int ACTIVE_QUERY_POLL_MS = 25;
+
+struct ActiveQueryObservation {
+    int backend_pid = 0;
+    std::string state;
+    std::string command;
+    std::string info;
+};
+
+PGConnPtr createAdminConnection() {
+    auto admin = createNewConnection(ADMIN);
+    if (!admin || PQstatus(admin.get()) != CONNECTION_OK) {
+        BAIL_OUT("Failed to connect to the ProxySQL admin interface for query-state synchronization");
+    }
+    return admin;
+}
+
+bool read_active_query(PGconn* admin, int session_id, const char* marker, ActiveQueryObservation& observed) {
+    observed = ActiveQueryObservation{};
+
+    // pid is the frontend SessionID; backend_pid identifies its real backend.
+    const std::string query =
+        "SELECT backend_pid, state, command, query FROM stats_pgsql_stat_activity WHERE pid=" +
+        std::to_string(session_id);
+
+    PGresult* res = PQexec(admin, query.c_str());
+    if (res == nullptr || PQresultStatus(res) != PGRES_TUPLES_OK) {
+        diag("Failed to read stats_pgsql_stat_activity for SessionID %d: %s",
+            session_id, PQerrorMessage(admin));
+        if (res) PQclear(res);
+        return false;
+    }
+
+    if (PQntuples(res) > 0) {
+        if (!PQgetisnull(res, 0, 0)) observed.backend_pid = std::stoi(PQgetvalue(res, 0, 0));
+        if (!PQgetisnull(res, 0, 1)) observed.state = PQgetvalue(res, 0, 1);
+        if (!PQgetisnull(res, 0, 2)) observed.command = PQgetvalue(res, 0, 2);
+        if (!PQgetisnull(res, 0, 3)) observed.info = PQgetvalue(res, 0, 3);
+    }
+    PQclear(res);
+
+    return observed.backend_pid > 0 && observed.state == "active" &&
+        observed.info.find(marker) != std::string::npos;
+}
+
+bool wait_for_active_query(PGconn* admin, int session_id, const char* marker) {
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(ACTIVE_QUERY_WAIT_MS);
+    ActiveQueryObservation observed;
+
+    do {
+        if (read_active_query(admin, session_id, marker, observed)) {
+            diag("SessionID %d is running '%s' on backend pid %d (state='%s', command='%s')",
+                session_id, marker, observed.backend_pid, observed.state.c_str(),
+                observed.command.c_str());
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(ACTIVE_QUERY_POLL_MS));
+    } while (std::chrono::steady_clock::now() < deadline);
+
+    diag("SessionID %d did not show an active '%s' query within %dms "
+        "(last: backend_pid=%d, state='%s', command='%s', info='%s')",
+        session_id, marker, ACTIVE_QUERY_WAIT_MS, observed.backend_pid, observed.state.c_str(),
+        observed.command.c_str(), observed.info.c_str());
+    return false;
+}
+
+// An expired condition-variable wait must not lead to an unbounded join.
+bool finish_query(TestSync& sync, std::thread& worker) {
+    bool completed;
+    int socket_fd;
+    {
+        std::unique_lock<std::mutex> lock(sync.mutex);
+        completed = sync.cv.wait_for(lock, std::chrono::seconds(3),
+            [&]() { return sync.query_completed; });
+        socket_fd = sync.socket_fd;
+    }
+    if (!completed) {
+        diag("Cancellation did not finish within 3 seconds; closing the test socket");
+        if (socket_fd >= 0) shutdown(socket_fd, SHUT_RDWR);
+    }
+    worker.join();
+    return completed;
+}
 
 // Function to execute query and handle results
 void execute_long_running_query(PGconn* conn, TestSync& sync, int thread_id, bool& was_canceled) {
     was_canceled = false;
 
-    // Notify that query is starting
+    // This only signals thread entry; the controller observes backend activity.
     {
         std::lock_guard<std::mutex> lock(sync.mutex);
+        sync.socket_fd = PQsocket(conn);
         sync.query_started = true;
     }
     sync.cv.notify_one();
@@ -120,6 +215,7 @@ void test_cancel_via_new_connection() {
     
     TestSync sync;
     bool was_canceled = false;
+    auto admin_conn = createAdminConnection();
 
     // Start query in separate thread
     std::thread query_thread([&]() {
@@ -132,10 +228,15 @@ void test_cancel_via_new_connection() {
         sync.cv.wait(lock, [&]() { return sync.query_started; });
     }
 
+    // Cancel only once the target session is actually running the query.
+    if (!wait_for_active_query(admin_conn.get(), backend_pid, LONG_RUNNING_QUERY_MARKER)) {
+        BAIL_OUT("SessionID %d never became active for cancellation", backend_pid);
+    }
+
     // Create connection and cancel the query
     auto cancel_conn = createNewConnection(BACKEND);
     if (!cancel_conn || PQstatus(cancel_conn.get()) != CONNECTION_OK) {
-        query_thread.join();
+        finish_query(sync, query_thread);
         diag("Error: Failed to create connection for cancellation in file %s, line %d", __FILE__, __LINE__);
         return;
     }
@@ -147,13 +248,7 @@ void test_cancel_via_new_connection() {
 
     ok(cancel_success, "Cancel query should execute successfully");
 
-    // Wait for query completion
-    {
-        std::unique_lock<std::mutex> lock(sync.mutex);
-        sync.cv.wait_for(lock, std::chrono::seconds(3), [&]() { return sync.query_completed; });
-    }
-
-    query_thread.join();
+    was_canceled = finish_query(sync, query_thread) && was_canceled;
 
     ok(was_canceled, "Query should be canceled via new connection method");
 }
@@ -171,6 +266,15 @@ void test_cancel_via_pqcancel() {
 
     TestSync sync;
     bool was_canceled = false;
+    const int target_session_id = PQbackendPID(backend_conn.get());
+    auto admin_conn = createAdminConnection();
+
+    // Obtain the opaque cancel object before the query thread starts: apart
+    // from PQcancel(), libpq must not be used concurrently on one PGconn.
+    PGcancel* cancel = PQgetCancel(backend_conn.get());
+    if (!cancel) {
+        BAIL_OUT("Failed to get PQcancel object for SessionID %d", target_session_id);
+    }
 
     // Start query in separate thread
     std::thread query_thread([&]() {
@@ -183,12 +287,9 @@ void test_cancel_via_pqcancel() {
         sync.cv.wait(lock, [&]() { return sync.query_started; });
     }
 
-    // Use PQcancel to cancel the query
-    PGcancel* cancel = PQgetCancel(backend_conn.get());
-    if (!cancel) {
-        query_thread.join();
-        diag("Error: Failed to get cancel object in file %s, line %d", __FILE__, __LINE__);
-        return;
+    // Cancel only once the target session is actually running the query.
+    if (!wait_for_active_query(admin_conn.get(), target_session_id, LONG_RUNNING_QUERY_MARKER)) {
+        BAIL_OUT("SessionID %d never became active for PQcancel", target_session_id);
     }
 
     char errbuf[256];
@@ -198,13 +299,7 @@ void test_cancel_via_pqcancel() {
 
     ok(cancel_result == 1, "PQcancel should return success");
 
-    // Wait for query completion
-    {
-        std::unique_lock<std::mutex> lock(sync.mutex);
-        sync.cv.wait_for(lock, std::chrono::seconds(3), [&]() { return sync.query_completed; });
-    }
-
-    query_thread.join();
+    was_canceled = finish_query(sync, query_thread) && was_canceled;
 
    ok(was_canceled, "Query should be canceled via PQcancel method");
 }
@@ -297,6 +392,8 @@ void test_multiple_concurrent_cancellations() {
 
     ok(connections.size() == NUM_CONNECTIONS, "Successfully created all backend connections");
     
+    auto admin_conn = createAdminConnection();
+
     // Start long-running queries on all connections
     for (int i = 0; i < NUM_CONNECTIONS; i++) {
         query_threads.emplace_back([&, i]() {
@@ -310,10 +407,17 @@ void test_multiple_concurrent_cancellations() {
         syncs[i].cv.wait(lock, [&, i]() { return syncs[i].query_started; });
     }
 
+    // Cancel only once every target session is actually running its query.
+    for (int i = 0; i < NUM_CONNECTIONS; i++) {
+        if (!wait_for_active_query(admin_conn.get(), backend_pids[i], LONG_RUNNING_QUERY_MARKER)) {
+            BAIL_OUT("SessionID %d (query %d) never became active for cancellation", backend_pids[i], i);
+        }
+    }
+
     // Create connection and cancel the query
     auto cancel_conn = createNewConnection(BACKEND);
     if (!cancel_conn || PQstatus(cancel_conn.get()) != CONNECTION_OK) {
-        for (auto& thread : query_threads) thread.join();
+        for (int i = 0; i < NUM_CONNECTIONS; ++i) finish_query(syncs[i], query_threads[i]);
         diag("Error: Failed to create connection for cancellation in file %s, line %d", __FILE__, __LINE__);
         return;
     }
@@ -333,15 +437,9 @@ void test_multiple_concurrent_cancellations() {
 
     ok(all_cancels_successful, "All cancel queries should execute successfully");
 
-    // Wait for all queries to complete
-    for (int i = 0; i < NUM_CONNECTIONS; i++) {
-        std::unique_lock<std::mutex> lock(syncs[i].mutex);
-        syncs[i].cv.wait_for(lock, std::chrono::seconds(3), [&, i]() { return syncs[i].query_completed; });
-    }
-
-    // Join all threads
-    for (auto& thread : query_threads) {
-        thread.join();
+    for (int i = 0; i < NUM_CONNECTIONS; ++i) {
+        const bool completed = finish_query(syncs[i], query_threads[i]);
+        if (!completed) was_canceled[i] = false;
     }
 
     // Verify all queries were canceled
@@ -392,6 +490,7 @@ void test_target_specificity() {
 
     TestSync sync1, sync2;
     bool was_canceled1 = false, was_canceled2 = false;
+    auto admin_conn = createAdminConnection();
 
     // Start long-running query on connection 1
     std::thread thread1([&]() {
@@ -411,10 +510,15 @@ void test_target_specificity() {
 
     ok(conn2_healthy, "Connection 2 should remain healthy during connection 1's long query");
 
+    // Cancel only once connection 1's session is actually running the query.
+    if (!wait_for_active_query(admin_conn.get(), backend_pid1, LONG_RUNNING_QUERY_MARKER)) {
+        BAIL_OUT("SessionID %d never became active for cancellation", backend_pid1);
+    }
+
     // Create connection and cancel the query
     auto cancel_conn = createNewConnection(BACKEND);
     if (!cancel_conn || PQstatus(cancel_conn.get()) != CONNECTION_OK) {
-        thread1.join();
+        finish_query(sync1, thread1);
         diag("Error: Failed to create connection for cancellation in file %s, line %d", __FILE__, __LINE__);
         return;
     }
@@ -426,13 +530,7 @@ void test_target_specificity() {
 
     ok(cancel_success, "Cancel should succeed for connection 1");
 
-    // Wait for connection 1's query to complete
-    {
-        std::unique_lock<std::mutex> lock(sync1.mutex);
-        sync1.cv.wait_for(lock, std::chrono::seconds(3), [&]() { return sync1.query_completed; });
-    }
-
-    thread1.join();
+    was_canceled1 = finish_query(sync1, thread1) && was_canceled1;
 
     // Verify connection 2 is still healthy
     simple_res = PQexec(backend_conn2.get(), "SELECT 1");
@@ -469,18 +567,25 @@ void test_cancel_extended_query() {
 
     ok(backend_pid == query_backend_pid, "Connection and query report the same backend PID");
 
+    auto admin_conn = createAdminConnection();
+
     // Start extended query in separate thread
     std::thread query_thread([&]() {
+        {
+            std::lock_guard<std::mutex> lock(sync.mutex);
+            sync.socket_fd = PQsocket(backend_conn.get());
+        }
         // Use extended query protocol: Parse, Bind, Execute
         const char* query_name = "long_running_query";
-        const char* query_text = "SELECT pg_sleep(5), $1::text";
 
         // Parse
-        PGresult* parse_res = PQprepare(backend_conn.get(), query_name, query_text, 1, NULL);
+        PGresult* parse_res = PQprepare(backend_conn.get(), query_name, EXTENDED_QUERY_TEXT, 1, NULL);
         if (PQresultStatus(parse_res) != PGRES_COMMAND_OK) {
             PQclear(parse_res);
             std::lock_guard<std::mutex> lock(sync.mutex);
+            sync.query_started = true;
             sync.query_completed = true;
+            sync.cv.notify_one();
             return;
         }
         PQclear(parse_res);
@@ -525,10 +630,14 @@ void test_cancel_extended_query() {
         sync.cv.wait(lock, [&]() { return sync.query_started; });
     }
 
+    if (!wait_for_active_query(admin_conn.get(), backend_pid, EXTENDED_QUERY_MARKER)) {
+        BAIL_OUT("SessionID %d never became active for extended query cancellation", backend_pid);
+    }
+
     // Cancel using admin connection
     auto cancel_conn = createNewConnection(BACKEND);
     if (!cancel_conn || PQstatus(cancel_conn.get()) != CONNECTION_OK) {
-        query_thread.join();
+        finish_query(sync, query_thread);
         diag("Error: Failed to create cancel connection for extended query cancellation in file %s, line %d", __FILE__, __LINE__);
         return;
     }
@@ -540,13 +649,7 @@ void test_cancel_extended_query() {
 
     ok(cancel_success, "Cancel should succeed for extended query");
 
-    // Wait for query completion
-    {
-        std::unique_lock<std::mutex> lock(sync.mutex);
-        sync.cv.wait_for(lock, std::chrono::seconds(3), [&]() { return sync.query_completed; });
-    }
-
-    query_thread.join();
+    was_canceled = finish_query(sync, query_thread) && was_canceled;
 
     ok(was_canceled, "Extended query should be canceled successfully");
 }

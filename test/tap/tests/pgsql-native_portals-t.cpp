@@ -72,6 +72,7 @@
 #include "utils.h"
 #include "pgsql-native_tracking.h"
 #include "pgsql-native_transport.h"
+#include "json.hpp"
 
 CommandLine cl;
 static const int BACKEND_HG = 0;
@@ -462,9 +463,46 @@ static OpRecord runDifferential(const std::string& label, const std::string& kin
 	return {native_transport_label(label), kind, match, !fell_back, detail};
 }
 
+// Inside a transaction a named portal outlives the Sync. Its first Execute, in the next round
+// trip, comes after a Parse of another statement. The set_config() call it runs must be recorded
+// from the statement being executed: read from the last Parse, it went to the backend untracked,
+// which kept a TimeZone ProxySQL did not know about (P2-93).
+static bool set_config_portal_executed_later(PGconn* admin, std::string& got) {
+	const std::string saved = adminScalar(admin,
+		"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-set_parser_algorithm'");
+	if (!execAdmin(admin, "SET pgsql-set_parser_algorithm=3") || !execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME")) {
+		got = "cannot enable pgsql-set_parser_algorithm=3";
+	} else try {
+		auto c = connectProxy();
+		c->execute("BEGIN");
+		collectUntilReady(*c);
+		c->prepareStatement("zz_sc_s1", "SELECT set_config('TimeZone','Asia/Tokyo',false)", false);
+		c->bindStatement("zz_sc_s1", "zz_sc_p1", {}, {}, false);
+		c->prepareStatement("zz_sc_s2", "SELECT 1", false);
+		c->sendSync();
+		collectUntilReady(*c);
+		c->executePortal("zz_sc_p1", 0, false);
+		c->sendSync();
+		collectUntilReady(*c);
+		c->execute("PROXYSQL INTERNAL SESSION");
+		auto res = c->readResult();
+		const nlohmann::json j = nlohmann::json::parse(std::get<std::string>(res->getValue(0, 0)));
+		got = j.at("client").at("conn").at("TimeZone").get<std::string>();
+		c->execute("ROLLBACK");  // PostgreSQL and ProxySQL both undo the change
+		collectUntilReady(*c);
+		c->disconnect();
+	} catch (const std::exception& e) {
+		got = e.what();
+	}
+	execAdmin(admin, "SET pgsql-set_parser_algorithm=" + saved);
+	execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	return got == "Asia/Tokyo";
+}
+
 int main(int /*argc*/, char** /*argv*/) {
 	plan(1 /*smoke*/ + (int)NATIVE_TRANSPORT_COUNT *
-		(10 /*corpus records*/ + 1 /*coverage summary*/ + 1 /*multiplexing*/ + NATIVE_TRANSPORT_CHECKS));
+		(10 /*corpus records*/ + 1 /*coverage summary*/ + 1 /*multiplexing*/ + 1 /*set_config portal*/ +
+		 NATIVE_TRANSPORT_CHECKS));
 	if (cl.getEnv()) return exit_status();
 
 	PGConnPtr admin = open_admin_conn();
@@ -548,6 +586,12 @@ int main(int /*argc*/, char** /*argv*/) {
 			"PORTAL_CLOSE_IDEMPOTENT", script_close_idempotent));
 		cov.record(runDifferential("PORTAL_ERR_BIND_DUP: Bind same portal twice, no close",
 			"PORTAL_ERR_BIND_DUP", script_bind_dup));
+		{
+			std::string got;
+			ok(set_config_portal_executed_later(admin.get(), got),
+				"set_config() run by a named portal's first Execute in a later round trip, after another "
+				"Parse, is recorded (client TimeZone '%s', expected 'Asia/Tokyo')", got.c_str());
+		}
 
 		// ---- Case 10: statement closed while its portal lives (last-owner teardown
 		// path through the d561b767c-fixed rc0 ordering), with the EVENTSLOG ACTIVE

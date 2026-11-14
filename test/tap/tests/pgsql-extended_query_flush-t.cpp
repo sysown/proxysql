@@ -18,10 +18,12 @@
  *
  * Expected reply sequences were taken from PostgreSQL 17 directly
  * (docs/superpowers/specs/2026-10-26-pgsql-client-flush-design.md, section 2).
- * Replies are read until the socket stays quiet; a closed socket fails the case.
+ * Flush probes read until the socket stays quiet; known positive protocol cycles wait for ReadyForQuery.
+ * A closed socket fails the case.
  * Configuration is only loaded to runtime, never saved to disk.
  */
 #include <chrono>
+#include <csignal>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -162,6 +164,37 @@ static std::string run(PgConnection& c, const std::function<void()>& send, int q
 	try {
 		send();
 		return tokens(c.readUntilQuiet(quiet_ms));
+	} catch (const PgException& e) {
+		return std::string("CLOSED:") + e.what();
+	}
+}
+
+// Positive cycles complete at ReadyForQuery; Flush-only probes keep run()'s silence check.
+// Retain the quiet drain after 'Z' so extra or duplicate replies still fail exact checks.
+// The deadline is checked between frames; each read retains its existing timeout.
+static Msgs read_until_ready(PgConnection& c) {
+	Msgs msgs;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	for (;;) {
+		if (std::chrono::steady_clock::now() >= deadline)
+			throw PgException("ReadyForQuery deadline exceeded");
+		char type = 0;
+		std::vector<uint8_t> payload;
+		c.readMessage(type, payload);
+		msgs.emplace_back(type, std::move(payload));
+		if (type == 'Z') {
+			const auto tail = c.readUntilQuiet(QUIET_MS);
+			msgs.insert(msgs.end(), tail.begin(), tail.end());
+			return msgs;
+		}
+	}
+}
+
+// Same CLOSED translation as run(), for a cycle that must reach ReadyForQuery.
+static std::string run_until_ready(PgConnection& c, const std::function<void()>& send) {
+	try {
+		send();
+		return tokens(read_until_ready(c));
 	} catch (const PgException& e) {
 		return std::string("CLOSED:") + e.what();
 	}
@@ -557,7 +590,7 @@ static void case_mode_flip_mid_group(Mode m, bool) {
 			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush(); }),
 		"1 2 C(INSERT 0 1)", "mode flip: P B E(INSERT) H on libpq", m, false);
 	admin_set("pgsql-use_native_backend_protocol", "true");
-	check(run(*c, [&] { c->sendSync(); }), "Z(I)", "mode flip: S after native mode was switched on", m, false);
+	check(run_until_ready(*c, [&] { c->sendSync(); }), "Z(I)", "mode flip: S after native mode was switched on", m, false);
 	ok(rows(tag) == 1, "mode flip [libpq]: the group finished on its own connection (rows=%ld)", rows(tag));
 	admin_set("pgsql-use_native_backend_protocol", "false");
 }
@@ -873,7 +906,7 @@ static void case_release_other_hostgroup(Mode mode, bool) {
 	{
 		auto a = client(m);
 		auto b = client(m);
-		check(run(*a, [&] { a->sendQuery("CREATE TEMP TABLE flush_tmp (x int)"); }), "C(CREATE TABLE) Z(I)",
+		check(run_until_ready(*a, [&] { a->sendQuery("CREATE TEMP TABLE flush_tmp (x int)"); }), "C(CREATE TABLE) Z(I)",
 			"release other hostgroup: A CREATE TEMP TABLE", m, false);
 		check(run(*a, [&] { a->prepareStatement("", uniq() + "SELECT 'flush_other_hg'", false); a->describeStatement("", false);
 				a->sendFlush(); }), "1 t T", "release other hostgroup: A P D(S) H", m, false);
@@ -909,7 +942,7 @@ static void case_release_not(Mode m, bool) {
 			"1 t T", "release not, after INSERT: P D(S) H", m, false);
 		check_held(mk, true, "release not, after INSERT", m);
 		ok(rows(tag) == 0, "release not, after INSERT [%s]: the INSERT is not visible before the Sync (rows=%ld)", mode_name(m), rows(tag));
-		check(run(*c, [&] { c->sendSync(); }), "Z(I)", "release not, after INSERT: S", m, false);
+		check(run_until_ready(*c, [&] { c->sendSync(); }), "Z(I)", "release not, after INSERT: S", m, false);
 		ok(rows(tag) == 1, "release not, after INSERT [%s]: committed by the Sync (rows=%ld)", mode_name(m), rows(tag));
 	}
 	if (native) {	// a named portal open
@@ -1129,7 +1162,7 @@ static void case_row15_cache(Mode mode, bool) {
 				c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendQuery("SELECT 1"); c->endBuffering(); });
 			want = "1 2 C(INSERT 0 1) " + want;
 		} else if (s == 3) {
-			q = run(*c, [&] { c->sendQuery("SET DateStyle = 'ISO'"); });
+			q = run_until_ready(*c, [&] { c->sendQuery("SET DateStyle = 'ISO'"); });
 			want = "C(SET) Z(I)";
 		} else {
 			q = run(*c, [&] { c->sendQuery("SELECT 1"); });
@@ -1160,7 +1193,7 @@ static void case_row11(Mode m, bool txn) {
 		check(run(*c, [&] { c->prepareStatement("flush_s1", uniq() + "SELECT 42 AS v", false); c->bindStatement("flush_s1", "p1", {}, {}, false);
 				c->sendFlush(); }), "1 2", "row 11: P(s1) B(p1) H", m, txn);
 	}
-	check(run(*c, [&] { c->sendQuery("SELECT 42"); }), std::string("T D C(SELECT 1) Z(") + txn_z(txn) + ")", "row 11: Q SELECT 42", m, txn);
+	check(run_until_ready(*c, [&] { c->sendQuery("SELECT 42"); }), std::string("T D C(SELECT 1) Z(") + txn_z(txn) + ")", "row 11: Q SELECT 42", m, txn);
 	ok(rows(tag) == (txn ? 0 : 1), "row 11 [%s%s]: the INSERT is %s (rows=%ld)", mode_name(m), txn ? ", in txn" : "",
 		txn ? "still in the open transaction" : "committed by the Query", rows(tag));
 	if (native) {
@@ -1243,7 +1276,7 @@ static void case_row11_var(Mode m, bool) {
 			c->bindStatement("", "", {}, {}, false); c->executePortal("", 0, false); c->sendFlush(); });
 		ok(set.size() >= 6 && set.compare(set.size() - 6, 6, "C(SET)") == 0, "row 11 var [%s]: P B E(SET DateStyle) H (got '%s')",
 			mode_name(m), set.c_str());
-		check(run(*c, [&] { c->sendQuery(good ? "SELECT 1" : "SELECT 1/0"); }), good ? "T D C(SELECT 1) Z(I)" : "E(22012) Z(I)",
+		check(run_until_ready(*c, [&] { c->sendQuery(good ? "SELECT 1" : "SELECT 1/0"); }), good ? "T D C(SELECT 1) Z(I)" : "E(22012) Z(I)",
 			good ? "row 11 var: Q SELECT 1" : "row 11 var: Q SELECT 1/0", m, false);
 		ok(rows(tag) == good, "row 11 var [%s]: the INSERT is %s (rows=%ld)", mode_name(m), good ? "committed" : "rolled back", rows(tag));
 	}
@@ -1396,7 +1429,7 @@ static void case_group_txn_end(Mode m, bool) {
 		auto c = client(m);
 		const std::string tag = tag_for("txnend", m, false) + sub.q;
 		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group txn end: P B E(INSERT) H", m, false);
-		check(run(*c, [&] { c->sendQuery(sub.q); }), sub.reply, (std::string("group txn end: Q ") + sub.q).c_str(), m, false);
+		check(run_until_ready(*c, [&] { c->sendQuery(sub.q); }), sub.reply, (std::string("group txn end: Q ") + sub.q).c_str(), m, false);
 		ok(rows(tag) == sub.rows, "group txn end [%s]: after %s the INSERT is %s (rows=%ld)", mode_name(m), sub.q,
 			sub.rows ? "committed" : "rolled back", rows(tag));
 	}
@@ -1418,10 +1451,10 @@ static void case_group_tracked_set(Mode m, bool) {
 	auto c = client(m);
 	const std::string tag = tag_for("tzset", m, false);
 	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group SET: P B E(INSERT) H", m, false);
-	check(run(*c, [&] { c->sendQuery("SET TimeZone = 'Asia/Tokyo'"); }), "C(SET) Z(I)", "group SET: Q SET TimeZone", m, false);
+	check(run_until_ready(*c, [&] { c->sendQuery("SET TimeZone = 'Asia/Tokyo'"); }), "C(SET) Z(I)", "group SET: Q SET TimeZone", m, false);
 	ok(rows(tag) == 1, "group SET [%s]: the INSERT is committed (rows=%ld)", mode_name(m), rows(tag));
 	std::string tz;
-	try { c->sendQuery("SELECT current_setting('TimeZone')"); tz = first_value(c->readUntilQuiet(QUIET_MS)); }
+	try { c->sendQuery("SELECT current_setting('TimeZone')"); tz = first_value(read_until_ready(*c)); }
 	catch (const PgException& e) { tz = std::string("CLOSED:") + e.what(); }
 	ok(tz == "Asia/Tokyo", "group SET [%s]: the backend runs the next statement with it (TimeZone '%s')", mode_name(m), tz.c_str());
 }
@@ -1443,7 +1476,7 @@ static void case_group_lock_route(Mode m, bool) {
 	auto c = client(m);
 	const std::string tag = tag_for("lockroute", m, false);
 	check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group lock route: P B E(INSERT) H", m, false);
-	check(run(*c, [&] { c->sendQuery("SET application_name = 'flush_lock_route'; SELECT 64"); }),
+	check(run_until_ready(*c, [&] { c->sendQuery("SET application_name = 'flush_lock_route'; SELECT 64"); }),
 		"C(SET) T D C(SELECT 1) Z(I)", "group lock route: Q SET ...; SELECT 64", m, false);
 	ok(rows(tag) == 1, "group lock route [%s]: the INSERT is committed with the Query (rows=%ld)", mode_name(m), rows(tag));
 	exec(g_admin, "DELETE FROM pgsql_query_rules WHERE rule_id=9164");
@@ -1463,11 +1496,11 @@ static void case_group_copy_in(Mode m, bool) {
 		check(run(*c, [&] { insert_flush(*c, tag); }), "1 2 C(INSERT 0 1)", "group COPY: P B E(INSERT) H", m, txn);
 		check(run(*c, [&] { c->sendQuery("COPY flush_t FROM STDIN"); }), "G", "group COPY: Q COPY FROM STDIN", m, txn);
 		const std::string line = tag2 + "\t1\n";
-		check(run(*c, [&] { c->sendMessage('d', std::vector<uint8_t>(line.begin(), line.end())); c->sendMessage('c', {}); }),
+		check(run_until_ready(*c, [&] { c->sendMessage('d', std::vector<uint8_t>(line.begin(), line.end())); c->sendMessage('c', {}); }),
 			"C(COPY 1) " + z, "group COPY: CopyData CopyDone", m, txn);
 		if (txn) {
-			check(run(*c, [&] { c->sendQuery("SET DateStyle = 'SQL, DMY'"); }), "C(SET) Z(T)", "group COPY: a SET answered by ProxySQL", m, txn);
-			check(run(*c, [&] { c->sendQuery("COMMIT"); }), "C(COMMIT) Z(I)", "group COPY: COMMIT", m, txn);
+			check(run_until_ready(*c, [&] { c->sendQuery("SET DateStyle = 'SQL, DMY'"); }), "C(SET) Z(T)", "group COPY: a SET answered by ProxySQL", m, txn);
+			check(run_until_ready(*c, [&] { c->sendQuery("COMMIT"); }), "C(COMMIT) Z(I)", "group COPY: COMMIT", m, txn);
 		}
 		ok(rows(tag) == 1 && rows(tag2) == 1, "group COPY [%s%s]: the INSERT and the copied row are committed (rows %ld, %ld)",
 			mode_name(m), txn ? ", in txn" : "", rows(tag), rows(tag2));
@@ -1572,6 +1605,9 @@ static const Mode MODES[] = { Mode::LIBPQ, Mode::NATIVE, Mode::NATIVE_UNBATCHED 
 
 int main(int, char**) {
 	if (cl.getEnv()) return exit_status();
+
+	// Let socket writes raise the existing PgException/CLOSED failures so fixture cleanup can run.
+	if (std::signal(SIGPIPE, SIG_IGN) == SIG_ERR) BAIL_OUT("could not ignore SIGPIPE");
 
 	// FLUSH_ONLY=<text> runs only the cases whose name contains it.
 	const char* only = getenv("FLUSH_ONLY");
