@@ -60,7 +60,7 @@ on:
 jobs:
   context:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     outputs:
       matrices: ${{ steps.context.outputs.matrices }}
       binding: ${{ steps.context.outputs.binding }}

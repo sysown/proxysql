@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import subprocess
 import sys
 import time
@@ -335,7 +336,7 @@ def producer_lookup():
             if run['conclusion']!='success':raise RuntimeError('producer failed: '+str(run['conclusion']))
             Path('producer.json').write_text(json.dumps(producer))
             return
-        time.sleep(30)
+        time.sleep(min(random.uniform(120,240),max(0,deadline-time.monotonic())))
     raise RuntimeError('timed out waiting for producer completion')
 
 if __name__=='__main__':

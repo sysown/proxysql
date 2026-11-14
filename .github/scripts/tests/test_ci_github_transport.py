@@ -118,6 +118,11 @@ class TransportTests(unittest.TestCase):
         _, _, waits, _ = self.invoke([response(403, ['X-RateLimit-Remaining: 0', 'X-RateLimit-Reset: 1030'], code=1), response()])
         self.assertEqual(waits, [30])
 
+    def test_twenty_minute_quota_wait_is_allowed(self):
+        result, _, waits, _ = self.invoke([response(429, ['Retry-After: 1200'], code=1), response()])
+        self.assertEqual(result, {'id': 7})
+        self.assertEqual(waits, [1200])
+
     def test_secondary_limit_backs_off_for_at_least_a_minute(self):
         _, _, waits, _ = self.invoke([response(403, code=1, stderr=b'secondary rate limit')] * 2 + [response()])
         self.assertEqual(waits, [60, 120])
@@ -136,8 +141,8 @@ class TransportTests(unittest.TestCase):
              patch.object(transport.time, 'sleep', side_effect=waits.append):
             with self.assertRaisesRegex(RuntimeError, 'budget'):
                 transport.request('checks')
-        self.assertEqual(run.call_count, 3)
-        self.assertEqual(waits, [60, 120])
+        self.assertEqual(run.call_count, 5)
+        self.assertEqual(waits, [60, 120, 240, 480])
 
     def test_lf_headers_and_empty_success_body(self):
         reply = subprocess.CompletedProcess([], 0, b'HTTP/2.0 204 No Content\nX-RateLimit-Remaining: 12\n\n', b'')

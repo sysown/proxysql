@@ -41,7 +41,7 @@ jobs:
     - tier-context
     runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 200
+    timeout-minutes: 230
     permissions: write-all
     strategy:
       fail-fast: false
@@ -75,7 +75,7 @@ jobs:
         phase: setup
 
     - name: Start selected product test check
-      timeout-minutes: 2
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

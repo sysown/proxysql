@@ -36,7 +36,7 @@ jobs:
     secrets: inherit
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     permissions:
       actions: read
       checks: write
@@ -230,7 +230,7 @@ jobs:
           proxysql/libs/
 #          proxysql/deps/
     - name: Complete selected product test check
-      timeout-minutes: 2
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

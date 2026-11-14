@@ -255,7 +255,7 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(sum(path == '/api' for path, _, _ in requests), 2)
 
     def test_parallel_api_retries_stop_at_attempt_and_wait_limits(self):
-        for status, headers, expected in [(500, {}, 6), (429, {'Retry-After': '90'}, 4)]:
+        for status, headers, expected in [(500, {}, 6), (429, {'Retry-After': '400'}, 4)]:
             with self.subTest(status=status), artifact_server('plain', api_failures=(status,)*6,
                     api_headers=headers) as (url, payload, requests), tempfile.TemporaryDirectory() as folder:
                 with patch('ci_tier_artifacts.MIN_DOWNLOAD_PART_BYTES', 65536), \

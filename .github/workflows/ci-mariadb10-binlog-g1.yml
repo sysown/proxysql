@@ -37,7 +37,7 @@ jobs:
   tests:
     runs-on: ubuntu-22.04
     # Reserve failure evidence after bounded setup, tests, cleanup, and runner shutdown.
-    timeout-minutes: 200
+    timeout-minutes: 230
     # Writes a check run and mints an OIDC token for Codecov, so keep the token
     # bounded to exactly those operations rather than write-all.
     #
@@ -79,7 +79,7 @@ jobs:
         phase: setup
 
     - name: Start selected product test check
-      timeout-minutes: 2
+      timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}

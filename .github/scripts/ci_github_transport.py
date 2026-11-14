@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 
 MAX_ATTEMPTS = 6
-MAX_WAIT_SECONDS = 300
+MAX_WAIT_SECONDS = 1200
 _QUOTA_HEADERS = ('x-ratelimit-limit', 'x-ratelimit-remaining',
                   'x-ratelimit-used', 'x-ratelimit-reset')
 _TRANSIENT = ('connection reset', 'i/o timeout', 'tls handshake timeout',

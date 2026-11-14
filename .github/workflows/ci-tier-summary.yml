@@ -18,7 +18,7 @@ jobs:
       checks: write
       contents: read
     runs-on: ${{ (contains(fromJson('["renecannao","rahim-kanji"]'), github.actor) && vars.SELFHOSTED_WORKFLOWS && contains(fromJson(vars.SELFHOSTED_WORKFLOWS), github.workflow) && fromJson('["self-hosted","proxysql-ci"]')) || 'ubuntu-24.04' }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     concurrency:
       group: ci-tier-summary-${{ fromJson(inputs.binding).execution_id }}
       cancel-in-progress: false

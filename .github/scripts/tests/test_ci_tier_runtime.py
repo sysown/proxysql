@@ -189,6 +189,18 @@ class RuntimeTests(unittest.TestCase):
   with patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh)}),patch.object(runtime,'api_for',return_value=api),patch.object(runtime,'resolve_producer',side_effect=ValueError('missing')):
    with self.assertRaisesRegex(RuntimeError,'before publishing'):runtime.producer_lookup()
 
+ def test_build_completion_polls_every_two_to_four_minutes_with_jitter(self):
+  gh=dict(repository='sysown/proxysql',sha='a'*40,run_id='1',run_attempt='1',event={})
+  api=Mock();api.request.side_effect=[{'status':'in_progress'},{'status':'in_progress'},{'status':'completed','conclusion':'success'}]
+  with patch.dict(os.environ,{'GITHUB_JSON':json.dumps(gh)}),patch.object(runtime,'api_for',return_value=api), \
+       patch.object(runtime,'resolve_producer',return_value={'build_id':2,'build_attempt':1}), \
+       patch('random.uniform',side_effect=[120,240]) as jitter,patch.object(runtime.time,'sleep') as sleep, \
+       patch.object(runtime.Path,'write_text'):
+   runtime.producer_lookup()
+  self.assertEqual([call.args[0] for call in sleep.call_args_list],[120,240])
+  self.assertEqual(jitter.call_args.args,(120,240))
+  self.assertEqual(jitter.call_count,2)
+
  def test_legacy_multi_instance_caller_matches_its_original_cells(self):
   plan=make_plan(self.ctx(),dict(tiers=['v40'],mode='normal'),{'consumers':[
    dict(workflow='CI-3p',job='test',automatic=True,instance='run-'+db,tiers=['v40'],groups=[],cells=[dict(infradb=db)]) for db in ['mysql','mariadb']]})
