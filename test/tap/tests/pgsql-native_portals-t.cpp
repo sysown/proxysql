@@ -553,9 +553,10 @@ static bool set_config_portal_shadowed(PGconn* admin, std::string& got) {
 		if (PQresultStatus(drop) != PGRES_COMMAND_OK) { got += " schema cleanup failed"; good = false; }
 		PQclear(drop);
 	}
-	execAdmin(admin, "SET pgsql-set_parser_algorithm=" + saved_algo);
-	execAdmin(admin, "SET pgsql-query_processor_parser=" + saved_parser);
-	execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	const bool r_algo = execAdmin(admin, "SET pgsql-set_parser_algorithm=" + saved_algo);
+	const bool r_parser = execAdmin(admin, "SET pgsql-query_processor_parser=" + saved_parser);
+	const bool r_load = execAdmin(admin, "LOAD PGSQL VARIABLES TO RUNTIME");
+	if (!r_algo || !r_parser || !r_load) good = false;
 	return good;
 }
 
