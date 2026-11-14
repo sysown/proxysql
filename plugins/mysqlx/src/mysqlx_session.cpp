@@ -296,6 +296,7 @@ MysqlxSession::MysqlxSession()
 	, to_process(false)
 	, status_(NONE)
 	, healthy(true)
+	, drain_deadline_ms_(0)
 	, target_hostgroup_(0)
 	, target_port_(0)
 	, target_use_ssl_(false)
@@ -358,6 +359,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr, const std::string& l
 	client_ds_.set_nonblocking();
 	status_ = CONNECTING_CLIENT;
 	healthy = true;
+	drain_deadline_ms_ = 0;
 	to_process = false;
 	thread_ptr_ = thread_ptr;
 	backend_conn_ = nullptr;
@@ -386,6 +388,7 @@ void MysqlxSession::init(int fd, Mysqlx_Thread* thread_ptr, const std::string& l
 void MysqlxSession::reset() {
 	status_ = NONE;
 	healthy = true;
+	drain_deadline_ms_ = 0;
 	to_process = false;
 	username_.clear();
 	schema_.clear();
@@ -416,6 +419,13 @@ void MysqlxSession::reset() {
 int MysqlxSession::handler() {
 	if (!to_process) return 0;
 	to_process = false;
+
+	// Closing sessions only flush output. Keep a periodic retry scheduled so
+	// a fully blocked peer cannot prevent the drain deadline from expiring.
+	if (status_ == X_SESSION_DRAINING) {
+		handler_session_draining();
+		return healthy ? 0 : -1;
+	}
 
 	// Passthrough fast path. Skip the X-Protocol read/parse stage —
 	// any bytes on the client fd are now opaque (TLS handshake +
@@ -477,6 +487,9 @@ handler_again:
 		case X_PASSTHROUGH_FORWARD:  handler_passthrough_forward(); break;
 		case X_SESSION_RESET_WAITING: handler_session_reset_waiting(); break;
 		case X_SESSION_CLOSING:      handler_session_closing(); break;
+		case X_SESSION_DRAINING:
+			handler_session_draining();
+			return healthy ? 0 : -1;
 		default: break;
 	}
 
@@ -1681,7 +1694,18 @@ void MysqlxSession::handler_waiting_server_msg() {
 		// backend_eof already marked the connection non-reusable, so
 		// return_backend_to_pool() evicts it instead of caching a dead fd.
 		return_backend_to_pool();
-		healthy = false;
+		// Preserve the response/error 2013 and any compressed bytes
+		// already queued for the client: enter a close-after-drain
+		// state instead of marking the session unhealthy immediately.
+		// The session stays healthy while the frontend socket drains;
+		// handler_session_draining() flips healthy=false (and lets
+		// process_all_sessions() delete it) once both plaintext and
+		// encrypted output buffers are empty or the bounded deadline
+		// expires.
+		drain_deadline_ms_ = monotonic_time_ms() + 5000;
+		status_ = X_SESSION_DRAINING;
+		healthy = true;
+		to_process = true;
 		return;
 	}
 
@@ -1812,6 +1836,44 @@ void MysqlxSession::handler_session_closing() {
 	return_backend_to_pool();
 	healthy = false;
 	status_ = X_SESSION_CLOSED;
+}
+
+void MysqlxSession::handler_session_draining() {
+	// Best-effort drain of the preserved response (including the
+	// terminal 2013) before teardown. Account for both the plaintext
+	// write buffer and any TLS-encrypted bytes still queued, as well
+	// as a not-yet-flushed compression batch.
+	flush_compression_batch();
+	ssize_t wr = client_ds_.write_to_net();
+	if (wr < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+		healthy = false;
+		status_ = X_SESSION_CLOSED;
+		drain_deadline_ms_ = 0;
+		return;
+	}
+	if (!client_output_pending()) {
+		healthy = false;
+		status_ = X_SESSION_CLOSED;
+		drain_deadline_ms_ = 0;
+		return;
+	}
+	if (drain_deadline_ms_ != 0 &&
+	    monotonic_time_ms() >= drain_deadline_ms_) {
+		healthy = false;
+		status_ = X_SESSION_CLOSED;
+		drain_deadline_ms_ = 0;
+		return;
+	}
+	// process_all_sessions() runs once per normal poll iteration. Reschedule
+	// even without POLLOUT, then return to poll instead of spinning here.
+	to_process = true;
+}
+
+bool MysqlxSession::client_output_pending() const {
+	return client_ds_.write_buffer_size() > 0 ||
+	       client_ds_.has_ssl_pending_write() ||
+	       compress_batch_count_ > 0 ||
+	       !compress_batch_framed_.empty();
 }
 
 // handler_passthrough_backend_connecting

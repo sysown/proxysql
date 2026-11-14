@@ -128,6 +128,7 @@ public:
 		X_TLS_CONNECT_DONE,
 		X_SESSION_CLOSING,
 		X_SESSION_CLOSED,
+		X_SESSION_DRAINING,
 		X_SESSION_RESET_WAITING,
 		// Raw-byte splice between client and backend. Reached after a
 		// CapabilitiesSet(tls=true) on a route configured with
@@ -225,6 +226,7 @@ public:
 	// state a debugger could not also observe and cannot mutate the
 	// session).
 #ifdef MYSQLX_TEST_BUILD
+	void expire_drain_for_test() { drain_deadline_ms_ = 1; }
 	void inject_identity_for_test(const MysqlxResolvedIdentity& id) { identity_ = id; }
 	void inject_identity_for_test(const std::string& username);
 	int  resolve_backend_target_for_test() { return resolve_backend_target(); }
@@ -307,6 +309,8 @@ private:
 	void handler_waiting_client_msg();
 	void handler_waiting_server_msg();
 	void handler_session_closing();
+	void handler_session_draining();
+	bool client_output_pending() const;
 	void handler_connecting_server();
 	void handler_session_reset_waiting();
 
@@ -446,6 +450,7 @@ private:
 	Mysqlx_Thread* thread_ptr_;
 	Status status_;
 	bool healthy;
+	uint64_t drain_deadline_ms_;
 	std::string username_;
 	std::string schema_;
 	std::string auth_method_;
