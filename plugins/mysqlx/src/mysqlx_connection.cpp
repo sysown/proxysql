@@ -93,6 +93,8 @@ bool MysqlxConnection::is_reusable() const {
 	// implies. Drop it instead — the next request gets a fresh
 	// connection.
 	if (needs_post_reset_rehandshake_) return false;
+	SSL* ssl = backend_ds_.get_ssl();
+	if (ssl && (SSL_get_shutdown(ssl) & SSL_RECEIVED_SHUTDOWN)) return false;
 	return reusable_;
 }
 
