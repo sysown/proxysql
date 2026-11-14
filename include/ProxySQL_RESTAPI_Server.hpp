@@ -23,8 +23,8 @@ struct ProxySQL_RESTAPI_Config {
 	int port { 6070 };
 	/**
 	 * @brief Empty = bind all interfaces (historical behavior). Otherwise an
-	 * IPv4/IPv6 numeric address, or a Unix socket path (absolute, or prefixed
-	 * with "unix:"). Unix socket parents must be owned by root or the
+	 * IPv4/IPv6 numeric address, or an absolute Unix socket path (optionally
+	 * prefixed with "unix:"). Unix socket parents must be owned by root or the
 	 * effective user and must restrict group/other writes unless sticky.
 	 */
 	std::string interface_name {};
@@ -39,7 +39,7 @@ struct ProxySQL_RESTAPI_Config {
  * @brief Parse an admin-restapi_interface value into a bind address.
  *
  * @param interface_name Value of admin-restapi_interface.
- * @param port TCP port to place in the IPv4/IPv6 sockaddr (ignored for Unix).
+ * @param port TCP port (0..65535) for the IPv4/IPv6 sockaddr (ignored for Unix).
  * @param has_bind_address Set true when addr/addr_len must be passed to
  *        libhttpserver; false for the historical "all interfaces" default.
  * @param addr Filled for IPv4/IPv6 addresses.
@@ -50,7 +50,7 @@ struct ProxySQL_RESTAPI_Config {
  */
 bool ProxySQL_RESTAPI_parse_bind_address(
 	const std::string& interface_name,
-	uint16_t port,
+	int port,
 	bool& has_bind_address,
 	struct sockaddr_storage& addr,
 	socklen_t& addr_len,
@@ -72,6 +72,10 @@ class ProxySQL_RESTAPI_Server {
 	 * effective UID and non-writable by group/other unless sticky.
 	 * The parent FD is opened once, before startup, so validation and cleanup
 	 * cannot be redirected by renaming or replacing the parent path.
+	 * On Linux the listener binds through /proc/self/fd/<dir_fd>/<leaf>, so
+	 * socket creation also stays in the pinned directory. On other platforms
+	 * it binds the canonical pathname and relies on post-bind ownership
+	 * verification; a renamed ancestor can still redirect creation there.
 	 */
 	std::string unix_socket_path {};
 	std::string unix_socket_leaf {};

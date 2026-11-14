@@ -31,16 +31,24 @@
 #include <utility>
 #include <vector>
 
+static std::string temporary_directory_template(const char* name) {
+	const char* configured = std::getenv("TMPDIR");
+	const std::string parent = configured != nullptr && configured[0] != '\0'
+		? configured : "/tmp";
+	return parent + "/" + name + "-XXXXXX";
+}
+
 static bool parse(
 	const std::string& value,
 	bool& has_bind,
 	sockaddr_storage& addr,
 	socklen_t& addr_len,
 	std::string& socket_path,
-	std::string& error
+	std::string& error,
+	int port = 6070
 ) {
 	return ProxySQL_RESTAPI_parse_bind_address(
-		value, 6070, has_bind, addr, addr_len, socket_path, error);
+		value, port, has_bind, addr, addr_len, socket_path, error);
 }
 
 static bool is_ipv4(const sockaddr_storage& addr, const char* expected) {
@@ -159,17 +167,20 @@ extern "C" int __real_fstatat(int, const char*, struct stat*, int);
 
 static int listen_failures_remaining = 0;
 static bool redirect_parent_after_stat = false;
+static bool redirect_parent_after_enoent = false;
 static std::string redirect_source_parent;
 static std::string redirect_replacement_parent;
 static std::string redirect_leaf;
+static std::string redirect_enoent_leaf;
 static std::atomic<bool> pause_in_capture { false };
 static std::atomic<bool> capture_reached { false };
 static std::atomic<bool> capture_resume { false };
 static std::string capture_pause_leaf;
 
 static void redirect_unix_parent() {
-	if (!redirect_parent_after_stat) return;
+	if (!redirect_parent_after_stat && !redirect_parent_after_enoent) return;
 	redirect_parent_after_stat = false;
+	redirect_parent_after_enoent = false;
 	const std::string old_parent = redirect_source_parent + ".pinned";
 	if (rename(redirect_source_parent.c_str(), old_parent.c_str()) != 0 ||
 		mkdir(redirect_replacement_parent.c_str(), 0700) != 0) {
@@ -205,6 +216,7 @@ extern "C" int __wrap_lstat(const char* path, struct stat* st) {
 
 extern "C" int __wrap_fstatat(int fd, const char* path, struct stat* st, int flags) {
 	const int rc = __real_fstatat(fd, path, st, flags);
+	const int saved_errno = errno;
 	if (rc == 0) {
 		redirect_unix_parent();
 		// Pause the post-start ownership capture after its fstatat succeeded,
@@ -217,7 +229,11 @@ extern "C" int __wrap_fstatat(int fd, const char* path, struct stat* st, int fla
 				usleep(1000);
 			}
 		}
+	} else if (rc < 0 && errno == ENOENT && redirect_parent_after_enoent &&
+			   path != nullptr && redirect_enoent_leaf == path) {
+		redirect_unix_parent();
 	}
+	errno = saved_errno;
 	return rc;
 }
 #endif
@@ -380,8 +396,8 @@ static int curl_unix_https_code(
  * and a pre-existing path must never be removed.
  */
 static void test_unix_socket_tls_failure_cleanup() {
-	char directory_template[] = "/tmp/proxysql-restapi-6552-XXXXXX";
-	char* directory = mkdtemp(directory_template);
+	std::string directory_template = temporary_directory_template("proxysql-restapi-6552");
+	char* directory = mkdtemp(&directory_template[0]);
 	if (directory == nullptr) {
 		diag("Cannot create temporary directory for TLS fixture: %s", strerror(errno));
 		ok(0, "created temporary directory for TLS fixture");
@@ -540,8 +556,8 @@ static void test_unix_socket_tls_failure_cleanup() {
 // The fixture's shared datadir may be writable by another UID. Only the
 // immediate parent needs to protect entries; cleanup remains anchored to it.
 static void test_unix_immediate_parent_policy() {
-	char directory_template[] = "/tmp/proxysql-restapi-parent-XXXXXX";
-	char* directory = mkdtemp(directory_template);
+	std::string directory_template = temporary_directory_template("proxysql-restapi-parent");
+	char* directory = mkdtemp(&directory_template[0]);
 	if (directory == nullptr) {
 		ok(0, "created parent-policy fixture directory");
 		skip(4, "parent-policy fixture unavailable");
@@ -588,8 +604,8 @@ static void test_dispatch_gate_until_ownership_verified() {
 #if !defined(__linux__)
 	skip(4, "Linux linker-wrap injection is unavailable");
 #else
-	char directory_template[] = "/tmp/proxysql-restapi-gate-XXXXXX";
-	char* directory = mkdtemp(directory_template);
+	std::string directory_template = temporary_directory_template("proxysql-restapi-gate");
+	char* directory = mkdtemp(&directory_template[0]);
 	if (directory == nullptr) {
 		ok(0, "created dispatch-gate fixture directory");
 		skip(3, "dispatch-gate fixture unavailable");
@@ -640,13 +656,13 @@ static void test_dispatch_gate_until_ownership_verified() {
 // path between validation and cleanup must not delete a foreign socket.
 static void test_unix_postbind_failure_and_parent_pinning() {
 #if !defined(__linux__)
-	skip(8, "Linux linker-wrap injection is unavailable");
+	skip(12, "Linux linker-wrap injection is unavailable");
 #else
-	char directory_template[] = "/tmp/proxysql-restapi-6552-postbind-XXXXXX";
-	char* directory = mkdtemp(directory_template);
+	std::string directory_template = temporary_directory_template("proxysql-restapi-6552-postbind");
+	char* directory = mkdtemp(&directory_template[0]);
 	if (directory == nullptr) {
 		diag("Cannot create temporary directory: %s", strerror(errno));
-		skip(8, "post-bind fixture directory unavailable");
+		skip(12, "post-bind fixture directory unavailable");
 		return;
 	}
 	const std::string dir(directory);
@@ -672,11 +688,11 @@ static void test_unix_postbind_failure_and_parent_pinning() {
 	ok(lstat(socket_path.c_str(), &st) != 0 && errno == ENOENT,
 		"destroying the retried listener removes its socket");
 
-	char redirect_template[] = "/tmp/proxysql-restapi-6552-redirect-XXXXXX";
-	char* redirect_dir = mkdtemp(redirect_template);
+	std::string redirect_template = temporary_directory_template("proxysql-restapi-6552-redirect");
+	char* redirect_dir = mkdtemp(&redirect_template[0]);
 	if (redirect_dir == nullptr) {
 		diag("Cannot create redirect fixture directory: %s", strerror(errno));
-		skip(3, "parent-redirection fixture unavailable");
+		skip(7, "parent-redirection fixture unavailable");
 		std::filesystem::remove_all(dir);
 		return;
 	}
@@ -701,12 +717,46 @@ static void test_unix_postbind_failure_and_parent_pinning() {
 	rmdir(redirect_parent.c_str());
 	unlink((pinned_parent + "/restapi.sock").c_str());
 	rmdir(pinned_parent.c_str());
+
+	std::string redirect_enoent_template = temporary_directory_template("proxysql-restapi-6552-redirect-enoent");
+	char* redirect_enoent_dir = mkdtemp(&redirect_enoent_template[0]);
+	if (redirect_enoent_dir == nullptr) {
+		diag("Cannot create redirect-enoent fixture directory: %s", strerror(errno));
+		skip(4, "parent-redirection-enoent fixture unavailable");
+		std::filesystem::remove_all(dir);
+		return;
+	}
+	const std::string redirect_enoent_parent(redirect_enoent_dir);
+	const std::string redirect_enoent_socket = redirect_enoent_parent + "/restapi.sock";
+	const std::string pinned_enoent_parent = redirect_enoent_parent + ".pinned";
+	ProxySQL_RESTAPI_Config redirect_enoent_config {};
+	redirect_enoent_config.interface_name = redirect_enoent_socket;
+	redirect_source_parent = redirect_enoent_parent;
+	redirect_replacement_parent = redirect_enoent_parent;
+	redirect_leaf = "restapi.sock";
+	redirect_enoent_leaf = "restapi.sock";
+	redirect_parent_after_enoent = true;
+	{
+		ProxySQL_RESTAPI_Server server(redirect_enoent_config, ping_endpoints());
+		ok(server.is_running(),
+			"listener starts when parent is renamed before bind");
+		ok(unix_http_status(pinned_enoent_parent + "/restapi.sock") == 200,
+			"HTTP reaches the socket created in the pinned parent");
+	}
+	ok(lstat(redirect_enoent_socket.c_str(), &st) == 0 && S_ISSOCK(st.st_mode),
+		"cleanup preserves a foreign socket created before bind");
+	ok(lstat((pinned_enoent_parent + "/restapi.sock").c_str(), &st) != 0,
+		"cleanup removes its own socket created through the pinned parent");
+	unlink(redirect_enoent_socket.c_str());
+	rmdir(redirect_enoent_parent.c_str());
+	unlink((pinned_enoent_parent + "/restapi.sock").c_str());
+	rmdir(pinned_enoent_parent.c_str());
 	std::filesystem::remove_all(dir);
 #endif
 }
 
 int main() {
-	plan(59);
+	plan(70);
 	if (test_init_minimal() != 0) {
 		ok(0, "test_init_minimal() succeeds");
 		return exit_status();
@@ -781,10 +831,42 @@ int main() {
 		!error.empty(),
 		"malformed IPv4 is rejected");
 
+	ok(!parse("127.0.0.1", has_bind, addr, addr_len, socket_path, error, -1) &&
+		!error.empty(),
+		"negative TCP port is rejected");
+	ok(!parse("127.0.0.1", has_bind, addr, addr_len, socket_path, error, 65536) &&
+		!error.empty(),
+		"TCP port 65536 is rejected");
+	ok(!parse("127.0.0.1", has_bind, addr, addr_len, socket_path, error, 70000) &&
+		!error.empty(),
+		"TCP port 70000 is rejected");
+	ok(parse("127.0.0.1", has_bind, addr, addr_len, socket_path, error, 0) &&
+		has_bind && is_ipv4(addr, "127.0.0.1"),
+		"TCP port 0 is accepted as a boundary");
+	ok(parse("127.0.0.1", has_bind, addr, addr_len, socket_path, error, 65535) &&
+		has_bind && is_ipv4(addr, "127.0.0.1"),
+		"TCP port 65535 is accepted as a boundary");
+	ok(parse("/tmp/restapi-port-ignored.sock", has_bind, addr, addr_len, socket_path, error, 70000) &&
+		has_bind && addr.ss_family == AF_UNIX &&
+		socket_path == "/tmp/restapi-port-ignored.sock",
+		"Unix socket parsing ignores an out-of-range TCP port");
+
 	std::string too_long = "/tmp/" + std::string(200, 'x') + ".sock";
 	ok(!parse(too_long, has_bind, addr, addr_len, socket_path, error) &&
 		!error.empty(),
 		"overlong Unix socket path is rejected");
+
+	{
+		std::vector<std::pair<
+			std::string,
+			std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)>
+		>> endpoints;
+		ProxySQL_RESTAPI_Config bad_port {};
+		bad_port.port = 70000;
+		bad_port.interface_name = "127.0.0.1";
+		ProxySQL_RESTAPI_Server server(bad_port, std::move(endpoints));
+		ok(!server.is_running(), "config constructor fails closed for invalid TCP port");
+	}
 
 	// Live IPv6 bind: this exercises the real libhttpserver -> MHD
 	// MHD_OPTION_SOCK_ADDR_LEN path and the explicit use_ipv6() flag, not just

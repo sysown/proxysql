@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -293,6 +294,19 @@ static string read_file(const string& path) {
 	return string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 }
 
+static string shell_quote(const string& value) {
+	string quoted = "'";
+	for (const char c : value) {
+		if (c == '\'') {
+			quoted += "'\\''";
+		} else {
+			quoted.push_back(c);
+		}
+	}
+	quoted += "'";
+	return quoted;
+}
+
 static bool write_file(
 	const string& path, const string& data, mode_t mode, uid_t owner = static_cast<uid_t>(-1)
 ) {
@@ -499,18 +513,44 @@ static bool create_ca(const string& ca_key, const string& ca_pem) {
 
 static bool create_server_cert(
 	const string& dir, const string& ca_pem, const string& ca_key,
-	const string& key, const string& cert, const string& serial
+	const string& key, const string& cert, const string& serial,
+	const string& host
 ) {
+	for (const char c : host) {
+		const bool ok_char = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '.' || c == ':' || c == '-';
+		if (!ok_char) return false;
+	}
+	if (host.empty()) return false;
+
 	const string csr = dir + "/server.csr";
+	const string ext = dir + "/server.ext";
+	struct in_addr ip4 {};
+	struct in6_addr ip6 {};
+	const bool is_ip = inet_pton(AF_INET, host.c_str(), &ip4) == 1 ||
+		inet_pton(AF_INET6, host.c_str(), &ip6) == 1;
+	std::ostringstream ext_content;
+	ext_content << "subjectAltName=";
+	if (is_ip) ext_content << "IP:" << host;
+	else ext_content << "DNS:" << host;
+	ext_content << ",DNS:localhost\n"
+		"extendedKeyUsage=serverAuth\n";
+	if (!write_file(ext, ext_content.str(), 0600)) return false;
+
 	const bool req = run_openssl({
 		"req", "-new", "-newkey", "rsa:2048", "-nodes",
 		"-subj", "/CN=proxysql", "-keyout", key, "-out", csr
 	});
 	const bool sign = req && run_openssl({
 		"x509", "-req", "-days", "2", "-set_serial", serial, "-in", csr,
-		"-CA", ca_pem, "-CAkey", ca_key, "-out", cert
+		"-CA", ca_pem, "-CAkey", ca_key, "-extfile", ext, "-out", cert
 	});
-	return sign && run_openssl({ "verify", "-CAfile", ca_pem, cert });
+	const bool basic_verify = sign && run_openssl({ "verify", "-CAfile", ca_pem, cert });
+	const bool host_verify = basic_verify && run_openssl({
+		"verify", "-CAfile", ca_pem,
+		is_ip ? "-verify_ip" : "-verify_hostname", host, cert
+	});
+	return basic_verify && host_verify;
 }
 
 static bool create_client_cert_with_eku(
@@ -716,7 +756,6 @@ struct cleanup_guard {
 
 	bool run() {
 		if (done) return true;
-		done = true;
 		bool ok = true;
 		if (state_ready && admin != nullptr) {
 			ok = cleanup_query(
@@ -736,6 +775,7 @@ struct cleanup_guard {
 		if (fixtures != nullptr) {
 			ok = fixtures->cleanup() && ok;
 		}
+		if (ok) done = true;
 		return ok;
 	}
 
@@ -878,24 +918,23 @@ static int configure_reload_route(
 		return EXIT_FAILURE;
 	}
 
-	char content[1024];
-	snprintf(
-		content, sizeof(content),
+	const string content =
 		"#!/bin/sh\n"
-		"export MYSQL_PWD='%s'\n"
-		"mysql -u'%s' -h127.0.0.1 -P%d -e 'PROXYSQL RELOAD TLS' >/dev/null || exit 1\n"
-		"mysql -u'%s' -h127.0.0.1 -P%d -N -e 'SELECT 1' >/dev/null || exit 1\n"
-		"touch '%s/reg_test_6552_sync_marker'\n"
-		"echo '{\"ok\":true}'\n",
-		cl.admin_password, cl.admin_username, cl.admin_port,
-		cl.admin_username, cl.admin_port, fixture_runtime_dir.c_str()
-	);
+		"export MYSQL_PWD=" + shell_quote(cl.admin_password) + "\n"
+		"mysql -u" + shell_quote(cl.admin_username) +
+		" -h127.0.0.1 -P" + std::to_string(cl.admin_port) +
+		" -e 'PROXYSQL RELOAD TLS' >/dev/null || exit 1\n"
+		"mysql -u" + shell_quote(cl.admin_username) +
+		" -h127.0.0.1 -P" + std::to_string(cl.admin_port) +
+		" -N -e 'SELECT 1' >/dev/null || exit 1\n"
+		"touch " + shell_quote(fixture_runtime_dir + "/reg_test_6552_sync_marker") + "\n"
+		"echo '{\"ok\":true}'\n";
 	// The script embeds admin credentials, so only its owner needs to execute
 	// it. A root runner gives it to the daemon UID; other accepted ownerships
 	// leave it with the runner (also valid when the daemon is root).
 	const uid_t owner = (root_runner && daemon_uid != runner)
 		? daemon_uid : static_cast<uid_t>(-1);
-	if (content[0] == '\0' || !write_file(script, content, 0700, owner)) {
+	if (content.empty() || !write_file(script, content, 0700, owner)) {
 		diag("Cannot create /sync reload script %s", script.c_str());
 		return EXIT_FAILURE;
 	}
@@ -960,7 +999,8 @@ int main() {
 		return EXIT_FAILURE;
 	}
 
-	cleanup_guard cleanup;
+	auto cleanup_holder = std::make_unique<cleanup_guard>();
+	cleanup_guard& cleanup = *cleanup_holder;
 	cleanup.admin = admin;
 	cleanup.backup = &backup;
 	cleanup.fixtures = &fixture_tree;
@@ -983,9 +1023,9 @@ int main() {
 
 	// ---------------------------------------------------------------- setup
 	ok(create_ca(ca_key, ca_pem), "generated test CA");
-	ok(create_server_cert(cert_dir, ca_pem, ca_key, server_key, server_cert, "6552201"),
+	ok(create_server_cert(cert_dir, ca_pem, ca_key, server_key, server_cert, "6552201", host),
 		"generated CA-signed server certificate");
-	ok(create_server_cert(cert_dir, ca_pem, ca_key, server_key2, server_cert2, "6552202"),
+	ok(create_server_cert(cert_dir, ca_pem, ca_key, server_key2, server_cert2, "6552202", host),
 		"generated second CA-signed server certificate");
 	ok(install_pem(ca_pem, installed_ca, 0644), "installed test CA in ProxySQL datadir");
 	ok(install_pem(server_key, installed_key, 0600), "installed test server key");
@@ -1277,13 +1317,18 @@ int main() {
 	}
 
 	const string proxysql_ip6 = resolve_ipv6(host);
-	if (!proxysql_ip6.empty()) {
+	curl_version_info_data *curl_version = curl_version_info(CURLVERSION_NOW);
+	const bool curl_ipv6_capable = curl_version != nullptr &&
+		(curl_version->features & CURL_VERSION_IPV6) != 0;
+	if (!proxysql_ip6.empty() && curl_ipv6_capable) {
 		const string bound_url6 =
 			"http://[" + proxysql_ip6 + "]:" + std::to_string(RESTAPI_TEST_PORT) + "/metrics";
 		admin_query(admin, "SET admin-restapi_interface='" + proxysql_ip6 + "'");
 		ok(admin_query(admin, "LOAD ADMIN VARIABLES TO RUNTIME"), "LOAD bound IPv6 interface");
 		if (wait_for_http(bound_url6, 200)) last_bound_url = bound_url6;
 		ok(last_bound_url == bound_url6, "listener actually binds the configured IPv6 address");
+	} else if (!proxysql_ip6.empty()) {
+		skip(2, "linked libcurl lacks IPv6 support");
 	} else {
 		skip(2, "ProxySQL container has no IPv6 address to bind");
 	}
@@ -1402,6 +1447,7 @@ int main() {
 		"all original runtime admin rows are restored exactly");
 	ok(access(fixture_root.c_str(), F_OK) != 0 && errno == ENOENT,
 		"the complete owned fixture tree is removed");
+	cleanup_holder.reset();
 	curl_global_cleanup();
 	mysql_close(admin);
 	return exit_status();

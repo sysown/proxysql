@@ -583,7 +583,7 @@ static std::string trim_restapi_interface(const std::string& value) {
 
 bool ProxySQL_RESTAPI_parse_bind_address(
 	const std::string& interface_name,
-	uint16_t port,
+	int port,
 	bool& has_bind_address,
 	struct sockaddr_storage& addr,
 	socklen_t& addr_len,
@@ -598,6 +598,11 @@ bool ProxySQL_RESTAPI_parse_bind_address(
 
 	std::string value = trim_restapi_interface(interface_name);
 	if (value.empty()) {
+		if (port < 0 || port > 65535) {
+			error = "Invalid TCP port " + std::to_string(port) +
+				" for admin-restapi_interface";
+			return false;
+		}
 		return true;
 	}
 
@@ -624,6 +629,12 @@ bool ProxySQL_RESTAPI_parse_bind_address(
 	}
 	if (unix_prefixed) {
 		error = "admin-restapi_interface 'unix:' requires an absolute socket path";
+		return false;
+	}
+
+	if (port < 0 || port > 65535) {
+		error = "Invalid TCP port " + std::to_string(port) +
+			" for admin-restapi_interface";
 		return false;
 	}
 
@@ -734,10 +745,11 @@ void ProxySQL_RESTAPI_Server::prepare_unix_socket() {
 		return;
 	}
 
-	// Bind through the canonical parent path so MHD creates the leaf in the
-	// directory this object has pinned. Verify the result before dispatching
-	// any handler: while verification is pending the listener may accept
-	// connections but every resource answers 503.
+	// The canonical configured path is retained for logs and verification, but
+	// on Linux the actual bind goes through the already-pinned parent FD. This
+	// prevents a renamed/replaced ancestor from redirecting creation of the
+	// leaf outside the pinned directory. /proc must be available; otherwise the
+	// bind path is invalid and normal bind failure applies.
 	const std::string canonical_path =
 		(canonical_parent == "/" ? canonical_parent : canonical_parent + "/") + unix_socket_leaf;
 	if (canonical_path.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
@@ -748,12 +760,23 @@ void ProxySQL_RESTAPI_Server::prepare_unix_socket() {
 	}
 	unix_socket_path = canonical_path;
 
+	std::string bind_path = canonical_path;
+#if defined(__linux__)
+	bind_path = "/proc/self/fd/" + std::to_string(unix_socket_dir_fd) + "/" + unix_socket_leaf;
+#endif
+	if (bind_path.size() + 1 > sizeof(((struct sockaddr_un*)0)->sun_path)) {
+		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': Unix socket bind "
+			"path is too long: '%s'\n", bind_path.c_str());
+		cleanup_unix_socket();
+		return;
+	}
+
 	struct sockaddr_un un {};
 	un.sun_family = AF_UNIX;
-	memcpy(un.sun_path, canonical_path.c_str(), canonical_path.size() + 1);
+	memcpy(un.sun_path, bind_path.c_str(), bind_path.size() + 1);
 	memcpy(&bind_addr, &un, sizeof(un));
 	bind_addr_len = static_cast<socklen_t>(
-		offsetof(struct sockaddr_un, sun_path) + canonical_path.size() + 1);
+		offsetof(struct sockaddr_un, sun_path) + bind_path.size() + 1);
 	has_bind_address = true;
 }
 
@@ -880,7 +903,7 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 ) : port(config_.port) {
 	std::string parse_error;
 	if (!ProxySQL_RESTAPI_parse_bind_address(
-			config_.interface_name, static_cast<uint16_t>(config_.port),
+			config_.interface_name, config_.port,
 			has_bind_address, bind_addr, bind_addr_len, unix_socket_path, parse_error)) {
 		proxy_error("Unable to start 'ProxySQL_RestAPI_Server': %s\n", parse_error.c_str());
 		return;

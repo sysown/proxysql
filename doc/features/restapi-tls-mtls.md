@@ -11,7 +11,7 @@ all-interfaces behavior.
 |----------|---------|-------------|
 | `admin-restapi_use_ssl` | `false` | `true` serves HTTPS on `admin-restapi_port` using ProxySQL's existing TLS key/certificate. |
 | `admin-restapi_ssl_verify_client` | `false` | `true` requires a client certificate signed by the configured CA. Requires `admin-restapi_use_ssl=true`. |
-| `admin-restapi_interface` | `""` | Empty/`0.0.0.0` binds all IPv4 interfaces. `::` binds all IPv6 interfaces and, on platforms with IPv6-only sockets, does not accept IPv4 connections. A numeric IPv4 or IPv6 address binds only that address. A path starting with `/`, or prefixed with `unix:`, creates a Unix-domain socket. |
+| `admin-restapi_interface` | `""` | Empty/`0.0.0.0` binds all IPv4 interfaces. `::` binds all IPv6 interfaces and, on platforms with IPv6-only sockets, does not accept IPv4 connections. A numeric IPv4 or IPv6 address binds only that address. A path starting with `/`, or prefixed with `unix:` followed by an absolute path, creates a Unix-domain socket. |
 | `admin-restapi_ssl_ca` | `""` | CA certificate PEM used to validate client certificates. Empty reads ProxySQL's configured CA file (normally `datadir/proxysql-ca.pem`). Relative paths resolve against the ProxySQL datadir. |
 
 All variables are available through `SET`/`SHOW`, `global_variables`,
@@ -101,6 +101,12 @@ shuts down.
 
 The socket's immediate parent directory must be owned by root or the ProxySQL
 user. If it permits group or other writes, it must have the sticky bit set.
+
+On Linux the listener binds through the already-pinned parent file descriptor,
+so socket creation cannot be redirected by renaming an ancestor. This requires
+`/proc/self/fd` to be available; otherwise listener startup fails. On other
+platforms it binds the canonical pathname and relies on post-bind ownership
+verification; a renamed ancestor may still redirect creation there.
 
 ## Fail-closed behavior
 

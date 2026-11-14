@@ -4,6 +4,7 @@ using json = nlohmann::json;
 
 #include <iostream>     // std::cout
 #include <sstream>      // std::stringstream
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <algorithm>    // std::sort
@@ -4042,14 +4043,20 @@ void ProxySQL_request_restapi_reload() {
 }
 
 static bool restapi_read_pem_file(const std::string& path, std::string& out) {
+	out.clear();
 	std::ifstream input(path, std::ios::in | std::ios::binary);
 	if (!input.is_open()) {
 		return false;
 	}
-	out.assign(
-		std::istreambuf_iterator<char>(input),
-		std::istreambuf_iterator<char>()
-	);
+	try {
+		out.assign(
+			std::istreambuf_iterator<char>(input),
+			std::istreambuf_iterator<char>()
+		);
+	} catch (const std::exception&) {
+		out.clear();
+		return false;
+	}
 	return !out.empty();
 }
 
@@ -4200,7 +4207,7 @@ void ProxySQL_Admin::apply_restapi_config(bool force_tls_reload) {
 		std::string unix_socket_path;
 		std::string parse_error;
 		if (!ProxySQL_RESTAPI_parse_bind_address(
-				desired.interface_name, static_cast<uint16_t>(desired.port),
+				desired.interface_name, desired.port,
 				has_bind_address, bind_address, bind_address_len,
 				unix_socket_path, parse_error)) {
 			proxy_error("Unable to start 'ProxySQL_RestAPI_Server': %s\n", parse_error.c_str());
