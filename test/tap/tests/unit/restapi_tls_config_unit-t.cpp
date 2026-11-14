@@ -763,29 +763,22 @@ static void test_unix_postbind_failure_and_parent_pinning() {
 #endif
 }
 
-// Exercise the startup-only Linux limit with a short writable parent under
-// /data. A private fixture directory would make the configured path too long.
+// Exercise the startup-only Linux limit with a short writable ancestor of
+// TMPDIR. A private fixture directory would make the configured path too long.
 static void test_linux_proc_fd_bind_sun_path_limit() {
 #if !defined(__linux__)
 	skip(2, "Linux proc-FD bind path check is unavailable");
 #else
+	const char* temporary = std::getenv("TMPDIR");
+	if (temporary == nullptr || temporary[0] == '\0') temporary = "/tmp";
+	char* resolved = realpath(temporary, nullptr);
+	std::string candidate = resolved != nullptr ? resolved : "";
+	free(resolved);
 	std::string parent;
-	struct stat data_st {};
-	if (stat("/data", &data_st) == 0 && S_ISDIR(data_st.st_mode) &&
-		(data_st.st_uid == 0 || data_st.st_uid == geteuid()) &&
-		(!(data_st.st_mode & (S_IWGRP | S_IWOTH)) || (data_st.st_mode & S_ISVTX)) &&
-		access("/data", W_OK | X_OK) == 0) {
-		parent = "/data";
-	} else {
-		const char* temporary = std::getenv("TMPDIR");
-		char* resolved = temporary != nullptr ? realpath(temporary, nullptr) : nullptr;
-		std::string candidate = resolved != nullptr ? resolved : "";
-		free(resolved);
-		while (!candidate.empty() && candidate != "/") {
+	while (!candidate.empty() && candidate != "/") {
 		struct stat st {};
-		if (candidate.compare(0, 6, "/data/") == 0 && candidate.size() <= 13 &&
-			stat(candidate.c_str(), &st) == 0 && S_ISDIR(st.st_mode) &&
-			(st.st_uid == 0 || st.st_uid == geteuid()) &&
+		if (candidate.size() <= 13 && stat(candidate.c_str(), &st) == 0 &&
+			S_ISDIR(st.st_mode) && (st.st_uid == 0 || st.st_uid == geteuid()) &&
 			(!(st.st_mode & (S_IWGRP | S_IWOTH)) || (st.st_mode & S_ISVTX)) &&
 			access(candidate.c_str(), W_OK | X_OK) == 0) {
 			parent = candidate;
@@ -793,10 +786,9 @@ static void test_linux_proc_fd_bind_sun_path_limit() {
 		}
 		const size_t slash = candidate.find_last_of('/');
 		candidate = slash == 0 ? "/" : candidate.substr(0, slash);
-		}
 	}
 	if (parent.empty()) {
-		skip(2, "no short trusted writable /data parent is available");
+		skip(2, "no short trusted writable ancestor of TMPDIR is available");
 		return;
 	}
 	std::string leaf = "restapi-long-leaf-" + std::to_string(getpid()) + "-";
