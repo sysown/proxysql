@@ -1,0 +1,2 @@
+*.log whitespace=-blank-at-eof
+*.csv whitespace=cr-at-eol

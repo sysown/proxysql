@@ -181,4 +181,3 @@ The result value is one byte; SQL text is eight bytes per query. The legacy appl
 - Client CPU is a live-sampled estimate and can miss startup/exit ticks.
 - PostgreSQL fast-forward HGM byte counters are zero on this host; raw application results and native plugin wire counters remain separate.
 - No wire relay capacity, general SQL capacity or causal claim is made.
-

@@ -236,4 +236,3 @@ Application bytes below come from verified native-client queries. HGM/TCP wire c
 - Client CPU is a bounded live-sampled estimate (50 ms) and can miss startup/exit ticks. RSS/fd/thread endpoint maxima are named explicitly.
 - Byte equality to application payload is not required or used for HGM/TCP wire counters.
 - No winner or production-capacity claim is made from these workloads.
-
