@@ -553,8 +553,8 @@ static void test_unix_socket_tls_failure_cleanup() {
 	std::filesystem::remove_all(dir);
 }
 
-// The fixture's shared datadir may be writable by another UID. Only the
-// immediate parent needs to protect entries; cleanup remains anchored to it.
+// Linux binds through the pinned parent FD and supports shared ancestors.
+// Canonical binding on other platforms requires every ancestor to be trusted.
 static void test_unix_immediate_parent_policy() {
 	std::string directory_template = temporary_directory_template("proxysql-restapi-parent");
 	char* directory = mkdtemp(&directory_template[0]);
@@ -577,7 +577,11 @@ static void test_unix_immediate_parent_policy() {
 	config.interface_name = parent + "/restapi.sock";
 	{
 		ProxySQL_RESTAPI_Server server(config, ping_endpoints());
+#if defined(__linux__)
 		ok(server.is_running(), "protected immediate parent accepts a shared writable ancestor");
+#else
+		ok(!server.is_running(), "non-Linux rejects an unsafe shared ancestor");
+#endif
 	}
 	struct stat st {};
 	ok(lstat(config.interface_name.c_str(), &st) != 0 && errno == ENOENT,
@@ -592,7 +596,11 @@ static void test_unix_immediate_parent_policy() {
 	chmod(parent.c_str(), 01777);
 	{
 		ProxySQL_RESTAPI_Server server(config, ping_endpoints());
+#if defined(__linux__)
 		ok(server.is_running(), "sticky writable immediate parent permits shared runtime writes");
+#else
+		ok(!server.is_running(), "non-Linux rejects an unsafe shared ancestor despite a sticky immediate parent");
+#endif
 	}
 	std::filesystem::remove_all(dir);
 }

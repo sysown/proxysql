@@ -73,9 +73,12 @@ class ProxySQL_RESTAPI_Server {
 	 * The parent FD is opened once, before startup, so validation and cleanup
 	 * cannot be redirected by renaming or replacing the parent path.
 	 * On Linux the listener binds through /proc/self/fd/<dir_fd>/<leaf>, so
-	 * socket creation also stays in the pinned directory. On other platforms
-	 * it binds the canonical pathname and relies on post-bind ownership
-	 * verification; a renamed ancestor can still redirect creation there.
+	 * socket creation also stays in the pinned directory and shared ancestors
+	 * remain supported. On other platforms every canonical ancestor must meet
+	 * the same ownership/write policy before canonical binding; untrusted UIDs cannot
+	 * replace a validated ancestor, but trusted root/effective-user filesystem
+	 * changes remain outside this threat model. Post-bind ownership
+	 * verification still applies on every platform.
 	 */
 	std::string unix_socket_path {};
 	std::string unix_socket_leaf {};

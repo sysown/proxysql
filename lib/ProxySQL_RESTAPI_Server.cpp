@@ -685,8 +685,83 @@ static bool trusted_unix_parent(const struct stat& st, std::string& error) {
 	return true;
 }
 
+// Validate every ancestor of an already-canonicalized absolute parent path
+// and return a pinned FD to its final component. This is the stricter policy
+// used where the listener cannot bind through a retained parent FD: an
+// untrusted UID must not be able to replace any ancestor of the socket path.
+[[maybe_unused]] static int open_trusted_unix_ancestor_chain(
+	const std::string& canonical_parent, std::string& error
+) {
+	if (canonical_parent.empty() || canonical_parent[0] != '/') {
+		error = "Unix socket parent path must be absolute: '" + canonical_parent + "'";
+		return -1;
+	}
+
+	std::vector<std::string> components;
+	if (canonical_parent != "/") {
+		size_t start = 1;
+		while (start < canonical_parent.size()) {
+			size_t slash = canonical_parent.find('/', start);
+			std::string component;
+			if (slash == std::string::npos) {
+				component = canonical_parent.substr(start);
+				start = canonical_parent.size();
+			} else {
+				component = canonical_parent.substr(start, slash - start);
+				start = slash + 1;
+			}
+			if (component.empty() || component == "." || component == "..") {
+				error = "Invalid Unix socket parent path: '" + canonical_parent + "'";
+				return -1;
+			}
+			components.push_back(component);
+			if (slash == std::string::npos) break;
+		}
+	}
+
+	int fd = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	if (fd < 0) {
+		error = "Cannot open Unix socket ancestor '/': " + std::string(strerror(errno));
+		return -1;
+	}
+	struct stat st {};
+	if (fstat(fd, &st) != 0 || !trusted_unix_parent(st, error)) {
+		if (error.empty()) {
+			error = "Cannot inspect Unix socket ancestor '/': " + std::string(strerror(errno));
+		}
+		close(fd);
+		return -1;
+	}
+
+	for (const auto& component : components) {
+		int next = openat(fd, component.c_str(),
+			O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+		if (next < 0) {
+			error = "Cannot open Unix socket ancestor '" + component + "': " +
+				std::string(strerror(errno));
+			close(fd);
+			return -1;
+		}
+		struct stat next_st {};
+		if (fstat(next, &next_st) != 0 || !trusted_unix_parent(next_st, error)) {
+			if (error.empty()) {
+				error = "Cannot inspect Unix socket ancestor '" + component + "': " +
+					std::string(strerror(errno));
+			}
+			close(next);
+			close(fd);
+			return -1;
+		}
+		close(fd);
+		fd = next;
+	}
+	return fd;
+}
+
 // Pin the immediate parent and validate who can modify its entries. Earlier
-// ancestors may be shared: cleanup uses this FD even if the directory moves.
+// ancestors may be shared on Linux, where binding goes through the retained
+// parent FD. On other platforms every canonical ancestor is validated by
+// open_trusted_unix_ancestor_chain before the canonical pathname is bound.
 static int open_trusted_unix_parent(
 	const std::string& parent, std::string& canonical, std::string& error
 ) {
@@ -697,6 +772,8 @@ static int open_trusted_unix_parent(
 	}
 	canonical.assign(resolved);
 	free(resolved);
+
+#if defined(__linux__)
 	int fd = open(canonical.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
 	if (fd < 0) {
 		error = "Cannot open Unix socket parent '" + canonical + "': " + strerror(errno);
@@ -704,11 +781,16 @@ static int open_trusted_unix_parent(
 	}
 	struct stat st {};
 	if (fstat(fd, &st) != 0 || !trusted_unix_parent(st, error)) {
-		if (error.empty()) error = "Cannot inspect Unix socket parent: " + std::string(strerror(errno));
+		if (error.empty()) {
+			error = "Cannot inspect Unix socket parent: " + std::string(strerror(errno));
+		}
 		close(fd);
 		return -1;
 	}
 	return fd;
+#else
+	return open_trusted_unix_ancestor_chain(canonical, error);
+#endif
 }
 
 void ProxySQL_RESTAPI_Server::prepare_unix_socket() {

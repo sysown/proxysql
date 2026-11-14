@@ -103,10 +103,15 @@ The socket's immediate parent directory must be owned by root or the ProxySQL
 user. If it permits group or other writes, it must have the sticky bit set.
 
 On Linux the listener binds through the already-pinned parent file descriptor,
-so socket creation cannot be redirected by renaming an ancestor. This requires
-`/proc/self/fd` to be available; otherwise listener startup fails. On other
-platforms it binds the canonical pathname and relies on post-bind ownership
-verification; a renamed ancestor may still redirect creation there.
+so socket creation cannot be redirected by renaming an ancestor and shared
+ancestors remain supported. This requires `/proc/self/fd` to be available;
+otherwise listener startup fails. On other platforms every canonical ancestor,
+from `/` through the immediate parent, must meet the same ownership and write
+permission requirements before the canonical pathname is bound. Configurations
+below an ancestor owned by another user, or writable by group/others without
+its sticky bit, fail to start. This prevents other users from replacing an
+ancestor; changes by root or the ProxySQL user remain trusted. Post-bind
+ownership verification still applies on every platform.
 
 ## Fail-closed behavior
 
