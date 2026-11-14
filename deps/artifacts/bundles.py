@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MAX_METADATA = 4 * 1024 * 1024
 MAX_UNPACKED = 4 * 1024 * 1024 * 1024
 MAX_FILES = 100000
+DUCKDB_STATIC_LOADER_FILES = ['build/release/src/duckdb_static_extension_loader.c',
+                             'extension/loader/static_extension_autoregister.cpp']
 
 
 def safe_path(name):
@@ -40,8 +42,9 @@ def duckdb_archives(tree):
 def validate_tree(dependency, tree, version=None):
     tree = Path(tree).resolve()
     if dependency == 'duckdb':
-        required = ['src/include/duckdb.h', 'build/release/DuckDBExports.cmake']
-        required += duckdb_archives(tree)
+        required = ['src/include/duckdb.h', 'src/include/duckdb_static_extension.h',
+                    'build/release/DuckDBExports.cmake']
+        required += DUCKDB_STATIC_LOADER_FILES + duckdb_archives(tree)
     elif dependency == 'openssl':
         required = ['libssl.a', 'libcrypto.a', 'include/openssl/ssl.h',
                     'include/openssl/crypto.h', 'include/openssl/opensslv.h',
@@ -72,7 +75,7 @@ def collect_payload(dependency, tree, version=None):
     if dependency == 'duckdb':
         files = [p.relative_to(tree).as_posix() for p in (tree / 'src/include').rglob('*')
                  if p.is_file() or p.is_symlink()]
-        files += ['build/release/DuckDBExports.cmake'] + duckdb_archives(tree)
+        files += ['build/release/DuckDBExports.cmake'] + DUCKDB_STATIC_LOADER_FILES + duckdb_archives(tree)
         license_dirs = [tree, tree / 'third_party', tree / 'extension']
     else:
         files = [p.relative_to(tree).as_posix() for p in (tree / 'include/openssl').rglob('*')

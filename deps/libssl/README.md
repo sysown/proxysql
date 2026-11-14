@@ -1,13 +1,13 @@
 # Vendored OpenSSL
 
-ProxySQL vendors OpenSSL 3.5.7 from the official release asset:
+ProxySQL vendors OpenSSL 3.5.9 from the official release asset:
 
-<https://github.com/openssl/openssl/releases/download/openssl-3.5.7/openssl-3.5.7.tar.gz>
+<https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz>
 
 The published SHA-256 is:
 
 ```text
-a8c0d28a529ca480f9f36cf5792e2cd21984552a3c8e4aa11a24aa31aeac98e8
+603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
 ```
 
 The source archive is vendored directly in git (like every other

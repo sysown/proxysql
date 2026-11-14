@@ -2,7 +2,7 @@
 
 ProxySQL builds against the OpenSSL version pinned by its mandatory vendored
 OpenSSL 3.5 LTS source archive.
-The current pin is OpenSSL 3.5.7. OpenSSL 3.5 is supported upstream through
+The current pin is OpenSSL 3.5.9. OpenSSL 3.5 is supported upstream through
 8 April 2030; moving to another release series requires a separately reviewed
 design rather than an incidental dependency update.
 
@@ -28,9 +28,9 @@ is not an operator override.
 
 The focused version test verifies three separate contracts for this pin:
 
-1. the OpenSSL header string is exactly `3.5.7`;
-2. the runtime version string has the prefix `OpenSSL 3.5.7`; and
-3. the runtime numeric version encodes major/minor/patch `3/5/7`.
+1. the OpenSSL header string is exactly `3.5.9`;
+2. the runtime version string has the prefix `OpenSSL 3.5.9`; and
+3. the runtime numeric version encodes major/minor/patch `3/5/9`.
 
 ## Verify a checkout
 
@@ -115,7 +115,7 @@ Make all version-dependent changes in one commit:
 Search for stale references before committing:
 
 ```bash
-old_version=3.5.7
+old_version=3.5.9
 rg -n "$old_version|openssl-$old_version" \
   README.md common_mk deps doc test
 deps/libssl/verify-source.bash

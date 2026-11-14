@@ -2,16 +2,16 @@
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-archive=${1:-"${script_dir}/openssl-3.5.7.tar.gz"}
+archive=${1:-"${script_dir}/openssl-3.5.9.tar.gz"}
 if [[ $# -ge 2 ]]; then
 	checksum_file=$2
 elif [[ $# -eq 1 ]]; then
 	checksum_file="${archive}.sha256"
 else
-	checksum_file="${script_dir}/openssl-3.5.7.tar.gz.sha256"
+	checksum_file="${script_dir}/openssl-3.5.9.tar.gz.sha256"
 fi
 archive_name=$(basename -- "${archive}")
-required_root=openssl-3.5.7
+required_root=openssl-3.5.9
 
 fail() {
 	echo "ERROR: $*" >&2
