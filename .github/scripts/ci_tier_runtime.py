@@ -39,7 +39,14 @@ def read_plan():
     validate_manifest(plan);verify_binding(plan,binding)
     if plan['execution_id']!=binding['execution_id']:raise ValueError('plan attempt mismatch')
     return plan
-def api_for(plan):return GitHubAPI(plan['repository'],token=os.environ.get('SOURCE_ARTIFACTS_TOKEN') or None)
+def api_for(plan):
+    options={}
+    scope=[os.environ.get(key) for key in ('GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_JOB')]
+    if os.environ.get('RUNNER_TEMP') and all(scope):
+        # Separate subprocess steps reuse metadata, but other jobs/reruns cannot.
+        key=hashlib.sha256(json.dumps(scope).encode()).hexdigest()
+        options['cache_dir']=Path(os.environ['RUNNER_TEMP'])/'ci-tier-metadata'/key
+    return GitHubAPI(plan['repository'],token=os.environ.get('SOURCE_ARTIFACTS_TOKEN') or None,**options)
 def reporting_api(plan):return GitHubAPI(reporting_repository(plan))
 def plan_command():
     ctx=context();api=api_for(ctx);trusted=os.environ.get('TRUSTED')=='true'
