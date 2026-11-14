@@ -5,6 +5,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <unistd.h>
 
 #include "libpq-fe.h"
@@ -99,18 +100,118 @@ static int poolFreeWithin(PGconn* admin, int hg, int want, int seconds) {
     }
 }
 
-static bool flushPool(PGconn* admin) {
+// Owns run-unique SQLite temp snapshots of everything this test mutates.
+// restore() rolls runtime and memory back independently, then drops only the
+// snapshots this run created; any failed step retains them for a retry.
+struct StateGuard {
+    std::string mem_servers;
+    std::string rt_servers;
+    std::string mem_vars;
+    std::string rt_vars;
+    std::vector<std::string> owned;
+    PGconn* admin = nullptr;
+    bool dirty = false;
+
+    StateGuard() = default;
+    StateGuard(const StateGuard&) = delete;
+    StateGuard& operator=(const StateGuard&) = delete;
+
+    bool capture(PGconn* a) {
+        admin = a;
+        const std::string base = "stale_deadline_" + std::to_string(getpid()) + "_"
+            + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        mem_servers = "temp." + base + "_mem_servers";
+        rt_servers = "temp." + base + "_rt_servers";
+        mem_vars = "temp." + base + "_mem_vars";
+        rt_vars = "temp." + base + "_rt_vars";
+        const struct { const std::string* name; const char* query; } copies[] = {
+            { &mem_servers, "SELECT * FROM pgsql_servers" },
+            { &rt_servers, "SELECT * FROM runtime_pgsql_servers" },
+            { &mem_vars, "SELECT * FROM global_variables WHERE variable_name LIKE 'pgsql-%'" },
+            { &rt_vars, "SELECT * FROM runtime_global_variables WHERE variable_name LIKE 'pgsql-%'" },
+        };
+        for (const auto& c : copies) {
+            if (!execOk(admin, "CREATE TEMP TABLE " + *c.name + " AS " + c.query)) {
+                diag("snapshot capture incomplete before any mutation");
+                return false;
+            }
+            owned.push_back(*c.name);
+        }
+        dirty = true;
+        return true;
+    }
+
+    bool drop_owned() {
+        bool all_ok = true;
+        for (auto it = owned.begin(); it != owned.end();) {
+            if (execOk(admin, "DROP TABLE IF EXISTS " + *it)) {
+                it = owned.erase(it);
+            } else {
+                diag("snapshot cleanup failed; retaining %s", it->c_str());
+                all_ok = false;
+                ++it;
+            }
+        }
+        return all_ok;
+    }
+
+    bool restore() {
+        if (!admin) return true;
+        if (dirty) {
+            // Stage the original runtime configuration into memory first.
+            bool staged = true;
+            staged = execOk(admin, "DELETE FROM pgsql_servers") && staged;
+            staged = execOk(admin, "INSERT INTO pgsql_servers SELECT * FROM " + rt_servers) && staged;
+            staged = execOk(admin, "INSERT OR REPLACE INTO global_variables SELECT * FROM " + rt_vars) && staged;
+            bool runtime_ok = staged;
+            if (staged) {
+                runtime_ok = execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME") && runtime_ok;
+                runtime_ok = execOk(admin, "LOAD PGSQL VARIABLES TO RUNTIME") && runtime_ok;
+            }
+            // Restore memory last, without a LOAD, even if runtime failed.
+            bool memory_ok = true;
+            memory_ok = execOk(admin, "DELETE FROM pgsql_servers") && memory_ok;
+            memory_ok = execOk(admin, "INSERT INTO pgsql_servers SELECT * FROM " + mem_servers) && memory_ok;
+            memory_ok = execOk(admin, "INSERT OR REPLACE INTO global_variables SELECT * FROM " + mem_vars) && memory_ok;
+            if (!runtime_ok || !memory_ok) {
+                diag("state restore incomplete; keeping snapshots for retry (runtime=%d memory=%d)",
+                     (int)runtime_ok, (int)memory_ok);
+                return false;
+            }
+            dirty = false; // Configuration restored; only drops remain.
+        }
+        return drop_owned();
+    }
+
+    const std::string& servers_snapshot() const { return mem_servers; }
+
+    ~StateGuard() noexcept {
+        if (!admin || (!dirty && owned.empty())) return;
+        try {
+            if (!restore()) diag("StateGuard fallback: state restore incomplete");
+        } catch (...) {
+            diag("StateGuard fallback: state restore threw");
+        }
+    }
+};
+
+static bool flushPool(PGconn* admin, const StateGuard& guard) {
     const std::string hg = std::to_string(BACKEND_HG);
-    // Put back the status the row actually had; assuming ONLINE would quietly
-    // promote a server the harness left in another state.
-    std::string prev = scalar(admin, "SELECT status FROM pgsql_servers WHERE hostgroup_id=" + hg + " LIMIT 1");
-    if (prev.empty()) prev = "ONLINE";
+    // Take the whole hostgroup offline so every pooled connection is dropped.
     if (!execOk(admin, "UPDATE pgsql_servers SET status='OFFLINE_HARD' WHERE hostgroup_id=" + hg)) return false;
     if (!execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
     const int emptied = poolFreeWithin(admin, BACKEND_HG, 0, 10);
-    if (!execOk(admin, "UPDATE pgsql_servers SET status='" + prev + "' WHERE hostgroup_id=" + hg)) return false;
+    // Restore every original per-row memory setting, not one LIMIT 1 status.
+    if (!execOk(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + hg)) return false;
+    if (!execOk(admin, "INSERT INTO pgsql_servers SELECT * FROM " + guard.servers_snapshot()
+            + " WHERE hostgroup_id=" + hg)) return false;
     if (!execOk(admin, "LOAD PGSQL SERVERS TO RUNTIME")) return false;
     return emptied == 0;
+}
+
+[[noreturn]] static void cleanup_and_bail(StateGuard& guard, const char* why) {
+    if (!guard.restore()) diag("%s: cleanup incomplete; snapshots retained for retry", why);
+    BAIL_OUT("%s", why);
 }
 
 // Run one statement through a proxied session; report success, SQLSTATE and
@@ -126,7 +227,7 @@ static bool runClientQuery(PGconn* c, const char* q, std::string& sqlstate, std:
 }
 
 int main(int, char**) {
-    plan(9);
+    plan(10);
     if (cl.getEnv()) return exit_status();
 
     auto admin = openAdmin();
@@ -134,55 +235,39 @@ int main(int, char**) {
        admin ? "" : " (null)");
     if (!admin || PQstatus(admin.get()) != CONNECTION_OK) return exit_status();
 
-    // ---- runtime state, restored in memory only -- never SAVE ... TO DISK ----
-    const std::string saved_ctmax = scalar(admin.get(),
-        "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-connect_timeout_server_max'");
     const bool native_supported = pgsql_native_supported(admin.get());
-    const std::string saved_native = native_supported
-        ? scalar(admin.get(),
-            "SELECT variable_value FROM global_variables WHERE variable_name='pgsql-use_native_backend_protocol'")
-        : std::string();
 
-    auto cleanup = [&]() {
-        if (!saved_ctmax.empty()) {
-            execOk(admin.get(), "SET pgsql-connect_timeout_server_max=" + saved_ctmax);
-            execOk(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
-        }
-        if (!saved_native.empty()) {
-            execOk(admin.get(), "SET pgsql-use_native_backend_protocol=" + saved_native);
-            execOk(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
-        }
-    };
+    // Snapshot runtime and memory before the first SET/LOAD/OFFLINE_HARD.
+    StateGuard guard;
+    if (!guard.capture(admin.get()))
+        cleanup_and_bail(guard, "cannot snapshot the pgsql configuration");
 
+    // The reset scenario requires an untracked timeout on a pooled connection.
     if (!execOk(admin.get(), "SET pgsql-connect_timeout_server_max=" + std::to_string(CONNECT_TIMEOUT_MAX_MS))
+        || !execOk(admin.get(), "SET pgsql-set_parser_algorithm=2")
+        || !execOk(admin.get(), "SET pgsql-query_processor_parser=0")
         || !execOk(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME")) {
-        cleanup();
-        BAIL_OUT("cannot set pgsql-connect_timeout_server_max");
+        cleanup_and_bail(guard, "cannot configure the legacy parser and connection timeout");
     }
     if (native_supported
         && (!execOk(admin.get(), "SET pgsql-use_native_backend_protocol='false'")
             || !execOk(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME"))) {
-        cleanup();
-        BAIL_OUT("cannot select the libpq backend protocol");
+        cleanup_and_bail(guard, "cannot select the libpq backend protocol");
     }
 
     // Start from an empty pool so the poisoned connection is the only one in
     // it: anything left over would serve the pickup instead.
-    const bool flushed = flushPool(admin.get());
+    const bool flushed = flushPool(admin.get(), guard);
     ok(flushed, "hostgroup %d starts with no pooled connection (ConnFree=%d)",
        BACKEND_HG, poolFree(admin.get(), BACKEND_HG));
-    if (!flushed) {
-        cleanup();
-        BAIL_OUT("cannot flush the backend pool");
-    }
+    if (!flushed)
+        cleanup_and_bail(guard, "cannot flush the backend pool");
 
     // ---- session A: poison exactly one pooled connection -------------------
     {
         auto a = openClient();
-        if (!a || PQstatus(a.get()) != CONNECTION_OK) {
-            cleanup();
-            BAIL_OUT("session A: client connection failed");
-        }
+        if (!a || PQstatus(a.get()) != CONNECTION_OK)
+            cleanup_and_bail(guard, "session A: client connection failed");
         const bool poisoned =
             execOk(a.get(), "SET bytea_output = 'escape'")
             && execOk(a.get(),
@@ -190,20 +275,16 @@ int main(int, char**) {
             && execOk(a.get(),
                   "SELECT set_config('statement_timeout', '"
                   + std::to_string(RESET_STATEMENT_TIMEOUT_MS) + "', false)");
-        if (!poisoned) {
-            cleanup();
-            BAIL_OUT("session A: could not poison the connection");
-        }
+        if (!poisoned)
+            cleanup_and_bail(guard, "session A: could not poison the connection");
         // The disconnect returns the connection to the pool still carrying the
         // variable, the temp table and the timeout.
     }
     const int poisoned_pooled = poolFreeWithin(admin.get(), BACKEND_HG, 1, 10);
     ok(poisoned_pooled == 1,
        "session A left exactly one poisoned connection in the pool (ConnFree=%d)", poisoned_pooled);
-    if (poisoned_pooled != 1) {
-        cleanup();
-        BAIL_OUT("the poisoned connection was not pooled; the scenario cannot proceed");
-    }
+    if (poisoned_pooled != 1)
+        cleanup_and_bail(guard, "the poisoned connection was not pooled; the scenario cannot proceed");
 
     // ---- helper: the catalog lock the reset will block on ------------------
     // Needs a role allowed to LOCK a system catalog; the harness's direct
@@ -228,8 +309,7 @@ int main(int, char**) {
     if (!helper_locked) {
         // BAIL_OUT exits without running destructors; the socket close rolls
         // the helper's transaction back and releases the lock.
-        cleanup();
-        BAIL_OUT("cannot take the pg_depend share lock");
+        cleanup_and_bail(guard, "cannot take the pg_depend share lock");
     }
 
     // ---- session B, query 1: the pickup and the blocked reset ----------------
@@ -239,10 +319,8 @@ int main(int, char**) {
     // (backend connection unusable) retries on a fresh connection and the
     // client would see a result instead of the cancellation.
     auto b = openClient();
-    if (!b || PQstatus(b.get()) != CONNECTION_OK) {
-        cleanup();
-        BAIL_OUT("session B: client connection failed");
-    }
+    if (!b || PQstatus(b.get()) != CONNECTION_OK)
+        cleanup_and_bail(guard, "session B: client connection failed");
     std::string b1_sqlstate, b1_msg;
     const bool b1_ok = runClientQuery(b.get(), "SELECT 'B1'", b1_sqlstate, b1_msg);
     diag("session B, first query: ok=%d sqlstate=%s error='%s'",
@@ -292,6 +370,8 @@ int main(int, char**) {
         ok(c_ok, "a fresh session works at the same moment, so the hostgroup was healthy");
     }
 
-    cleanup();
+    const bool cleaned = guard.restore();
+    if (!cleaned) diag("final cleanup failed; snapshots retained for retry");
+    ok(cleaned, "runtime and memory state restored after the test");
     return exit_status();
 }
