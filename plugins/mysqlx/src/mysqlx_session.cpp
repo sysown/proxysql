@@ -1702,7 +1702,9 @@ void MysqlxSession::handler_waiting_server_msg() {
 		// process_all_sessions() delete it) once both plaintext and
 		// encrypted output buffers are empty or the bounded deadline
 		// expires.
-		drain_deadline_ms_ = monotonic_time_ms() + 5000;
+		const uint64_t drain_now = monotonic_time_ms();
+		drain_deadline_ms_ = drain_now + 5000;
+		last_active_time_ = drain_now;
 		status_ = X_SESSION_DRAINING;
 		healthy = true;
 		to_process = true;

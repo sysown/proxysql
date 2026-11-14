@@ -22,6 +22,8 @@
 #include <unistd.h>
 #include <vector>
 
+extern const char* mysqlx_session_status_string_for_test(int status);
+
 // Lazy process-global thread+store fixture for tests whose auth flow
 // runs all the way through `resolve_backend_target()`. The hardened
 // auth path (commit 74e678006) resolves the route+endpoint BEFORE
@@ -1702,6 +1704,7 @@ static void test_backend_eof_drains_blocked_frontend() {
 		session.backend_conn() = connection;
 		session.server_ds().init(XDS_BACKEND, backend[0]);
 		session.set_status(MysqlxSession::WAITING_SERVER_XMSG);
+		session.set_last_active_time(1); // Simulate a long-running request.
 		session.set_response_state_for_test(RESP_WAITING_STMT_EXECUTE);
 		Mysqlx::Notice::Frame notice;
 		notice.set_type(Mysqlx::Notice::Frame_Type_WARNING);
@@ -1714,6 +1717,9 @@ static void test_backend_eof_drains_blocked_frontend() {
 		ok(session.is_healthy() && session.get_status() == MysqlxSession::X_SESSION_DRAINING &&
 		   session.client_ds().write_buffer_size() > 0,
 		   "backend EOF retains response/error while frontend is blocked (timeout=%d)", timeout);
+		ok(session.get_last_active_time() > 1 &&
+		   session.get_last_active_time() >= session.get_start_time(),
+		   "entering drain refreshes stale idle activity (timeout=%d)", timeout);
 		session.handler();
 		ok(session.is_healthy() && session.to_process,
 		   "blocked frontend reschedules deadline checks without a writable event (timeout=%d)", timeout);
@@ -1758,8 +1764,10 @@ int main() {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 	// Includes two regression assertions proving mysqlx-connect_timeout is
 	// applied to regular and TLS-passthrough backend connections.
-	plan(130);
+	plan(133);
 	diag("=== mysqlx_session_unit-t starting ===");
+	ok(std::strcmp(mysqlx_session_status_string_for_test(MysqlxSession::X_SESSION_DRAINING),
+	               "X_SESSION_DRAINING") == 0, "draining session stats report the named state");
 
 	test_session_init();
 	test_session_state_transitions();
