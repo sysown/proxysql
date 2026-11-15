@@ -715,7 +715,6 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
 UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t module_lifecycle_unit-t module_startup_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
-UNIT_TESTS += cluster_replica_helpers_unit-t
 UNIT_TESTS += worker_scheduler_cost_unit-t
 
 ifeq ($(PROXYSQL31),1)
@@ -868,11 +867,6 @@ endif
 $(ODIR)/tap_noise_stubs.o: | $(ODIR)
 	@printf '#include <vector>\n#include <string>\n#include <mutex>\nstd::vector<std::string> noise_failures;\nstd::mutex noise_failure_mutex;\nextern "C" { void stop_noise_tools(){} int get_noise_tools_count(){return 0;} }\n' | \
 		$(CXX) -x c++ -c -o $@ - $(STDCPP)
-
-cluster_replica_helpers_unit-t: cluster_replica_helpers_unit-t.cpp ../cluster_replica_helpers.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		$(IDIRS) $(OPT) $(MARIADB_LDIR)/libmariadbclient.a \
-		$(OPENSSL_STATIC_LIBS) $(LWGCOV) -lpthread -lm -lz -ldl -o $@
 
 ezoption_parser_unit-t: ezoption_parser_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \

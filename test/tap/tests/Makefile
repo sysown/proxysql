@@ -268,9 +268,6 @@ $(TEST_MYSQL_LDIR)/libmysqlclient.a:
 	cd $(TEST_DEPS_PATH) && CC=${CC} CXX=${CXX} ${MAKE} mysql_client
 
 
-# Shared replica process, readiness and output helpers.
-test_cluster_sync_mysql_servers-t: cluster_replica_helpers.h
-
 ### helper targets
 
 set_testing-240.csv: generate_set_session_csv

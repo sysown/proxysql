@@ -126,11 +126,6 @@ eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp
 eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp
 	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@
 
-ok_mixed_flags_queries-t: ok_mixed_flags_queries-t.cpp
-	$(CXX) $< -I$(TEST_MARIADB_IDIR) $(IDIRS) -L$(TEST_MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@
-
-eof_mixed_flags_queries-t ok_mixed_flags_queries-t: mixed_flags_queries.h
-
 eof_conn_options_check-t: eof_conn_options_check-t.cpp
 	$(CXX) $< -I$(MARIADB_IDIR) $(IDIRS) -L$(MARIADB_LDIR) $(LDIRS) -lmariadbclient $(COMMONARGS) -o $@
 
