@@ -67,7 +67,7 @@ int read_output(const std::string& path, Report report) {
 	if (!output) return errno;
 	char line[4096];
 	while (fgets(line, sizeof(line), output)) {
-		line[strcspn(line, "\r\n")] = '\0';
+		if (char* newline = strpbrk(line, "\r\n")) *newline = '\0';
 		report(line);
 	}
 	fclose(output);

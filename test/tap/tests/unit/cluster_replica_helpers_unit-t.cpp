@@ -39,7 +39,7 @@ static int reserve_port(unsigned& port) {
 }
 
 int main() {
-	plan(24);
+	plan(25);
 	char dirname[] = "cluster-replica-unit-'XXXXXX";
 	if (!mkdtemp(dirname)) BAIL_OUT("Unable to create replica test directory: %s", strerror(errno));
 	const std::string output = std::string(dirname) + "/output.txt";
@@ -59,6 +59,11 @@ int main() {
 	ok(result.exit_code() == 127, "Missing replica executable reports launch failure");
 	ok(!output_lines(output).empty(), "Failed launch retains the shell diagnostic");
 
+	const std::string full_line(4095, 'x');
+	{ std::ofstream boundary(output); boundary << full_line; }
+	ok(output_lines(output) == std::vector<std::string>({full_line}),
+		"A full diagnostic buffer without a newline is preserved");
+
 	bool reported = false;
 	int error = cluster_replica::read_output(missing, [&](const char*) { reported = true; });
 	ok(error == ENOENT, "Missing replica output preserves the original open error");
@@ -67,7 +72,7 @@ int main() {
 	ok(cluster_replica::read_output(output, [&](const char*) { reported = true; }) == 0 && !reported,
 		"Empty replica output is read successfully without fabricated lines");
 
-	std::thread launcher([&] {
+	std::thread launcher([&result, &output, &pid] {
 		result = cluster_replica::run("/bin/sh -c 'printf \"%s\\n\" $$; printf \"replica startup diagnostic\\n\" >&2; exec sleep 60' > " + quote(output) + " 2>&1", pid);
 	});
 	pid_t replica_pid = 0;
@@ -116,7 +121,7 @@ int main() {
 	const std::string expected_error = mysql_error(probe);
 	mysql_close(probe);
 	std::vector<std::string> diagnostics;
-	auto report = [&](const std::string& message) { diagnostics.push_back(message); };
+	auto report = [&diagnostics](const std::string& message) { diagnostics.push_back(message); };
 	MYSQL* admin = cluster_replica::wait_for_ready("127.0.0.1", "replica", "", port, 0, report);
 	ok(admin == nullptr && expected_errno != 0, "Unlistened local port fails readiness without retries");
 	ok(diagnostics.size() == 1 && diagnostics[0] == "Replica readiness failed at 127.0.0.1:" +
