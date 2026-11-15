@@ -1,6 +1,7 @@
 # duckdb-e2e-g1: ProxySQL with the duckdb plugin loaded, exercised
-# end-to-end over a real client socket (no backend database -- the
-# plugin owns an embedded DuckDB instance and answers queries itself).
+# end-to-end over real client sockets. The replica test also consumes a
+# MySQL 8.4 GTID/ROW/FULL source supplied by infras.lst.
+export DEFAULT_MYSQL_INFRA="infra-dbdeployer-mysql84-binlog"
 
 # Tell start-proxysql-isolated.bash to bind-mount the duckdb plugin .so
 # into the ProxySQL container.

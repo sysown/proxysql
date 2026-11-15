@@ -785,6 +785,8 @@ UNIT_TESTS += \
 	test_mysqlx_plugin_load-t \
 	test_duckdb_plugin_load-t \
 	duckdb_config_unit-t \
+	duckdb_replica_unit-t \
+	duckdb_replica_storage_unit-t \
 	duckdb_engine_unit-t \
 	duckdb_result_unit-t \
 	duckdb_admin_schema_unit-t \
@@ -1072,6 +1074,19 @@ duckdb_config_unit-t: duckdb_config_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/s
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
+duckdb_replica_unit-t: duckdb_replica_unit-t.cpp \
+		$(MARIADB_LDIR)/libmariadbclient.a \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica.cpp \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_types.cpp \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_values.cpp \
+		$(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica.cpp \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_types.cpp \
+		$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_values.cpp \
+		$(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
 # libduckdb_static.a alone does not satisfy DuckDB's symbols -- see the long
 # comment in plugins/duckdb/Makefile. It's kept as the prerequisite that
 # forces the deps/duckdb build; DUCKDB_ARS enumerates the configured static archive
@@ -1088,7 +1103,7 @@ $(DUCKDB_AR):
 $(DUCKDB_STATIC_LOADER_SRCS): $(DUCKDB_AR)
 	@test -s $@ || { echo "ERROR: missing DuckDB static extension loader: $@; rebuild deps/duckdb" >&2; exit 1; }
 
-duckdb_engine_unit-t duckdb_result_unit-t duckdb_session_unit-t duckdb_listener_unit-t duckdb_admin_schema_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
+duckdb_engine_unit-t duckdb_result_unit-t duckdb_session_unit-t duckdb_listener_unit-t duckdb_admin_schema_unit-t duckdb_replica_storage_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
 
 DUCKDB_LINK_GROUP_START :=
 DUCKDB_LINK_GROUP_END :=
@@ -1096,6 +1111,11 @@ ifneq ($(UNAME_S),Darwin)
 DUCKDB_LINK_GROUP_START := -Wl,--start-group
 DUCKDB_LINK_GROUP_END := -Wl,--end-group
 endif
+
+duckdb_replica_storage_unit-t: duckdb_replica_storage_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_types.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_snapshot.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_types.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica_snapshot.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
+		$(WHOLE_LIBPROXYSQL) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
 duckdb_engine_unit-t: duckdb_engine_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
@@ -1126,8 +1146,11 @@ duckdb_session_unit-t: duckdb_session_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb
 # (in duckdb_plugin.cpp) calls duckdb_sync_variables_disk_to_memory() and
 # duckdb_install_variables_from_admin(), both defined there. Same full
 # configured DUCKDB_ARS link group as duckdb_session_unit-t.
-duckdb_listener_unit-t: duckdb_listener_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+# These tests link the plugin context, which owns the replica lifecycle.
+DUCKDB_REPLICA_SRCS := $(wildcard $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica*.cpp)
+
+duckdb_listener_unit-t: duckdb_listener_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
@@ -1139,8 +1162,8 @@ duckdb_listener_unit-t: duckdb_listener_unit-t.cpp $(PROXYSQL_PATH)/plugins/duck
 # the DuckDBEngine/DuckDBListener destructor symbols transitively -- hence
 # the same DUCKDB_IDIR/DUCKDB_ARS additions duckdb_listener_unit-t needs,
 # even though this test never calls duckdb_start()/duckdb_stop() itself.
-duckdb_admin_schema_unit-t: duckdb_admin_schema_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+duckdb_admin_schema_unit-t: duckdb_admin_schema_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 

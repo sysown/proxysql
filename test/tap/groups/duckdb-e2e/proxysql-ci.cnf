@@ -5,11 +5,8 @@
 # at /usr/lib/proxysql/ProxySQL_DuckDB_Plugin.so by
 # start-proxysql-isolated.bash when PROXYSQL_LOAD_DUCKDB_PLUGIN=1.
 #
-# The duckdb plugin needs no backend database -- it owns an embedded
-# DuckDB instance and answers queries itself -- so this group has no
-# infras.lst and brings up no backend containers (see
-# test/infra/control/ensure-infras.bash's "No infras.lst or INFRA_TYPE
-# for group ...; continuing with no backend infrastructure." path).
+# The plugin owns an embedded DuckDB instance. duckdb-e2e-g1 also starts
+# a MySQL 8.4 binlog source through its infras.lst for replica coverage.
 #
 # The plugin's own MySQL (6031) and PgSQL (6034) listeners are opened by
 # DuckDBListener::start() using DuckDBConfigStore's compiled-in defaults

@@ -27,13 +27,16 @@ echo 'libusual incremental patch rebuild passed'
 
 target=mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a
 mkdir -p "$temporary/mariadb-client-library/mariadb_client/libmariadb"
-touch -t 200001010000 "$temporary/mariadb-client-library/x509cache.patch"
+touch -t 200001010000 "$temporary/mariadb-client-library/x509cache.patch" \
+    "$temporary/mariadb-client-library/mariadb_rpl_rows.patch"
 touch -t 200001020000 "$temporary/$target"
-changed=$(make -C "$temporary" -f "$repo_root/deps/Makefile" \
-    PROXYSQL_PATH="$repo_root" --no-print-directory -n "$target" \
-    MAKE=true -o libssl/openssl/.proxysql-build-complete \
-    -W mariadb-client-library/x509cache.patch)
-[[ "$changed" == *'x509cache.patch'* ]] || {
-    echo 'Changed CA cache patch does not invalidate the connector archive' >&2; exit 1;
-}
-echo 'MariaDB incremental CA cache patch rebuild passed'
+for patch_name in x509cache.patch mariadb_rpl_rows.patch; do
+    changed=$(make -C "$temporary" -f "$repo_root/deps/Makefile" \
+        PROXYSQL_PATH="$repo_root" --no-print-directory -n "$target" \
+        MAKE=true -o libssl/openssl/.proxysql-build-complete \
+        -W "mariadb-client-library/$patch_name")
+    [[ "$changed" == *"patch -p0 < ../$patch_name"* ]] || {
+        echo "Changed $patch_name does not invalidate the connector archive" >&2; exit 1;
+    }
+    echo "MariaDB incremental $patch_name rebuild passed"
+done

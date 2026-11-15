@@ -54,6 +54,13 @@ encodes the DEBUG build tag and rejects a mismatched plugin/core pair.
 | `src/duckdb_plugin.cpp` | Chassis descriptor and lifecycle callbacks |
 | `src/duckdb_admin_schema.cpp` | `duckdb-*` global-variable lifecycle and LOAD/SAVE commands |
 | `src/duckdb_engine.cpp` | DuckDB open/close, live settings, and connection cap |
+| `include/duckdb_replica.h` | MySQL replica config, source checks, and thread |
+| `src/duckdb_replica.cpp` | Replica lifecycle and MySQL prerequisite probe |
+| `src/duckdb_replica_types.cpp` | MySQL column to DuckDB type mapping |
+| `src/duckdb_replica_snapshot.cpp` | Consistent snapshot load into DuckDB |
+| `src/duckdb_replica_values.cpp` | Binlog value literals and GTID set arithmetic |
+| `src/duckdb_replica_binlog.cpp` | COM_BINLOG_DUMP stream and batched row apply |
+| `src/duckdb_replica_admin.cpp` | Replica admin tables, commands, and stats projection |
 | `src/duckdb_listener.cpp` | Socket accept and per-connection thread loop |
 | `src/duckdb_session.cpp` | SQL execution and wire-protocol adaptation |
 | `src/duckdb_result.cpp` | Length-aware text result conversion |
@@ -63,6 +70,7 @@ encodes the DEBUG build tag and rejects a mismatched plugin/core pair.
 - [Vendored DuckDB](../../deps/duckdb/README.md)
 - [Plugin API](../../doc/PLUGIN_API.md)
 - [DuckDB plugin design](../../docs/superpowers/specs/2026-08-26-duckdb-server-plugin-design.md)
+- [MySQL replica design and handoff](../../docs/superpowers/specs/2026-11-05-duckdb-mysql-replica-design.md)
 - [Review-fix/documentation plan](../../docs/superpowers/plans/2026-09-01-duckdb-review-and-documentation.md)
 
 Focused unit targets are defined in `test/tap/tests/unit/Makefile`; end-to-end

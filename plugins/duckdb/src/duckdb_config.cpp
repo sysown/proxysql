@@ -183,7 +183,7 @@ bool DuckDBConfigStore::set(const std::string& name, const std::string& value, s
 	} else if (name == "read_only") {
 		bool v = false;
 		if (!parse_bool(value, v)) {
-			err = "invalid value for 'read_only': expected a boolean";
+			err = "invalid value for '" + name + "': expected a boolean";
 			return false;
 		}
 	} else if (name == "enable_external_access") {
