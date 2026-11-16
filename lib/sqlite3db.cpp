@@ -1196,7 +1196,10 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_bind_null = NULL;
 	proxy_sqlite3_bind_text = NULL;
 	proxy_sqlite3_bind_blob = NULL;
+	proxy_sqlite3_bind_parameter_count = NULL;
 	proxy_sqlite3_column_name = NULL;
+	proxy_sqlite3_column_blob = NULL;
+	proxy_sqlite3_column_decltype = NULL;
 	proxy_sqlite3_column_text = NULL;
 	proxy_sqlite3_column_bytes = NULL;
 	proxy_sqlite3_column_type = NULL;
@@ -1225,6 +1228,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_prepare_v2 = NULL;
 	proxy_sqlite3_open_v2 = NULL;
 	proxy_sqlite3_exec = NULL;
+	proxy_sqlite3_stmt_readonly = NULL;
 	if (plugin_name && allow_load_plugin == true) {
 		int fd = -1;
 		fd = ::open(plugin_name, O_RDONLY);
@@ -1284,7 +1288,10 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_bind_null = sqlite3_bind_null;
 		proxy_sqlite3_bind_text = sqlite3_bind_text;
 		proxy_sqlite3_bind_blob = sqlite3_bind_blob;
+		proxy_sqlite3_bind_parameter_count = sqlite3_bind_parameter_count;
 		proxy_sqlite3_column_name = sqlite3_column_name;
+		proxy_sqlite3_column_blob = sqlite3_column_blob;
+		proxy_sqlite3_column_decltype = sqlite3_column_decltype;
 		proxy_sqlite3_column_text = sqlite3_column_text;
 		proxy_sqlite3_column_bytes = sqlite3_column_bytes;
 		proxy_sqlite3_column_type = sqlite3_column_type; /* signature matches */
@@ -1313,6 +1320,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_prepare_v2 = sqlite3_prepare_v2;
 		proxy_sqlite3_open_v2 = sqlite3_open_v2;
 		proxy_sqlite3_exec = sqlite3_exec;
+		proxy_sqlite3_stmt_readonly = sqlite3_stmt_readonly;
 		proxy_info("Loaded built-in SQLite3\n");
 	}
 	assert(proxy_sqlite3_config);
@@ -1322,7 +1330,10 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_bind_null);
 	assert(proxy_sqlite3_bind_text);
 	assert(proxy_sqlite3_bind_blob);
+	assert(proxy_sqlite3_bind_parameter_count);
 	assert(proxy_sqlite3_column_name);
+	assert(proxy_sqlite3_column_blob);
+	assert(proxy_sqlite3_column_decltype);
 	assert(proxy_sqlite3_column_text);
 	assert(proxy_sqlite3_column_bytes);
 	assert(proxy_sqlite3_column_type);
@@ -1351,6 +1362,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_prepare_v2);
 	assert(proxy_sqlite3_open_v2);
 	assert(proxy_sqlite3_exec);
+	assert(proxy_sqlite3_stmt_readonly);
 	{
 		/* moved here, so if needed by multiple modules it applies to all of them */
 		int i=(*proxy_sqlite3_config)(SQLITE_CONFIG_URI, 1);

@@ -19,7 +19,10 @@ int (*proxy_sqlite3_bind_int64)(sqlite3_stmt*, int, sqlite3_int64) = sqlite3_bin
 int (*proxy_sqlite3_bind_null)(sqlite3_stmt*, int) = sqlite3_bind_null;
 int (*proxy_sqlite3_bind_text)(sqlite3_stmt*,int,const char*,int,void(*)(void*)) = sqlite3_bind_text;
 int (*proxy_sqlite3_bind_blob)(sqlite3_stmt*, int, const void*, int, void(*)(void*)) = sqlite3_bind_blob;
+int (*proxy_sqlite3_bind_parameter_count)(sqlite3_stmt*) = sqlite3_bind_parameter_count;
 const char *(*proxy_sqlite3_column_name)(sqlite3_stmt*, int) = sqlite3_column_name;
+const void *(*proxy_sqlite3_column_blob)(sqlite3_stmt*, int) = sqlite3_column_blob;
+const char *(*proxy_sqlite3_column_decltype)(sqlite3_stmt*, int) = sqlite3_column_decltype;
 const unsigned char *(*proxy_sqlite3_column_text)(sqlite3_stmt*, int) = sqlite3_column_text;
 int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int) = sqlite3_column_bytes;
 int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int) = sqlite3_column_type;
@@ -49,6 +52,7 @@ int (*proxy_sqlite3_shutdown)(void) = sqlite3_shutdown;
 int (*proxy_sqlite3_prepare_v2)(sqlite3*, const char*, int, sqlite3_stmt**, const char**) = sqlite3_prepare_v2;
 int (*proxy_sqlite3_open_v2)(const char*, sqlite3**, int, const char*) = sqlite3_open_v2;
 int (*proxy_sqlite3_exec)(sqlite3*, const char*, int (*)(void*,int,char**,char**), void*, char**) = sqlite3_exec;
+int (*proxy_sqlite3_stmt_readonly)(sqlite3_stmt*) = sqlite3_stmt_readonly;
 
 // Hook for sqlite-vec.  Gated on PROXYSQL40: vec.o + sqlite-vec.h
 // only get built (deps/Makefile) and linked (src/Makefile) when the

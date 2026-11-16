@@ -487,3 +487,13 @@ SQL admission implementation. Independent root validation: `make -C test/tap/tes
 duckdb_mysql_select_compat_unit-t` rebuilt the target successfully; executing it
 passed all 834 checks (zero failures). Further implementation results are recorded
 in the implementation ledger.
+
+### Upstream prerequisite
+
+[ParserSQL PR #72](https://github.com/ProxySQL/ParserSQL/pull/72) is a draft of
+the provenance, operator, SELECT-option and conservative expression-refusal fixes.
+Codex independently compiled and ran 689 parser-only tests across 94 suites at
+commit `24bae10`. The full engine/client-linked suite was not run in that clone.
+ProxySQL still uses the original vendored 1.1.1 source plus its existing UTF-8
+patch. The characterization expectations above intentionally describe that
+baseline; no production translation is enabled by this PR or this document.

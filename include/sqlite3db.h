@@ -42,7 +42,10 @@ extern int (*proxy_sqlite3_bind_int64)(sqlite3_stmt*, int, sqlite3_int64);
 extern int (*proxy_sqlite3_bind_null)(sqlite3_stmt*, int);
 extern int (*proxy_sqlite3_bind_text)(sqlite3_stmt*,int,const char*,int,void(*)(void*));
 extern int (*proxy_sqlite3_bind_blob)(sqlite3_stmt*, int, const void*, int, void(*)(void*));
+extern int (*proxy_sqlite3_bind_parameter_count)(sqlite3_stmt*);
 extern const char *(*proxy_sqlite3_column_name)(sqlite3_stmt*, int N);
+extern const void *(*proxy_sqlite3_column_blob)(sqlite3_stmt*, int iCol);
+extern const char *(*proxy_sqlite3_column_decltype)(sqlite3_stmt*, int iCol);
 extern const unsigned char *(*proxy_sqlite3_column_text)(sqlite3_stmt*, int iCol);
 extern int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int iCol);
 extern int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int iCol);
@@ -94,6 +97,7 @@ extern int (*proxy_sqlite3_exec)(
   void *,                                    /* 1st argument to callback */
   char **errmsg                              /* Error msg written here */
 );
+extern int (*proxy_sqlite3_stmt_readonly)(sqlite3_stmt*);
 #else
 int (*proxy_sqlite3_bind_double)(sqlite3_stmt*, int, double);
 int (*proxy_sqlite3_bind_int)(sqlite3_stmt*, int, int);
@@ -101,12 +105,15 @@ int (*proxy_sqlite3_bind_int64)(sqlite3_stmt*, int, sqlite3_int64);
 int (*proxy_sqlite3_bind_null)(sqlite3_stmt*, int);
 int (*proxy_sqlite3_bind_text)(sqlite3_stmt*,int,const char*,int,void(*)(void*));
 int (*proxy_sqlite3_bind_blob)(sqlite3_stmt*, int, const void*, int, void(*)(void*));
+int (*proxy_sqlite3_bind_parameter_count)(sqlite3_stmt*);
 sqlite3_int64 (*proxy_sqlite3_column_int64)(sqlite3_stmt*, int iCol);
 double (*proxy_sqlite3_column_double)(sqlite3_stmt*, int iCol);
 sqlite3_int64 (*proxy_sqlite3_last_insert_rowid)(sqlite3*);
 const char *(*proxy_sqlite3_errstr)(int);
 sqlite3* (*proxy_sqlite3_db_handle)(sqlite3_stmt*);
 const char *(*proxy_sqlite3_column_name)(sqlite3_stmt*, int N);
+const void *(*proxy_sqlite3_column_blob)(sqlite3_stmt*, int iCol);
+const char *(*proxy_sqlite3_column_decltype)(sqlite3_stmt*, int iCol);
 const unsigned char *(*proxy_sqlite3_column_text)(sqlite3_stmt*, int iCol);
 int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int iCol);
 int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int iCol);
@@ -153,6 +160,7 @@ int (*proxy_sqlite3_exec)(
   void *,                                    /* 1st argument to callback */
   char **errmsg                              /* Error msg written here */
 );
+int (*proxy_sqlite3_stmt_readonly)(sqlite3_stmt*);
 #endif //MAIN_PROXY_SQLITE3
 class SQLite3_row {
 	public:

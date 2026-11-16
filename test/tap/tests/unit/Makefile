@@ -645,6 +645,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_poison_rollback_cancel_unit-t \
 	pgsql_conn_liveness_unit-t \
 	sqlite3db_unit-t \
+	embedded_prepared_unit-t \
 	pgsql_error_helper_unit-t \
 	pgsql_native_params_unit-t \
 	pgsql_native_tier_policy_unit-t \
@@ -1069,6 +1070,11 @@ test_duckdb_plugin_load-t: ../test_duckdb_plugin_load-t.cpp $(TEST_HELPERS_OBJ) 
 		-DPROXYSQL_DUCKDB_PLUGIN_PATH='"$(DUCKDB_PLUGIN_SO)"' \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+embedded_prepared_unit-t: embedded_prepared_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/include/Embedded_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
 # Characterize the vendored parser independently of engine and core runtime.
 duckdb_mysql_select_compat_unit-t: duckdb_mysql_select_compat_unit-t.cpp $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
