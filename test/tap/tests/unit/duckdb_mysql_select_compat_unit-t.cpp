@@ -1,4 +1,4 @@
-// ParserSQL 1.1.1 capability fixtures for the MySQL analytical SELECT contract.
+// Patched ParserSQL capability fixtures for the MySQL analytical SELECT contract.
 //
 // This target is deliberately parser-only. It records what the vendored
 // Parser<Dialect::MySQL> actually produces, including incomplete ASTs and
@@ -491,11 +491,11 @@ const ParseFixture kParseFixtures[] = {
 
 	// --- functions ----------------------------------------------------------
 	{
-		"basic aggregates",
+		"basic aggregates including deferred AVG",
 		"SELECT COUNT(*), SUM(a), AVG(b), MIN(c), MAX(d) FROM t",
 		ParseResult::OK, StmtType::SELECT, true, true,
 		NodeType::NODE_SELECT_STMT, "",
-		"SELECT COUNT(*), SUM(a), AVG(b), MIN(c), MAX(d) FROM t", true, Disposition::CANDIDATE,
+		"SELECT COUNT(*), SUM(a), AVG(b), MIN(c), MAX(d) FROM t", true, Disposition::DEFERRED,
 	},
 	{
 		"date_format parses but is deferred",
@@ -573,34 +573,34 @@ const ParseFixture kParseFixtures[] = {
 		NodeType::NODE_SELECT_STMT, "", "SELECT 0x41, X'41', b'101'", true, Disposition::DEFERRED,
 	},
 	{
-		"standard DATE literal is silently misparsed as an alias",
+		"standard DATE literal is left unparsed",
 		"SELECT DATE '2024-01-01'",
-		ParseResult::OK, StmtType::SELECT, true, true,
-		NodeType::NODE_SELECT_STMT, "", "SELECT DATE AS '2024-01-01'", true, Disposition::PARSER_GAP,
+		ParseResult::OK, StmtType::SELECT, false, true,
+		NodeType::NODE_SELECT_STMT, "DATE '2024-01-01'", "SELECT ", false, Disposition::PARSER_GAP,
 	},
 	{
-		"national string literal is silently misparsed as an alias",
+		"national string literal is left unparsed",
 		"SELECT N'abc'",
-		ParseResult::OK, StmtType::SELECT, true, true,
-		NodeType::NODE_SELECT_STMT, "", "SELECT N AS 'abc'", true, Disposition::PARSER_GAP,
+		ParseResult::OK, StmtType::SELECT, false, true,
+		NodeType::NODE_SELECT_STMT, "N'abc'", "SELECT ", false, Disposition::PARSER_GAP,
 	},
 	{
-		"unary BINARY operator is silently misparsed as an alias",
+		"unary BINARY operator is left unparsed",
 		"SELECT BINARY 'a'",
-		ParseResult::OK, StmtType::SELECT, true, true,
-		NodeType::NODE_SELECT_STMT, "", "SELECT BINARY AS 'a'", true, Disposition::PARSER_GAP,
+		ParseResult::OK, StmtType::SELECT, false, true,
+		NodeType::NODE_SELECT_STMT, "BINARY 'a'", "SELECT ", false, Disposition::PARSER_GAP,
 	},
 	{
-		"null-safe equality silently loses its operator",
+		"null-safe equality preserves its operator",
 		"SELECT a <=> b FROM t",
 		ParseResult::OK, StmtType::SELECT, true, true,
-		NodeType::NODE_SELECT_STMT, "", "SELECT a > b FROM t", true, Disposition::PARSER_GAP,
+		NodeType::NODE_SELECT_STMT, "", "SELECT a <=> b FROM t", true, Disposition::DEFERRED,
 	},
 	{
-		"logical AND silently becomes bitwise AND",
+		"logical AND preserves its operator",
 		"SELECT a && b FROM t",
 		ParseResult::OK, StmtType::SELECT, true, true,
-		NodeType::NODE_SELECT_STMT, "", "SELECT a & b FROM t", true, Disposition::PARSER_GAP,
+		NodeType::NODE_SELECT_STMT, "", "SELECT a && b FROM t", true, Disposition::DEFERRED,
 	},
 	{
 		"REGEXP followed by RLIKE is partial",
@@ -642,18 +642,18 @@ const ParseFixture kParseFixtures[] = {
 		NodeType::NODE_SELECT_STMT, "/", "SELECT ", false, Disposition::PARSER_GAP,
 	},
 	{
-		"select option HIGH_PRIORITY is silently treated as a column",
+		"select option HIGH_PRIORITY is retained",
 		"SELECT HIGH_PRIORITY a FROM t",
 		ParseResult::OK, StmtType::SELECT, true, true,
-		NodeType::NODE_SELECT_STMT, "", "SELECT HIGH_PRIORITY AS a FROM t",
-		true, Disposition::PARSER_GAP,
+		NodeType::NODE_SELECT_STMT, "", "SELECT HIGH_PRIORITY a FROM t",
+		true, Disposition::REFUSED,
 	},
 	{
-		"select option SQL_NO_CACHE is silently treated as a column",
+		"select option SQL_NO_CACHE is retained",
 		"SELECT SQL_NO_CACHE a FROM t",
 		ParseResult::OK, StmtType::SELECT, true, true,
-		NodeType::NODE_SELECT_STMT, "", "SELECT SQL_NO_CACHE AS a FROM t",
-		true, Disposition::PARSER_GAP,
+		NodeType::NODE_SELECT_STMT, "", "SELECT SQL_NO_CACHE a FROM t",
+		true, Disposition::REFUSED,
 	},
 	{
 		"SQL_CALC_FOUND_ROWS is parsed as a select option",
@@ -1012,6 +1012,44 @@ void test_ast_walk_and_transform() {
 	   "ast transform: replacement changes emitted SQL");
 }
 
+void test_provenance_and_operators() {
+	for (const char* sql : {"SELECT 1 /*! + 1 */", "SELECT 1 /*M! + 1 */"}) {
+		Parser<Dialect::MySQL> parser;
+		ParseResult result = parser.parse(sql, std::strlen(sql));
+		ok(result.full_input && result.has_comments && result.has_executable_comments,
+		   "provenance: executable comment is recorded for %s", sql);
+	}
+	for (const char* sql : {"SELECT 1 /* ordinary */", "SELECT '/*! quoted */'"}) {
+		Parser<Dialect::MySQL> parser;
+		ParseResult result = parser.parse(sql, std::strlen(sql));
+		ok(!result.has_executable_comments, "provenance: no executable comment in %s", sql);
+	}
+	{
+		Parser<Dialect::MySQL> parser;
+		const char* sql = "SELECT (a /* inner */ + b) AS x, c <=> d, e && f FROM t";
+		ParseResult result = parser.parse(sql, std::strlen(sql));
+		ok(result.full_input && result.has_comments, "provenance: inline comment recorded");
+		const AstNode* list = direct_child(result.ast, NodeType::NODE_SELECT_ITEM_LIST);
+		const AstNode* item = list != nullptr ? list->first_child : nullptr;
+		ok(item != nullptr && ref_string(item->source()) == "(a /* inner */ + b)",
+		   "provenance: projection source preserves expression and excludes alias");
+		ok(item != nullptr && item->source().ptr == std::strstr(sql, "(a"),
+		   "provenance: projection source points into the input");
+		size_t count = 0;
+		const AstNode* op = find_node(result.ast, NodeType::NODE_BINARY_OP, count);
+		bool null_safe = false, logical_and = false;
+		walk_ast(result.ast, [&](const AstNode& node, const AstVisitContext&) {
+			if (node.type == NodeType::NODE_BINARY_OP) {
+				null_safe |= ref_string(node.value()) == "<=>";
+				logical_and |= ref_string(node.value()) == "&&";
+			}
+			return AstVisitAction::Continue;
+		});
+		ok(op != nullptr && null_safe && logical_and,
+		   "operators: null-safe equality and logical AND retain distinct AST values");
+	}
+}
+
 void test_direct_emitter_comments() {
 	Parser<Dialect::MySQL> parser;
 	const char* sql = "SELECT 1 # hash comment\n";
@@ -1040,6 +1078,7 @@ int main() {
 	test_parse_all_framing();
 	test_ast_walk_and_transform();
 	test_direct_emitter_comments();
+	test_provenance_and_operators();
 
 	return exit_status();
 }

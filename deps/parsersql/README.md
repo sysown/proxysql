@@ -29,6 +29,19 @@ regression tests to ParserSQL 1.1.1. The dependency recipe applies it before
 building; the upstream release tarball remains unchanged. This fixes non-ASCII
 identifiers in MCP read-only validation without suppressing lexer errors.
 
+`mysql-analytical-ast.patch` is applied after the UTF-8 patch and carries the
+MySQL analytical AST and SQL provenance changes from [draft PR #72](https://github.com/ProxySQL/ParserSQL/pull/72), based on upstream commit
+`c7adfcb1d578f3121f876bebf2ee5b4978cbf7af` and ending at
+`71dca32cd26ae2e7512ab00788cf944b49788205`, plus a local expression/query
+recursion guard and regression tests for MySQL and PostgreSQL. The guard defaults
+to a hard ceiling of 128 active expression/query parser entries; callers may
+choose a lower `ParserConfig.max_parse_depth`. This bounds those recursive
+paths, not every unrelated DDL grammar. Its tokenizer test hunk is
+adapted to coexist with the UTF-8 patch. This local patch workflow is authorized
+while the changes are developed upstream; track further parser changes here
+and submit the upstream PR at the end of the work. The vendored archive remains
+the original 1.1.1 release.
+
 ## Upstream
 
 - Repository: **https://github.com/ProxySQL/ParserSQL**
@@ -52,11 +65,10 @@ rm parsersql && ln -s parsersql-X.Y.Z parsersql
 ```
 
 The Makefile auto-detects the version via `parsersql-*.tar.gz` and
-`ParserSQL-*/` glob patterns. Revalidate and, if needed, rebase
-`utf8-identifiers.patch` against the new release and run its tokenizer
-regressions before rebuilding. Once upstream includes the fix, remove the
-patch and its application and dependency from `deps/Makefile` instead of
-applying it again.
+`ParserSQL-*/` glob patterns. Revalidate and, if needed, rebase both local patches against the new release
+and run their regression tests before rebuilding. Once upstream includes each
+change, remove its patch and its application and dependency from `deps/Makefile`
+instead of applying it again.
 
 ## Working on the parser: fix it upstream, don't work around it
 
