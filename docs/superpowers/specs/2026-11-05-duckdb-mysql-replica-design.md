@@ -46,7 +46,7 @@ ParserSQL draft [PR #72](https://github.com/ProxySQL/ParserSQL/pull/72), head
 comment provenance. It passes 695 local parser tests and upstream CI. ProxySQL
 still vendors 1.1.1; no upstream release, merge, tag or vendor bump has occurred.
 
-PostgreSQL codec prerequisites now pass 308 parameter and 47 result assertions,
+PostgreSQL codec prerequisites now pass 312 parameter and 47 result assertions,
 including sanitizer runs. Native parameter-position metadata passes 31 SQLite
 checks and is covered by the DuckDB adapter tests. The read-only controller adds 85 component checks, the strict SQLite result
 profile adds 157, and PostgreSQL policy/statistics dialect checks pass. These
@@ -102,7 +102,11 @@ these observations do not constitute production translator acceptance.
 CI exposed missing transitive sources in legacy DuckDB listener/Admin-schema
 unit link recipes. The repaired targets and session/policy tests build and pass
 locally. Remote Linux CI must pass on the updated commit before this milestone
-can be treated as CI-validated.
+can be treated as CI-validated. macOS CI also exposed missing floating-point
+`from_chars` overloads in Apple libc++; an Apple-specific private C-locale
+conversion now passes all 312 decoder checks through a forced Linux fallback,
+including ASan/UBSan. The macOS workflow now runs the decoder test directly;
+native Apple confirmation remains pending CI.
 
 Next: complete scoped analytical SQL translation after
 the ParserSQL dependency update. Admin extension and view/trigger authorization

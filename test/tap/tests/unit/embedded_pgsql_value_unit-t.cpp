@@ -567,6 +567,17 @@ void text_floats() {
     expect_infinity(pgsql_oid_float4, 0, text("-INF"), -1,
                     "float4 text accepts -INF");
 
+    expect_double(pgsql_oid_float4, 0, text("1.401298464324817e-45"),
+                  static_cast<double>(std::numeric_limits<float>::denorm_min()),
+                  "float4 text accepts the smallest subnormal");
+    expect_double(pgsql_oid_float8, 0, text("4.9406564584124654e-324"),
+                  std::numeric_limits<double>::denorm_min(),
+                  "float8 text accepts the smallest subnormal");
+    expect_double(pgsql_oid_float8, 0, text("0e-9999"), 0.0,
+                  "exact zero with a large exponent is accepted");
+    expect_double(pgsql_oid_float4, 0, text("0x1p-149"),
+                  static_cast<double>(std::numeric_limits<float>::denorm_min()),
+                  "float4 hexadecimal subnormal is accepted");
     expect_error_wire(pgsql_oid_float4, 0, text("1e39"), ErrorKind::range,
                       "22003", "float4 text finite overflow is a range error");
     expect_error_wire(pgsql_oid_float4, 0, text("-1e39"), ErrorKind::range,

@@ -1,8 +1,11 @@
 #include "Embedded_PgSQL_Value.h"
 
+#include <cerrno>
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <locale.h>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -10,6 +13,10 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#ifdef __APPLE__
+#include <xlocale.h>
+#endif
 
 namespace embedded {
 namespace {
@@ -427,6 +434,35 @@ Status decode_float_text(const unsigned char* data, size_t length,
         return fail(ErrorKind::invalid_parameter, "22P02",
                     "invalid floating-point text for parameter type");
     }
+#if defined(__APPLE__) || defined(EMBEDDED_PGSQL_TEST_C_LOCALE_FLOAT)
+    // Apple libc++ does not provide floating-point from_chars on all supported
+    // versions. Use a private C locale, leaving the process locale untouched.
+    const size_t number_begin = begin - (hexadecimal ? 2 : 0);
+    const std::string number(reinterpret_cast<const char*>(data + number_begin),
+                             end - number_begin);
+    locale_t locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
+    if (!locale) {
+        return fail(ErrorKind::resource, "53200",
+                    "unable to create numeric locale for parameter conversion");
+    }
+    char* parsed_end = nullptr;
+    errno = 0;
+    const double value = single_precision
+        ? static_cast<double>(strtof_l(number.c_str(), &parsed_end, locale))
+        : strtod_l(number.c_str(), &parsed_end, locale);
+    const int parse_errno = errno;
+    freelocale(locale);
+    if (parse_errno == ERANGE && (value == 0.0 || std::isinf(value))) {
+        return fail(ErrorKind::range, "22003",
+                    "floating-point parameter value is out of range");
+    }
+    if (parsed_end != number.c_str() + number.size()) {
+        return fail(ErrorKind::invalid_parameter, "22P02",
+                    "invalid floating-point text for parameter type");
+    }
+    local = negative ? -value : value;
+    return {};
+#else
     const auto format = hexadecimal ? std::chars_format::hex : std::chars_format::general;
 
     const char* first = reinterpret_cast<const char*>(data + begin);
@@ -467,6 +503,7 @@ Status decode_float_text(const unsigned char* data, size_t length,
     }
     local = value;
     return {};
+#endif
 }
 
 int hex_value(unsigned char value) {
