@@ -11,6 +11,7 @@
 #include "Embedded_MySQL_Result.h"
 
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -69,18 +70,23 @@ struct SimplePolicy : embedded::EndpointPolicy {
 struct ResetFailureAdapter : embedded::Adapter {
     embedded::SQLiteAdapter inner;
     bool fail_reset = false;
+    int* active = nullptr;
+    int unguarded = 0;
+    int native_calls = 0;
+    void check() { ++native_calls; if (active && !*active) ++unguarded; }
     explicit ResetFailureAdapter(sqlite3* db) : inner(db) {}
-    embedded::Status prepare(const std::string& q, std::unique_ptr<embedded::Statement>& o) override { return inner.prepare(q, o); }
-    embedded::Status describe_parameters(embedded::Statement& s, std::vector<embedded::Type>& o) override { return inner.describe_parameters(s, o); }
-    embedded::Status describe_result(embedded::Statement& s, std::vector<embedded::Column>& o) override { return inner.describe_result(s, o); }
-    embedded::Status bind(embedded::Statement& s, const std::vector<embedded::Value>& v) override { return inner.bind(s, v); }
-    embedded::Status execute(embedded::Statement& s, embedded::ExecInfo& o) override { return inner.execute(s, o); }
-    embedded::Status fetch(embedded::Statement& s, embedded::Row& r, bool& d, size_t b) override { return inner.fetch(s, r, d, b); }
+    embedded::Status prepare(const std::string& q, std::unique_ptr<embedded::Statement>& o) override { check(); return inner.prepare(q, o); }
+    embedded::Status describe_parameters(embedded::Statement& s, std::vector<embedded::Type>& o) override { check(); return inner.describe_parameters(s, o); }
+    embedded::Status describe_result(embedded::Statement& s, std::vector<embedded::Column>& o) override { check(); return inner.describe_result(s, o); }
+    embedded::Status bind(embedded::Statement& s, const std::vector<embedded::Value>& v) override { check(); return inner.bind(s, v); }
+    embedded::Status execute(embedded::Statement& s, embedded::ExecInfo& o) override { check(); return inner.execute(s, o); }
+    embedded::Status fetch(embedded::Statement& s, embedded::Row& r, bool& d, size_t b) override { check(); return inner.fetch(s, r, d, b); }
     embedded::Status reset(embedded::Statement& s) override {
+        check();
         if (fail_reset) return embedded::Error{embedded::ErrorKind::engine, SQLITE_BUSY, "injected reset failure", "HY000"};
         return inner.reset(s);
     }
-    void finalize(std::unique_ptr<embedded::Statement> s) noexcept override { inner.finalize(std::move(s)); }
+    void finalize(std::unique_ptr<embedded::Statement> s) noexcept override { check(); inner.finalize(std::move(s)); }
 };
 
 int main() {
@@ -104,6 +110,107 @@ int main() {
         ok(pkt.ptr != nullptr, "unregistered does not consume packet");
         free(pkt.ptr);
         delete st->myconn; st->myconn = nullptr; delete s;
+    }
+
+    // A failed operation guard must consume PREPARE without touching SQLite.
+    {
+        MySQL_Data_Stream* gs = nullptr; MySQL_Protocol* gp = nullptr;
+        MySQL_Session* g = make_session(gs, gp);
+        int calls = 0;
+        embedded::GuardFactory deny = [&](const embedded::OperationContext& context, std::unique_ptr<embedded::OperationGuard>& out) -> embedded::Status {
+            ++calls;
+            if (context.operation == embedded::Operation::prepare)
+                return embedded::Error{embedded::ErrorKind::resource, 0, "guard denied", "HY000"};
+            out.reset(new embedded::OperationGuard); return {};
+        };
+        embedded::register_mysql_prepared(*g, adapter, policy, [] { return uint16_t(0); }, {}, deny);
+        auto packet = make_packet({0x16, 'S','E','L','E','C','T',' ','1'});
+        ok(embedded::handle_mysql_prepared(*g, packet) && !packet.ptr && calls == 1 && gs->PSarrayOUT->len == 1,
+           "guard failure consumes prepare and returns error");
+        clear_ps(gs->PSarrayOUT);
+        embedded::unregister_mysql_prepared(*g);
+        delete gs->myconn; gs->myconn = nullptr; delete g;
+    }
+
+    // All native operations and teardown run while the factory's guard is held.
+    {
+        struct Guard : embedded::OperationGuard {
+            int& active;
+            explicit Guard(int& n) : active(n) { ++active; }
+            ~Guard() override { --active; }
+        };
+        MySQL_Data_Stream* gs = nullptr; MySQL_Protocol* gp = nullptr;
+        MySQL_Session* g = make_session(gs, gp);
+        ResetFailureAdapter guarded(db);
+        int active = 0; guarded.active = &active;
+        bool deny = false, throwing = false;
+        bool known_sql_seen = false, unknown_sql_seen = false;
+        auto factory = [&](const embedded::OperationContext& context, std::unique_ptr<embedded::OperationGuard>& out) -> embedded::Status {
+            if (context.operation == embedded::Operation::execute) {
+                if (context.sql && *context.sql == "SELECT 1") known_sql_seen = true;
+                if (!context.sql) unknown_sql_seen = true;
+            }
+            if (throwing) { out.reset(new Guard(active)); throw std::runtime_error("injected guard exception"); }
+            if (deny) return embedded::Error{embedded::ErrorKind::resource, 0, "denied", "HY000"};
+            out.reset(new Guard(active)); return {};
+        };
+        embedded::register_mysql_prepared(*g, guarded, policy, [] { return uint16_t(0); }, {}, factory);
+        auto prep = make_packet({0x16, 'S','E','L','E','C','T',' ','1'});
+        embedded::handle_mysql_prepared(*g, prep);
+        auto bytes = static_cast<unsigned char*>(gs->PSarrayOUT->index(0)->ptr);
+        uint32_t id = 0; memcpy(&id, bytes + 5, 4);
+        clear_ps(gs->PSarrayOUT);
+        std::vector<unsigned char> exbody = {0x17, 0,0,0,0, 0, 1,0,0,0};
+        memcpy(exbody.data() + 1, &id, 4);
+        auto ex = make_packet(exbody); embedded::handle_mysql_prepared(*g, ex);
+        ok(active == 0 && guarded.native_calls >= 6 && guarded.unguarded == 0,
+           "prepare describe bind execute and fetch remain guarded until return");
+        clear_ps(gs->PSarrayOUT);
+        auto unknown_body = exbody; memset(unknown_body.data() + 1, 0xff, 4);
+        auto unknown = make_packet(unknown_body); embedded::handle_mysql_prepared(*g, unknown);
+        ok(known_sql_seen && unknown_sql_seen, "execute guard receives original SQL only for known statement");
+        clear_ps(gs->PSarrayOUT);
+        deny = true;
+        std::vector<unsigned char> ld_body = {0x18, 0,0,0,0, 0,0, 'x'};
+        memcpy(ld_body.data() + 1, &id, 4);
+        auto ld = make_packet(ld_body); embedded::handle_mysql_prepared(*g, ld);
+        std::vector<unsigned char> close_body = {0x19, 0,0,0,0};
+        memcpy(close_body.data() + 1, &id, 4);
+        auto close = make_packet(close_body); embedded::handle_mysql_prepared(*g, close);
+        ok(!ld.ptr && !close.ptr && gs->PSarrayOUT->len == 0,
+           "long data and close guard failures send no response");
+        deny = false;
+        ex = make_packet(exbody); embedded::handle_mysql_prepared(*g, ex);
+        ok(gs->PSarrayOUT->len == 1 && static_cast<unsigned char*>(gs->PSarrayOUT->index(0)->ptr)[4] == 0xff,
+           "next execute reports deferred long data guard failure");
+        clear_ps(gs->PSarrayOUT);
+        ex = make_packet(exbody); embedded::handle_mysql_prepared(*g, ex);
+        ok(gs->PSarrayOUT->len > 1, "statement survives failed close and recovers after deferred error");
+        clear_ps(gs->PSarrayOUT);
+        throwing = true; int throw_before = guarded.native_calls;
+        auto thrown_prepare = make_packet({0x16, 'S','E','L','E','C','T',' ','1'});
+        embedded::handle_mysql_prepared(*g, thrown_prepare);
+        ok(!thrown_prepare.ptr && gs->PSarrayOUT->len == 1 && active == 0 && guarded.native_calls == throw_before,
+           "throwing prepare guard releases partial guard, consumes packet and prevents native work");
+        clear_ps(gs->PSarrayOUT);
+        ex = make_packet(exbody); embedded::handle_mysql_prepared(*g, ex);
+        ok(!ex.ptr && gs->PSarrayOUT->len == 1 && active == 0 && guarded.native_calls == throw_before,
+           "throwing execute guard releases partial guard, consumes packet and prevents native work");
+        clear_ps(gs->PSarrayOUT);
+        ok((bool)embedded::reset_mysql_prepared(*g) && active == 0 && guarded.native_calls == throw_before,
+           "throwing reset guard returns error without native work");
+        throwing = false;
+        deny = true; int before = guarded.native_calls;
+        ok((bool)embedded::reset_mysql_prepared(*g) && guarded.native_calls == before,
+           "failed reset guard leaves native statements untouched");
+        deny = false;
+        ok(!embedded::reset_mysql_prepared(*g) && active == 0 && guarded.unguarded == 0,
+           "reset closes native handles before releasing guard");
+        prep = make_packet({0x16, 'S','E','L','E','C','T',' ','1'});
+        embedded::handle_mysql_prepared(*g, prep); clear_ps(gs->PSarrayOUT);
+        embedded::unregister_mysql_prepared(*g);
+        ok(active == 0 && guarded.unguarded == 0, "disconnect closes native handles under guard");
+        delete gs->myconn; gs->myconn = nullptr; delete g;
     }
 
     // register
@@ -348,7 +455,13 @@ int main() {
         MySQL_Data_Stream* vs = nullptr; MySQL_Protocol* vp = nullptr;
         MySQL_Session* v = make_session(vs, vp);
         embedded::MySQLPreparedLimits vl; vl.longdata_per_statement = 2;
-        embedded::register_mysql_prepared(*v, adapter, policy, status_cb, vl);
+        bool deny_execute = false;
+        auto value_guard = [&](const embedded::OperationContext& ctx, std::unique_ptr<embedded::OperationGuard>& out) -> embedded::Status {
+            if (deny_execute && ctx.operation == embedded::Operation::execute)
+                return embedded::Error{embedded::ErrorKind::resource, 0, "denied", "HY000"};
+            out.reset(new embedded::OperationGuard); return {};
+        };
+        embedded::register_mysql_prepared(*v, adapter, policy, status_cb, vl, value_guard);
         PtrSize_t prep = make_packet({0x16,'S','E','L','E','C','T',' ','?'});
         embedded::handle_mysql_prepared(*v, prep);
         uint32_t id = 0; memcpy(&id, static_cast<unsigned char*>(vs->PSarrayOUT->index(0)->ptr)+5, 4);
@@ -364,6 +477,30 @@ int main() {
             auto* bytes = static_cast<unsigned char*>(packet->ptr);
             return std::vector<unsigned char>(bytes + 4, bytes + packet->size);
         };
+        PtrSize_t stale = make_packet({0x18,(unsigned char)id,0,0,0,0,0,'a','b'});
+        embedded::handle_mysql_prepared(*v, stale);
+        deny_execute = true;
+        run({0,1,MYSQL_TYPE_BLOB,0,1,'x'});
+        clear_ps(vs->PSarrayOUT);
+        deny_execute = false;
+        run({0,1,MYSQL_TYPE_BLOB,0,1,'z'});
+        auto fresh = row();
+        ok(fresh.size() == 4 && fresh[2] == 1 && fresh[3] == 'z',
+           "execute guard failure clears old long data before a fresh normal binding");
+        clear_ps(vs->PSarrayOUT);
+        stale = make_packet({0x18,(unsigned char)id,0,0,0,0,0,'a','b'});
+        embedded::handle_mysql_prepared(*v, stale);
+        PtrSize_t malformed = make_packet({0x17,(unsigned char)id,0,0,0});
+        embedded::handle_mysql_prepared(*v, malformed);
+        ok(!malformed.ptr && vs->PSarrayOUT->len == 1 &&
+           static_cast<unsigned char*>(vs->PSarrayOUT->index(0)->ptr)[4] == 0xff,
+           "short execute with a known statement ID is consumed and rejected");
+        clear_ps(vs->PSarrayOUT);
+        run({0,0,1,'z'});
+        fresh = row();
+        ok(fresh.size() == 4 && fresh[2] == 1 && fresh[3] == 'z',
+           "malformed execute also clears pending long data");
+        clear_ps(vs->PSarrayOUT);
         run({1,1,MYSQL_TYPE_BLOB,0});
         auto null_row = row();
         ok(null_row.size() == 2 && null_row[0] == 0 && (null_row[1] & 4), "NULL bind yields binary NULL bitmap");

@@ -111,3 +111,18 @@ wide-integer and nested result types are refused. Non-SELECT statements are
 refused before execution; writes, transaction commands, cancellation, listener
 registration and the complete D1 milestone remain outstanding. SELECT function
 effects must still be authorized by an endpoint policy.
+
+
+Shared connections can now supply an optional operation-guard factory. Core holds
+the returned RAII guard through native preparation, execution, all row fetching
+and response buffering, and through reset/close/finalization. The factory receives
+an operation kind and, for a known execute, a synchronously borrowed original SQL
+pointer. It runs outside the registry mutex. Factory failures or exceptions become
+operation errors; failed executes consume their pending long data while retaining
+client type bindings. Disconnect cleanup must acquire its guard successfully;
+violating that provider contract terminates rather than leaving callback/native
+handles attached to a destroyed borrowed connection. Existing SQLite listener
+registration uses no guard. The Admin provider must still supply its actual lock,
+startup policy and authorization lease; this hook alone enables no Admin queries.
+Independent controller validation now passes 63 checks, including guard lifetime,
+throwing factories, rejected-execute stale-data cleanup and malformed execution.

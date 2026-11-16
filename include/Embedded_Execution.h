@@ -1,6 +1,7 @@
 #pragma once
 // Internal C++17 interface; this is not a plugin ABI.
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -11,6 +12,13 @@ namespace embedded {
 enum class ErrorKind { syntax, unsupported, policy, invalid_parameter, range, resource, schema_changed, transaction, engine, internal };
 struct Error { ErrorKind kind; int native_code; std::string message; std::string sqlstate; };
 using Status = std::optional<Error>; // Empty means success.
+enum class Operation { prepare, execute, fetch, reset, close, disconnect, long_data };
+struct OperationGuard { virtual ~OperationGuard() = default; };
+// On success a factory must provide an owned guard. Disconnect acquisition must
+// succeed and must not throw; failure is a fatal provider contract violation.
+// sql is borrowed only for the synchronous factory call; it must not be retained.
+struct OperationContext { Operation operation; const std::string* sql = nullptr; };
+using GuardFactory = std::function<Status(const OperationContext&, std::unique_ptr<OperationGuard>&)>;
 struct Decimal { std::string exact; };
 struct Text { std::string bytes; };
 struct Bytes { std::vector<uint8_t> bytes; };

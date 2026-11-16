@@ -42,6 +42,7 @@ struct SharedState {
     EndpointPolicy* policy = nullptr;
     MySQLStatus status_cb;
     MySQLPreparedLimits limits;
+    GuardFactory guard_factory;
     Session core;
     StmtLongDataHandler longdata;
     uint64_t next_wire_id = 1;
@@ -50,9 +51,9 @@ struct SharedState {
     size_t longdata_total_used = 0;
     size_t metadata_total_used = 0;
     SharedState(MySQL_Session& s, Adapter& a, EndpointPolicy& p, MySQLStatus cb,
-               MySQLPreparedLimits l)
+               MySQLPreparedLimits l, GuardFactory factory)
         : session(&s), owner_thread(std::this_thread::get_id()), adapter(&a),
-          policy(&p), status_cb(std::move(cb)), limits(l),
+          policy(&p), status_cb(std::move(cb)), limits(l), guard_factory(std::move(factory)),
           core(a, p, l.statements, l.response_bytes) {}
 };
 
@@ -241,11 +242,40 @@ Status make_status(ErrorKind kind, int code, const std::string& message, const s
     return Error{kind, code, message, valid_sqlstate_or_hy000(sqlstate.empty() ? std::string("HY000") : sqlstate)};
 }
 
+Status acquire_guard(SharedState& state, Operation operation, std::unique_ptr<OperationGuard>& guard,
+                     const std::string* sql = nullptr) {
+    if (!state.guard_factory) return {};
+    try {
+        auto error = state.guard_factory(OperationContext{operation, sql}, guard);
+        if (error) { guard.reset(); return error; }
+        if (!guard) return make_status(ErrorKind::internal, 0, "operation guard factory returned no guard", "HY000");
+        return {};
+    } catch (const std::bad_alloc&) {
+        guard.reset();
+        return make_status(ErrorKind::resource, 0, "operation guard allocation failed", "HY000");
+    } catch (const std::exception&) {
+        guard.reset();
+        return make_status(ErrorKind::internal, 0, "operation guard factory threw", "HY000");
+    } catch (...) {
+        guard.reset();
+        return make_status(ErrorKind::internal, 0, "operation guard factory threw", "HY000");
+    }
+}
+
+void close_all(SharedState& state) {
+    for (auto& kv : state.statements) {
+        state.core.close(kv.second->core_id);
+        state.longdata.reset(kv.first);
+    }
+    state.statements.clear();
+    state.sql_total_used = state.longdata_total_used = state.metadata_total_used = 0;
+}
+
 }  // namespace
 
 Status register_mysql_prepared(MySQL_Session& session, Adapter& adapter,
                               EndpointPolicy& policy, MySQLStatus status,
-                              MySQLPreparedLimits limits) {
+                              MySQLPreparedLimits limits, GuardFactory guard_factory) {
     if (is_ordinary_proxy_mysql(session)) {
         return make_status(ErrorKind::unsupported, 1235, "ordinary proxy MySQL sessions are not prepared endpoints", "HY000");
     }
@@ -253,30 +283,39 @@ Status register_mysql_prepared(MySQL_Session& session, Adapter& adapter,
     if (registry().count(&session)) {
         return make_status(ErrorKind::invalid_parameter, 1105, "session already registered", "HY000");
     }
-    auto state = std::make_shared<SharedState>(session, adapter, policy, std::move(status), limits);
+    auto state = std::make_shared<SharedState>(session, adapter, policy, std::move(status), limits, std::move(guard_factory));
     registry()[&session] = state;
     return {};
 }
 
 void unregister_mysql_prepared(MySQL_Session& session) noexcept {
-    std::lock_guard<std::mutex> lock(registry_mutex());
-    auto it = registry().find(&session);
-    if (it != registry().end() && owner_ok(*it->second)) registry().erase(it);
+    auto state = lookup(session);
+    if (!state || !owner_ok(*state)) return;
+    try {
+        std::unique_ptr<OperationGuard> guard;
+        if (acquire_guard(*state, Operation::disconnect, guard)) {
+            std::fprintf(stderr, "embedded prepared: disconnect guard failed; terminating\n");
+            std::terminate();
+        }
+        close_all(*state);
+        std::lock_guard<std::mutex> lock(registry_mutex());
+        registry().erase(&session);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "embedded prepared: disconnect guard threw: %s; terminating\n", e.what());
+        std::terminate();
+    } catch (...) {
+        std::fprintf(stderr, "embedded prepared: disconnect guard threw; terminating\n");
+        std::terminate();
+    }
 }
 
 Status reset_mysql_prepared(MySQL_Session& session) {
     auto state = lookup(session);
     if (!state) return {};
     if (!owner_ok(*state)) return make_status(ErrorKind::invalid_parameter, 1105, "owner thread mismatch", "HY000");
-    // close all statements
-    for (auto& kv : state->statements) {
-        state->core.close(kv.second->core_id);
-        state->longdata.reset(kv.first);
-    }
-    state->statements.clear();
-    state->sql_total_used = 0;
-    state->longdata_total_used = 0;
-    state->metadata_total_used = 0;
+    std::unique_ptr<OperationGuard> guard;
+    if (auto error = acquire_guard(*state, Operation::reset, guard)) return error;
+    close_all(*state);
     return {};
 }
 
@@ -301,6 +340,56 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         session.client_myds->DSS = STATE_SLEEP;
         session.status = WAITING_CLIENT_DATA;
     };
+
+    Operation operation;
+    switch (cmd) {
+        case 0x16: operation = Operation::prepare; break;
+        case 0x17: operation = Operation::execute; break;
+        case 0x18: operation = Operation::long_data; break;
+        case 0x19: operation = Operation::close; break;
+        case 0x1a: operation = Operation::reset; break;
+        case 0x1c: operation = Operation::fetch; break;
+        default: return false;
+    }
+    const std::string* operation_sql = nullptr;
+    if (operation == Operation::execute && pkt.size >= 9) {
+        uint32_t id = static_cast<uint32_t>(read_uint_le(base + 5, 4));
+        auto it = state->statements.find(id);
+        if (it != state->statements.end()) operation_sql = &it->second->sql;
+    }
+    std::unique_ptr<OperationGuard> guard;
+    if (auto error = acquire_guard(*state, operation, guard, operation_sql)) {
+        if (operation == Operation::execute && pkt.size >= 9) {
+            uint32_t id = static_cast<uint32_t>(read_uint_le(base + 5, 4));
+            auto it = state->statements.find(id);
+            if (it != state->statements.end()) {
+                auto& stmt = *it->second;
+                state->longdata.reset(id);
+                state->longdata_total_used -= stmt.longdata_bytes;
+                stmt.longdata_bytes = 0;
+                stmt.longdata_entries.clear();
+                stmt.has_deferred_error = false;
+                stmt.deferred_sqlstate = "HY000";
+            }
+        }
+        if (operation == Operation::long_data) {
+            if (pkt.size >= 9) {
+                uint32_t id = static_cast<uint32_t>(read_uint_le(base + 5, 4));
+                auto it = state->statements.find(id);
+                if (it != state->statements.end() && !it->second->has_deferred_error) {
+                    auto& stmt = *it->second;
+                    stmt.has_deferred_error = true;
+                    stmt.deferred_code = mysql_error_code(*error);
+                    stmt.deferred_sqlstate = valid_sqlstate_or_hy000(error->sqlstate);
+                    stmt.deferred_message = error->message.substr(0, 1024);
+                }
+            }
+        } else if (operation != Operation::close) {
+            send_err(session, rseq + 1, mysql_error_code(*error), error->sqlstate, error->message);
+        }
+        finish_consume();
+        return true;
+    }
 
     if (cmd == 0x16) { // PREPARE
         // SQL from offset 5
@@ -546,6 +635,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         it->second->longdata_bytes = 0;
         it->second->longdata_entries.clear();
         it->second->has_deferred_error = false;
+        it->second->deferred_sqlstate = "HY000";
         // Client bindings remain cached even if native reset fails.
         if (reset_status) {
             send_err(session, rseq + 1, mysql_error_code(*reset_status),
@@ -657,6 +747,21 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
 
     if (cmd == 0x17) { // EXECUTE
         if (pkt.size < 14) {
+            // A short fixed header can still identify the statement. An
+            // attempted execute consumes its pending long data on error too.
+            if (pkt.size >= 9) {
+                uint32_t id = static_cast<uint32_t>(read_uint_le(base + 5, 4));
+                auto it = state->statements.find(id);
+                if (it != state->statements.end()) {
+                    auto& stmt = *it->second;
+                    state->longdata.reset(id);
+                    state->longdata_total_used -= stmt.longdata_bytes;
+                    stmt.longdata_bytes = 0;
+                    stmt.longdata_entries.clear();
+                    stmt.has_deferred_error = false;
+                    stmt.deferred_sqlstate = "HY000";
+                }
+            }
             send_err(session, rseq + 1, 1210, "HY000", "Malformed COM_STMT_EXECUTE");
             finish_consume();
             return true;
@@ -678,6 +783,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
                 stmt.longdata_bytes = 0;
                 stmt.longdata_entries.clear();
                 stmt.has_deferred_error = false;
+                stmt.deferred_sqlstate = "HY000";
             }
         } cleanup{*state, st, wid};
         uint32_t iteration = static_cast<uint32_t>(read_uint_le(base + 10, 4));
@@ -697,7 +803,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             st.longdata_bytes = 0;
             st.longdata_entries.clear();
             st.has_deferred_error = false;
-            send_err(session, rseq + 1, code, "HY000", msg);
+            send_err(session, rseq + 1, code, st.deferred_sqlstate, msg);
             finish_consume();
             return true;
         }

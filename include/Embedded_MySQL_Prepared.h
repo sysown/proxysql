@@ -32,7 +32,7 @@ using MySQLStatus = std::function<uint16_t()>;
 
 Status register_mysql_prepared(MySQL_Session& session, Adapter& adapter,
                               EndpointPolicy& policy, MySQLStatus status,
-                              MySQLPreparedLimits limits = {});
+                              MySQLPreparedLimits limits = {}, GuardFactory guard_factory = {});
 
 void unregister_mysql_prepared(MySQL_Session& session) noexcept;
 
