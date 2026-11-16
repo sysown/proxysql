@@ -177,12 +177,12 @@ int main() {
         mysql_stmt_close(s);
     ok(!mysql_query(c, "ROLLBACK"), "rollback transaction");
     ok(count() == 1, "rollback preserves initial row and removes transaction insert");
-    ok(mysql_autocommit(c, 0) && mysql_errno(c) == 1235 &&
-           !strcmp(mysql_sqlstate(c), "0A000"),
+    ok(mysql_autocommit(c, 0) && mysql_errno(c) == 1235 && !strcmp(mysql_sqlstate(c), "0A000"),
        "unsupported implicit transaction mode is refused without state change");
     s = prepare(c, "SELECT 1");
     ok(s != nullptr, "prepared execution remains usable after rejected autocommit change");
-    if (s) mysql_stmt_close(s);
+    if (s)
+        mysql_stmt_close(s);
     ok(!mysql_autocommit(c, 1), "autocommit already enabled remains accepted");
     const std::string temporary = table + "_temporary";
     ok(!mysql_query(c, ("CREATE TEMP TABLE " + temporary + " (v INTEGER)").c_str()),
@@ -196,7 +196,8 @@ int main() {
     ok(temporary_status != 0, "connection reset discards temporary tables");
     if (!temporary_status) {
         MYSQL_RES *unexpected = mysql_store_result(c);
-        if (unexpected) mysql_free_result(unexpected);
+        if (unexpected)
+            mysql_free_result(unexpected);
     }
     ok(!mysql_set_character_set(c, "utf8mb4", 45), "select UTF8 after connection reset");
     s = prepare(c, "SELECT 1");
@@ -213,6 +214,93 @@ int main() {
     ok(row && row[0] && !strcmp(row[0], "1"), "session healthy after refusals");
     if (result)
         mysql_free_result(result);
+    const std::string wide = "duckdb_wide_my_" + std::to_string((long)getpid());
+    const char *min128 = "-170141183460469231731687303715884105728";
+    const char *maxu128 = "340282366920938463463374607431768211455";
+    const char *over128 = "170141183460469231731687303715884105728";
+    bool wide_created =
+        !mysql_query(c, ("CREATE TABLE " + wide + " (w HUGEINT, u UHUGEINT)").c_str());
+    ok(wide_created, "create owned wide numeric table: %s", mysql_error(c));
+    if (wide_created) {
+        std::string insert =
+            "INSERT INTO " + wide + " VALUES ('" + min128 + "', '" + maxu128 + "')";
+        ok(!mysql_query(c, insert.c_str()), "insert wide numeric boundaries: %s", mysql_error(c));
+        s = prepare(c, ("SELECT w, u FROM " + wide + " WHERE w = ?").c_str());
+        ok(s != nullptr, "prepare wide numeric predicate");
+        if (s) {
+            MYSQL_RES *meta = mysql_stmt_result_metadata(s);
+            MYSQL_FIELD *f = meta ? mysql_fetch_fields(meta) : nullptr;
+            ok(meta && mysql_num_fields(meta) == 2 && f[0].type == MYSQL_TYPE_NEWDECIMAL &&
+                   f[1].type == MYSQL_TYPE_NEWDECIMAL && f[0].length == 40 && f[1].length == 40 &&
+                   f[0].decimals == 0 && f[1].decimals == 0,
+               "wide columns advertise DECIMAL(39,0)");
+            if (meta)
+                mysql_free_result(meta);
+            char input[64];
+            strcpy(input, min128);
+            unsigned long input_len = strlen(input);
+            MYSQL_BIND param[1] = {};
+            param[0].buffer_type = MYSQL_TYPE_NEWDECIMAL;
+            param[0].buffer = input;
+            param[0].buffer_length = sizeof(input);
+            param[0].length = &input_len;
+            char result_values[2][64] = {};
+            unsigned long result_len[2] = {};
+            MYSQL_BIND output[2] = {};
+            for (int j = 0; j < 2; ++j) {
+                output[j].buffer_type = MYSQL_TYPE_NEWDECIMAL;
+                output[j].buffer = result_values[j];
+                output[j].buffer_length = sizeof(result_values[j]);
+                output[j].length = &result_len[j];
+            }
+            bool bound = !mysql_stmt_bind_param(s, param) && !mysql_stmt_bind_result(s, output);
+            bool fetched = bound && !mysql_stmt_execute(s) && !mysql_stmt_fetch(s);
+            ok(fetched && result_len[0] == strlen(min128) && result_len[1] == strlen(maxu128) &&
+                   !memcmp(result_values[0], min128, result_len[0]) &&
+                   !memcmp(result_values[1], maxu128, result_len[1]),
+               "bind signed minimum and return exact signed and unsigned boundaries");
+            mysql_stmt_free_result(s);
+            strcpy(input, over128);
+            input_len = strlen(input);
+            ok(mysql_stmt_execute(s) != 0, "out-of-range signed HUGEINT bind is refused");
+            mysql_stmt_free_result(s);
+            strcpy(input, min128);
+            input_len = strlen(input);
+            fetched = !mysql_stmt_execute(s) && !mysql_stmt_fetch(s);
+            ok(fetched && result_len[0] == strlen(min128) &&
+                   !memcmp(result_values[0], min128, result_len[0]),
+               "valid wide bind recovers after overflow");
+            mysql_stmt_free_result(s);
+            mysql_stmt_close(s);
+        }
+        ok(!mysql_query(c, ("DROP TABLE " + wide).c_str()), "drop owned wide table");
+    }
+    s = prepare(c, ("SELECT SUM(v) FROM " + table + " WHERE v = ?").c_str());
+    ok(s != nullptr, "prepare integer SUM with typed predicate");
+    if (s) {
+        MYSQL_RES *meta = mysql_stmt_result_metadata(s);
+        MYSQL_FIELD *f = meta ? mysql_fetch_fields(meta) : nullptr;
+        ok(meta && f[0].type == MYSQL_TYPE_NEWDECIMAL && f[0].length == 40 && f[0].decimals == 0,
+           "integer SUM advertises DECIMAL(39,0)");
+        if (meta)
+            mysql_free_result(meta);
+        int v = 1;
+        MYSQL_BIND param[1] = {};
+        param[0].buffer_type = MYSQL_TYPE_LONG;
+        param[0].buffer = &v;
+        char value[64] = {};
+        unsigned long length = 0;
+        MYSQL_BIND output[1] = {};
+        output[0].buffer_type = MYSQL_TYPE_NEWDECIMAL;
+        output[0].buffer = value;
+        output[0].buffer_length = sizeof(value);
+        output[0].length = &length;
+        bool fetched = !mysql_stmt_bind_param(s, param) && !mysql_stmt_bind_result(s, output) &&
+                       !mysql_stmt_execute(s) && !mysql_stmt_fetch(s);
+        ok(fetched && length == 1 && value[0] == '1', "integer SUM returns exact decimal value");
+        mysql_stmt_free_result(s);
+        mysql_stmt_close(s);
+    }
     if (created)
         ok(!mysql_query(c, ("DROP TABLE " + table).c_str()), "drop owned table");
     mysql_close(c);

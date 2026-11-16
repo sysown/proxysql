@@ -68,7 +68,27 @@ int main() {
  a.finalize(std::move(s));
  check(!a.prepare("SELECT ?::TINYINT",s) && !a.bind(*s,{int64_t(1000)}) && bool(a.execute(*s,info)) && !a.reset(*s) && !a.bind(*s,{int64_t(7)}) && !a.execute(*s,info) && !a.fetch(*s,row,done,8) && std::get<int64_t>(row[0])==7,"execution failure reset and recovery");
  a.finalize(std::move(s));
- check(bool(a.prepare("SELECT 1::HUGEINT",s)) && !s,"hugeint rejected");
+ check(!a.prepare("SELECT ?::HUGEINT, ?::HUGEINT, ?::UHUGEINT",s),"prepare wide integers");
+ if (s) {
+ check(!a.describe_parameters(*s,params) && params.size()==3 && params[0].kind==TypeKind::decimal && params[0].precision==39 && params[0].scale==0 && params[2].precision==39,"wide parameter metadata");
+ check(!a.describe_result(*s,cols) && cols.size()==3 && cols[0].type.precision==39 && cols[2].type.precision==39,"wide result metadata");
+ check(!a.bind(*s,{Decimal{"-170141183460469231731687303715884105728"},Decimal{"170141183460469231731687303715884105727"},Decimal{"340282366920938463463374607431768211455"}}) && !a.execute(*s,info),"bind wide boundaries");
+ check(bool(a.fetch(*s,row,done,117)) && row.empty(),"wide payload budget");
+ check(!a.fetch(*s,row,done,118) && std::get<Decimal>(row[0]).exact=="-170141183460469231731687303715884105728" && std::get<Decimal>(row[1]).exact=="170141183460469231731687303715884105727" && std::get<Decimal>(row[2]).exact=="340282366920938463463374607431768211455","wide boundaries exact");
+ check(!a.reset(*s) && bool(a.bind(*s,{Decimal{"170141183460469231731687303715884105728"},Decimal{"0"},Decimal{"0"}})),"signed positive overflow rejected");
+ check(bool(a.bind(*s,{Decimal{"-170141183460469231731687303715884105729"},Decimal{"0"},Decimal{"0"}})),"signed negative overflow rejected");
+ check(bool(a.bind(*s,{Decimal{"0"},Decimal{"0"},Decimal{"340282366920938463463374607431768211456"}})),"unsigned overflow rejected");
+ check(bool(a.bind(*s,{Decimal{"0"},Decimal{"0"},Decimal{"-1"}})) && bool(a.bind(*s,{Decimal{"1.0"},Decimal{"0"},Decimal{"0"}})),"invalid wide literals rejected");
+ check(!a.bind(*s,{Decimal{"+00042"},Decimal{"-0"},Decimal{"0007"}}) && !a.execute(*s,info) && !a.fetch(*s,row,done,10) && std::get<Decimal>(row[0]).exact=="42" && std::get<Decimal>(row[1]).exact=="0" && std::get<Decimal>(row[2]).exact=="7","wide binding recovery");
+ a.finalize(std::move(s));
+ }
+ check(!a.prepare("SELECT sum(i) FROM (VALUES (9223372036854775807::BIGINT), (2::BIGINT)) t(i)",s) && !a.bind(*s,{}) && !a.execute(*s,info) && !a.fetch(*s,row,done,19) && std::get<Decimal>(row[0]).exact=="9223372036854775809","sum exceeds int64"); a.finalize(std::move(s));
+ check(!a.prepare("SELECT sum(i) FROM (VALUES (-9223372036854775807::BIGINT), (-2::BIGINT)) t(i)",s) && !a.bind(*s,{}) && !a.execute(*s,info) && !a.fetch(*s,row,done,20) && std::get<Decimal>(row[0]).exact=="-9223372036854775809","negative sum exceeds int64"); a.finalize(std::move(s));
+ check(!a.prepare("SELECT ?::HUGEINT, ?::UHUGEINT",s) && !a.bind(*s,{std::monostate{},std::monostate{}}) && !a.execute(*s,info) && !a.fetch(*s,row,done,0) && std::holds_alternative<std::monostate>(row[0]) && std::holds_alternative<std::monostate>(row[1]),"wide null values"); a.finalize(std::move(s));
+ check(query(c,"CREATE SEQUENCE wide_probe START 1") && !a.prepare("SELECT nextval('wide_probe'), ?::HUGEINT",s) && bool(a.bind(*s,{Decimal{"170141183460469231731687303715884105728"}})) && bool(a.execute(*s,info)),"overflow fails before execution");
+ duckdb_result wide_probe{}; auto wide_rc=duckdb_query(c,"SELECT nextval('wide_probe')",&wide_probe);
+ check(wide_rc==DuckDBSuccess && duckdb_value_int64(&wide_probe,0,0)==1,"invalid bind causes no side effects"); duckdb_destroy_result(&wide_probe); a.finalize(std::move(s));
+ check(!a.prepare("SELECT sum(i) FROM (SELECT 1::INTEGER i WHERE false) t",s) && !a.bind(*s,{}) && !a.execute(*s,info) && !a.fetch(*s,row,done,0) && std::holds_alternative<std::monostate>(row[0]),"empty sum is null"); a.finalize(std::move(s));
  check(bool(a.prepare("SELECT current_date",s)) && !s,"temporal rejected");
  check(!a.prepare("SELECT true, false, NULL::BOOLEAN",s) && !a.describe_result(*s,cols) && cols.size()==3 && cols[0].type.kind==TypeKind::boolean && cols[1].type.kind==TypeKind::boolean && cols[2].type.kind==TypeKind::boolean,"boolean metadata");
  check(!a.bind(*s,{}) && !a.execute(*s,info) && bool(a.fetch(*s,row,done,1)) && row.empty(),"boolean row budget");

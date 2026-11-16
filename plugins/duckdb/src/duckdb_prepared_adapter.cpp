@@ -36,6 +36,7 @@ Type map_type(duckdb_logical_type t) {
  case DUCKDB_TYPE_FLOAT: case DUCKDB_TYPE_DOUBLE: x.kind=TypeKind::floating; break;
  case DUCKDB_TYPE_VARCHAR: x.kind=TypeKind::text; break;
  case DUCKDB_TYPE_BLOB: x.kind=TypeKind::bytes; break;
+ case DUCKDB_TYPE_HUGEINT: case DUCKDB_TYPE_UHUGEINT: x.kind=TypeKind::decimal; x.precision=39; x.scale=0; break;
  case DUCKDB_TYPE_DECIMAL: x.kind=TypeKind::decimal; x.precision=duckdb_decimal_width(t); x.scale=duckdb_decimal_scale(t); break;
  default: break;
  }
@@ -79,6 +80,30 @@ bool decimal_value(const std::string& text, DecimalLiteral& out) {
     out.value.value.upper = int64_t(uint64_t(bits >> 64));
     return true;
 }
+// Parse integer magnitudes with checked unsigned arithmetic, including signed minimum.
+bool wide_integer(const std::string& text, bool is_unsigned, unsigned __int128& bits) {
+ size_t i=0; bool neg=false;
+ if (i<text.size() && (text[i]=='-' || text[i]=='+')) neg=text[i++]=='-';
+ if (i==text.size() || (is_unsigned && neg)) return false;
+ const unsigned __int128 sign=(static_cast<unsigned __int128>(1)<<127);
+ const unsigned __int128 limit=is_unsigned ? ~static_cast<unsigned __int128>(0) : (neg ? sign : sign-1);
+ unsigned __int128 value=0;
+ for (;i<text.size();++i) {
+  if (text[i]<'0' || text[i]>'9') return false;
+  unsigned digit=text[i]-'0';
+  if (value>(limit-digit)/10) return false;
+  value=value*10+digit;
+ }
+ bits=neg ? ~value+1 : value;
+ return true;
+}
+size_t wide_length(unsigned __int128 value, bool neg) {
+ size_t digits=1; while (value>=10) { value/=10; ++digits; } return digits+(neg ? 1 : 0);
+}
+std::string wide_string(unsigned __int128 value, bool neg) {
+ std::string result; do { result.push_back(char('0'+value%10)); value/=10; } while (value);
+ if (neg) result.push_back('-'); std::reverse(result.begin(),result.end()); return result;
+}
 size_t decimal_length(__int128 value, unsigned scale) {
  bool neg=value<0; unsigned __int128 u=neg ? (unsigned __int128)(-(value+1))+1 : (unsigned __int128)value;
  size_t digits=1; while (u>=10) { u/=10; ++digits; }
@@ -95,7 +120,7 @@ std::string decimal_string(__int128 value, unsigned scale) {
 struct DuckDBAdapter::State final : Statement {
  const DuckDBAdapter* owner; duckdb_prepared_statement stmt=nullptr; duckdb_result result{};
  bool has_result=false, bound=false, executed=false, ready=false; idx_t row=0;
- std::vector<Type> params; std::vector<Column> columns; std::vector<duckdb_type> native_types; duckdb_data_chunk chunk=nullptr; idx_t chunk_index=0, chunk_row=0;
+ std::vector<Type> params; std::vector<duckdb_type> native_params; std::vector<Column> columns; std::vector<duckdb_type> native_types; duckdb_data_chunk chunk=nullptr; idx_t chunk_index=0, chunk_row=0;
  explicit State(const DuckDBAdapter* p):owner(p) {}
  ~State() override { if (chunk) duckdb_destroy_data_chunk(&chunk); if (has_result) duckdb_destroy_result(&result); if (stmt) duckdb_destroy_prepare(&stmt); }
 };
@@ -124,6 +149,7 @@ Status DuckDBAdapter::prepare(const std::string& sql, std::unique_ptr<Statement>
     for (idx_t i = 1; i <= duckdb_nparams(p->stmt); ++i) {
         LogicalTypeHandle logical(duckdb_param_logical_type(p->stmt, i));
         p->params.push_back(map_type(logical.get()));
+        p->native_params.push_back(logical ? duckdb_get_type_id(logical.get()) : DUCKDB_TYPE_INVALID);
     }
     for (idx_t i = 0; i < duckdb_prepared_statement_column_count(p->stmt); ++i) {
         LogicalTypeHandle logical(duckdb_prepared_statement_column_logical_type(p->stmt, i));
@@ -201,6 +227,19 @@ Status DuckDBAdapter::bind(Statement& s,const std::vector<Value>& values) {
             else if constexpr (std::is_same_v<T, Text>) return duckdb_bind_varchar_length(p->stmt, idx, v.bytes.data(), v.bytes.size());
             else if constexpr (std::is_same_v<T, Bytes>) return duckdb_bind_blob(p->stmt, idx, v.bytes.empty() ? "" : reinterpret_cast<const char*>(v.bytes.data()), v.bytes.size());
             else {
+                const auto native = p->native_params[i];
+                if (native == DUCKDB_TYPE_HUGEINT || native == DUCKDB_TYPE_UHUGEINT) {
+                    unsigned __int128 bits;
+                    if (!wide_integer(v.exact, native == DUCKDB_TYPE_UHUGEINT, bits)) return DuckDBError;
+                    if (native == DUCKDB_TYPE_UHUGEINT) {
+                        duckdb_uhugeint value{uint64_t(bits), uint64_t(bits >> 64)};
+                        return duckdb_bind_uhugeint(p->stmt, idx, value);
+                    }
+                    duckdb_hugeint value{uint64_t(bits), 0};
+                    uint64_t upper = uint64_t(bits >> 64);
+                    std::memcpy(&value.upper, &upper, sizeof(upper));
+                    return duckdb_bind_hugeint(p->stmt, idx, value);
+                }
                 DecimalLiteral literal;
                 if (!decimal_value(v.exact, literal)) return DuckDBError;
                 const auto& target = p->params[i];
@@ -284,6 +323,19 @@ Status DuckDBAdapter::fetch(Statement& s,Row& row,bool& done,size_t budget) {
     auto bytes=duckdb_string_t_data(&str);
     if (p->native_types[i]==DUCKDB_TYPE_VARCHAR) v=Text{std::string(bytes,n)};
     else { Bytes b; if (n) b.bytes.assign((const uint8_t*)bytes,(const uint8_t*)bytes+n); v=std::move(b); } break;
+   }
+   case DUCKDB_TYPE_HUGEINT: case DUCKDB_TYPE_UHUGEINT: {
+    unsigned __int128 bits; bool neg=false;
+    if (p->native_types[i]==DUCKDB_TYPE_HUGEINT) {
+     auto h=((duckdb_hugeint*)data)[r]; neg=h.upper<0;
+     bits=(static_cast<unsigned __int128>(static_cast<uint64_t>(h.upper))<<64)|h.lower;
+    } else {
+     auto h=((duckdb_uhugeint*)data)[r];
+     bits=(static_cast<unsigned __int128>(h.upper)<<64)|h.lower;
+    }
+    auto magnitude=neg ? ~bits+1 : bits;
+    if (wide_length(magnitude,neg)>budget) { row.clear(); return error(ErrorKind::resource,"row payload exceeds budget"); }
+    v=Decimal{wide_string(magnitude,neg)}; break;
    }
    case DUCKDB_TYPE_DECIMAL: {
     auto precision=p->columns[i].type.precision; __int128 val;

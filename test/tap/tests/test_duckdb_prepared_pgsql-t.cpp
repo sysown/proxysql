@@ -130,6 +130,68 @@ int main() {
     ok(good(r, PGRES_TUPLES_OK) && !strcmp(PQgetvalue(r, 0, 0), "1"),
        "session healthy after refusals");
     PQclear(r);
+    const std::string wide = "duckdb_wide_pg_" + std::to_string((long)getpid());
+    const char *min128 = "-170141183460469231731687303715884105728";
+    const char *maxu128 = "340282366920938463463374607431768211455";
+    const char *over128 = "170141183460469231731687303715884105728";
+    r = PQexec(c, ("CREATE TABLE " + wide + " (w HUGEINT, u UHUGEINT)").c_str());
+    bool wide_created = good(r, PGRES_COMMAND_OK);
+    ok(wide_created, "create owned wide table: %s", PQresultErrorMessage(r));
+    PQclear(r);
+    if (wide_created) {
+        std::string insert =
+            "INSERT INTO " + wide + " VALUES ('" + min128 + "', '" + maxu128 + "')";
+        r = PQexec(c, insert.c_str());
+        ok(good(r, PGRES_COMMAND_OK), "insert wide boundaries: %s", PQresultErrorMessage(r));
+        PQclear(r);
+        Oid numeric[] = {1700};
+        r = PQprepare(c, "wide", ("SELECT w, u FROM " + wide + " WHERE w = $1").c_str(), 1,
+                      numeric);
+        bool wide_prepared = good(r, PGRES_COMMAND_OK);
+        ok(wide_prepared, "prepare wide predicate: %s", PQresultErrorMessage(r));
+        PQclear(r);
+        r = PQdescribePrepared(c, "wide");
+        const int typmod = (39 << 16) + 4;
+        ok(good(r, PGRES_COMMAND_OK) && PQnfields(r) == 2 && PQftype(r, 0) == 1700 &&
+               PQftype(r, 1) == 1700 && PQfmod(r, 0) == typmod && PQfmod(r, 1) == typmod,
+           "wide columns advertise NUMERIC(39,0)");
+        PQclear(r);
+        const char *wide_values[] = {min128};
+        r = PQexecPrepared(c, "wide", 1, wide_values, nullptr, nullptr, 0);
+        ok(wide_prepared && good(r, PGRES_TUPLES_OK) && PQntuples(r) == 1 &&
+               !strcmp(PQgetvalue(r, 0, 0), min128) && !strcmp(PQgetvalue(r, 0, 1), maxu128),
+           "bind signed minimum and return exact signed and unsigned boundaries");
+        PQclear(r);
+        wide_values[0] = over128;
+        r = PQexecPrepared(c, "wide", 1, wide_values, nullptr, nullptr, 0);
+        ok(!good(r, PGRES_TUPLES_OK), "out-of-range signed HUGEINT bind is refused");
+        PQclear(r);
+        wide_values[0] = min128;
+        r = PQexecPrepared(c, "wide", 1, wide_values, nullptr, nullptr, 0);
+        ok(good(r, PGRES_TUPLES_OK) && PQntuples(r) == 1 && !strcmp(PQgetvalue(r, 0, 0), min128),
+           "valid wide bind recovers after overflow");
+        PQclear(r);
+        r = PQexec(c, ("DROP TABLE " + wide).c_str());
+        ok(good(r, PGRES_COMMAND_OK), "drop owned wide table");
+        PQclear(r);
+    }
+    Oid int_type[] = {23};
+    r = PQprepare(c, "sum_value", ("SELECT SUM(v) FROM " + table + " WHERE v = $1").c_str(), 1,
+                  int_type);
+    bool sum_prepared = good(r, PGRES_COMMAND_OK);
+    ok(sum_prepared, "prepare integer SUM with typed predicate: %s", PQresultErrorMessage(r));
+    PQclear(r);
+    r = PQdescribePrepared(c, "sum_value");
+    ok(good(r, PGRES_COMMAND_OK) && PQnfields(r) == 1 && PQftype(r, 0) == 1700 &&
+           PQfmod(r, 0) == ((39 << 16) + 4),
+       "integer SUM advertises NUMERIC(39,0)");
+    PQclear(r);
+    const char *sum_values[] = {"1"};
+    r = PQexecPrepared(c, "sum_value", 1, sum_values, nullptr, nullptr, 0);
+    ok(sum_prepared && good(r, PGRES_TUPLES_OK) && PQntuples(r) == 1 &&
+           !strcmp(PQgetvalue(r, 0, 0), "1"),
+       "integer SUM returns exact decimal value");
+    PQclear(r);
     if (created) {
         r = PQexec(c, ("DROP TABLE " + table).c_str());
         ok(good(r, PGRES_COMMAND_OK), "drop owned table");

@@ -21,7 +21,7 @@ not attempt complete dialect or wire-feature compatibility.
 Both listeners support client prepared SELECT through the shared ABI 17 execution
 service. Use native DuckDB SQL, not MySQL dialect translation. Preparation is
 limited to implicit, autocommit client cycles: explicit client transactions,
-prepared DML and RETURNING, temporal, wide and nested values, cursors and
+prepared DML and RETURNING, temporal and nested values, cursors and
 cancellation are unsupported. MySQL clients must negotiate UTF-8 or issue a
 separate `SET NAMES utf8`, `utf8mb3`, or `utf8mb4`; PostgreSQL requires UTF8.
 
@@ -32,7 +32,9 @@ works. PostgreSQL can use `CAST($1 AS BIGINT)` with an explicit parameter OID.
 The current policy rejects opaque `DECIMAL(p,s)` cast type names on PostgreSQL;
 ParserSQL 1.1.1 also rejects MySQL `CAST(? AS INTEGER)` and `COUNT(DISTINCT ...)`.
 Typed table results support boolean, decimal and blob, with signed and unsigned
-integers, floating point, text and NULL within the supported mappings.
+integers, floating point, text and NULL within the supported mappings. Native
+HUGEINT/UHUGEINT and integer SUM results use exact DECIMAL/NUMERIC(39,0), including
+typed predicate binding and checked overflow.
 
 Each native prepared operation is protected by a private read-only transaction,
 including protection against hidden database writes. Engine external access

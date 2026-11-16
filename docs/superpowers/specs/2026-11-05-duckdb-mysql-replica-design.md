@@ -34,7 +34,7 @@ freshness. Admin/STATS PostgreSQL now supports shared read-only prepared executi
 its real libpq/packet client passes 53 checks. Explicit transactions and prepared
 writes are refused in this initial PostgreSQL slice. Both native DuckDB listeners now register the shared ABI 17 service for a
 read-only prepared SELECT subset. Native adapter/provider/policy checks pass
-65/41/47 assertions; real clients pass 36 MySQL and 18 PostgreSQL assertions.
+81/41/47 assertions; real clients pass 47 MySQL and 29 PostgreSQL assertions.
 MySQL connection reset finalizes handles before replacing the native connection,
 rolling back pending writes and discarding temporary tables. Statement reset
 retains the client transaction. These are incremental milestones, not complete
@@ -77,8 +77,14 @@ implicit native transaction mode (`SET autocommit=0`) is explicitly refused.
 The adapter/provider and public bridge pass independent ASan/UBSan checks; the
 DuckDB engine itself was not rebuilt with sanitizers.
 
-Next: add exact wide-integer results/binding for analytical SUM, then remaining
-PostgreSQL transaction/type coverage and scoped analytical SQL translation after
+HUGEINT/UHUGEINT now bind and fetch as exact DECIMAL/NUMERIC(39,0), including
+integer SUM results and checked overflow. Native wide adapter tests pass 81
+assertions under ASan/UBSan. Schema/disconnect driver checks pass 32 across
+SQLite/Admin/DuckDB MySQL; native PostgreSQL extended checks pass 18. Ordinary
+proxy prepared regressions pass 9 MySQL and 14 PostgreSQL assertions against
+real local backends (and separately against each backend directly).
+
+Next: complete scoped analytical SQL translation after
 the ParserSQL dependency update. Admin extension and view/trigger authorization
 must be proved rather than inherited from the SQLite3 listener policy. Core
 cross-session handle/SQL/metadata quotas have 13 helper and 95 lifecycle checks;

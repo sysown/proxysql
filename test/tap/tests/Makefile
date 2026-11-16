@@ -295,7 +295,7 @@ kill_connection2_fixture-t: kill_connection2_fixture-t.cpp kill_connection2-t.cp
 unit/obj/tap.o unit/obj/tap_noise_stubs.o:
 	$(MAKE) -C unit $(patsubst unit/%,%,$@)
 
-test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t: %: %.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t test_embedded_prepared_schema_mysql-t: %: %.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 	$(CXX) $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(MARIADB_IDIR) $(STDCPP) -O0 -ggdb \
 		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm -o $@
 
@@ -708,3 +708,6 @@ parsersql_digest_test-t: parsersql_digest_test
 
 # These tests query the target server capability or active backend mode.
 pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-local_error_txn_state-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t pgsql-reg_test_6375_offline_retry-t pgsql-extended_query_protocol_test-t pgsql-unsupported_feature_test-t pgsql-idle_ping_dead_conns-t pgsql-stale_connect_deadline-t: pgsql_native_tier.h
+
+test_duckdb_prepared_pgsql_extended-t: test_duckdb_prepared_pgsql_extended-t.cpp pg_lite_client.cpp pg_lite_client.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) $< pg_lite_client.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) -I$(LIBSCRAM_IDIR) -I$(LIBUSUAL_IDIR) -I$(SSL_IDIR) $(STDCPP) -O0 -ggdb $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm -o $@

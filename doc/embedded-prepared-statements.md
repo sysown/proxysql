@@ -105,8 +105,9 @@ currently manual; its unit components are registered in unit-tests-g1.
 A native DuckDB SELECT-only adapter is implemented and registered on both native listeners.
 It borrows one connection, describes native types without execution, binds exact
 integer/Boolean/text/blob/decimal values and checks metadata before exposing rows. Native
-DuckDB decimal precision is limited to 38 digits. Unknown, temporal,
-wide-integer and nested result types are refused. Non-SELECT statements are
+DuckDB decimal precision is limited to 38 digits. Unknown, temporal and nested result types are refused. HUGEINT and UHUGEINT use
+exact Decimal values with precision 39 and scale 0; native DECIMAL remains limited
+to 38 digits. Non-SELECT statements are
 refused before execution; prepared writes, transaction commands and cancellation
 remain unsupported. The endpoint policy authorizes SELECT function effects.
 
@@ -312,7 +313,7 @@ client suites retain their 53/39/23 passing checks after enabling Boolean binds.
 
 The MySQL and PostgreSQL listeners use the shared ABI 17 prepared execution
 core for native read-only SELECT in implicit autocommit cycles. Explicit client
-transactions, prepared DML/RETURNING, temporal, wide and nested values,
+transactions, prepared DML/RETURNING, temporal and nested values,
 cursors and cancellation are unsupported. MySQL requires a UTF-8 handshake or
 `SET NAMES utf8`, `utf8mb3`, or `utf8mb4`; PostgreSQL requires UTF8.
 On the MySQL listener, `SET autocommit=0` is refused (MySQL 1235 / SQLSTATE `0A000`); setting it to
@@ -333,7 +334,7 @@ hidden database writes. Engine external access remains disabled by default;
 neither control is an OS sandbox. See the [DuckDB protocol guide](duckdb/protocol-compatibility.md#prepared-queries).
 
 
-Native listener acceptance passed 36 MySQL and 18 PostgreSQL checks on the rebuilt
+Native listener acceptance passed 47 MySQL and 29 PostgreSQL checks on the rebuilt
 ABI 17 core and plugin. MySQL connection reset finalizes old handles before
 replacing the connection; pending writes roll back, temporary tables disappear,
 and the shared provider remains registered. Statement reset retains transaction
@@ -342,3 +343,16 @@ ASan/UBSan with the supplied DuckDB/ParserSQL libraries uninstrumented. ParserSQ
 admission passes 47 checks, session-setting recognition 11, and existing DuckDB
 text/session tests retain 116 passing assertions. These do not complete the D1–D3
 or K5–K6 roadmap gates.
+
+
+HUGEINT and UHUGEINT bind and fetch as exact decimal integers with precision 39,
+scale 0. This covers the full signed and unsigned 128-bit ranges and integer SUM
+results. Fractional or out-of-range Decimal binds fail without truncation; a valid
+rebind recovers. The adapter passes 81 checks, including ASan/UBSan. Additional
+real-driver suites pass 32 schema/disconnect checks across MySQL SQLite, Admin and
+DuckDB, and 18 native PostgreSQL extended checks for binary formats, portals,
+suspension, Sync recovery and schema changes. Ordinary proxy routes pass 9 MySQL
+and 14 PostgreSQL prepared regression checks against local MySQL 8.0.46 and
+PostgreSQL 16.15 backends, independently rerun against their direct endpoints.
+The isolated live targets require explicitly configured TAP listener credentials;
+they create and remove uniquely named test objects.
