@@ -3206,7 +3206,7 @@ bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int
 	case PGSQL_ERROR_CODES::ERRCODE_ADMIN_SHUTDOWN: // Server shutdown in progress. Requested by Admin
 	case PGSQL_ERROR_CODES::ERRCODE_CRASH_SHUTDOWN: // Server shutdown in progress
 	case PGSQL_ERROR_CODES::ERRCODE_CANNOT_CONNECT_NOW: // Server in initialization mode and not ready to handle new connections
-		myconn->parent->connect_error(9999);
+		myconn->parent->connect_error(myconn->get_error_code());
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
 			retry_conn = query_retry_allowed(myds);

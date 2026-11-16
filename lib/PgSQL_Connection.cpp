@@ -472,7 +472,7 @@ handler_again:
 			native_teardown();
 		}
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, 9999 /* TODO: fix this mysql_errno(pgsql) */);
-		parent->connect_error(9999 /* TODO: fix this mysql_errno(pgsql)*/);
+		parent->connect_error(get_error_code());
 		break;
 	case ASYNC_CONNECT_TIMEOUT:
 		// to fix
@@ -486,7 +486,8 @@ handler_again:
 		}
 		proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, 9999/* TODO: fix this mysql_errno(pgsql)*/);
-		parent->connect_error(9999 /* TODO: fix this mysql_errno(pgsql)*/);
+		// The backend never answered, so this is not a refused login: it counts toward shunning.
+		parent->connect_error(PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION);
 		break;
 	case ASYNC_QUERY_START:
 		query_start();

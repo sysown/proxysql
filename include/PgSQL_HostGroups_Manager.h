@@ -232,7 +232,7 @@ class PgSQL_SrvC {	// MySQL Server Container
 		char* _comment
 	);
 	~PgSQL_SrvC();
-	void connect_error(int, bool get_mutex=true);
+	void connect_error(PGSQL_ERROR_CODES err_code, bool get_mutex=true);
 	void shun_and_killall();
 	/**
 	 * @brief Update the maximum number of used connections

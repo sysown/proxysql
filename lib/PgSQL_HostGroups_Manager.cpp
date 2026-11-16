@@ -414,43 +414,23 @@ PgSQL_SrvC::PgSQL_SrvC(
 	ConnectionsFree=new PgSQL_SrvConnList(this);
 }
 
-void PgSQL_SrvC::connect_error(int err_num, bool get_mutex) {
+void PgSQL_SrvC::connect_error(PGSQL_ERROR_CODES err_code, bool get_mutex) {
 	// NOTE: this function operates without any mutex
 	// although, it is not extremely important if any counter is lost
 	// as a single connection failure won't make a significant difference
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Connect failed with code '%d'\n", err_num);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Connect failed with code '%s'\n", PgSQL_Error_Helper::get_error_code(err_code));
 	__sync_fetch_and_add(&connect_ERR,1);
 	__sync_fetch_and_add(&PgHGM->status.server_connections_aborted,1);
-	if (err_num >= 1048 && err_num <= 1052)
-		return;
-	if (err_num >= 1054 && err_num <= 1075)
-		return;
-	if (err_num >= 1099 && err_num <= 1104)
-		return;
-	if (err_num >= 1106 && err_num <= 1113)
-		return;
-	if (err_num >= 1116 && err_num <= 1118)
-		return;
-	if (err_num == 1136 || (err_num >= 1138 && err_num <= 1149))
-		return;
-	switch (err_num) {
-		case 1007: // Can't create database
-		case 1008: // Can't drop database
-		case 1044: // access denied
-		case 1045: // access denied
-/*
-		case 1048: // Column cannot be null
-		case 1049: // Unknown database
-		case 1050: // Table already exists
-		case 1051: // Unknown table
-		case 1052: // Column is ambiguous
-*/
-		case 1120:
-		case 1203: // User %s already has more than 'max_user_connections' active connections
-		case 1226: // User '%s' has exceeded the '%s' resource (current value: %ld)
-		case 3118: // Access denied for user '%s'. Account is locked..
+	switch (err_code) {
+		// PostgreSQL refused this login, which says nothing about the server's health (as MySrvC
+		// skips access denied): counting it let one rejected client shun the server for everyone.
+		// The SQLSTATEs are those PostgreSQL 16 raises during connection startup.
+		case PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION: // 28000: pg_hba.conf, client certificate,
+		                                                                     //   unknown or NOLOGIN role, non-password auth
+		case PGSQL_ERROR_CODES::ERRCODE_INVALID_PASSWORD:                    // 28P01: password, md5, scram
+		case PGSQL_ERROR_CODES::ERRCODE_INVALID_CATALOG_NAME:                // 3D000: database does not exist
+		case PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE:              // 42501: no CONNECT privilege
 			return;
-			break;
 		default:
 			break;
 	}

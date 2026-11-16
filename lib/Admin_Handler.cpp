@@ -3856,8 +3856,9 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 						backup_shun_on_failures = pgsql_thread___shun_on_failures;
 						pgsql_thread___shun_on_failures = 1;
 						// Set the error twice to surpass 'pgsql_thread___shun_on_failures' value.
-						pgsrvc->connect_error(i_errcode, false);
-						pgsrvc->connect_error(i_errcode, false);
+						// The error number is MySQL's, which means nothing to PgSQL: use a code that counts.
+						pgsrvc->connect_error(PGSQL_ERROR_CODES::ERRCODE_UNKNOWN, false);
+						pgsrvc->connect_error(PGSQL_ERROR_CODES::ERRCODE_UNKNOWN, false);
 						pgsql_thread___shun_on_failures = backup_shun_on_failures;
 						SPA->send_ok_msg_to_client(sess, NULL, 0, query_no_space);
 					} else {
