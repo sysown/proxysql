@@ -785,6 +785,7 @@ UNIT_TESTS += \
 	test_mysqlx_plugin_load-t \
 	test_duckdb_plugin_load-t \
 	duckdb_config_unit-t \
+	duckdb_mysql_select_compat_unit-t \
 	duckdb_replica_unit-t \
 	duckdb_replica_storage_unit-t \
 	duckdb_engine_unit-t \
@@ -1068,6 +1069,12 @@ test_duckdb_plugin_load-t: ../test_duckdb_plugin_load-t.cpp $(TEST_HELPERS_OBJ) 
 		-DPROXYSQL_DUCKDB_PLUGIN_PATH='"$(DUCKDB_PLUGIN_SO)"' \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+# Characterize the vendored parser independently of engine and core runtime.
+duckdb_mysql_select_compat_unit-t: duckdb_mysql_select_compat_unit-t.cpp $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PARSERSQL_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a -lpthread -o $@
 
 duckdb_config_unit-t: duckdb_config_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \

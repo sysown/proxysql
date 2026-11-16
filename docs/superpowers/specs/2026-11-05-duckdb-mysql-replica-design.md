@@ -6,6 +6,25 @@ Branch: `feature/duckdb-mysql-replica`
 Worktree: `/mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica`
 Base: `v3.0` at `e2f317aba`
 
+## Current continuation — 2026-11-16
+
+PR #6591 was incorporated into #6303 and merged into `v3.0` at
+`663e84aa6f498cc18bc6a81e0d6c98c68b43504d`. The branch/base above describe the
+historical replica handoff. New work uses `feature/duckdb-query-compat` from
+that merged baseline; the current tree vendors DuckDB 2.0.0 and ParserSQL 1.1.1.
+
+The user approved an active implementation goal for analytical query compatibility
+(#6284), the core shared prepared framework (#6298), and the DuckDB native adapter
+(#6282). Follow the [integrated roadmap](../plans/2026-11-15-duckdb-mysql-query-compatibility.md)
+and its linked core/adapter plans. The [MyDuck audit](../../../doc/duckdb/prior-art.md)
+provides pinned source evidence and behavioral test candidates. Core owns both
+protocol state machines; new SQL recognition uses only vendored ParserSQL.
+
+CDC expansion, DBTrail evaluation, internal routing/fallback and benchmarks are
+outside this continuation. Ordinary query rules can still route to the same
+instance's DuckDB listener. The original replica architecture and operational
+notes below remain historical context, not a request to reimplement merged work.
+
 ## 1. Goal
 
 Provide a recoverable analytical replica of selected MySQL tables within
