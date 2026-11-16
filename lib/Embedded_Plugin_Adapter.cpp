@@ -693,6 +693,8 @@ uint32_t operation(Operation op) {
         return ProxySQL_Embedded_OPERATION_DISCONNECT;
     case Operation::long_data:
         return ProxySQL_Embedded_OPERATION_LONG_DATA;
+    case Operation::session_reset:
+        return ProxySQL_Embedded_OPERATION_SESSION_RESET;
     }
     return 0;
 }

@@ -398,7 +398,7 @@ Status reset_mysql_prepared(MySQL_Session& session) {
     if (!state) return {};
     if (!owner_ok(*state)) return make_status(ErrorKind::invalid_parameter, 1105, "owner thread mismatch", "HY000");
     std::unique_ptr<OperationGuard> guard;
-    if (auto error = acquire_guard(*state, Operation::reset, guard)) return error;
+    if (auto error = acquire_guard(*state, Operation::session_reset, guard)) return error;
     close_all(*state);
     return {};
 }

@@ -14,6 +14,8 @@ namespace embedded {
 class DuckDBAdapter final : public Adapter {
 public:
  explicit DuckDBAdapter(duckdb_connection connection) noexcept : connection_(connection) {}
+ // Caller must finalize every statement before replacing the borrowed connection.
+ void reset_connection(duckdb_connection connection) noexcept { connection_ = connection; }
  DuckDBAdapter(const DuckDBAdapter&) = delete;
  DuckDBAdapter& operator=(const DuckDBAdapter&) = delete;
  Status prepare(const std::string&, std::unique_ptr<Statement>&) override;

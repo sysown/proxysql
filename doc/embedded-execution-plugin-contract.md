@@ -26,3 +26,13 @@ READ_ONLY is required for both frontends. MySQL request flags must be exactly RE
 
 
 The core uses a shared process quota pool for native statement counts and retained SQL, metadata, bind, and result bytes, in addition to per-session limits. Frontends account for their retained copies. MySQL reserves its bounded private response budget before execution; PostgreSQL charges retained encoded rows until portal cleanup. These limits cover logical retained payloads, not allocator capacity, temporary engine allocations, engine RSS, or packets already transferred to the normal network output queue. Provider callback views have separate checked count and payload bounds before copying.
+
+
+Statement RESET releases native results and bindings without ending the client
+transaction. SESSION_RESET is a separate operation: core closes every native
+statement while its guard is held, and guard leave may replace the borrowed native
+connection. A failed reset must fail closed rather than acknowledge a successful
+reset. The DuckDB provider replaces its connection after finalization, discarding
+pending transactions, temporary tables and connection-local settings. Its listener
+marks the session unhealthy if replacement fails; core emits no reset/authentication
+success afterward.

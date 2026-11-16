@@ -56,7 +56,7 @@ encoders and checks descriptor pointers before queuing any output. Callers suppl
 transaction status and keep all NUL-terminated field strings alive through the
 synchronous call. The proxy wrapper still holds its metadata lock and uses the
 same existing status calculation. All 18 direct metadata-packet checks pass.
-Prepared commands are enabled on the SQLite3 MySQL listener. Admin and STATS MySQL listeners are also integrated within the restrictions below. Admin/STATS PostgreSQL listeners now support the read-only subset described below. DuckDB listener registration remains to be implemented.
+Prepared commands are enabled on the SQLite3 MySQL listener. Admin and STATS MySQL listeners are also integrated within the restrictions below. Admin/STATS PostgreSQL listeners now support the read-only subset described below. The native DuckDB MySQL and PostgreSQL listeners also register the shared ABI 17 service for the read-only subset described below.
 
 
 The SQLite3 listener now registers one shared MySQL prepared controller per
@@ -91,8 +91,7 @@ statement; 8 MiB metadata; and 64 MiB response payload including packet framing.
 Metadata/row response errors discard privately buffered packets before sending
 ERR. A conservative maximum OK-packet size is reserved before executing DML.
 These are transport payload limits, not bounds on engine RSS. Error packets are
-sent even when the configured success-response budget cannot fit them. Frontend buffer accounting and a public versioned registration ABI remain
-outstanding; core global handle/SQL/metadata quotas are described below.
+sent even when the configured success-response budget cannot fit them. The public versioned registration ABI and shared frontend accounting are integrated; core global quotas are described below.
 
 Validation on 2026-11-16: the real MariaDB C API acceptance client passed 39
 checks against the rebuilt isolated SQLite3 listener, including repeated types,
@@ -103,14 +102,13 @@ TAP_SQLITE_PORT, TAP_USERNAME and TAP_PASSWORD for a dedicated SQLite3 test
 listener. It creates and drops a uniquely named test table. This live test is
 currently manual; its unit components are registered in unit-tests-g1.
 
-A native DuckDB SELECT-only adapter is also implemented and tested separately.
+A native DuckDB SELECT-only adapter is implemented and registered on both native listeners.
 It borrows one connection, describes native types without execution, binds exact
 integer/Boolean/text/blob/decimal values and checks metadata before exposing rows. Native
 DuckDB decimal precision is limited to 38 digits. Unknown, temporal,
 wide-integer and nested result types are refused. Non-SELECT statements are
-refused before execution; writes, transaction commands, cancellation, listener
-registration and the complete D1 milestone remain outstanding. SELECT function
-effects must still be authorized by an endpoint policy.
+refused before execution; prepared writes, transaction commands and cancellation
+remain unsupported. The endpoint policy authorizes SELECT function effects.
 
 
 Shared connections can now supply an optional operation-guard factory. Core holds
@@ -233,7 +231,7 @@ Limits default to 128 statements and 128 portals, 4,096 parameters and columns,
 Accounting includes conservative container and framing charges, but excludes
 native/adapter/Session allocations before metadata reaches the controller and
 engine internal memory. Callers release each transferred response before asking
-for another to retain the stated response bound. Frontend bind/result global accounting remains in progress.
+for another to retain the stated response bound. Frontend bind/result buffers also participate in shared global accounting.
 
 SQLite now has an opt-in `strict_declared` result profile. Exact native declared
 names BLOB/TEXT/INTEGER/INT/BIGINT/REAL/DOUBLE/FLOAT provide fixed descriptors;
@@ -245,8 +243,7 @@ can select ParserSQL's PostgreSQL dialect; MySQL remains their default.
 
 Independent component validation passed 66 controller assertions, 157 strict
 profile assertions, 46 SQLite policy assertions, 46 Admin policy assertions and
-16 statistics assertions on 2026-11-16. These checks do not enable a listener or
-complete the prepared-statement framework.
+16 statistics assertions on 2026-11-16. These component checks alone do not complete the prepared-statement framework.
 
 
 ## Admin/STATS PostgreSQL listener support
@@ -265,8 +262,7 @@ start a native transaction. Transaction ownership and writable PostgreSQL prepar
 execution remain separate unfinished work. PostgreSQL prepared execution requires
 UTF8 client encoding; other startup encodings are refused before native access.
 The existing MySQL prepared endpoints retain their current write/transaction
-policy. Plugin-backed PostgreSQL sessions retain their existing dispatch until
-explicit registration is added.
+policy. Native DuckDB PostgreSQL sessions now register the shared service explicitly.
 
 Independent live libpq and packet-client validation on 2026-11-16 passed 53 checks
 across Admin and STATS, including NULL/empty/binary/Unicode values, exact-limit
@@ -300,8 +296,8 @@ Core Sessions share limits of 4,096 native prepared handles, 64 MiB retained SQL
 and 64 MiB owned metadata. Handle/SQL reservations precede native prepare;
 metadata refusal finalizes the new native handle and releases all reservations.
 Reset retains reservations; close and destruction release them. Tests can inject
-a smaller shared pool. The helper also defines 256 MiB bind and 512 MiB result
-categories for the frontend accounting still being integrated. These limits count
+a smaller shared pool. The shared pool also accounts for 256 MiB bind and 512 MiB result
+categories used by frontend accounting. These limits count
 logical retained state and exclude allocator overhead, engine memory and transient
 adapter allocations; they do not bound process RSS or output network queues.
 
@@ -310,3 +306,39 @@ PostgreSQL parameter assertions, 47 PostgreSQL field assertions, 65 MySQL field
 assertions, 364 native SQLite assertions, 66 portal controller assertions and 65
 native DuckDB assertions. The quota helper also passes ASan/UBSan. All three real
 client suites retain their 53/39/23 passing checks after enabling Boolean binds.
+
+
+## Native DuckDB listeners
+
+The MySQL and PostgreSQL listeners use the shared ABI 17 prepared execution
+core for native read-only SELECT in implicit autocommit cycles. Explicit client
+transactions, prepared DML/RETURNING, temporal, wide and nested values,
+cursors and cancellation are unsupported. MySQL requires a UTF-8 handshake or
+`SET NAMES utf8`, `utf8mb3`, or `utf8mb4`; PostgreSQL requires UTF8.
+On the MySQL listener, `SET autocommit=0` is refused (MySQL 1235 / SQLSTATE `0A000`); setting it to
+1 when already enabled is accepted. Explicit text transaction commands remain
+available for text queries.
+
+Native output metadata must resolve at prepare time. Untyped expressions such as
+`SELECT ? + 0` and `length(?)` may be refused; PostgreSQL
+`CAST($1 AS BIGINT)` with an explicit OID and typed table columns are usable.
+Opaque PostgreSQL `DECIMAL(p,s)` cast names and MySQL `CAST(? AS INTEGER)` or
+`COUNT(DISTINCT ...)` are refused by the current policy/parser. Typed table
+results support boolean, decimal and blob, alongside signed/unsigned integer,
+floating point, text and NULL within supported mappings. SQL is native DuckDB;
+there is no MySQL translation.
+
+A private native read-only transaction guards each prepared operation against
+hidden database writes. Engine external access remains disabled by default;
+neither control is an OS sandbox. See the [DuckDB protocol guide](duckdb/protocol-compatibility.md#prepared-queries).
+
+
+Native listener acceptance passed 36 MySQL and 18 PostgreSQL checks on the rebuilt
+ABI 17 core and plugin. MySQL connection reset finalizes old handles before
+replacing the connection; pending writes roll back, temporary tables disappear,
+and the shared provider remains registered. Statement reset retains transaction
+ownership. The native provider's 41 assertions and public bridge's 126 pass
+ASan/UBSan with the supplied DuckDB/ParserSQL libraries uninstrumented. ParserSQL
+admission passes 47 checks, session-setting recognition 11, and existing DuckDB
+text/session tests retain 116 passing assertions. These do not complete the D1–D3
+or K5–K6 roadmap gates.

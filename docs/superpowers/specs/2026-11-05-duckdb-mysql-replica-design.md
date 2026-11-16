@@ -32,10 +32,13 @@ MariaDB C API acceptance test passed 39 checks on 2026-11-16. Admin/STATS MySQL 
 real-client test passes 23 checks, with runtime read-only enforcement and statistics
 freshness. Admin/STATS PostgreSQL now supports shared read-only prepared execution;
 its real libpq/packet client passes 53 checks. Explicit transactions and prepared
-writes are refused in this initial PostgreSQL slice. DuckDB listeners remain
-unregistered. The native DuckDB SELECT adapter has a separate 65-check unit proof,
-including native parameter
-positions, and still awaits registration.
+writes are refused in this initial PostgreSQL slice. Both native DuckDB listeners now register the shared ABI 17 service for a
+read-only prepared SELECT subset. Native adapter/provider/policy checks pass
+65/41/47 assertions; real clients pass 36 MySQL and 18 PostgreSQL assertions.
+MySQL connection reset finalizes handles before replacing the native connection,
+rolling back pending writes and discarding temporary tables. Statement reset
+retains the client transaction. These are incremental milestones, not complete
+#6282/#6298 acceptance.
 See [the support and limits](../../../doc/embedded-prepared-statements.md).
 
 ParserSQL draft [PR #72](https://github.com/ProxySQL/ParserSQL/pull/72), head
@@ -55,7 +58,7 @@ The public V1 native execution service is now implemented through the tail of
 PluginServices ABI 17, with Phase B returning no service. The older supported ABI
 prefixes remain accepted. The C-shaped callback bridge passes 126 checks,
 including independent ASan/UBSan validation; ABI and plugin lifecycle checks pass
-60 and 100 assertions. The MySQL controller passes 86 checks and PostgreSQL
+60 and 100 assertions. The MySQL controller passes 89 checks and PostgreSQL
 controller 85 (also ASan/UBSan). Frontends now use the process quota pool for
 retained SQL, metadata, long-data/bind and bounded result storage; engine RSS,
 scratch allocations and ordinary network output queues are outside this accounting.
@@ -67,9 +70,14 @@ Public-service tests pass 40 assertions, including both actual session destructo
 finalizing live provider handles under the disconnect guard before borrowed contexts
 expire, and MySQL prepared reset preserving registration without reusing IDs.
 
-Next: register and validate the native DuckDB
-provider through ABI 17, with provider-owned read-only transactions and explicit
-refusal of client transactions in the first SELECT slice. Then complete remaining
+Native provider-owned read-only transactions protect prepared SELECT execution,
+including writes hidden behind views. Prepared work inside explicit client
+transactions is refused. MySQL `SET NAMES` now updates tracked charset state;
+implicit native transaction mode (`SET autocommit=0`) is explicitly refused.
+The adapter/provider and public bridge pass independent ASan/UBSan checks; the
+DuckDB engine itself was not rebuilt with sanitizers.
+
+Next: add exact wide-integer results/binding for analytical SUM, then remaining
 PostgreSQL transaction/type coverage and scoped analytical SQL translation after
 the ParserSQL dependency update. Admin extension and view/trigger authorization
 must be proved rather than inherited from the SQLite3 listener policy. Core

@@ -12,6 +12,7 @@
 
 class DuckDBConfigStore;
 class DuckDBEngine;
+struct ProxySQL_Embedded_ServiceV1;
 
 // Binds the configured MySQL and PostgreSQL ports and runs one accept
 // loop over all of them. Each accepted socket gets its own thread that
@@ -32,7 +33,8 @@ public:
 	DuckDBListener(const DuckDBListener&) = delete;
 	DuckDBListener& operator=(const DuckDBListener&) = delete;
 
-	bool start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::string& err);
+	bool start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::string& err,
+	           const ProxySQL_Embedded_ServiceV1* service = nullptr);
 	void stop();
 
 	bool is_running() const { return running_.load(); }
@@ -67,6 +69,7 @@ private:
 	int signal_pipe_[2] { -1, -1 };
 
 	DuckDBEngine* engine_ { nullptr };
+	const ProxySQL_Embedded_ServiceV1* prepared_service_ { nullptr };
 
 	mutable pthread_mutex_t mutex_;
 	std::vector<Listener> listeners_;

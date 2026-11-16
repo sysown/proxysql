@@ -100,7 +100,10 @@ enum ProxySQL_Embedded_Operation : std::uint32_t {
     ProxySQL_Embedded_OPERATION_RESET = 4,
     ProxySQL_Embedded_OPERATION_CLOSE = 5,
     ProxySQL_Embedded_OPERATION_DISCONNECT = 6,
-    ProxySQL_Embedded_OPERATION_LONG_DATA = 7
+    ProxySQL_Embedded_OPERATION_LONG_DATA = 7,
+    // Session reset: core finalizes all handles while this guard is held.
+    // Its leave callback may then replace the borrowed native connection.
+    ProxySQL_Embedded_OPERATION_SESSION_RESET = 8
 };
 
 struct ProxySQL_Embedded_ExecInfo {

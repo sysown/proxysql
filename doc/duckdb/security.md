@@ -104,11 +104,12 @@ The plugin rejects multiple statements in one request, closing a statement
 smuggling path where earlier side effects could be hidden by the final result.
 That is not a substitute for normal SQL-injection defenses.
 
-Use parameterization only with APIs the plugin supports. Because prepared
-statement protocols are not currently supported, do not fall back to unsafe
-string concatenation for untrusted values. Validate and quote data in a trusted
-application layer, or avoid exposing such query construction until an
-appropriate supported interface exists.
+Use supported native prepared SELECT parameter binding for untrusted values;
+do not concatenate untrusted values into SQL. Prepared operations use private
+read-only transactions to prevent hidden database writes. External access remains
+disabled by default and applies to prepared execution as well as text queries.
+These engine controls do not provide an operating-system sandbox. See the
+[prepared-query restrictions](protocol-compatibility.md#prepared-queries).
 
 ## Operational checklist
 

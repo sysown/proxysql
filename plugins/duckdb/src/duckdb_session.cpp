@@ -1,6 +1,8 @@
 #include "duckdb_session.h"
 #include "duckdb_engine.h"
 #include "duckdb_result.h"
+#include "duckdb_mysql_set.h"
+#include "proxysql_find_charset.h"
 #include "sqlite3db.h"
 
 #include "proxysql.h"
@@ -1285,6 +1287,35 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		sql.assign((const char*)hdr.data.ptr, hdr.data.size - 1);
 	}
 
+	// The generic compatibility intercept predates prepared execution and only
+	// acknowledges these statements. Track their real client state before the
+	// prepared-operation guard consults it. The parser accepts a single exact
+	// statement and never interprets arbitrary text as a setting.
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
+		DuckDBMySQLSet setting;
+		try { setting = duckdb_parse_mysql_set(sql); }
+		catch (...) { duckdb_send_mysql_error(sess, 1105, "HY000", "Cannot parse session setting"); return; }
+		if (setting.kind == DuckDBMySQLSetKind::names || setting.kind == DuckDBMySQLSetKind::charset) {
+			const auto* cs = setting.collation.empty()
+				? proxysql_find_charset_name(setting.charset.c_str())
+				: proxysql_find_charset_collate_names(setting.charset.c_str(), setting.collation.c_str());
+			if (!cs || !sess->client_myds || !sess->client_myds->myconn) {
+				duckdb_send_mysql_error(sess, 1115, "42000", "Unknown character set or collation"); return;
+			}
+			sess->client_myds->myconn->set_charset(cs->nr,
+				setting.kind == DuckDBMySQLSetKind::names ? NAMES : CHARSET);
+			duckdb_send_result(sess, nullptr, nullptr, 0, sql.c_str()); return;
+		}
+		if (setting.kind == DuckDBMySQLSetKind::autocommit_off || setting.kind == DuckDBMySQLSetKind::autocommit_on) {
+			// Implicit native transactions are not implemented by this endpoint.
+			// Never acknowledge a mode that ordinary DML would silently ignore.
+			if (setting.kind == DuckDBMySQLSetKind::autocommit_off || !sess->autocommit) {
+				duckdb_send_mysql_error(sess, 1235, "0A000", "Implicit DuckDB transactions are unsupported; use explicit BEGIN");
+				return;
+			}
+			duckdb_send_result(sess, nullptr, nullptr, 0, sql.c_str()); return;
+		}
+	}
 	const DuckDBIntercept kind = duckdb_classify_query(sql.c_str(), sql.size());
 	std::string effective = sql;
 	switch (kind) {
@@ -1313,6 +1344,10 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		return;
 	}
 	case DuckDBIntercept::ok_noop:
+		if constexpr (std::is_same_v<S, MySQL_Session>) {
+			duckdb_send_mysql_error(sess, 1064, "42000", "Invalid or unsupported session setting");
+			return;
+		}
 		duckdb_send_result(sess, nullptr, nullptr, 0, sql.c_str());
 		return;
 	case DuckDBIntercept::none:

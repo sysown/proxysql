@@ -3,6 +3,12 @@
 #include "duckdb_config.h"
 #include "duckdb_engine.h"
 #include "duckdb_session.h"
+#include "duckdb_prepared_provider.h"
+#include "MySQL_Variables.h"
+#include "PgSQL_Variables.h"
+#include "proxysql_find_charset.h"
+#include <strings.h>
+#include <exception>
 
 #include "proxysql.h"
 #include "proxysql_utils.h"
@@ -175,7 +181,7 @@ DuckDBListener::~DuckDBListener() {
 	pthread_mutex_destroy(&mutex_);
 }
 
-bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::string& err) {
+bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::string& err, const ProxySQL_Embedded_ServiceV1* service) {
 	if (running_.load()) {
 		err = "listener already running";
 		return false;
@@ -215,6 +221,7 @@ bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::st
 
 	listeners_ = std::move(bound);
 	engine_ = &engine;
+	prepared_service_ = service;
 	shutdown_.store(false);
 	running_.store(true);
 	accept_thread_ = std::thread(&DuckDBListener::accept_loop, this);
@@ -495,6 +502,84 @@ void DuckDBListener::run_session(int client_fd) {
 	sess->session_type = PROXYSQL_SESSION_SQLITE;
 	sess->handler_function = duckdb_session_handler<typename std::remove_pointer<Sess>::type>;
 
+	// Registration is session-scoped and its callbacks borrow this provider.
+	std::unique_ptr<DuckDBPreparedProvider> provider;
+	bool prepared_registered = false;
+	struct PreparedStatus { Sess session; } prepared_status { sess };
+	auto pg_status = [](void*) noexcept -> uint8_t {
+		return static_cast<uint8_t>(duckdb_pgsql_transaction_status(duckdb_session_state().conn));
+	};
+	auto mysql_status = [](void* opaque) noexcept -> uint16_t {
+		if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+			auto* session = static_cast<PreparedStatus*>(opaque)->session;
+			return (session->autocommit ? SERVER_STATUS_AUTOCOMMIT : 0) |
+				(duckdb_pgsql_transaction_status(duckdb_session_state().conn) != 'I' ? SERVER_STATUS_IN_TRANS : 0);
+		} else return 0;
+	};
+	auto idle = [](void* opaque) noexcept -> uint8_t {
+		auto* session = static_cast<PreparedStatus*>(opaque)->session;
+		if (duckdb_pgsql_transaction_status(duckdb_session_state().conn) != 'I') return 'T';
+		if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+			if (!session->autocommit) return 'T';
+			const char* value = mysql_variables.client_get_value(session, SQL_CHARACTER_SET_CLIENT);
+			if (!value || !*value) return 'E';
+			char* end = nullptr; unsigned long id = strtoul(value, &end, 10);
+			const auto* cs = end && !*end && id <= UINT32_MAX ? proxysql_find_charset_nr(id) : nullptr;
+			if (!cs || !cs->csname || (strcasecmp(cs->csname, "utf8") && strcasecmp(cs->csname, "utf8mb3") && strcasecmp(cs->csname, "utf8mb4"))) return 'E';
+		} else {
+			const char* value = pgsql_variables.client_get_value(session, PGSQL_CLIENT_ENCODING);
+			if (value && *value && strcasecmp(value, "UTF8") && strcasecmp(value, "UTF-8")) return 'E';
+		}
+		return 'I';
+	};
+	if (prepared_service_) {
+		try {
+			auto failure = [](void* opaque) noexcept {
+				static_cast<PreparedStatus*>(opaque)->session->healthy = false;
+			};
+			constexpr auto dialect = std::is_same_v<Thr, MySQL_Thread>
+				? embedded::DuckDBSourceDialect::mysql : embedded::DuckDBSourceDialect::postgresql;
+			auto reset_client = [](void*, duckdb_connection* out) noexcept -> bool {
+				auto& state = duckdb_session_state();
+				if (!out || !state.engine) return false;
+				*out = nullptr;
+				state.engine->disconnect(&state.conn);
+				try {
+					std::string error;
+					if (!state.engine->connect(&state.conn, error)) return false;
+				} catch (...) { return false; }
+				state.pgsql_txn_status = 'I';
+				state.pgsql_extended_error = false;
+				*out = state.conn;
+				return true;
+			};
+			provider = std::make_unique<DuckDBPreparedProvider>(st.conn, idle, failure, reset_client, &prepared_status, dialect);
+			ProxySQL_Embedded_RequestV1 request{};
+			request.abi_version = ProxySQL_Embedded_ABI_V1; request.struct_size = sizeof(request);
+			request.engine = provider->engine(); request.policy = provider->policy();
+			request.flags = ProxySQL_Embedded_REQUEST_READ_ONLY;
+			request.mysql_status = mysql_status; request.status_context = &prepared_status;
+			request.pgsql_status = pg_status; request.pgsql_status_context = &prepared_status;
+			ProxySQL_Embedded_Error error{};
+			int rc;
+			if constexpr (std::is_same_v<Thr, MySQL_Thread>) rc = prepared_service_->register_mysql(sess, &request, &error);
+			else { request.flags |= ProxySQL_Embedded_REQUEST_PG_IMPLICIT_CYCLES; rc = prepared_service_->register_pgsql(sess, &request, &error); }
+			prepared_registered = rc == ProxySQL_Embedded_SUCCESS;
+		} catch (...) { prepared_registered = false; }
+		if (!prepared_registered) {
+			proxy_error("DuckDB prepared service registration failed\n");
+			thr->gen_args = nullptr; delete thr; provider.reset(); engine_->disconnect(&st.conn); st.engine = nullptr; return;
+		}
+	}
+	auto unregister_prepared = [&]() {
+		if (!prepared_registered) return;
+		ProxySQL_Embedded_Error error{};
+		int rc;
+		if constexpr (std::is_same_v<Thr, MySQL_Thread>) rc = prepared_service_->unregister_mysql(sess, &error);
+		else rc = prepared_service_->unregister_pgsql(sess, &error);
+		if (rc != ProxySQL_Embedded_SUCCESS) std::terminate();
+		prepared_registered = false;
+	};
 	auto* myds = sess->client_myds;
 	fill_client_addr(myds, client_fd);
 
@@ -503,10 +588,12 @@ void DuckDBListener::run_session(int client_fd) {
 		// waiting on the client for anything.
 		if (myds->myprot.generate_pkt_initial_handshake(true, NULL, NULL,
 				&sess->thread_session_id, true) == false) {
-			engine_->disconnect(&st.conn);
-			st.engine = nullptr;
+			unregister_prepared();
 			thr->gen_args = nullptr;
 			delete thr;
+			provider.reset();
+			engine_->disconnect(&st.conn);
+			st.engine = nullptr;
 			return;
 		}
 	} else {
@@ -575,8 +662,10 @@ void DuckDBListener::run_session(int client_fd) {
 		}
 	}
 
-	engine_->disconnect(&st.conn);
-	st.engine = nullptr;
+	unregister_prepared();
 	thr->gen_args = nullptr;
 	delete thr;
+	provider.reset();
+	engine_->disconnect(&st.conn);
+	st.engine = nullptr;
 }

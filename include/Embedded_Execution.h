@@ -12,7 +12,7 @@ namespace embedded {
 enum class ErrorKind { syntax, unsupported, policy, invalid_parameter, range, resource, schema_changed, transaction, engine, internal };
 struct Error { ErrorKind kind; int native_code; std::string message; std::string sqlstate; };
 using Status = std::optional<Error>; // Empty means success.
-enum class Operation { prepare, execute, fetch, reset, close, disconnect, long_data };
+enum class Operation { prepare, execute, fetch, reset, close, disconnect, long_data, session_reset };
 struct OperationGuard { virtual ~OperationGuard() = default; };
 // On success a factory must provide an owned guard. Disconnect acquisition must
 // succeed and must not throw; failure is a fatal provider contract violation.

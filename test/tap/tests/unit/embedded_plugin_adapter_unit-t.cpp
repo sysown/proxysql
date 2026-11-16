@@ -567,14 +567,14 @@ int main() {
        "invalid SQLSTATE falls back to typed mapping");
     const Operation operations[] = {Operation::prepare,  Operation::execute, Operation::fetch,
                                     Operation::reset,    Operation::close,   Operation::disconnect,
-                                    Operation::long_data};
+                                    Operation::long_data, Operation::session_reset};
     const uint32_t tags[] = {
         ProxySQL_Embedded_OPERATION_PREPARE,  ProxySQL_Embedded_OPERATION_EXECUTE,
         ProxySQL_Embedded_OPERATION_FETCH,    ProxySQL_Embedded_OPERATION_RESET,
         ProxySQL_Embedded_OPERATION_CLOSE,    ProxySQL_Embedded_OPERATION_DISCONNECT,
-        ProxySQL_Embedded_OPERATION_LONG_DATA};
+        ProxySQL_Embedded_OPERATION_LONG_DATA, ProxySQL_Embedded_OPERATION_SESSION_RESET};
     bool tags_match = true;
-    for (size_t i = 0; i < 7; ++i) {
+    for (size_t i = 0; i < 8; ++i) {
         OperationContext op{operations[i], nullptr};
         tags_match = tags_match && !gf(op, guard) && other.operation == tags[i];
         guard.reset();

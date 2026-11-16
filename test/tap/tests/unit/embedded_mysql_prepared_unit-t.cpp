@@ -148,8 +148,9 @@ int main() {
         ResetFailureAdapter guarded(db);
         int active = 0; guarded.active = &active;
         bool deny = false, throwing = false;
-        bool known_sql_seen = false, unknown_sql_seen = false;
+        bool known_sql_seen = false, unknown_sql_seen = false, session_reset_seen = false;
         auto factory = [&](const embedded::OperationContext& context, std::unique_ptr<embedded::OperationGuard>& out) -> embedded::Status {
+            if (context.operation == embedded::Operation::session_reset) session_reset_seen = true;
             if (context.operation == embedded::Operation::execute) {
                 if (context.sql && *context.sql == "SELECT 1") known_sql_seen = true;
                 if (!context.sql) unknown_sql_seen = true;
@@ -222,16 +223,20 @@ int main() {
         ok((bool)embedded::reset_mysql_prepared(*g) && active == 0 && guarded.native_calls == throw_before,
            "throwing reset guard returns error without native work");
         throwing = false;
-        deny = true; int before = guarded.native_calls;
+        deny = true; int before = guarded.native_calls; int finalizes_before = guarded.finalizes;
         ok((bool)embedded::reset_mysql_prepared(*g) && guarded.native_calls == before,
            "failed reset guard leaves native statements untouched");
+        ok(guarded.finalizes == finalizes_before, "failed session reset preserves native handles");
         deny = false;
         ok(!embedded::reset_mysql_prepared(*g) && active == 0 && guarded.unguarded == 0,
            "reset closes native handles before releasing guard");
+        ok(session_reset_seen, "connection reset uses distinct session reset guard");
         prep = make_packet({0x16, 'S','E','L','E','C','T',' ','1'});
         embedded::handle_mysql_prepared(*g, prep); clear_ps(gs->PSarrayOUT);
+        const int before_unregister = guarded.finalizes;
         embedded::unregister_mysql_prepared(*g);
         ok(active == 0 && guarded.unguarded == 0, "disconnect closes native handles under guard");
+        ok(guarded.finalizes > before_unregister, "unregister finalizes retained native handle");
         delete gs->myconn; gs->myconn = nullptr; delete g;
     }
 

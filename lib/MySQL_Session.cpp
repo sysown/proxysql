@@ -1211,10 +1211,14 @@ MySQL_Session::MySQL_Session() {
  */
 void MySQL_Session::reset() {
 	embedded::unregister_admin_mysql_prepared(*this);
+	const bool was_healthy = healthy;
 	// Registered embedded endpoints own native statements outside proxy metadata.
 	if (auto error = embedded::reset_mysql_prepared(*this)) {
 		proxy_error("Embedded prepared reset failed: %s\n", error->message.c_str());
+		healthy = false;
+		return;
 	}
+	if (was_healthy && !healthy) return;
 #ifndef PROXYSQL31
 	pending_user_variable_set.reset();
 #endif
@@ -10119,6 +10123,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	//if (session_type == PROXYSQL_SESSION_MYSQL) {
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
 		reset();
+		if (!healthy) { l_free(pkt->size, pkt->ptr); return; }
 		init();
 		if (client_authenticated) {
 			if (use_ldap_auth == false) {
@@ -10211,6 +10216,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 		// Re-initialize the session
 		reset();
+		if (!healthy) { l_free(pkt->size, pkt->ptr); return; }
 		init();
 
 		// Recover the relevant session values

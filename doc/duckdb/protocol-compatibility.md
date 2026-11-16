@@ -10,27 +10,33 @@ not attempt complete dialect or wire-feature compatibility.
 |---|---|---|
 | Authentication | `mysql_users` | `pgsql_users` |
 | Simple text query | Supported | Supported |
-| Client prepared statements | Not supported | Not supported |
-| Extended-query protocol | N/A | Rejected with SQLSTATE `0A000` |
+| Client prepared statements | Read-only native SELECT subset | Read-only native SELECT subset |
+| Extended-query protocol | N/A | Supported for the prepared subset |
 | Multiple statements in one request | Rejected | Rejected |
 | Transaction status | Protocol OK/status behavior | `ReadyForQuery` I/T/E |
 | Result metadata | Typed numeric, binary and core temporal columns | Typed numeric, boolean and BYTEA columns |
 
-## Simple-query requirement
+## Prepared queries
 
-Use non-prepared client APIs. For PostgreSQL, the driver must use the simple
-Query message. A normal extended flow (`Parse`, `Bind`, `Describe`, `Execute`)
-receives one `Feature not supported` error. The plugin then discards frontend
-messages until `Sync`, sends one `ReadyForQuery`, and resumes normal processing.
-This follows PostgreSQL error-resynchronization rules without pretending that
-prepared execution is available.
+Both listeners support client prepared SELECT through the shared ABI 17 execution
+service. Use native DuckDB SQL, not MySQL dialect translation. Preparation is
+limited to implicit, autocommit client cycles: explicit client transactions,
+prepared DML and RETURNING, temporal, wide and nested values, cursors and
+cancellation are unsupported. MySQL clients must negotiate UTF-8 or issue a
+separate `SET NAMES utf8`, `utf8mb3`, or `utf8mb4`; PostgreSQL requires UTF8.
 
-For MySQL, use `COM_QUERY`-based APIs. `COM_STMT_PREPARE` and
-`COM_STMT_EXECUTE` are outside the current plugin surface. The shared frontend
-framework is owned by [#6298](https://github.com/sysown/proxysql/issues/6298);
-[#6282](https://github.com/sysown/proxysql/issues/6282) supplies the DuckDB adapter
-once that contract is available. The plugin must not add an independent
-prepared-statement protocol state machine.
+Output metadata must be known at native preparation. Expressions such as
+`SELECT ? + 0` and `SELECT length(?)` can be refused when DuckDB cannot resolve
+their output types; selecting typed table columns with parameters in predicates
+works. PostgreSQL can use `CAST($1 AS BIGINT)` with an explicit parameter OID.
+The current policy rejects opaque `DECIMAL(p,s)` cast type names on PostgreSQL;
+ParserSQL 1.1.1 also rejects MySQL `CAST(? AS INTEGER)` and `COUNT(DISTINCT ...)`.
+Typed table results support boolean, decimal and blob, with signed and unsigned
+integers, floating point, text and NULL within the supported mappings.
+
+Each native prepared operation is protected by a private read-only transaction,
+including protection against hidden database writes. Engine external access
+remains disabled by default. These controls are not an OS sandbox.
 
 ## One statement per request
 
@@ -62,7 +68,7 @@ The following common discovery commands are intercepted or rewritten:
 - `SHOW TABLES`
 - `SHOW DATABASES`
 - `SHOW SCHEMAS`
-- `SET autocommit=0` and `SET autocommit=1`
+- `SET autocommit=1` when autocommit is already enabled
 - a single `SET NAMES ...` command
 
 Matching is case-insensitive and tolerates normal whitespace and a trailing
@@ -91,9 +97,9 @@ Inherited discovery/configuration guards remain in place.
 
 ## Result metadata and conversion
 
-Numeric, boolean, and binary results carry native type metadata on both endpoints. Values still use
-the text transfer format; this does not add prepared statements or binary
-transfer support.
+The following table describes the simple text-query path. Numeric, boolean and
+binary results carry native type metadata, but values use text transfer. Prepared
+execution uses its protocol binary or negotiated formats and has a narrower type subset.
 
 | DuckDB type | MySQL metadata | PostgreSQL metadata |
 | --- | --- | --- |
@@ -189,6 +195,10 @@ and invalid parameter categories. Unclassified DuckDB errors use `XX000`.
 
 ## Transactions
 
+On the MySQL listener, `SET autocommit=0` is refused (MySQL error 1235 / SQLSTATE
+`0A000`): native implicit transactions are not implemented. `SET autocommit=1`
+is accepted when already enabled.
+
 Text `BEGIN`, `COMMIT`, and `ROLLBACK` commands execute in DuckDB. PostgreSQL
 `ReadyForQuery` reports:
 
@@ -198,7 +208,7 @@ Text `BEGIN`, `COMMIT`, and `ROLLBACK` commands execute in DuckDB. PostgreSQL
 
 ## Current omissions
 
-- No client-visible prepared statements.
+- Prepared execution is limited to the read-only subset described above.
 - No query timeout or `duckdb_interrupt()` policy.
 - No general MySQL/PostgreSQL dialect translation.
 - No structured protocol error when the connection cap rejects a newly
