@@ -7,6 +7,25 @@
 
 namespace embedded {
 namespace {
+struct ExtractedStatementsDeleter {
+    void operator()(duckdb_extracted_statements handle) const noexcept {
+        if (handle) duckdb_destroy_extracted(&handle);
+    }
+};
+using ExtractedStatementsHandle =
+    std::unique_ptr<std::remove_pointer_t<duckdb_extracted_statements>, ExtractedStatementsDeleter>;
+struct LogicalTypeDeleter {
+    void operator()(duckdb_logical_type handle) const noexcept {
+        if (handle) duckdb_destroy_logical_type(&handle);
+    }
+};
+using LogicalTypeHandle = std::unique_ptr<std::remove_pointer_t<duckdb_logical_type>, LogicalTypeDeleter>;
+struct AllocatedTextDeleter {
+    void operator()(const char* text) const noexcept {
+        if (text) duckdb_free(const_cast<char*>(text));
+    }
+};
+using AllocatedTextHandle = std::unique_ptr<const char, AllocatedTextDeleter>;
 Status error(ErrorKind kind, const char* message) { return Error{kind, 0, message ? message : "DuckDB error", {}}; }
 Type map_type(duckdb_logical_type t) {
  Type x; if (!t) return x;
@@ -22,21 +41,42 @@ Type map_type(duckdb_logical_type t) {
  return x;
 }
 // Parse a fixed-point literal without rounding; DuckDB DECIMAL is limited to 38 digits.
-bool decimal_value(const std::string& text, duckdb_decimal& out) {
- size_t i=0; bool neg=false, dot=false, saw_digit=false, significant=false;
- unsigned digits=0, scale=0; unsigned __int128 magnitude=0;
- if (i<text.size() && (text[i]=='-' || text[i]=='+')) neg=text[i++]=='-';
- for (;i<text.size();++i) {
-  char c=text[i]; if (c=='.' && !dot) { dot=true; continue; }
-  if (c<'0'||c>'9') return false;
-  saw_digit=true; if (dot && ++scale>38) return false;
-  if (c!='0') significant=true;
-  if (significant) { if (++digits>38) return false; magnitude=magnitude*10+(c-'0'); }
- }
- if (!saw_digit) return false;
- out.width=std::max<unsigned>({digits,scale,1}); out.scale=scale;
- unsigned __int128 bits=neg ? (~magnitude+1) : magnitude;
- out.value.lower=uint64_t(bits); out.value.upper=int64_t(uint64_t(bits>>64)); return true;
+struct DecimalLiteral {
+    duckdb_decimal value{};
+    // Storage width has a minimum of one even for zero; DECIMAL range checks
+    // must instead use the significant integer digits before the point.
+    unsigned integer_digits = 0;
+};
+bool decimal_value(const std::string& text, DecimalLiteral& out) {
+    size_t i = 0;
+    bool neg = false, dot = false, saw_digit = false, significant = false;
+    unsigned digits = 0, scale = 0, integer_digits = 0;
+    unsigned __int128 magnitude = 0;
+    if (i < text.size() && (text[i] == '-' || text[i] == '+')) neg = text[i++] == '-';
+    for (; i < text.size(); ++i) {
+        char c = text[i];
+        if (c == '.' && !dot) {
+            dot = true;
+            continue;
+        }
+        if (c < '0' || c > '9') return false;
+        saw_digit = true;
+        if (dot && ++scale > 38) return false;
+        if (c != '0') significant = true;
+        if (significant) {
+            if (++digits > 38) return false;
+            if (!dot) ++integer_digits;
+            magnitude = magnitude * 10 + (c - '0');
+        }
+    }
+    if (!saw_digit) return false;
+    out.value.width = std::max<unsigned>({digits, scale, 1});
+    out.value.scale = scale;
+    out.integer_digits = integer_digits;
+    unsigned __int128 bits = neg ? (~magnitude + 1) : magnitude;
+    out.value.value.lower = uint64_t(bits);
+    out.value.value.upper = int64_t(uint64_t(bits >> 64));
+    return true;
 }
 size_t decimal_length(__int128 value, unsigned scale) {
  bool neg=value<0; unsigned __int128 u=neg ? (unsigned __int128)(-(value+1))+1 : (unsigned __int128)value;
@@ -60,21 +100,43 @@ struct DuckDBAdapter::State final : Statement {
 };
 DuckDBAdapter::State* DuckDBAdapter::checked(Statement& s) const noexcept { auto p=dynamic_cast<State*>(&s); return p && p->owner==this ? p : nullptr; }
 Status DuckDBAdapter::prepare(const std::string& sql, std::unique_ptr<Statement>& out) {
- out.reset(); if (!connection_) return error(ErrorKind::internal,"missing connection");
- if (sql.find('\0')!=std::string::npos) return error(ErrorKind::syntax,"embedded NUL in SQL");
- duckdb_extracted_statements extracted=nullptr; auto n=duckdb_extract_statements(connection_,sql.c_str(),&extracted);
- if (n!=1) { std::string msg=n==0 && extracted && duckdb_extract_statements_error(extracted) ? duckdb_extract_statements_error(extracted) : "expected exactly one statement"; if (extracted) duckdb_destroy_extracted(&extracted); return error(n>1?ErrorKind::unsupported:ErrorKind::syntax,msg.c_str()); }
- auto p=std::make_unique<State>(this); auto rc=duckdb_prepare_extracted_statement(connection_,extracted,0,&p->stmt); duckdb_destroy_extracted(&extracted);
- if (rc!=DuckDBSuccess) return error(ErrorKind::engine,duckdb_prepare_error(p->stmt));
- if (duckdb_prepared_statement_type(p->stmt)!=DUCKDB_STATEMENT_TYPE_SELECT) return error(ErrorKind::unsupported,"only native SELECT statements are supported");
- for (idx_t i=1;i<=duckdb_nparams(p->stmt);++i) { auto t=duckdb_param_logical_type(p->stmt,i); p->params.push_back(map_type(t)); if (t) duckdb_destroy_logical_type(&t); }
- for (idx_t i=0;i<duckdb_prepared_statement_column_count(p->stmt);++i) {
-  auto t=duckdb_prepared_statement_column_logical_type(p->stmt,i); auto ty=map_type(t); if (t) duckdb_destroy_logical_type(&t);
-  if (ty.kind==TypeKind::unknown) return error(ErrorKind::unsupported,"unsupported or unresolved result type");
-  auto name=duckdb_prepared_statement_column_name(p->stmt,i); if (!name) return error(ErrorKind::internal,"missing result name");
-  p->columns.push_back({name,ty}); p->native_types.push_back(duckdb_prepared_statement_column_type(p->stmt,i)); duckdb_free((void*)name);
- }
- out=std::move(p); return {};
+    out.reset();
+    if (!connection_) return error(ErrorKind::internal, "missing connection");
+    if (sql.find('\0') != std::string::npos) return error(ErrorKind::syntax, "embedded NUL in SQL");
+    duckdb_extracted_statements raw_extracted = nullptr;
+    const auto statement_count = duckdb_extract_statements(connection_, sql.c_str(), &raw_extracted);
+    ExtractedStatementsHandle extracted(raw_extracted);
+    if (statement_count != 1) {
+        std::string message = "expected exactly one statement";
+        if (statement_count == 0 && extracted) {
+            const char* extract_error = duckdb_extract_statements_error(extracted.get());
+            if (extract_error) message = extract_error;
+        }
+        return error(statement_count > 1 ? ErrorKind::unsupported : ErrorKind::syntax, message.c_str());
+    }
+    auto p = std::make_unique<State>(this);
+    const auto rc = duckdb_prepare_extracted_statement(connection_, extracted.get(), 0, &p->stmt);
+    if (rc != DuckDBSuccess) return error(ErrorKind::engine, duckdb_prepare_error(p->stmt));
+    if (duckdb_prepared_statement_type(p->stmt) != DUCKDB_STATEMENT_TYPE_SELECT) {
+        return error(ErrorKind::unsupported, "only native SELECT statements are supported");
+    }
+    for (idx_t i = 1; i <= duckdb_nparams(p->stmt); ++i) {
+        LogicalTypeHandle logical(duckdb_param_logical_type(p->stmt, i));
+        p->params.push_back(map_type(logical.get()));
+    }
+    for (idx_t i = 0; i < duckdb_prepared_statement_column_count(p->stmt); ++i) {
+        LogicalTypeHandle logical(duckdb_prepared_statement_column_logical_type(p->stmt, i));
+        const auto type = map_type(logical.get());
+        if (type.kind == TypeKind::unknown) {
+            return error(ErrorKind::unsupported, "unsupported or unresolved result type");
+        }
+        AllocatedTextHandle name(duckdb_prepared_statement_column_name(p->stmt, i));
+        if (!name) return error(ErrorKind::internal, "missing result name");
+        p->columns.push_back({name.get(), type});
+        p->native_types.push_back(duckdb_prepared_statement_column_type(p->stmt, i));
+    }
+    out = std::move(p);
+    return {};
 }
 Status DuckDBAdapter::describe_parameters(Statement& s,std::vector<Type>& out) { auto p=checked(s); if (!p) return error(ErrorKind::internal,"foreign statement"); out=p->params; return {}; }
 Status DuckDBAdapter::describe_parameter_positions(Statement& statement,
@@ -117,37 +179,77 @@ Status DuckDBAdapter::describe_parameter_positions(Statement& statement,
 }
 Status DuckDBAdapter::describe_result(Statement& s,std::vector<Column>& out) { auto p=checked(s); if (!p) return error(ErrorKind::internal,"foreign statement"); out=p->columns; return {}; }
 Status DuckDBAdapter::bind(Statement& s,const std::vector<Value>& values) {
- auto p=checked(s); if (!p) return error(ErrorKind::internal,"foreign statement"); p->bound=false;
- if (values.size()!=p->params.size()) return error(ErrorKind::invalid_parameter,"parameter count mismatch");
- if (duckdb_clear_bindings(p->stmt)!=DuckDBSuccess) return error(ErrorKind::engine,"clear bindings failed");
- for (size_t i=0;i<values.size();++i) {
-  auto rc=std::visit([&](const auto& v)->duckdb_state { using T=std::decay_t<decltype(v)>; auto idx=i+1;
-   if constexpr(std::is_same_v<T,std::monostate>) return duckdb_bind_null(p->stmt,idx);
-   else if constexpr(std::is_same_v<T,int64_t>) return duckdb_bind_int64(p->stmt,idx,v);
-   else if constexpr(std::is_same_v<T,uint64_t>) return duckdb_bind_uint64(p->stmt,idx,v);
-   else if constexpr(std::is_same_v<T,double>) return duckdb_bind_double(p->stmt,idx,v);
-   else if constexpr(std::is_same_v<T,Text>) return duckdb_bind_varchar_length(p->stmt,idx,v.bytes.data(),v.bytes.size());
-   else if constexpr(std::is_same_v<T,Bytes>) return duckdb_bind_blob(p->stmt,idx,v.bytes.empty()?"":reinterpret_cast<const char*>(v.bytes.data()),v.bytes.size());
-   else { duckdb_decimal d{}; if (!decimal_value(v.exact,d)) return DuckDBError;
-    const auto& target=p->params[i]; if (target.kind==TypeKind::decimal && (d.scale>target.scale || d.width-d.scale>target.precision-target.scale)) return DuckDBError;
-    return duckdb_bind_decimal(p->stmt,idx,d); }
-  },values[i]);
-  if (rc!=DuckDBSuccess) { duckdb_clear_bindings(p->stmt); return error(ErrorKind::invalid_parameter,"unsupported or invalid parameter"); }
- }
- p->bound=true; return {};
+    auto p = checked(s);
+    if (!p) return error(ErrorKind::internal, "foreign statement");
+    p->bound = false;
+    if (values.size() != p->params.size()) {
+        return error(ErrorKind::invalid_parameter, "parameter count mismatch");
+    }
+    if (duckdb_clear_bindings(p->stmt) != DuckDBSuccess) {
+        return error(ErrorKind::engine, "clear bindings failed");
+    }
+    for (size_t i = 0; i < values.size(); ++i) {
+        auto rc = std::visit([&](const auto& v) -> duckdb_state {
+            using T = std::decay_t<decltype(v)>;
+            auto idx = i + 1;
+            if constexpr (std::is_same_v<T, std::monostate>) return duckdb_bind_null(p->stmt, idx);
+            else if constexpr (std::is_same_v<T, int64_t>) return duckdb_bind_int64(p->stmt, idx, v);
+            else if constexpr (std::is_same_v<T, uint64_t>) return duckdb_bind_uint64(p->stmt, idx, v);
+            else if constexpr (std::is_same_v<T, double>) return duckdb_bind_double(p->stmt, idx, v);
+            else if constexpr (std::is_same_v<T, Text>) return duckdb_bind_varchar_length(p->stmt, idx, v.bytes.data(), v.bytes.size());
+            else if constexpr (std::is_same_v<T, Bytes>) return duckdb_bind_blob(p->stmt, idx, v.bytes.empty() ? "" : reinterpret_cast<const char*>(v.bytes.data()), v.bytes.size());
+            else {
+                DecimalLiteral literal;
+                if (!decimal_value(v.exact, literal)) return DuckDBError;
+                const auto& target = p->params[i];
+                const int integer_capacity = target.precision - target.scale;
+                if (target.kind == TypeKind::decimal &&
+                    (literal.value.scale > target.scale ||
+                     integer_capacity < 0 ||
+                     literal.integer_digits > static_cast<unsigned>(integer_capacity))) {
+                    return DuckDBError;
+                }
+                return duckdb_bind_decimal(p->stmt, idx, literal.value);
+            }
+        }, values[i]);
+        if (rc != DuckDBSuccess) {
+            duckdb_clear_bindings(p->stmt);
+            return error(ErrorKind::invalid_parameter, "unsupported or invalid parameter");
+        }
+    }
+    p->bound = true;
+    return {};
 }
 Status DuckDBAdapter::execute(Statement& s,ExecInfo& info) {
- auto p=checked(s); info={}; if (!p) return error(ErrorKind::internal,"foreign statement"); if (!p->bound && !p->params.empty()) return error(ErrorKind::invalid_parameter,"parameters not bound");
- if (p->executed) return error(ErrorKind::internal,"reset required");
- p->executed=true; p->has_result=true;
- if (duckdb_execute_prepared(p->stmt,&p->result)!=DuckDBSuccess) return error(ErrorKind::engine,duckdb_result_error(&p->result));
- if (duckdb_column_count(&p->result)!=p->columns.size()) return error(ErrorKind::schema_changed,"result column count changed");
- for (idx_t i=0;i<p->columns.size();++i) {
-  auto t=duckdb_column_logical_type(&p->result,i); auto ty=map_type(t); if (t) duckdb_destroy_logical_type(&t);
-  const char* name=duckdb_column_name(&p->result,i); auto expected=p->columns[i].type;
-  if (!name || p->columns[i].name!=name || ty.kind!=expected.kind || ty.precision!=expected.precision || ty.scale!=expected.scale || duckdb_column_type(&p->result,i)!=p->native_types[i]) return error(ErrorKind::schema_changed,"result metadata changed");
- }
- p->ready=true; info.has_result=true; return {};
+    auto p = checked(s);
+    info = {};
+    if (!p) return error(ErrorKind::internal, "foreign statement");
+    if (!p->bound && !p->params.empty()) {
+        return error(ErrorKind::invalid_parameter, "parameters not bound");
+    }
+    if (p->executed) return error(ErrorKind::internal, "reset required");
+    p->executed = true;
+    p->has_result = true;
+    if (duckdb_execute_prepared(p->stmt, &p->result) != DuckDBSuccess) {
+        return error(ErrorKind::engine, duckdb_result_error(&p->result));
+    }
+    if (duckdb_column_count(&p->result) != p->columns.size()) {
+        return error(ErrorKind::schema_changed, "result column count changed");
+    }
+    for (idx_t i = 0; i < p->columns.size(); ++i) {
+        LogicalTypeHandle logical(duckdb_column_logical_type(&p->result, i));
+        const auto type = map_type(logical.get());
+        const char* name = duckdb_column_name(&p->result, i);
+        const auto expected = p->columns[i].type;
+        if (!name || p->columns[i].name != name || type.kind != expected.kind ||
+            type.precision != expected.precision || type.scale != expected.scale ||
+            duckdb_column_type(&p->result, i) != p->native_types[i]) {
+            return error(ErrorKind::schema_changed, "result metadata changed");
+        }
+    }
+    p->ready = true;
+    info.has_result = true;
+    return {};
 }
 Status DuckDBAdapter::fetch(Statement& s,Row& row,bool& done,size_t budget) {
  auto p=checked(s); row.clear(); done=false; if (!p || !p->has_result || !p->ready) return error(ErrorKind::internal,"statement not executed");

@@ -59,6 +59,13 @@ int main() {
  check(!a.execute(*s,info),"execute fractional decimals");
  check(!a.fetch(*s,row,done,100) && std::get<Decimal>(row[0]).exact=="0.1234" && std::get<Decimal>(row[1]).exact=="-0.1234" && std::get<Decimal>(row[2]).exact=="0.0001","decimal fractional precision ignores leading zeroes");
  a.finalize(std::move(s));
+ check(!a.prepare("SELECT ?::DECIMAL(4,4), ?::DECIMAL(4,4), ?::DECIMAL(4,4), ?::DECIMAL(4,4), ?::DECIMAL(4,4)",s),"prepare fractional zero and boundaries");
+ check(!a.bind(*s,{Decimal{"0"},Decimal{"-0"},Decimal{"0.0000"},Decimal{"0.0001"},Decimal{"-0.9999"}}),"bind fractional zero and boundaries");
+ check(!a.execute(*s,info),"execute fractional zero and boundaries");
+ check(!a.fetch(*s,row,done,100) && std::get<Decimal>(row[0]).exact=="0.0000" && std::get<Decimal>(row[1]).exact=="0.0000" && std::get<Decimal>(row[2]).exact=="0.0000" && std::get<Decimal>(row[3]).exact=="0.0001" && std::get<Decimal>(row[4]).exact=="-0.9999","fractional zero preserves fixed scale");
+ check(!a.reset(*s) && bool(a.bind(*s,{Decimal{"0"},Decimal{"-0"},Decimal{"0.0000"},Decimal{"0.0001"},Decimal{"1"}})),"fractional overflow refused");
+ check(!a.reset(*s) && bool(a.bind(*s,{Decimal{"0"},Decimal{"-0"},Decimal{"0.0000"},Decimal{"0.0001"},Decimal{"-1"}})),"negative fractional overflow refused");
+ a.finalize(std::move(s));
  check(!a.prepare("SELECT ?::TINYINT",s) && !a.bind(*s,{int64_t(1000)}) && bool(a.execute(*s,info)) && !a.reset(*s) && !a.bind(*s,{int64_t(7)}) && !a.execute(*s,info) && !a.fetch(*s,row,done,8) && std::get<int64_t>(row[0])==7,"execution failure reset and recovery");
  a.finalize(std::move(s));
  check(bool(a.prepare("SELECT 1::HUGEINT",s)) && !s,"hugeint rejected");
