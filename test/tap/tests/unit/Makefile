@@ -808,6 +808,7 @@ UNIT_TESTS += \
 	test_duckdb_plugin_load-t \
 	duckdb_config_unit-t \
 	duckdb_mysql_select_compat_unit-t \
+	duckdb_mysql_select_metadata_unit-t \
 	duckdb_replica_unit-t \
 	duckdb_replica_storage_unit-t \
 	duckdb_engine_unit-t \
@@ -1208,6 +1209,8 @@ duckdb_engine_unit-t duckdb_result_unit-t duckdb_session_unit-t duckdb_listener_
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(PARSERSQL_IDIR) $(STDCPP) -O0 -ggdb \
 		$(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a -lpthread -o $@
 
+duckdb_mysql_select_metadata_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
+
 duckdb_prepared_adapter_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
 
 DUCKDB_LINK_GROUP_START :=
@@ -1229,7 +1232,13 @@ duckdb_engine_unit-t: duckdb_engine_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/s
 
 duckdb_prepared_adapter_unit-t: duckdb_prepared_adapter_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_adapter.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(DUCKDB_IDIR) $(STDCPP) -O0 -ggdb \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(DUCKDB_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) -lpthread -ldl -lm -o $@
+
+# Metadata API test; intentionally independent of the SQL parser.
+duckdb_mysql_select_metadata_unit-t: duckdb_mysql_select_metadata_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_metadata.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(DUCKDB_IDIR) $(STDCPP) -O0 -ggdb \
 		$(WGCOV) $(LWGCOV) $(WASAN) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) -lpthread -ldl -lm -o $@
 
 duckdb_result_unit-t: duckdb_result_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)

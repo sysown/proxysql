@@ -497,3 +497,31 @@ commit `24bae10`. The full engine/client-linked suite was not run in that clone.
 ProxySQL still uses the original vendored 1.1.1 source plus its existing UTF-8
 patch. The characterization expectations above intentionally describe that
 baseline; no production translation is enabled by this PR or this document.
+
+## Native metadata prerequisite (2026-11-16)
+
+The read-only `duckdb_mysql_select_metadata` component provides facts for the
+future translator through DuckDB's table-description C API. It executes no user
+SQL, caches no metadata, and requires the caller's connection ownership guard.
+It does not enable SQL translation or bypass the ParserSQL dependency gate.
+
+| Fact | Available evidence | Translation boundary |
+| --- | --- | --- |
+| Column names and logical types | Native catalog names/type IDs, decimal width and scale | Native facts do not establish original MySQL types or collations. |
+| Catalog/schema/table identity | Requested identifiers; explicit versus default-connection catalog provenance | Request spelling is not a canonical resolved name. |
+| Nullability and MySQL provenance | Explicitly unknown | Do not infer nullability, source type or collation from DuckDB storage types. |
+| Client encoding | MySQL handshake and supported `SET NAMES`/`SET CHARACTER SET` tracking | A client encoding is not a column's source collation. |
+| Effective MySQL modes and namespace | No general MySQL semantics established by plugin compatibility acknowledgements | Generic defaults, `SELECT DATABASE()` and `COM_INIT_DB` acknowledgements are insufficient provenance. |
+
+Each lookup returns owned data with at most 4,096 columns and an 8 MiB logical
+payload cap, further constrained by the caller's remaining budget. Native error
+diagnostics also respect that budget and have a separate 4 KiB maximum. Invalid
+requests, native lookup errors and exhausted budgets remain distinct; native
+error messages are not parsed to guess whether a relation exists. Fixed container
+overhead and native engine allocations are outside this logical payload budget.
+
+The component's 26 TAP checks cover odd/Unicode identifiers, physical types,
+unknown provenance, request spelling versus native column spelling, missing
+relations, malformed names, budget/column limits, fresh metadata after DDL and
+preservation of an existing client transaction. The canonical static build and
+ASan/UBSan run pass with the DuckDB library itself uninstrumented.

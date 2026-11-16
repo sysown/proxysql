@@ -88,6 +88,11 @@ The seven live acceptance clients now run with isolated owned child processes
 and are registered in tier-4 duckdb-e2e-g1. All seven and the full repository CI
 lint suite pass locally, including explicit TAP bailout cleanup verification.
 
+A read-only native catalog metadata prerequisite now exposes owned column facts,
+explicit unknown MySQL provenance and bounded diagnostics without executing user
+SQL. Its 26 checks pass in the canonical static build and ASan/UBSan. It does not
+enable translation.
+
 Next: complete scoped analytical SQL translation after
 the ParserSQL dependency update. Admin extension and view/trigger authorization
 must be proved rather than inherited from the SQLite3 listener policy. Core
