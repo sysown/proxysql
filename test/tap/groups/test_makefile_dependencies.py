@@ -2,6 +2,7 @@
 """Regression contracts for TAP Makefile dependency boundaries."""
 
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -295,6 +296,50 @@ class MakefileDependencyTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertNotIn(f"TASK4_PROBE={probe}", result.stdout)
                 self.assertIn("startup_tls_ownership_unit-t.cpp", result.stdout)
+
+    def test_duckdb_legacy_units_link_their_own_sources_and_support(self):
+        """Direct listener and session builds must carry their implementation dependencies."""
+        mysql_set = "duckdb_mysql_set.cpp"
+        provider = (
+            "duckdb_prepared_adapter.cpp",
+            "duckdb_prepared_provider.cpp",
+            "duckdb_prepared_policy.cpp",
+        )
+        targets = {
+            "duckdb_listener_unit-t": ("duckdb_listener.cpp", "duckdb_session.cpp", mysql_set, *provider),
+            "duckdb_admin_schema_unit-t": ("duckdb_listener.cpp", "duckdb_session.cpp", mysql_set, *provider),
+            "duckdb_session_unit-t": ("duckdb_session.cpp", mysql_set),
+            "duckdb_prepared_policy_unit-t": ("duckdb_prepared_policy.cpp",),
+        }
+        for target, support_sources in targets.items():
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                (Path(tmp) / "libsqlparser.a").touch()
+                result = subprocess.run(
+                    [
+                        "make", "--no-print-directory", "-B", "-n", "-p",
+                        "-C", str(TAP_TESTS_DIR / "unit"), "MAKE=true",
+                        "PROXYSQL40=1", "CXX=duckdb-test-cxx", f"PARSERSQL_LDIR={tmp}", target,
+                    ],
+                    cwd=ROOT, text=True, capture_output=True, check=False, timeout=30,
+                )
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 0, output)
+                lines = result.stdout.replace("\\\n", " ").splitlines()
+                compile_line = self.required_output_line(
+                    lines, lambda line: line.startswith("duckdb-test-cxx ") and f"-o {target}" in line,
+                    f"compile command for {target}", output,
+                )
+                command = shlex.split(compile_line)
+                self.assertEqual(command[1], f"{target}.cpp", compile_line)
+                dependency_line = self.required_output_line(
+                    lines, lambda line: line.startswith(f"{target}: {target}.cpp "),
+                    f"prerequisites for {target}", output,
+                )
+                prerequisites = shlex.split(dependency_line.split(":", 1)[1])
+                for source in support_sources:
+                    with self.subTest(source=source):
+                        self.assertEqual(sum(Path(arg).name == source for arg in command), 1, compile_line)
+                        self.assertEqual(sum(Path(arg).name == source for arg in prerequisites), 1, dependency_line)
 
     def test_mysqlx_bridge_targets_share_one_unit_submake(self):
         result = subprocess.run(
