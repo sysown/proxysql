@@ -26,6 +26,7 @@
  */
 
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -65,6 +66,9 @@ static const long long MAX_ROWS = 4000000;
 // A probe on the streaming session's thread waited for the whole stream before the fix.
 static const long MAX_PROBE_MS = 1000;
 static const int PROBES = 8;
+// A probe waits at most this for its answer, so the main loop always gets back to the writer deadline.
+// Longer than the stream, so a probe held for the whole stream is still measured and fails MAX_PROBE_MS.
+static const int PROBE_WAIT_S = STREAM_SECONDS + 5;
 // A session whose client vanished is gone within this.
 static const int GONE_S = 5;
 static const double MAX_IDLE_CPU = 30;
@@ -101,6 +105,25 @@ static std::string queryOneValue(PGconn* c, const std::string& q) {
 		out = PQgetvalue(res, 0, 0);
 	PQclear(res);
 	return out;
+}
+
+// SELECT 1 on a probe, waiting at most PROBE_WAIT_S: PQexec() would wait for as long as ProxySQL does not
+// answer. A probe that timed out still has its query pending, so every later call on it fails at once.
+static bool probeSelect1(PGconn* c) {
+	if (!PQsendQuery(c, "SELECT 1")) return false;
+	const auto deadline = Clock::now() + std::chrono::seconds(PROBE_WAIT_S);
+	bool one = false;
+	for (;;) {
+		while (PQisBusy(c)) {
+			const long left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+			struct pollfd pfd = { PQsocket(c), POLLIN, 0 };
+			if (left <= 0 || poll(&pfd, 1, (int)left) <= 0 || !PQconsumeInput(c)) return false;
+		}
+		PGresult* r = PQgetResult(c);
+		if (r == nullptr) return one;
+		one = one || (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && std::string(PQgetvalue(r, 0, 0)) == "1");
+		PQclear(r);
+	}
 }
 
 static long ms_since(Clock::time_point t) {
@@ -237,7 +260,7 @@ static void stream_case(const std::string& what, PGconn* setup) {
 		}
 		for (auto& p : probes) {
 			const auto t0 = Clock::now();
-			if (queryOneValue(p.get(), "SELECT 1") != "1") probe_failures++;
+			if (!probeSelect1(p.get())) probe_failures++;
 			max_probe_ms = std::max(max_probe_ms, ms_since(t0));
 			probe_queries++;
 		}
