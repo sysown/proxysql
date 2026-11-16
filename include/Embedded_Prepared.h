@@ -13,6 +13,7 @@ public:
 
     Status prepare(const std::string&, uint64_t& id);
     Status describe(uint64_t, std::vector<Type>&, std::vector<Column>&) const;
+    Status describe_parameter_positions(uint64_t, std::vector<uint32_t>&);
     Status execute(uint64_t, const std::vector<Value>&, ExecInfo&);
     Status fetch(uint64_t, Row&, bool& done);
     Status reset(uint64_t);

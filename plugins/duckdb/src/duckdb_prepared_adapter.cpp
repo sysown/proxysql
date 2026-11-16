@@ -77,6 +77,44 @@ Status DuckDBAdapter::prepare(const std::string& sql, std::unique_ptr<Statement>
  out=std::move(p); return {};
 }
 Status DuckDBAdapter::describe_parameters(Statement& s,std::vector<Type>& out) { auto p=checked(s); if (!p) return error(ErrorKind::internal,"foreign statement"); out=p->params; return {}; }
+Status DuckDBAdapter::describe_parameter_positions(Statement& statement,
+                                                   std::vector<uint32_t>& out) {
+    out.clear();
+    auto* prepared = checked(statement);
+    if (!prepared) return error(ErrorKind::internal, "foreign statement");
+    std::vector<uint32_t> positions;
+    for (idx_t i = 1; i <= duckdb_nparams(prepared->stmt); ++i) {
+        const char* name = duckdb_parameter_name(prepared->stmt, i);
+        if (!name) return error(ErrorKind::engine, "missing parameter name");
+        auto free_name = [](const char* value) {
+            duckdb_free(const_cast<char*>(value));
+        };
+        std::unique_ptr<const char, decltype(free_name)> owned(name, free_name);
+        const char* digits = name;
+        if (*digits == '$') ++digits;
+        bool numeric = *digits != '\0';
+        for (const char* c = digits; *c; ++c) {
+            if (*c < '0' || *c > '9') {
+                numeric = false;
+                break;
+            }
+        }
+        uint32_t value = 0;
+        if (numeric) {
+            for (const char* c = digits; *c; ++c) {
+                const unsigned digit = *c - '0';
+                if (value > (std::numeric_limits<uint32_t>::max() - digit) / 10)
+                    return error(ErrorKind::range, "parameter position overflow");
+                value = value * 10 + digit;
+            }
+            if (!value)
+                return error(ErrorKind::invalid_parameter, "zero parameter position");
+        }
+        positions.push_back(value);
+    }
+    out = std::move(positions);
+    return {};
+}
 Status DuckDBAdapter::describe_result(Statement& s,std::vector<Column>& out) { auto p=checked(s); if (!p) return error(ErrorKind::internal,"foreign statement"); out=p->columns; return {}; }
 Status DuckDBAdapter::bind(Statement& s,const std::vector<Value>& values) {
  auto p=checked(s); if (!p) return error(ErrorKind::internal,"foreign statement"); p->bound=false;

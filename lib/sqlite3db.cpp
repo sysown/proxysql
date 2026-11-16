@@ -1197,6 +1197,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_bind_text = NULL;
 	proxy_sqlite3_bind_blob = NULL;
 	proxy_sqlite3_bind_parameter_count = NULL;
+	proxy_sqlite3_bind_parameter_name = NULL;
 	proxy_sqlite3_column_name = NULL;
 	proxy_sqlite3_column_blob = NULL;
 	proxy_sqlite3_column_decltype = NULL;
@@ -1278,6 +1279,11 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 			// An older SQLite plugin may not expose this optional capability.
 			// Preserve a pointer supplied by its loader and consume optional lookup
 			// errors so they cannot contaminate later required symbol checks.
+			if (!proxy_sqlite3_bind_parameter_name) {
+				dlerror();
+				proxy_sqlite3_bind_parameter_name = reinterpret_cast<decltype(proxy_sqlite3_bind_parameter_name)>(dlsym(handle_sqlite3_plugin, "sqlite3_bind_parameter_name"));
+				dlerror();
+			}
 			if (!proxy_sqlite3_set_authorizer) {
 				dlerror();
 				proxy_sqlite3_set_authorizer = reinterpret_cast<decltype(proxy_sqlite3_set_authorizer)>(dlsym(handle_sqlite3_plugin, "sqlite3_set_authorizer"));
@@ -1298,6 +1304,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_bind_text = sqlite3_bind_text;
 		proxy_sqlite3_bind_blob = sqlite3_bind_blob;
 		proxy_sqlite3_bind_parameter_count = sqlite3_bind_parameter_count;
+		proxy_sqlite3_bind_parameter_name = sqlite3_bind_parameter_name;
 		proxy_sqlite3_column_name = sqlite3_column_name;
 		proxy_sqlite3_column_blob = sqlite3_column_blob;
 		proxy_sqlite3_column_decltype = sqlite3_column_decltype;

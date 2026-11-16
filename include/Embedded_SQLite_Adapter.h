@@ -107,6 +107,7 @@ public:
     Status fetch(Statement& statement, Row& row, bool& done, size_t budget) override;
     Status reset(Statement& statement) override;
     void finalize(std::unique_ptr<Statement> statement) noexcept override;
+    Status describe_parameter_positions(Statement&, std::vector<uint32_t>&) override;
 
     sqlite3* connection() const noexcept { return connection_; }
 

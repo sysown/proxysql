@@ -18,6 +18,7 @@ public:
  DuckDBAdapter& operator=(const DuckDBAdapter&) = delete;
  Status prepare(const std::string&, std::unique_ptr<Statement>&) override;
  Status describe_parameters(Statement&, std::vector<Type>&) override;
+ Status describe_parameter_positions(Statement&, std::vector<uint32_t>&) override;
  Status describe_result(Statement&, std::vector<Column>&) override;
  Status bind(Statement&, const std::vector<Value>&) override;
  Status execute(Statement&, ExecInfo&) override;

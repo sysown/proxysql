@@ -175,3 +175,36 @@ chunks, reset and cached-type error recovery against the SQLite listener. SQLite
 continues to advertise its documented binary VAR_STRING dynamic metadata; engine
 error codes and the client call at which a buffered-result error appears need not
 match MySQL's streaming behavior.
+
+
+## PostgreSQL codec prerequisites
+
+The internal PostgreSQL datum and result codecs are implemented separately from
+packet framing. Listener registration and the extended-query controller are still
+pending; these helpers alone do not enable PostgreSQL prepared execution.
+
+Parameters support INT2/INT4/INT8, FLOAT4/FLOAT8, UTF-8 TEXT/VARCHAR/BPCHAR and BYTEA
+in text and binary formats. Finite fixed-point NUMERIC is accepted in text format
+as an exact Decimal. Other NUMERIC forms, binary NUMERIC, booleans, temporals and
+other OIDs return `0A000`. Invalid UTF-8 and embedded text NUL are refused;
+BYTEA preserves arbitrary bytes, empty values and NULL distinctly. Integer text
+includes PostgreSQL's base prefixes and digit separators. Floating-point parsing
+uses locale-independent conversion. Each datum has an explicit payload budget.
+
+Result metadata maps signed integers to INT8, doubles to FLOAT8, text and dynamic
+values to TEXT, bytes to BYTEA, and exact decimal/unsigned values to NUMERIC.
+Binary NUMERIC is explicitly refused during format negotiation. A dynamic TEXT
+column cannot represent arbitrary BLOB bytes and refuses them. Field encoders
+produce payloads only; the frontend must enforce signed 32-bit framing lengths
+and aggregate response limits.
+
+Native parameter-position metadata maps each engine bind slot to an original
+positive `$n` position without rewriting SQL. SQLite uses native slot encounter
+order; DuckDB reports its native numeric identities. Unknown identities remain
+zero and must be refused by the PostgreSQL frontend. The optional SQLite symbol
+is not required for existing MySQL prepared execution.
+
+Independent validation on 2026-11-16 passed 298 parameter-codec assertions, 39
+result-codec assertions, 31 SQLite position assertions and 55 native DuckDB
+adapter assertions. Both PostgreSQL codecs also passed ASan/UBSan. These are
+component checks; they do not substitute for pending real libpq endpoint tests.

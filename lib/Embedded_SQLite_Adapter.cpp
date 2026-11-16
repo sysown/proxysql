@@ -2,6 +2,7 @@
 
 #include "sqlite3db.h"
 
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -200,6 +201,41 @@ Status SQLiteAdapter::describe_parameters(Statement& statement, std::vector<Type
     StatementState* state = checked(statement);
     if (state == nullptr) return affinity_error();
     out.assign(static_cast<size_t>(state->parameter_count), Type{});
+    return {};
+}
+
+Status SQLiteAdapter::describe_parameter_positions(Statement& statement, std::vector<uint32_t>& out) {
+    out.clear();
+    StatementState* state = checked(statement);
+    if (!state) return affinity_error();
+    if (!proxy_sqlite3_bind_parameter_count)
+        return make_error(ErrorKind::internal, 0, "bind parameter count symbol is unavailable");
+    const int count = proxy_sqlite3_bind_parameter_count(state->stmt);
+    if (count != state->parameter_count)
+        return make_error(ErrorKind::schema_changed, 0, "native parameter count changed");
+    if (!count) return {};
+    if (!proxy_sqlite3_bind_parameter_name)
+        return make_error(ErrorKind::unsupported, 0, "bind parameter names unavailable");
+    std::vector<uint32_t> positions;
+    positions.reserve(static_cast<size_t>(count));
+    for (int i = 1; i <= count; ++i) {
+        const char* name = proxy_sqlite3_bind_parameter_name(state->stmt, i);
+        uint32_t position = 0;
+        if (name && name[0] == '$' && name[1]) {
+            std::string_view digits(name + 1);
+            bool numeric = true;
+            for (char c : digits) if (c < '0' || c > '9') { numeric = false; break; }
+            if (numeric) {
+                auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), position);
+                if (parsed.ec == std::errc::result_out_of_range)
+                    return make_error(ErrorKind::range, 0, "parameter position out of range");
+                if (parsed.ec != std::errc{} || position == 0)
+                    return make_error(ErrorKind::invalid_parameter, 0, "invalid parameter position");
+            }
+        }
+        positions.push_back(position);
+    }
+    out = std::move(positions);
     return {};
 }
 

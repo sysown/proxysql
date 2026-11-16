@@ -20,6 +20,7 @@ int (*proxy_sqlite3_bind_null)(sqlite3_stmt*, int) = sqlite3_bind_null;
 int (*proxy_sqlite3_bind_text)(sqlite3_stmt*,int,const char*,int,void(*)(void*)) = sqlite3_bind_text;
 int (*proxy_sqlite3_bind_blob)(sqlite3_stmt*, int, const void*, int, void(*)(void*)) = sqlite3_bind_blob;
 int (*proxy_sqlite3_bind_parameter_count)(sqlite3_stmt*) = sqlite3_bind_parameter_count;
+const char* (*proxy_sqlite3_bind_parameter_name)(sqlite3_stmt*, int) = sqlite3_bind_parameter_name;
 const char *(*proxy_sqlite3_column_name)(sqlite3_stmt*, int) = sqlite3_column_name;
 const void *(*proxy_sqlite3_column_blob)(sqlite3_stmt*, int) = sqlite3_column_blob;
 const char *(*proxy_sqlite3_column_decltype)(sqlite3_stmt*, int) = sqlite3_column_decltype;

@@ -61,6 +61,18 @@ Status Session::describe(uint64_t id, std::vector<Type>& parameters,
     return {};
 }
 
+Status Session::describe_parameter_positions(uint64_t id, std::vector<uint32_t>& out) {
+    out.clear();
+    auto it = entries_.find(id);
+    if (it == entries_.end()) return error(ErrorKind::invalid_parameter, "unknown statement");
+    std::vector<uint32_t> positions;
+    if (auto err = adapter_.describe_parameter_positions(*it->second.handle, positions)) return err;
+    if (positions.size() != it->second.parameters.size())
+        return error(ErrorKind::schema_changed, "native parameter count changed");
+    out = std::move(positions);
+    return {};
+}
+
 Status Session::execute(uint64_t id, const std::vector<Value>& values, ExecInfo& info) {
     info = {};
     auto it = entries_.find(id);

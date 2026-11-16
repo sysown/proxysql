@@ -10,6 +10,26 @@ int main() {
  duckdb_database db; duckdb_connection c; if(duckdb_open(nullptr,&db)!=DuckDBSuccess || duckdb_connect(db,&c)!=DuckDBSuccess) return 1;
  {
  DuckDBAdapter a(c); std::unique_ptr<Statement> s; std::vector<Column> cols; std::vector<Type> params; ExecInfo info; Row row; bool done=false;
+ std::vector<uint32_t> positions; Adapter& base=a;
+ check(!a.prepare("SELECT $2::BIGINT AS second, $1::BIGINT AS first",s),"prepare reversed numbered parameters");
+ check(!base.describe_parameter_positions(*s,positions) && positions==std::vector<uint32_t>({1,2}),"native numbered positions follow bind slots");
+ std::vector<Value> client{int64_t(11),int64_t(22)}, native;
+ for (auto pos:positions) if (pos && pos<=client.size()) native.push_back(client[pos-1]);
+ check(!a.bind(*s,native) && !a.execute(*s,info) && !a.fetch(*s,row,done,16) && std::get<int64_t>(row[0])==22 && std::get<int64_t>(row[1])==11,"positions map client bindings to reversed output");
+ check(!a.reset(*s) && !base.describe_parameter_positions(*s,positions) && positions==std::vector<uint32_t>({1,2}),"reset retains positions");
+ DuckDBAdapter other(c); positions={99}; check(bool(other.describe_parameter_positions(*s,positions)) && positions.empty(),"foreign owner clears positions");
+ struct Foreign final : Statement {} foreign; positions={99}; check(bool(base.describe_parameter_positions(foreign,positions)) && positions.empty(),"foreign handle clears positions");
+ a.finalize(std::move(s));
+ check(!a.prepare("SELECT $1::BIGINT, $1::BIGINT",s) && !base.describe_parameter_positions(*s,positions) && positions==std::vector<uint32_t>({1}),"repeated numbered parameter shares slot"); a.finalize(std::move(s));
+ check(!a.prepare("SELECT ?::BIGINT",s) && !base.describe_parameter_positions(*s,positions) && positions==std::vector<uint32_t>({1}),"anonymous parameter engine name"); a.finalize(std::move(s));
+ check(!a.prepare("SELECT $foo::BIGINT",s) && !base.describe_parameter_positions(*s,positions) && positions==std::vector<uint32_t>({0}),"named parameter is unknown position"); a.finalize(std::move(s));
+ check(!a.prepare("SELECT $001::BIGINT",s) && !base.describe_parameter_positions(*s,positions) && positions==std::vector<uint32_t>({1}),"leading zero normalized by engine"); a.finalize(std::move(s));
+ check(!a.prepare("SELECT 1::BIGINT",s) && !base.describe_parameter_positions(*s,positions) && positions.empty(),"zero parameters"); a.finalize(std::move(s));
+ check(query(c,"CREATE SEQUENCE metadata_probe START 1") && !a.prepare("SELECT nextval('metadata_probe')::BIGINT, $1::BIGINT",s) && !base.describe_parameter_positions(*s,positions),"describe side effect fixture");
+ duckdb_result probe{}; auto probe_rc=duckdb_query(c,"SELECT nextval('metadata_probe')",&probe);
+ check(probe_rc==DuckDBSuccess && duckdb_value_int64(&probe,0,0)==1,"describing positions does not execute"); duckdb_destroy_result(&probe); a.finalize(std::move(s));
+ check(bool(a.prepare("SELECT $0::BIGINT",s)),"zero parameter rejected by engine");
+ check(!a.prepare("SELECT $4294967296::BIGINT",s) && (positions={99}, bool(base.describe_parameter_positions(*s,positions))) && positions.empty(),"unavailable oversized parameter metadata rejected"); a.finalize(std::move(s));
  check(!a.prepare("SELECT CAST(? AS BIGINT) AS x",s),"prepare select");
  check(!a.describe_parameters(*s,params) && params.size()==1 && params[0].kind==TypeKind::signed_integer,"parameter metadata");
  check(!a.describe_result(*s,cols) && cols.size()==1 && cols[0].name=="x" && cols[0].type.kind==TypeKind::signed_integer,"owned result metadata");

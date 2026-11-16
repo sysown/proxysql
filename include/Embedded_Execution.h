@@ -56,6 +56,11 @@ struct Adapter {
  virtual Status fetch(Statement&, Row&, bool& done, size_t budget) = 0;
  virtual Status reset(Statement&) = 0;
  virtual void finalize(std::unique_ptr<Statement>) noexcept = 0;
+ // Native bind slots map to original 1-based protocol positions; zero means unknown.
+ virtual Status describe_parameter_positions(Statement&, std::vector<uint32_t>& out) {
+  out.clear();
+  return Error{ErrorKind::unsupported, 0, "parameter positions unavailable", ""};
+ }
 };
 struct EndpointPolicy {
  virtual ~EndpointPolicy() = default;

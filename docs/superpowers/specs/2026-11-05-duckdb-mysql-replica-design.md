@@ -31,13 +31,20 @@ listener now supports prepared execution through the shared controller; its real
 MariaDB C API acceptance test passed 39 checks on 2026-11-16. Admin/STATS MySQL prepared queries are now also integrated: their dedicated
 real-client test passes 23 checks, with runtime read-only enforcement and statistics
 freshness. PostgreSQL and DuckDB listeners remain unregistered. The native DuckDB
-SELECT adapter has a separate 40-check unit proof and still awaits registration.
+SELECT adapter has a separate 55-check unit proof, including native parameter
+positions, and still awaits registration.
 See [the support and limits](../../../doc/embedded-prepared-statements.md).
 
 ParserSQL draft [PR #72](https://github.com/ProxySQL/ParserSQL/pull/72), head
 `71dca32`, fixes analytical AST admission and provides expression source spans and
 comment provenance. It passes 695 local parser tests and upstream CI. ProxySQL
 still vendors 1.1.1; no upstream release, merge, tag or vendor bump has occurred.
+
+PostgreSQL codec prerequisites now pass 298 parameter and 39 result assertions,
+including sanitizer runs. Native parameter-position metadata passes 31 SQLite
+checks and is covered by the DuckDB adapter tests. These components do not yet
+enable extended-query execution; the controller and real libpq acceptance remain
+pending.
 
 Next: finish cross-endpoint resource/ownership acceptance; implement the shared
 PostgreSQL frontend and public
