@@ -16,12 +16,14 @@ class AdminSQLitePolicy final : public EndpointPolicy {
 public:
  AdminSQLitePolicy(sqlite3*, std::function<bool()> read_only,
                    std::function<bool()> lock_held, std::vector<std::string> editable_tables,
-                   std::function<Status(const std::string&)> before_execute = {});
+                   std::function<Status(const std::string&)> before_execute = {},
+                   SQLSourceDialect dialect = SQLSourceDialect::mysql);
  Status guard(std::unique_ptr<OperationGuard>& out);
  Status authorize_prepare(const std::string&) override;
  Status authorize_execute(const std::string&, const std::vector<Value>&) override;
  Status authorize_fetch(const std::string&) override;
 private:
+ SQLSourceDialect dialect_;
  sqlite3* db_;
  std::function<bool()> read_only_, lock_held_;
  std::vector<std::string> editable_;

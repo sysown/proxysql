@@ -86,17 +86,50 @@ Status reserve_payload(size_t bytes, size_t budget, size_t& used) {
     return {};
 }
 
+char ascii_lower(char c) {
+    return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
+}
+
+// Exact whole-name comparison, ASCII case-insensitive only. The declared type
+// is never trimmed, tokenized, or interpreted as SQLite affinity.
+bool ascii_iequals(std::string_view left, std::string_view right) {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i) {
+        if (ascii_lower(left[i]) != ascii_lower(right[i])) return false;
+    }
+    return true;
+}
+
+TypeKind declared_result_kind(const char* declared) {
+    if (declared == nullptr) return TypeKind::dynamic;
+    const std::string_view name(declared);
+    if (ascii_iequals(name, "BLOB")) return TypeKind::bytes;
+    if (ascii_iequals(name, "TEXT")) return TypeKind::text;
+    if (ascii_iequals(name, "INTEGER") || ascii_iequals(name, "INT") ||
+        ascii_iequals(name, "BIGINT")) {
+        return TypeKind::signed_integer;
+    }
+    if (ascii_iequals(name, "REAL") || ascii_iequals(name, "DOUBLE") ||
+        ascii_iequals(name, "FLOAT")) {
+        return TypeKind::floating;
+    }
+    return TypeKind::dynamic;
+}
+
 }  // namespace
 
 struct SQLiteAdapter::StatementState final : Statement {
     StatementState(SQLiteAdapter* adapter, sqlite3_stmt* native, int parameters,
-                   int columns, std::vector<std::string> names)
+                   int columns, std::vector<std::string> names,
+                   std::vector<Type> types, ResultProfile result_profile)
         : owner(adapter),
           db(adapter != nullptr ? adapter->connection_ : nullptr),
           stmt(native),
           parameter_count(parameters),
           column_count(columns),
-          column_names(std::move(names)) {}
+          column_names(std::move(names)),
+          column_types(std::move(types)),
+          profile(result_profile) {}
 
     ~StatementState() noexcept override {
         if (stmt != nullptr && proxy_sqlite3_finalize != nullptr)
@@ -109,6 +142,8 @@ struct SQLiteAdapter::StatementState final : Statement {
     int parameter_count;
     int column_count;
     std::vector<std::string> column_names;
+    std::vector<Type> column_types;
+    ResultProfile profile;
     bool needs_reset = false;
     bool row_ready = false;
     bool exhausted = false;
@@ -117,7 +152,8 @@ struct SQLiteAdapter::StatementState final : Statement {
     bool pending_step_error_reported = false;
 };
 
-SQLiteAdapter::SQLiteAdapter(sqlite3* connection) noexcept : connection_(connection) {}
+SQLiteAdapter::SQLiteAdapter(sqlite3* connection, ResultProfile profile) noexcept
+    : connection_(connection), profile_(profile) {}
 
 SQLiteAdapter::~SQLiteAdapter() = default;
 
@@ -132,10 +168,48 @@ SQLiteAdapter::StatementState* SQLiteAdapter::checked(Statement& statement) cons
     return state;
 }
 
+Status SQLiteAdapter::verify_result_metadata(StatementState& state) const {
+    if (proxy_sqlite3_column_count == nullptr ||
+        proxy_sqlite3_column_name == nullptr) {
+        return make_error(ErrorKind::internal, 0,
+                          "result metadata symbols are unavailable");
+    }
+    if (proxy_sqlite3_column_count(state.stmt) != state.column_count)
+        return make_error(ErrorKind::schema_changed, 0,
+                          "result column count changed");
+    for (int i = 0; i < state.column_count; ++i) {
+        const char* name = proxy_sqlite3_column_name(state.stmt, i);
+        const std::string current(name != nullptr ? name : "");
+        if (current != state.column_names[static_cast<size_t>(i)])
+            return make_error(ErrorKind::schema_changed, 0,
+                              "result column name changed");
+    }
+    if (state.profile == ResultProfile::strict_declared) {
+        if (proxy_sqlite3_column_decltype == nullptr) {
+            return make_error(ErrorKind::unsupported, 0,
+                              "SQLite declared-type metadata is unavailable");
+        }
+        for (int i = 0; i < state.column_count; ++i) {
+            const char* declared = proxy_sqlite3_column_decltype(state.stmt, i);
+            if (declared_result_kind(declared) !=
+                state.column_types[static_cast<size_t>(i)].kind) {
+                return make_error(ErrorKind::schema_changed, 0,
+                                  "result column declared type changed");
+            }
+        }
+    }
+    return {};
+}
+
 Status SQLiteAdapter::prepare(const std::string& sql, std::unique_ptr<Statement>& out) {
     out.reset();
     if (connection_ == nullptr)
         return make_error(ErrorKind::internal, 0, "SQLite adapter has no connection");
+    if (profile_ == ResultProfile::strict_declared &&
+        proxy_sqlite3_column_decltype == nullptr) {
+        return make_error(ErrorKind::unsupported, 0,
+                          "SQLite declared-type metadata is unavailable");
+    }
     if (proxy_sqlite3_prepare_v2 == nullptr || proxy_sqlite3_finalize == nullptr ||
         proxy_sqlite3_column_count == nullptr || proxy_sqlite3_column_name == nullptr ||
         proxy_sqlite3_bind_parameter_count == nullptr ||
@@ -183,14 +257,26 @@ Status SQLiteAdapter::prepare(const std::string& sql, std::unique_ptr<Statement>
     }
 
     std::vector<std::string> names;
+    std::vector<Type> types;
     names.reserve(static_cast<size_t>(columns));
+    types.reserve(static_cast<size_t>(columns));
     for (int i = 0; i < columns; ++i) {
         const char* name = proxy_sqlite3_column_name(native, i);
         names.emplace_back(name != nullptr ? name : "");
+        Type type;
+        if (profile_ == ResultProfile::strict_declared) {
+            type.kind = declared_result_kind(
+                proxy_sqlite3_column_decltype(native, i));
+        } else {
+            type.kind = TypeKind::dynamic;
+        }
+        type.nullable = true;
+        types.push_back(type);
     }
 
     std::unique_ptr<StatementState> state(new StatementState(
-        this, native, proxy_sqlite3_bind_parameter_count(native), columns, std::move(names)));
+        this, native, proxy_sqlite3_bind_parameter_count(native), columns,
+        std::move(names), std::move(types), profile_));
     native = nullptr;
     out.reset(state.release());
     return {};
@@ -244,10 +330,9 @@ Status SQLiteAdapter::describe_result(Statement& statement, std::vector<Column>&
     StatementState* state = checked(statement);
     if (state == nullptr) return affinity_error();
     out.reserve(state->column_names.size());
-    for (const std::string& name : state->column_names) {
-        Type type;
-        type.kind = TypeKind::dynamic;
-        out.push_back(Column{name, type});
+    for (size_t i = 0; i < state->column_names.size(); ++i) {
+        out.push_back(Column{state->column_names[i],
+                             state->column_types[i]});
     }
     return {};
 }
@@ -357,25 +442,7 @@ Status SQLiteAdapter::execute(Statement& statement, ExecInfo& info) {
             return make_error(ErrorKind::internal, 0,
                               "SQLite returned a row for a statement without columns");
         }
-        if (auto err = [&]() -> Status {
-                if (proxy_sqlite3_column_count == nullptr ||
-                    proxy_sqlite3_column_name == nullptr)
-                    return make_error(ErrorKind::internal, 0,
-                                      "result metadata symbols are unavailable");
-                if (proxy_sqlite3_column_count(state->stmt) != state->column_count)
-                    return make_error(ErrorKind::schema_changed, 0,
-                                      "result column count changed");
-                for (int i = 0; i < state->column_count; ++i) {
-                    const char* name = proxy_sqlite3_column_name(state->stmt, i);
-                    const std::string current(name != nullptr ? name : "");
-                    if (current != state->column_names[static_cast<size_t>(i)])
-                        return make_error(ErrorKind::schema_changed, 0,
-                                          "result column name changed");
-                }
-                return {};
-            }()) {
-            return err;
-        }
+        if (auto err = verify_result_metadata(*state)) return err;
         state->row_ready = true;
         state->active_result = true;
         info.has_result = true;
@@ -386,21 +453,7 @@ Status SQLiteAdapter::execute(Statement& statement, ExecInfo& info) {
     if (rc == SQLITE_DONE) {
         state->exhausted = true;
         if (state->column_count > 0) {
-            if (proxy_sqlite3_column_count == nullptr ||
-                proxy_sqlite3_column_name == nullptr) {
-                return make_error(ErrorKind::internal, 0,
-                                  "result metadata symbols are unavailable");
-            }
-            if (proxy_sqlite3_column_count(state->stmt) != state->column_count)
-                return make_error(ErrorKind::schema_changed, 0,
-                                  "result column count changed");
-            for (int i = 0; i < state->column_count; ++i) {
-                const char* name = proxy_sqlite3_column_name(state->stmt, i);
-                const std::string current(name != nullptr ? name : "");
-                if (current != state->column_names[static_cast<size_t>(i)])
-                    return make_error(ErrorKind::schema_changed, 0,
-                                      "result column name changed");
-            }
+            if (auto err = verify_result_metadata(*state)) return err;
             state->active_result = true;
             info.has_result = true;
         } else if (track_changes && proxy_sqlite3_total_changes64 != nullptr) {
@@ -437,14 +490,7 @@ Status SQLiteAdapter::fetch(Statement& statement, Row& row, bool& done, size_t b
             return make_error(ErrorKind::internal, 0,
                               "result column symbols are unavailable");
         }
-        if (proxy_sqlite3_column_count(state->stmt) != state->column_count)
-            return make_error(ErrorKind::schema_changed, 0, "result column count changed");
-        for (int i = 0; i < state->column_count; ++i) {
-            const char* name = proxy_sqlite3_column_name(state->stmt, i);
-            const std::string current(name != nullptr ? name : "");
-            if (current != state->column_names[static_cast<size_t>(i)])
-                return make_error(ErrorKind::schema_changed, 0, "result column name changed");
-        }
+        if (auto err = verify_result_metadata(*state)) return err;
 
         Row result;
         result.reserve(static_cast<size_t>(state->column_count));
@@ -457,7 +503,31 @@ Status SQLiteAdapter::fetch(Statement& statement, Row& row, bool& done, size_t b
         };
 
         for (int i = 0; i < state->column_count; ++i) {
+            // Inspect the original storage class before any column getter that
+            // could ask SQLite to coerce it.
             const int type = proxy_sqlite3_column_type(state->stmt, i);
+            const Type& advertised = state->column_types[static_cast<size_t>(i)];
+            if (advertised.kind != TypeKind::dynamic) {
+                if (type == SQLITE_NULL) {
+                    if (!advertised.nullable)
+                        return make_error(ErrorKind::schema_changed, 0,
+                                          "NULL is not allowed by the result profile");
+                } else {
+                    const bool matches =
+                        (advertised.kind == TypeKind::signed_integer &&
+                         type == SQLITE_INTEGER) ||
+                        (advertised.kind == TypeKind::floating &&
+                         type == SQLITE_FLOAT) ||
+                        (advertised.kind == TypeKind::text &&
+                         type == SQLITE_TEXT) ||
+                        (advertised.kind == TypeKind::bytes &&
+                         type == SQLITE_BLOB);
+                    if (!matches)
+                        return make_error(
+                            ErrorKind::schema_changed, 0,
+                            "native storage class does not match the declared result type");
+                }
+            }
             Status status;
             if (type == SQLITE_INTEGER) {
                 status = append(Value{static_cast<int64_t>(

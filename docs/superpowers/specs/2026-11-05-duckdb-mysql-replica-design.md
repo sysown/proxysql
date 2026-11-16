@@ -42,9 +42,10 @@ still vendors 1.1.1; no upstream release, merge, tag or vendor bump has occurred
 
 PostgreSQL codec prerequisites now pass 298 parameter and 39 result assertions,
 including sanitizer runs. Native parameter-position metadata passes 31 SQLite
-checks and is covered by the DuckDB adapter tests. These components do not yet
-enable extended-query execution; the controller and real libpq acceptance remain
-pending.
+checks and is covered by the DuckDB adapter tests. The read-only controller adds 64 component checks, the strict SQLite result
+profile adds 157, and PostgreSQL policy/statistics dialect checks pass. These
+components do not yet enable extended-query execution; transport, listener
+registration and real libpq acceptance remain pending.
 
 Next: finish cross-endpoint resource/ownership acceptance; implement the shared
 PostgreSQL frontend and public

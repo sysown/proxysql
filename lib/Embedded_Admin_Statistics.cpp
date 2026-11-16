@@ -71,13 +71,14 @@ bool admin_sqlite_statistics_reset_table(const std::string& name) {
 bool admin_sqlite_statistics_dynamic_table(const std::string& name) {
  return refresh_tables.count(lower(name)) != 0;
 }
-Status admin_sqlite_statistics_refresh_query(const std::string& sql, std::string& out, std::vector<std::string>* relations) {
+template <sql_parser::Dialect dialect>
+Status refresh_query(const std::string& sql, std::string& out, std::vector<std::string>* relations) {
  out.clear();
  if (relations) relations->clear();
  try {
   if (sql.size() > 1048576) return fail(ErrorKind::resource, "Admin SQL exceeds size limit");
   using namespace sql_parser;
-  Parser<Dialect::MySQL> parser;
+  Parser<dialect> parser;
   auto parsed = parser.parse(sql.data(), sql.size());
   if (parsed.status != ParseResult::OK || !parsed.full_input || parsed.has_remaining() ||
       !parsed.ast || parsed.ast->next_sibling)
@@ -126,5 +127,11 @@ Status admin_sqlite_statistics_refresh_query(const std::string& sql, std::string
   out.swap(request);
   return {};
  } catch (const std::bad_alloc&) { return fail(ErrorKind::resource, "Cannot allocate Admin statistics request"); }
+}
+Status admin_sqlite_statistics_refresh_query(const std::string& sql, std::string& out,
+                                             std::vector<std::string>* relations, SQLSourceDialect dialect) {
+    return dialect == SQLSourceDialect::postgresql
+        ? refresh_query<sql_parser::Dialect::PostgreSQL>(sql, out, relations)
+        : refresh_query<sql_parser::Dialect::MySQL>(sql, out, relations);
 }
 }

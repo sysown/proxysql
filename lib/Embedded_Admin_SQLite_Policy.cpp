@@ -55,8 +55,8 @@ struct NativeGuard final : OperationGuard {
  }
 };
 }
-AdminSQLitePolicy::AdminSQLitePolicy(sqlite3* db, std::function<bool()> ro, std::function<bool()> held, std::vector<std::string> tables, std::function<Status(const std::string&)> before_execute)
- : db_(db), read_only_(std::move(ro)), lock_held_(std::move(held)), editable_(std::move(tables)), source_(db, [] { return true; }, read_only_), before_execute_(std::move(before_execute)) {
+AdminSQLitePolicy::AdminSQLitePolicy(sqlite3* db, std::function<bool()> ro, std::function<bool()> held, std::vector<std::string> tables, std::function<Status(const std::string&)> before_execute, SQLSourceDialect dialect)
+ : dialect_(dialect), db_(db), read_only_(std::move(ro)), lock_held_(std::move(held)), editable_(std::move(tables)), source_(db, [] { return true; }, read_only_, dialect), before_execute_(std::move(before_execute)) {
  for (auto& table : editable_) table = lower(table.c_str());
 }
 Status AdminSQLitePolicy::guard(std::unique_ptr<OperationGuard>& out) {
@@ -114,7 +114,7 @@ Status AdminSQLitePolicy::authorize_prepare(const std::string& sql) {
   if (auto status = source_.authorize_prepare(sql)) return status;
   std::string refresh;
   std::vector<std::string> relations;
-  if (auto status = admin_sqlite_statistics_refresh_query(sql, refresh, &relations)) return status;
+  if (auto status = admin_sqlite_statistics_refresh_query(sql, refresh, &relations, dialect_)) return status;
   return arm(relations);
  }
  catch (...) { return fail("Admin SQLite policy callback failed"); }
@@ -124,7 +124,7 @@ Status AdminSQLitePolicy::authorize_execute(const std::string& sql, const std::v
   if (auto status = source_.authorize_execute(sql, v)) return status;
   std::string refresh;
   std::vector<std::string> relations;
-  if (auto status = admin_sqlite_statistics_refresh_query(sql, refresh, &relations)) return status;
+  if (auto status = admin_sqlite_statistics_refresh_query(sql, refresh, &relations, dialect_)) return status;
   if (!lock_held_ || !lock_held_()) return fail("Admin SQLite lock is not held");
   {
    std::lock_guard<std::mutex> lock(registry_mutex);

@@ -27,8 +27,17 @@
 //    time, so native preparation is not an authorization mechanism.
 //  * describe_* only reads prepare-time native metadata. It never steps or
 //    executes SQL. Parameter types are reported as unknown with the native
-//    parameter count. Result names are owned copies and every result type is
-//    dynamic; SQLite declared affinity is not a fixed result type.
+//    parameter count. Result names are owned copies. Under the default
+//    ResultProfile::dynamic every result type is dynamic; SQLite declared
+//    affinity is not a fixed result type. Under ResultProfile::strict_declared
+//    the adapter records sqlite3_column_decltype at prepare and advertises only
+//    exact whole-name (ASCII case-insensitive) mappings: BLOB->bytes,
+//    TEXT->text, INTEGER/INT/BIGINT->signed_integer, REAL/DOUBLE/FLOAT->
+//    floating. A NULL or any other declared name stays dynamic. It never trims,
+//    tokenizes, or guesses affinity, decimal, boolean, or temporal types, and
+//    it requires the native column_decltype symbol only for this opt-in profile
+//    (an unavailable symbol makes strict prepare unsupported). Declared metadata
+//    does not carry nullability, so strict columns are reported nullable.
 //  * The supported result slice is a read-only result or a no-result DML/DDL
 //    statement. A write statement with result columns (for example DML
 //    RETURNING) is rejected before execution using native stmt_readonly plus
@@ -62,13 +71,22 @@
 //    preserving embedded NULs and empty-versus-NULL. Native byte lengths are
 //    checked against the payload budget before large fields are copied.
 //    value_payload_bytes is the consistent accounting rule.
+//  * In the strict_declared profile, fetch accepts only the native storage
+//    class promised by the declared type: INTEGER->int64, FLOAT->double,
+//    TEXT->Text, and BLOB->Bytes, plus NULL for a nullable column. No coercion,
+//    TEXT-to-BLOB conversion, or lossy numeric conversion is performed. A
+//    runtime mismatch is reported as schema_changed with an empty row and
+//    done=false, so no row is exposed under a wrong descriptor. Dynamic columns
+//    (unknown declared type) keep the existing dynamic behavior even in the
+//    strict profile.
 //  * A SQLITE_TEXT column requires a non-null native text pointer even when
 //    its byte length is zero; null is reported as an error because SQLite can
 //    use it for conversion or allocation failure. A zero-length SQLITE_BLOB
 //    may have a null data pointer and remains a valid empty value.
 //  * After SQLite reprepares a statement because of a schema change, a changed
-//    result column count or name is reported as ErrorKind::schema_changed
-//    instead of exposing rows under stale metadata.
+//    result column count, name, or (in the strict profile) mapped declared kind
+//    is reported as ErrorKind::schema_changed instead of exposing rows under
+//    stale metadata.
 //
 // Counters:
 //  * For a no-result execution, affected_rows is reported only when
@@ -90,10 +108,21 @@ struct sqlite3;
 
 namespace embedded {
 
+// Result profile selection. The default preserves SQLite's dynamic runtime
+// result types. strict_declared opts into exact native declared-type metadata
+// and matching runtime value validation for the PostgreSQL-facing slice.
+enum class ResultProfile {
+    dynamic,
+    strict_declared,
+};
+
 class SQLiteAdapter final : public Adapter {
 public:
     // connection is borrowed and must outlive this adapter and its sessions.
-    explicit SQLiteAdapter(sqlite3* connection) noexcept;
+    // The default profile keeps the existing MySQL dynamic result behavior.
+    explicit SQLiteAdapter(
+        sqlite3* connection,
+        ResultProfile profile = ResultProfile::dynamic) noexcept;
     ~SQLiteAdapter() override;
 
     SQLiteAdapter(const SQLiteAdapter&) = delete;
@@ -118,7 +147,13 @@ private:
     // connection. This blocks cross-adapter and cross-connection reuse.
     StatementState* checked(Statement& statement) const noexcept;
 
+    // Re-reads native result metadata after a step/reprepare and rejects a
+    // changed column count, name, or strict mapped declared kind before any row
+    // is exposed.
+    Status verify_result_metadata(StatementState& state) const;
+
     sqlite3* connection_;
+    ResultProfile profile_;
 };
 
 }  // namespace embedded

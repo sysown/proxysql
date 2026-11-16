@@ -4,6 +4,7 @@
 #include <string>
 struct sqlite3;
 namespace embedded {
+enum class SQLSourceDialect { mysql, postgresql };
 bool sqlite_prepared_function_allowed(const std::string& name);
 // The connection and callbacks must outlive this policy. Calls are synchronous.
 //
@@ -25,12 +26,14 @@ bool sqlite_prepared_function_allowed(const std::string& name);
 class SQLitePolicy final : public EndpointPolicy {
 public:
  SQLitePolicy(sqlite3* connection, std::function<bool()> client_autocommit,
-              std::function<bool()> read_only = [] { return false; });
+              std::function<bool()> read_only = [] { return false; },
+              SQLSourceDialect dialect = SQLSourceDialect::mysql);
  Status authorize_prepare(const std::string&) override;
  Status authorize_execute(const std::string&, const std::vector<Value>&) override;
  Status authorize_fetch(const std::string&) override;
 private:
  Status admit(const std::string&, bool fetch);
+ SQLSourceDialect dialect_;
  sqlite3* connection_;
  std::function<bool()> autocommit_, read_only_;
  std::string cached_sql_;

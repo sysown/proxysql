@@ -39,9 +39,10 @@ bool root_matches(StmtType s, NodeType n) {
  default: return false;
  }
 }
+template <Dialect dialect>
 Status classify(const std::string& sql, bool& is_select) {
  if (sql.size() > 1048576) return error(ErrorKind::resource, "SQL exceeds policy size limit");
- Parser<Dialect::MySQL> parser;
+ Parser<dialect> parser;
  auto parsed = parser.parse(sql.data(), sql.size());
  if (parsed.status != ParseResult::OK || !parsed.full_input || parsed.has_remaining() || !parsed.ast || parsed.ast->next_sibling)
   return error(ErrorKind::syntax, "SQL must be one fully parsed statement");
@@ -86,13 +87,14 @@ Status classify(const std::string& sql, bool& is_select) {
  return {};
 }
 }
-SQLitePolicy::SQLitePolicy(sqlite3* db, std::function<bool()> ac, std::function<bool()> ro)
- : connection_(db), autocommit_(std::move(ac)), read_only_(std::move(ro)) {}
+SQLitePolicy::SQLitePolicy(sqlite3* db, std::function<bool()> ac, std::function<bool()> ro, SQLSourceDialect dialect)
+ : dialect_(dialect), connection_(db), autocommit_(std::move(ac)), read_only_(std::move(ro)) {}
 Status SQLitePolicy::admit(const std::string& sql, bool fetch) {
  if (!connection_ || !autocommit_ || !read_only_) return error(ErrorKind::internal, "SQLite policy is not configured");
  if (!cached_ || cached_sql_ != sql) {
   bool select = false;
-  auto status = classify(sql, select);
+  auto status = dialect_ == SQLSourceDialect::postgresql
+      ? classify<Dialect::PostgreSQL>(sql, select) : classify<Dialect::MySQL>(sql, select);
   cached_ = sql.size() <= 1048576;
   cached_sql_ = cached_ ? sql : std::string{};
   cached_status_ = status;

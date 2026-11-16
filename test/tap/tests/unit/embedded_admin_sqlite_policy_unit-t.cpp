@@ -12,7 +12,7 @@ static int fail_removal(sqlite3*, int (*)(void*, int, const char*, const char*, 
 static void udf(sqlite3_context* ctx, int, sqlite3_value**) { ++calls; sqlite3_result_int(ctx, 42); }
 static int run(sqlite3* db, const char* sql) { return sqlite3_exec(db, sql, nullptr, nullptr, nullptr); }
 int main() {
- plan(43);
+ plan(NO_PLAN);
  sqlite3* db = nullptr; ok(sqlite3_open(":memory:", &db) == SQLITE_OK, "open database");
  run(db, "CREATE TABLE t(x); CREATE TABLE forbidden(x); INSERT INTO t VALUES(1); ATTACH ':memory:' AS other; CREATE TABLE other.t(x); CREATE VIEW v AS SELECT unsafe(x) FROM t; CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO forbidden VALUES(unsafe(new.x)); END");
  sqlite3_create_function(db, "unsafe", 1, SQLITE_UTF8, nullptr, udf, nullptr, nullptr);
@@ -97,6 +97,17 @@ int main() {
  ok(!policy.guard(guard) && !policy.authorize_prepare("SELECT * FROM hidden_stats") &&
     run(db, "SELECT * FROM hidden_stats") == SQLITE_AUTH,
     "hidden dynamic statistics dependencies are refused instead of returning stale rows");
+ guard.reset();
+ std::string pg_request;
+ AdminSQLitePolicy pg(db, [] { return true; }, [&] { return held; }, {},
+    [&](const std::string& sql) -> Status { pg_request = sql; return {}; },
+    embedded::SQLSourceDialect::postgresql);
+ ok(!pg.guard(guard) && !pg.authorize_execute("SELECT * FROM \"stats_pgsql_global\" WHERE $1 = 1", {}) &&
+    pg_request == "SELECT * FROM stats_pgsql_global", "PostgreSQL dialect reaches source policy and statistics refresh");
+ guard.reset();
+ ok(!pg.guard(guard) && bool(pg.authorize_prepare("SELECT unsafe_udf($1)")), "PostgreSQL admin rejects unsafe function");
+ guard.reset();
+ ok(!pg.guard(guard) && bool(pg.authorize_prepare("INSERT INTO t VALUES (1)")), "PostgreSQL admin rejects writes");
  guard.reset();
  pid_t child = fork();
  if (child == 0) {

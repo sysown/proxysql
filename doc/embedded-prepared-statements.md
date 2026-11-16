@@ -208,3 +208,42 @@ Independent validation on 2026-11-16 passed 298 parameter-codec assertions, 39
 result-codec assertions, 31 SQLite position assertions and 55 native DuckDB
 adapter assertions. Both PostgreSQL codecs also passed ASan/UBSan. These are
 component checks; they do not substitute for pending real libpq endpoint tests.
+
+
+## PostgreSQL read-only controller components
+
+The internal controller implements named and unnamed statements, independent
+bound portals, metadata-only Parse/Describe/Bind, one native execution per portal,
+and buffered row pagination. An exact row-limit boundary suspends the portal;
+a subsequent Execute observes exhaustion. CommandComplete counts rows from that
+Execute, following PostgreSQL's PortalRunSelect behavior. Unknown Close names
+succeed. Sync clears failed-cycle state and closes implicit-cycle portals;
+a simple query also drops the unnamed statement while retaining named ones.
+Listener registration and real-client acceptance remain pending.
+
+This controller requires a policy that admits only read-only SQL. It supports
+implicit cycles; explicit transaction ownership is pending. One operation guard
+covers execution and complete native fetch, then releases before the next client
+packet. Encoded rows are transferred to the caller without copying their field
+payloads. Failures discard partial output, poison the cycle and prevent replay.
+
+Limits default to 128 statements and 128 portals, 4,096 parameters and columns,
+1 KiB names, 1 MiB SQL per statement, 16 MiB aggregate owned SQL and bind payload,
+8 MiB metadata and 64 MiB encoded results. Injected limits can lower these caps.
+Accounting includes conservative container and framing charges, but excludes
+native/adapter/Session allocations before metadata reaches the controller and
+engine internal memory. Callers release each transferred response before asking
+for another to retain the stated response bound. Global quotas remain pending.
+
+SQLite now has an opt-in `strict_declared` result profile. Exact native declared
+names BLOB/TEXT/INTEGER/INT/BIGINT/REAL/DOUBLE/FLOAT provide fixed descriptors;
+other declarations and expressions stay dynamic. Runtime storage classes must
+match, with no coercion. This enables BYTEA for declared BLOB columns and rejects
+mixed storage before exposing a row under an incompatible descriptor. The default
+MySQL profile remains dynamic. Source policies and statistics relation discovery
+can select ParserSQL's PostgreSQL dialect; MySQL remains their default.
+
+Independent component validation passed 64 controller assertions, 157 strict
+profile assertions, 46 SQLite policy assertions, 46 Admin policy assertions and
+16 statistics assertions on 2026-11-16. These checks do not enable a listener or
+complete the prepared-statement framework.

@@ -30,5 +30,10 @@ int main() {
  ok(embedded::admin_sqlite_statistics_reset_table("STATS_MYSQL_QUERY_DIGEST_RESET") &&
     !embedded::admin_sqlite_statistics_reset_table("other_stats_mysql_query_digest_reset_suffix"),
     "native authorization recognizes exact reset relation names");
+ auto pg = embedded::SQLSourceDialect::postgresql;
+ ok(!embedded::admin_sqlite_statistics_refresh_query("SELECT * FROM \"stats_pgsql_global\" WHERE $1 = 1", out, nullptr, pg) && out == "SELECT * FROM stats_pgsql_global", "PostgreSQL quoted relation and placeholder refresh");
+ ok(!embedded::admin_sqlite_statistics_refresh_query("SELECT 'stats_pgsql_query_digest_reset' AS stats_pgsql_global", out, nullptr, pg) && out.empty(), "PostgreSQL literals and aliases do not refresh");
+ ok(bool(embedded::admin_sqlite_statistics_refresh_query("SELECT * FROM other.stats_pgsql_global", out, nullptr, pg)), "PostgreSQL cross-schema denied");
+ ok(bool(embedded::admin_sqlite_statistics_refresh_query("SELECT * FROM stats_pgsql_query_digest_reset", out, nullptr, pg)), "PostgreSQL reset denied");
  return exit_status();
 }

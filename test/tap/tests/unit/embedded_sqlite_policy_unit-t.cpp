@@ -1,6 +1,8 @@
 #include "Embedded_SQLite_Policy.h"
 #include "sqlite3db.h"
 #include "tap.h"
+#include "sql_parser/parser.h"
+#include "sql_parser/ast_walk.h"
 #include <string>
 using embedded::SQLitePolicy;
 static int native_calls = 0;
@@ -10,7 +12,7 @@ static int count_exec(sqlite3*, const char*, int (*)(void*, int, char**, char**)
  return SQLITE_OK;
 }
 int main() {
- plan(39);
+ plan(NO_PLAN);
  sqlite3* db = nullptr;
  ok(sqlite3_open(":memory:", &db) == SQLITE_OK, "open database");
  sqlite3_exec(db, "CREATE TABLE t(x)", nullptr, nullptr, nullptr);
@@ -66,6 +68,24 @@ int main() {
  auto failure = policy.authorize_execute("SELECT 1", {});
  ok(failure && failure->kind == embedded::ErrorKind::transaction && failure->native_code == SQLITE_BUSY && sqlite3_get_autocommit(db), "failed BEGIN propagates without opening transaction");
  proxy_sqlite3_exec = original_exec;
+ sql_parser::Parser<sql_parser::Dialect::PostgreSQL> pg_parser;
+ auto pg_parsed = pg_parser.parse("SELECT $1", 9);
+ bool pg_placeholder = false;
+ if (pg_parsed.ast) sql_parser::walk_ast(pg_parsed.ast, [&](const sql_parser::AstNode& node, const sql_parser::AstVisitContext&) {
+     if (node.type == sql_parser::NodeType::NODE_PLACEHOLDER) pg_placeholder = true;
+     return sql_parser::AstVisitAction::Continue;
+ });
+ sql_parser::Parser<sql_parser::Dialect::MySQL> mysql_parser;
+ auto mysql_parsed = mysql_parser.parse("SELECT $1", 9);
+ ok(pg_parsed.full_input && pg_placeholder && !mysql_parsed.full_input,
+    "ParserSQL recognizes $1 as a PostgreSQL placeholder and not as complete MySQL SQL");
+ SQLitePolicy pg(db, [] { return true; }, [] { return true; }, embedded::SQLSourceDialect::postgresql);
+ ok(!pg.authorize_prepare("SELECT $1, abs(1) UNION SELECT 2, abs(3)"), "PostgreSQL placeholder and safe UNION admitted");
+ ok(!pg.authorize_prepare("SELECT \"x\" FROM \"t\""), "PostgreSQL quoted identifiers admitted");
+ ok(bool(pg.authorize_prepare("SELECT dangerous_udf(1)")), "PostgreSQL unsafe function denied");
+ ok(bool(pg.authorize_prepare("SELECT $1::integer")), "PostgreSQL cast is explicitly unsupported");
+ ok(bool(pg.authorize_prepare("INSERT INTO t VALUES (1)")), "PostgreSQL read-only policy rejects writes");
+ ok(!pg.authorize_execute("SELECT $1", {}) && sqlite3_get_autocommit(db), "PostgreSQL select does not begin a transaction");
  sqlite3_close(db);
  return exit_status();
 }
