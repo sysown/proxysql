@@ -210,7 +210,7 @@ coercion on that value unless collation/type rules are established.
 | `DIV`, `MOD`, `%` | OK, complete | preserved | Deferred | Integer division/remainder rules and operand types. |
 | `<=>` | OK but silently becomes `>` | emits `a > b` | Parser gap | Refused; null-safe equality is corrupted. |
 | `&&` | OK but silently becomes `&` | emits `a & b` | Parser gap | Refused; logical AND becomes bitwise AND. |
-| `||` | OK, complete | preserved | Refused | MySQL meaning depends on `PIPES_AS_CONCAT`; DuckDB differs. |
+| `\|\|` | OK, complete | preserved | Refused | MySQL meaning depends on `PIPES_AS_CONCAT`; DuckDB differs. |
 | `REGEXP` / `RLIKE` | Partial when mixed | `remaining` after first expression | Parser gap | Refused. |
 | `SOUNDS LIKE`, `MEMBER OF` | OK, complete | preserved | Deferred | Not in the first subset. |
 | Row-value `(a,b) IN ((...))` | OK, complete | tuple nodes | Deferred | Type/row comparison rules. |
@@ -356,7 +356,7 @@ an explicit refusal.
 | Column type, signedness, precision/scale | arithmetic, casts, aggregates, metadata | catalog metadata, not query execution |
 | Nullability | joins, predicates, ORDER BY, aggregates | catalog metadata |
 | Charset and collation per column/expression | string comparison/grouping/order | catalog + session collation state |
-| `sql_mode` (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`, `PIPES_AS_CONCAT`, `ONLY_FULL_GROUP_BY`, strict modes) | quoting, escapes, `||`, grouping | effective session settings |
+| `sql_mode` (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`, `PIPES_AS_CONCAT`, `ONLY_FULL_GROUP_BY`, strict modes) | quoting, escapes, `\|\|`, grouping | effective session settings |
 | `lower_case_table_names` and identifier case rules | table/column resolution | server/session configuration |
 | `time_zone`, `lc_time_names`, date/time precision | date/time functions and casts | effective session settings |
 | Function existence/arity/return type/determinism | function admission | maintained allowlist/function metadata |

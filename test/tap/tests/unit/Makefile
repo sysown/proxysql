@@ -654,6 +654,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	embedded_pgsql_value_unit-t \
 	embedded_pgsql_result_unit-t \
 	embedded_pgsql_prepared_unit-t \
+	embedded_pgsql_frontend_unit-t \
 	embedded_sqlite_policy_unit-t \
 	embedded_admin_sqlite_policy_unit-t \
 	embedded_admin_statistics_unit-t \

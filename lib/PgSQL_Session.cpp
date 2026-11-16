@@ -33,6 +33,8 @@ using json = nlohmann::json;
 #include "PgSQL_ExplicitTxnStateMgr.h"
 #include "PgSQLTxnEndClassifier.h"
 #include "PgSQL_Extended_Query_Message.h"
+#include "Embedded_Admin_PgSQL_Prepared.h"
+#include "Embedded_PgSQL_Frontend.h"
 #include "libinjection.h"
 #include "libinjection_sqli.h"
 
@@ -470,6 +472,8 @@ PgSQL_Session::PgSQL_Session() {
 }
 
 void PgSQL_Session::reset() {
+	embedded::unregister_admin_pgsql_prepared(*this);
+	embedded::unregister_pgsql_prepared(*this);
 	autocommit = true;
 	autocommit_handled = false;
 	sending_set_autocommit = false;
@@ -2263,6 +2267,10 @@ __implicit_flush:
 					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
 						session_type == PROXYSQL_SESSION_SQLITE) {
 						c = *((unsigned char*)pkt.ptr);
+						if (!admin_extq_rejected && session_type != PROXYSQL_SESSION_SQLITE &&
+						    embedded::handle_admin_pgsql_prepared(*this, pkt, admin_extq_rejected)) {
+							continue;
+						}
 						// Recovery discards every message, including simple Query,
 						// until Sync. Terminate must still close the connection.
 						if (admin_extq_rejected && c != 'S' && c != 'X') {

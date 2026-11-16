@@ -299,6 +299,13 @@ test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t: %: %.cpp un
 	$(CXX) $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(MARIADB_IDIR) $(STDCPP) -O0 -ggdb \
 		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm -o $@
 
+# Standalone libpq/pg_lite prepared acceptance client; owns no external fixture.
+test_embedded_prepared_admin_pgsql-t: test_embedded_prepared_admin_pgsql-t.cpp pg_lite_client.cpp pg_lite_client.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) $< pg_lite_client.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) -I$(LIBSCRAM_IDIR) -I$(LIBUSUAL_IDIR) -I$(SSL_IDIR) $(STDCPP) -O0 -ggdb \
+		$(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a \
+		$(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm -o $@
+
 # Owns an isolated ProxySQL child for real SIGKILL recovery testing.
 test_duckdb_replica_recovery-t test_duckdb_replica_bench-t test_duckdb_mysql_types-t: %: %.cpp duckdb_replica_test_utils.h $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) \

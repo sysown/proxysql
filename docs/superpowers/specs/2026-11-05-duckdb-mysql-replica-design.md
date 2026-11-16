@@ -30,8 +30,11 @@ The shared native lifecycle and SQLite adapter are implemented. The SQLite3 MySQ
 listener now supports prepared execution through the shared controller; its real
 MariaDB C API acceptance test passed 39 checks on 2026-11-16. Admin/STATS MySQL prepared queries are now also integrated: their dedicated
 real-client test passes 23 checks, with runtime read-only enforcement and statistics
-freshness. PostgreSQL and DuckDB listeners remain unregistered. The native DuckDB
-SELECT adapter has a separate 55-check unit proof, including native parameter
+freshness. Admin/STATS PostgreSQL now supports shared read-only prepared execution;
+its real libpq/packet client passes 53 checks. Explicit transactions and prepared
+writes are refused in this initial PostgreSQL slice. DuckDB listeners remain
+unregistered. The native DuckDB SELECT adapter has a separate 61-check unit proof,
+including native parameter
 positions, and still awaits registration.
 See [the support and limits](../../../doc/embedded-prepared-statements.md).
 
@@ -44,12 +47,12 @@ PostgreSQL codec prerequisites now pass 298 parameter and 39 result assertions,
 including sanitizer runs. Native parameter-position metadata passes 31 SQLite
 checks and is covered by the DuckDB adapter tests. The read-only controller adds 64 component checks, the strict SQLite result
 profile adds 157, and PostgreSQL policy/statistics dialect checks pass. These
-components do not yet enable extended-query execution; transport, listener
-registration and real libpq acceptance remain pending.
+components are integrated into Admin/STATS read-only extended execution. The
+packet frontend passes 39 checks and sanitizer validation; full transaction and
+writable PostgreSQL acceptance remain pending.
 
 Next: finish cross-endpoint resource/ownership acceptance; implement the shared
-PostgreSQL frontend and public
-versioned registration; register the native DuckDB adapter; complete scoped
+remaining PostgreSQL transaction/type coverage and public versioned registration; register the native DuckDB adapter; complete scoped
 analytical SQL translation after the ParserSQL dependency update. Admin extension
 and view/trigger authorization must be proved rather than inherited from the
 SQLite3 listener policy. Global cross-session quotas and temporal values remain

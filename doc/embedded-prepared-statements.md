@@ -4,11 +4,11 @@ This is an internal C++17 framework, integrated with the SQLite3, Admin and STAT
 
 The endpoint policy is mandatory and must use the actual endpoint's authorization rules. It is called before native prepare and before every execute and fetch. The caller must arrange any required lock or guard across native operations and the complete lifetime of a live result; these callbacks do not supply one. The adapter and policy must enforce single-statement admission and reject unsupported SQL. Embedded NUL is rejected by the registry. Describing metadata must never execute SQL. Unknown and dynamic metadata are explicit; no wire type mapping is implied.
 
-The session defaults to 128 statements and passes a 64 MiB row-payload budget to the adapter. The adapter must fail before returning a row with payload exceeding that budget; this counts value payloads, not vector capacity or allocator overhead. NULL has zero payload, text, bytes and decimal count their length, and numeric values count eight bytes. The registry checks the same budget after fetch; this does not bound engine internal materialization or process RSS. Fetch is not streaming-memory protection (#6287). Global accounting is not implemented. PostgreSQL portals and cursor capabilities are not implemented. The MySQL controller supplies bounded long data, parameter type reuse and the protocol limits described below. Cursor requests are explicitly rejected.
+The session defaults to 128 statements and passes a 64 MiB row-payload budget to the adapter. The adapter must fail before returning a row with payload exceeding that budget; this counts value payloads, not vector capacity or allocator overhead. NULL has zero payload, text, bytes and decimal count their length, and numeric values count eight bytes. The registry checks the same budget after fetch; this does not bound engine internal materialization or process RSS. Fetch is not streaming-memory protection (#6287). Global accounting is not implemented. The read-only PostgreSQL controller buffers portals as described below; MySQL cursor capabilities remain unimplemented. The MySQL controller supplies bounded long data, parameter type reuse and the protocol limits described below. Cursor requests are explicitly rejected.
 
 Null, signed and unsigned integers, floating point, text, bytes and exact decimal are distinct. Text and bytes carry explicit lengths, including empty values and embedded NUL. Temporal values are unsupported until their units and timezone semantics are defined. Adapters must reject unsupported values and overflow instead of coercing or truncating them. Decimal syntax and precision validation remain adapter/integration responsibilities.
 
-Each explicit execute validates arity and obtains policy authorization, then resets the native statement before binding and executing. A reset error stops the operation and is returned unchanged. Native reset must release prior results and bindings without replaying SQL or committing or rolling back. Reset clears execution state and asks the adapter to release results and bindings; it does not end a transaction. Failed execute is never automatically replayed and cannot be fetched. Transaction and autocommit ownership remain with the endpoint; adapters do not implicitly commit or roll back. Structured errors retain native information. The MySQL controller validates SQLSTATE and maps ErrorKind into MySQL error codes instead of exposing engine-native codes as protocol codes; detailed vendor-specific mappings and PostgreSQL mapping remain pending. Exceptions propagate to the caller; acquired statement handles remain owned and are finalized during unwinding. Integration must establish where exceptions are translated to protocol errors.
+Each explicit execute validates arity and obtains policy authorization, then resets the native statement before binding and executing. A reset error stops the operation and is returned unchanged. Native reset must release prior results and bindings without replaying SQL or committing or rolling back. Reset clears execution state and asks the adapter to release results and bindings; it does not end a transaction. Failed execute is never automatically replayed and cannot be fetched. Transaction and autocommit ownership remain with the endpoint; adapters do not implicitly commit or roll back. Structured errors retain native information. The MySQL controller validates SQLSTATE and maps ErrorKind into MySQL error codes instead of exposing engine-native codes as protocol codes; detailed vendor-specific mappings remain pending. The PostgreSQL frontend preserves structured SQLSTATE values and maps unclassified engine errors by ErrorKind. Exceptions propagate to the caller; acquired statement handles remain owned and are finalized during unwinding. Integration must establish where exceptions are translated to protocol errors.
 
 A future plugin registration must use a separately reviewed, versioned C ABI and bump the relevant plugin ABI version. No frontend, plugin registration, global limits or live wire tests are supplied by this foundation. The core library and `embedded_prepared_unit-t` target are wired into the standard Makefiles; the test requires no live server.
 
@@ -56,7 +56,7 @@ encoders and checks descriptor pointers before queuing any output. Callers suppl
 transaction status and keep all NUL-terminated field strings alive through the
 synchronous call. The proxy wrapper still holds its metadata lock and uses the
 same existing status calculation. All 18 direct metadata-packet checks pass.
-Prepared commands are enabled on the SQLite3 MySQL listener. Admin and STATS MySQL listeners are also integrated within the restrictions below. PostgreSQL and DuckDB listener registration remain to be implemented.
+Prepared commands are enabled on the SQLite3 MySQL listener. Admin and STATS MySQL listeners are also integrated within the restrictions below. Admin/STATS PostgreSQL listeners now support the read-only subset described below. DuckDB listener registration remains to be implemented.
 
 
 The SQLite3 listener now registers one shared MySQL prepared controller per
@@ -180,8 +180,8 @@ match MySQL's streaming behavior.
 ## PostgreSQL codec prerequisites
 
 The internal PostgreSQL datum and result codecs are implemented separately from
-packet framing. Listener registration and the extended-query controller are still
-pending; these helpers alone do not enable PostgreSQL prepared execution.
+packet framing. The extended-query controller and Admin/STATS registration use these helpers;
+codec support does not imply that an endpoint admits every corresponding SQL type.
 
 Parameters support INT2/INT4/INT8, FLOAT4/FLOAT8, UTF-8 TEXT/VARCHAR/BPCHAR and BYTEA
 in text and binary formats. Finite fixed-point NUMERIC is accepted in text format
@@ -207,7 +207,7 @@ is not required for existing MySQL prepared execution.
 Independent validation on 2026-11-16 passed 298 parameter-codec assertions, 39
 result-codec assertions, 31 SQLite position assertions and 55 native DuckDB
 adapter assertions. Both PostgreSQL codecs also passed ASan/UBSan. These are
-component checks; they do not substitute for pending real libpq endpoint tests.
+component checks; the endpoint acceptance results are recorded below.
 
 
 ## PostgreSQL read-only controller components
@@ -219,7 +219,7 @@ a subsequent Execute observes exhaustion. CommandComplete counts rows from that
 Execute, following PostgreSQL's PortalRunSelect behavior. Unknown Close names
 succeed. Sync clears failed-cycle state and closes implicit-cycle portals;
 a simple query also drops the unnamed statement while retaining named ones.
-Listener registration and real-client acceptance remain pending.
+Admin/STATS registration has passed the real-client acceptance below.
 
 This controller requires a policy that admits only read-only SQL. It supports
 implicit cycles; explicit transaction ownership is pending. One operation guard
@@ -247,3 +247,41 @@ Independent component validation passed 64 controller assertions, 157 strict
 profile assertions, 46 SQLite policy assertions, 46 Admin policy assertions and
 16 statistics assertions on 2026-11-16. These checks do not enable a listener or
 complete the prepared-statement framework.
+
+
+## Admin/STATS PostgreSQL listener support
+
+Admin and STATS now use the shared frontend for Parse, Bind, Describe, Execute,
+Close, Flush and Sync. The initial capability is read-only SELECT with the same
+native authorizer and AST-derived statistics refresh protections as the MySQL
+provider. It selects ParserSQL's PostgreSQL dialect and the strict SQLite result
+profile. Named statements survive Sync; implicit-cycle portals do not. All rows
+are read during the portal's first Execute, then paged from its owned buffer.
+This does not provide a transaction-wide snapshot across independent portals.
+
+Explicit transaction commands are refused on the Admin/STATS simple-query path,
+as well as in prepared SQL. The earlier simple-query acknowledgement did not
+start a native transaction. Transaction ownership and writable PostgreSQL prepared
+execution remain separate unfinished work. PostgreSQL prepared execution requires
+UTF8 client encoding; other startup encodings are refused before native access.
+The existing MySQL prepared endpoints retain their current write/transaction
+policy. Plugin-backed PostgreSQL sessions retain their existing dispatch until
+explicit registration is added.
+
+Independent live libpq and packet-client validation on 2026-11-16 passed 53 checks
+across Admin and STATS, including NULL/empty/binary/Unicode values, exact-limit
+portal suspension, Flush without premature ReadyForQuery, multiple portals,
+Sync recovery, explicit transaction refusal and non-UTF8 rejection. The existing
+#6345 error/Sync regression also passes 15 real-client assertions. Packet-level
+checks pass 39 assertions and ASan/UBSan (new sources instrumented, existing core
+uninstrumented; global leak checking disabled). Preserved MySQL live clients pass
+39 SQLite and 23 Admin/STATS checks. These results do not complete K5's writable
+or explicit-transaction acceptance.
+
+MySQL exception hardening now owns decoded bind metadata and temporary prepared
+handles, resets active native results before an exception releases its guard, and
+publishes prepare success only after statement registration. Its focused tests
+pass 81 assertions. The legacy metadata wrapper uses the signed no-transaction
+sentinel; the response test passes 26 assertions, including active hostgroup zero.
+The SELECT-only native DuckDB adapter passes 61 assertions, including exact zero
+binding to fractional-only DECIMAL and native temporary-handle cleanup.
