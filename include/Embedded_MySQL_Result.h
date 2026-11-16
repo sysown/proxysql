@@ -12,17 +12,16 @@
 //    MYSQL_TYPE_VAR_STRING with BINARY_FLAG. Every non-NULL dynamic value is
 //    rendered as its exact text representation: integers and floating-point
 //    values through std::to_chars (shortest round-trippable form for doubles),
-//    Text/Bytes as their raw bytes, and Decimal as its exact text. This keeps
+//    Text/Bytes as their raw bytes, Decimal as its exact text, and bool as 0/1. This keeps
 //    SQLite's value-preserving text view without silently choosing a numeric
 //    wire encoding from the runtime value.
 //  * Fixed typed descriptors retain their native MySQL wire encodings:
-//    eight-byte little-endian signed/unsigned integers and doubles, and
+//    one-byte booleans, eight-byte little-endian signed/unsigned integers and doubles, and
 //    length-encoded text/blob/decimal payloads.
 //  * NULL is the empty Value alternative and is represented only in the row's
 //    NULL bitmap. Empty text/blob/decimal values remain non-NULL zero-length
 //    values. NULL in a NOT NULL column is rejected.
-//  * Temporal and boolean result types do not exist in the shared Value model
-//    yet and are unsupported rather than invented here.
+//  * Temporal result types remain unsupported.
 //
 // All operations are allocation-local and perform no SQL execution, engine
 // access, or protocol I/O. On error both output parameters are left empty.

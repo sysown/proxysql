@@ -90,7 +90,14 @@ static void libpq_checks(const char* host, const char* port, const char* user, c
         PQftype(r, 0) == 20, "known %s INTEGER column describes as PostgreSQL int8",
         stats ? "STATS" : "Admin");
     PQclear(r);
-    struct Unsupported { Oid oid; const char* name; } unsupported[] = {{16,"bool"}, {1082,"date"}};
+    Oid bool_oid = 16;
+    r = PQprepare(c, "bool_value", "SELECT $1", 1, &bool_oid);
+    bool bool_prepared = PQresultStatus(r) == PGRES_COMMAND_OK; PQclear(r);
+    const char* bool_values[] = {"true"};
+    r = bool_prepared ? PQexecPrepared(c, "bool_value", 1, bool_values, nullptr, nullptr, 0) : nullptr;
+    ok(r && PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && std::string(PQgetvalue(r, 0, 0)) == "1", "BOOL parameter binds through SQLite as integer");
+    if (r) PQclear(r);
+    struct Unsupported { Oid oid; const char* name; } unsupported[] = {{1082,"date"}};
     for (const auto& u : unsupported) {
         r = PQprepare(c, u.name, "SELECT $1", 1, &u.oid);
         bool rejected = state(r, "0A000"); PQclear(r);

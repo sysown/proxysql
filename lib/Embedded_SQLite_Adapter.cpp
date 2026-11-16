@@ -373,6 +373,10 @@ Status SQLiteAdapter::bind(Statement& statement, const std::vector<Value>& value
                 return make_error(ErrorKind::internal, 0, "bind int64 symbol is unavailable");
             rc = proxy_sqlite3_bind_int64(state->stmt, native_index,
                                           static_cast<sqlite3_int64>(*unsigned_value));
+        } else if (const auto* boolean = std::get_if<bool>(&value)) {
+            if (proxy_sqlite3_bind_int64 == nullptr)
+                return make_error(ErrorKind::internal, 0, "bind int64 symbol is unavailable");
+            rc = proxy_sqlite3_bind_int64(state->stmt, native_index, *boolean ? 1 : 0);
         } else if (const auto* real_value = std::get_if<double>(&value)) {
             if (std::isnan(*real_value))
                 return make_error(ErrorKind::invalid_parameter, 0,

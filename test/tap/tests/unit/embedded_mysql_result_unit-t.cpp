@@ -513,6 +513,13 @@ void value_and_arity_errors() {
 
 int main() {
     plan(NO_PLAN);
+    { auto c = descriptor(TypeKind::boolean); Wire p;
+      ok(c.size() == 1 && c[0].wire_type == MYSQL_TYPE_TINY && c[0].length == 1, "boolean metadata");
+      ok(!mysql_encode_binary_row(c, Row{true}, p) && p == Wire({0, 0, 1}), "boolean true binary");
+      ok(!mysql_encode_binary_row(c, Row{false}, p) && p == Wire({0, 0, 0}), "boolean false binary");
+      ok(!mysql_encode_binary_row(c, Row{std::monostate{}}, p) && p == Wire({0, 4}), "boolean NULL bitmap");
+      auto d = descriptor(TypeKind::dynamic);
+      ok(!mysql_encode_binary_row(d, Row{true}, p) && p == Wire({0, 0, 1, '1'}), "dynamic boolean text"); }
     metadata_mapping();
     metadata_errors();
     null_bitmap_crosses_bytes();

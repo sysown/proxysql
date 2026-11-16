@@ -70,7 +70,11 @@ int main() {
  a.finalize(std::move(s));
  check(bool(a.prepare("SELECT 1::HUGEINT",s)) && !s,"hugeint rejected");
  check(bool(a.prepare("SELECT current_date",s)) && !s,"temporal rejected");
- check(bool(a.prepare("SELECT true",s)) && !s,"boolean rejected");
+ check(!a.prepare("SELECT true, false, NULL::BOOLEAN",s) && !a.describe_result(*s,cols) && cols.size()==3 && cols[0].type.kind==TypeKind::boolean && cols[1].type.kind==TypeKind::boolean && cols[2].type.kind==TypeKind::boolean,"boolean metadata");
+ check(!a.bind(*s,{}) && !a.execute(*s,info) && bool(a.fetch(*s,row,done,1)) && row.empty(),"boolean row budget");
+ check(!a.fetch(*s,row,done,2) && std::get<bool>(row[0]) && !std::get<bool>(row[1]) && std::holds_alternative<std::monostate>(row[2]),"boolean values and NULL"); a.finalize(std::move(s));
+ check(!a.prepare("SELECT true WHERE ?::BOOLEAN",s) && !a.describe_parameters(*s,params) && params[0].kind==TypeKind::boolean && !a.bind(*s,{true}) && !a.execute(*s,info) && !a.fetch(*s,row,done,1) && !done && std::get<bool>(row[0]),"boolean predicate true bind");
+ check(!a.reset(*s) && !a.bind(*s,{false}) && !a.execute(*s,info) && !a.fetch(*s,row,done,1) && done,"boolean predicate false bind"); a.finalize(std::move(s));
  check(bool(a.prepare("SELECT [1,2]",s)) && !s,"nested type rejected");
  check(bool(a.prepare("SELECT ?",s)) && !s,"unresolved result rejected");
  check(bool(a.prepare("SELECT 1; SELECT 2",s)) && !s,"multiple statements rejected");

@@ -4,7 +4,7 @@ This is an internal C++17 framework, integrated with the SQLite3, Admin and STAT
 
 The endpoint policy is mandatory and must use the actual endpoint's authorization rules. It is called before native prepare and before every execute and fetch. The caller must arrange any required lock or guard across native operations and the complete lifetime of a live result; these callbacks do not supply one. The adapter and policy must enforce single-statement admission and reject unsupported SQL. Embedded NUL is rejected by the registry. Describing metadata must never execute SQL. Unknown and dynamic metadata are explicit; no wire type mapping is implied.
 
-The session defaults to 128 statements and passes a 64 MiB row-payload budget to the adapter. The adapter must fail before returning a row with payload exceeding that budget; this counts value payloads, not vector capacity or allocator overhead. NULL has zero payload, text, bytes and decimal count their length, and numeric values count eight bytes. The registry checks the same budget after fetch; this does not bound engine internal materialization or process RSS. Fetch is not streaming-memory protection (#6287). Global accounting is not implemented. The read-only PostgreSQL controller buffers portals as described below; MySQL cursor capabilities remain unimplemented. The MySQL controller supplies bounded long data, parameter type reuse and the protocol limits described below. Cursor requests are explicitly rejected.
+The session defaults to 128 statements and passes a 64 MiB row-payload budget to the adapter. The adapter must fail before returning a row with payload exceeding that budget; this counts value payloads, not vector capacity or allocator overhead. NULL has zero payload, text, bytes and decimal count their length, and numeric values count eight bytes and Boolean values count one byte. The registry checks the same budget after fetch; this does not bound engine internal materialization or process RSS. Fetch is not streaming-memory protection (#6287). Core Session handles, retained SQL and metadata share process-wide quotas; frontend-owned copies, bind buffers and cached responses still require their additional accounting. The read-only PostgreSQL controller buffers portals as described below; MySQL cursor capabilities remain unimplemented. The MySQL controller supplies bounded long data, parameter type reuse and the protocol limits described below. Cursor requests are explicitly rejected.
 
 Null, signed and unsigned integers, floating point, text, bytes and exact decimal are distinct. Text and bytes carry explicit lengths, including empty values and embedded NUL. Temporal values are unsupported until their units and timezone semantics are defined. Adapters must reject unsupported values and overflow instead of coercing or truncating them. Decimal syntax and precision validation remain adapter/integration responsibilities.
 
@@ -91,8 +91,8 @@ statement; 8 MiB metadata; and 64 MiB response payload including packet framing.
 Metadata/row response errors discard privately buffered packets before sending
 ERR. A conservative maximum OK-packet size is reserved before executing DML.
 These are transport payload limits, not bounds on engine RSS. Error packets are
-sent even when the configured success-response budget cannot fit them. Global
-cross-session quotas and a public versioned registration ABI remain outstanding.
+sent even when the configured success-response budget cannot fit them. Frontend buffer accounting and a public versioned registration ABI remain
+outstanding; core global handle/SQL/metadata quotas are described below.
 
 Validation on 2026-11-16: the real MariaDB C API acceptance client passed 39
 checks against the rebuilt isolated SQLite3 listener, including repeated types,
@@ -105,8 +105,8 @@ currently manual; its unit components are registered in unit-tests-g1.
 
 A native DuckDB SELECT-only adapter is also implemented and tested separately.
 It borrows one connection, describes native types without execution, binds exact
-integer/text/blob/decimal values and checks metadata before exposing rows. Native
-DuckDB decimal precision is limited to 38 digits. Unknown, boolean, temporal,
+integer/Boolean/text/blob/decimal values and checks metadata before exposing rows. Native
+DuckDB decimal precision is limited to 38 digits. Unknown, temporal,
 wide-integer and nested result types are refused. Non-SELECT statements are
 refused before execution; writes, transaction commands, cancellation, listener
 registration and the complete D1 milestone remain outstanding. SELECT function
@@ -183,15 +183,15 @@ The internal PostgreSQL datum and result codecs are implemented separately from
 packet framing. The extended-query controller and Admin/STATS registration use these helpers;
 codec support does not imply that an endpoint admits every corresponding SQL type.
 
-Parameters support INT2/INT4/INT8, FLOAT4/FLOAT8, UTF-8 TEXT/VARCHAR/BPCHAR and BYTEA
+Parameters support BOOL, INT2/INT4/INT8, FLOAT4/FLOAT8, UTF-8 TEXT/VARCHAR/BPCHAR and BYTEA
 in text and binary formats. Finite fixed-point NUMERIC is accepted in text format
-as an exact Decimal. Other NUMERIC forms, binary NUMERIC, booleans, temporals and
+as an exact Decimal. Other NUMERIC forms, binary NUMERIC, temporals and
 other OIDs return `0A000`. Invalid UTF-8 and embedded text NUL are refused;
 BYTEA preserves arbitrary bytes, empty values and NULL distinctly. Integer text
 includes PostgreSQL's base prefixes and digit separators. Floating-point parsing
 uses locale-independent conversion. Each datum has an explicit payload budget.
 
-Result metadata maps signed integers to INT8, doubles to FLOAT8, text and dynamic
+Result metadata maps Boolean values to BOOL, signed integers to INT8, doubles to FLOAT8, text and dynamic
 values to TEXT, bytes to BYTEA, and exact decimal/unsigned values to NUMERIC.
 Binary NUMERIC is explicitly refused during format negotiation. A dynamic TEXT
 column cannot represent arbitrary BLOB bytes and refuses them. Field encoders
@@ -204,8 +204,8 @@ order; DuckDB reports its native numeric identities. Unknown identities remain
 zero and must be refused by the PostgreSQL frontend. The optional SQLite symbol
 is not required for existing MySQL prepared execution.
 
-Independent validation on 2026-11-16 passed 298 parameter-codec assertions, 39
-result-codec assertions, 31 SQLite position assertions and 55 native DuckDB
+Independent validation on 2026-11-16 passed 308 parameter-codec assertions, 47
+result-codec assertions, 31 SQLite position assertions and 65 native DuckDB
 adapter assertions. Both PostgreSQL codecs also passed ASan/UBSan. These are
 component checks; the endpoint acceptance results are recorded below.
 
@@ -233,7 +233,7 @@ Limits default to 128 statements and 128 portals, 4,096 parameters and columns,
 Accounting includes conservative container and framing charges, but excludes
 native/adapter/Session allocations before metadata reaches the controller and
 engine internal memory. Callers release each transferred response before asking
-for another to retain the stated response bound. Global quotas remain pending.
+for another to retain the stated response bound. Frontend bind/result global accounting remains in progress.
 
 SQLite now has an opt-in `strict_declared` result profile. Exact native declared
 names BLOB/TEXT/INTEGER/INT/BIGINT/REAL/DOUBLE/FLOAT provide fixed descriptors;
@@ -243,7 +243,7 @@ mixed storage before exposing a row under an incompatible descriptor. The defaul
 MySQL profile remains dynamic. Source policies and statistics relation discovery
 can select ParserSQL's PostgreSQL dialect; MySQL remains their default.
 
-Independent component validation passed 64 controller assertions, 157 strict
+Independent component validation passed 66 controller assertions, 157 strict
 profile assertions, 46 SQLite policy assertions, 46 Admin policy assertions and
 16 statistics assertions on 2026-11-16. These checks do not enable a listener or
 complete the prepared-statement framework.
@@ -283,5 +283,30 @@ handles, resets active native results before an exception releases its guard, an
 publishes prepare success only after statement registration. Its focused tests
 pass 81 assertions. The legacy metadata wrapper uses the signed no-transaction
 sentinel; the response test passes 26 assertions, including active hostgroup zero.
-The SELECT-only native DuckDB adapter passes 61 assertions, including exact zero
+The SELECT-only native DuckDB adapter passes 65 assertions, including exact zero
 binding to fractional-only DECIMAL and native temporary-handle cleanup.
+
+
+## Boolean values and core global quotas
+
+Boolean values now have an explicit shared tag. MySQL fixed descriptors use TINY
+and one-byte 0/1 binary values; PostgreSQL uses BOOL with `t`/`f` text or a binary
+byte. PostgreSQL input follows its documented prefixes and treats any nonzero
+binary byte as true. SQLite binds Boolean parameters as INTEGER 0/1 without
+inventing fixed Boolean metadata for dynamic expressions. The DuckDB adapter uses
+native Boolean bindings and result vectors. Temporal values remain unsupported.
+
+Core Sessions share limits of 4,096 native prepared handles, 64 MiB retained SQL
+and 64 MiB owned metadata. Handle/SQL reservations precede native prepare;
+metadata refusal finalizes the new native handle and releases all reservations.
+Reset retains reservations; close and destruction release them. Tests can inject
+a smaller shared pool. The helper also defines 256 MiB bind and 512 MiB result
+categories for the frontend accounting still being integrated. These limits count
+logical retained state and exclude allocator overhead, engine memory and transient
+adapter allocations; they do not bound process RSS or output network queues.
+
+Independent checks pass 13 quota assertions, 95 lifecycle assertions, 308
+PostgreSQL parameter assertions, 47 PostgreSQL field assertions, 65 MySQL field
+assertions, 364 native SQLite assertions, 66 portal controller assertions and 65
+native DuckDB assertions. The quota helper also passes ASan/UBSan. All three real
+client suites retain their 53/39/23 passing checks after enabling Boolean binds.

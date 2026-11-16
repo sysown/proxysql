@@ -9,13 +9,14 @@
 // performs no SQL parsing, engine access, network I/O or protocol I/O.
 //
 // Supported scalar OID/format pairs:
+//   BOOL                text and binary -> bool
 //   INT2/INT4/INT8      text and binary -> int64_t (exact type ranges)
 //   FLOAT4/FLOAT8       text and binary -> double
 //   TEXT/VARCHAR/BPCHAR text and binary -> Text (strictly validated UTF-8)
 //   BYTEA               text and binary -> Bytes
 //   NUMERIC             text only       -> Decimal (canonical fixed point)
 //
-// BOOL, temporal types, arrays, UUID, JSON, binary NUMERIC and all other OIDs
+// Temporal types, arrays, UUID, JSON, binary NUMERIC and all other OIDs
 // are rejected with SQLSTATE 0A000. This decoder intentionally does not claim
 // full PostgreSQL type coverage; additional families belong to later work.
 //
@@ -73,6 +74,7 @@ namespace embedded {
 
 // PostgreSQL type OIDs supported by this scalar decoder. These are the
 // pg_type OIDs sent by clients in Parse/Describe metadata.
+inline constexpr uint32_t pgsql_oid_bool = 16;
 inline constexpr uint32_t pgsql_oid_bytea = 17;
 inline constexpr uint32_t pgsql_oid_int8 = 20;
 inline constexpr uint32_t pgsql_oid_int2 = 21;
@@ -93,7 +95,7 @@ bool pgsql_utf8_text_valid(const unsigned char*, size_t) noexcept;
 // or less), or -1 for SQL NULL. `data` may be null only when length is 0.
 //
 // On success returns an empty Status and commits an owned alternative to
-// `out`: int64_t, double, Text, Bytes, Decimal, or monostate for NULL.
+// `out`: bool, int64_t, double, Text, Bytes, Decimal, or monostate for NULL.
 // On failure returns an Error with an appropriate kind and SQLSTATE and leaves
 // `out` holding std::monostate.
 Status pgsql_decode_parameter(

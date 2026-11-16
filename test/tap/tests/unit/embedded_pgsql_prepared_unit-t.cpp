@@ -19,7 +19,7 @@ struct Fake : Adapter {
         int64_t value = 0;
     };
     int executes = 0, finals = 0, prepares = 0;
-    bool mutate = false, bad_position = false, fail_fetch = false;
+    bool mutate = false, bad_position = false, fail_fetch = false, boolean_parameters = false;
     int *guard_depth = nullptr;
     bool all_guarded = true;
     std::vector<Value> bound;
@@ -31,7 +31,7 @@ struct Fake : Adapter {
         return {};
     }
     Status describe_parameters(Statement &, std::vector<Type> &p) override {
-        p.assign(3, Type{TypeKind::signed_integer});
+        p.assign(3, Type{boolean_parameters ? TypeKind::boolean : TypeKind::signed_integer});
         return {};
     }
     Status describe_parameter_positions(Statement &, std::vector<uint32_t> &p) override {
@@ -96,6 +96,13 @@ int main() {
     PgSQLPrepared p(a, policy, factory);
     PgSQLDescription desc;
     PgSQLExecution result;
+    { Fake boolean_adapter; boolean_adapter.boolean_parameters = true;
+      PgSQLPrepared boolean_controller(boolean_adapter, policy, factory);
+      PgSQLDescription boolean_desc;
+      ok(!boolean_controller.parse("bool", "SELECT", {0, 0}) && !boolean_controller.describe_statement("bool", boolean_desc) && boolean_desc.parameter_oids == std::vector<uint32_t>({16, 16}), "inferred Boolean OID");
+      const unsigned char t[] = {'t'}, f[] = {'f'};
+      ok(!boolean_controller.bind("bool_portal", "bool", {{t, 1, 0}, {f, 1, 0}}, {}) && !boolean_controller.execute("bool_portal", 0, result) && boolean_adapter.bound.size() == 3 && std::holds_alternative<bool>(boolean_adapter.bound[0]) && !std::get<bool>(boolean_adapter.bound[0]) && std::get<bool>(boolean_adapter.bound[1]), "Boolean parameters reach adapter as bool"); }
+
     ok(!p.parse("s", "SELECT $2, $1, $2", {pgsql_oid_int8, pgsql_oid_int8}),
        "parse accepts mapped parameters");
     ok(a.sql == "SELECT $2, $1, $2", "SQL is not rewritten");

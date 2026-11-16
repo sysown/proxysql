@@ -1,5 +1,6 @@
 #include "Embedded_Prepared.h"
 #include <type_traits>
+#include <limits>
 
 namespace embedded {
 namespace {
@@ -8,8 +9,9 @@ Status error(ErrorKind kind, const char* message) {
 }
 }
 
-Session::Session(Adapter& adapter, EndpointPolicy& policy, size_t max, size_t budget)
-    : adapter_(adapter), policy_(policy), max_statements_(max), result_budget_(budget) {}
+Session::Session(Adapter& adapter, EndpointPolicy& policy, size_t max, size_t budget, QuotaPool* quota)
+    : adapter_(adapter), policy_(policy), max_statements_(max), result_budget_(budget),
+      quota_(quota ? *quota : process_quota_pool()) {}
 
 void Session::Deleter::operator()(Statement* statement) const noexcept {
     if (statement) adapter->finalize(std::unique_ptr<Statement>(statement));
@@ -25,7 +27,12 @@ Status Session::prepare(const std::string& sql, uint64_t& id) {
         return error(ErrorKind::syntax, "embedded NUL in SQL");
     if (auto err = policy_.authorize_prepare(sql)) return err;
 
-    Entry entry(adapter_);
+    Entry entry(adapter_, quota_);
+    ResourceUsage usage{};
+    usage[static_cast<size_t>(Resource::native_statements)] = 1;
+    usage[static_cast<size_t>(Resource::sql_bytes)] = sql.size();
+    if (!entry.lease.resize(usage))
+        return Error{ErrorKind::resource, 0, "prepared statement quota exceeded", "54000"};
     entry.sql = sql;
     std::unique_ptr<Statement> native;
     // Adopt even a handle supplied on an error or during an exception.
@@ -43,6 +50,22 @@ Status Session::prepare(const std::string& sql, uint64_t& id) {
     if (!entry.handle) return error(ErrorKind::internal, "adapter returned no statement");
     if (auto err = adapter_.describe_parameters(*entry.handle, entry.parameters)) return err;
     if (auto err = adapter_.describe_result(*entry.handle, entry.columns)) return err;
+    // Include the retained Entry itself as a conservative fixed overhead. Metadata
+    // construction above is transient and cannot be preflighted through Adapter.
+    size_t bytes = sizeof(Entry);
+    const size_t max = std::numeric_limits<size_t>::max();
+    auto add = [&](size_t count, size_t size) {
+        if (count > (max - bytes) / size) return false;
+        bytes += count * size;
+        return true;
+    };
+    bool fits = add(entry.parameters.size(), sizeof(Type)) &&
+                add(entry.columns.size(), sizeof(Column));
+    for (const auto& column : entry.columns)
+        if (fits) fits = add(column.name.size(), 1);
+    usage[static_cast<size_t>(Resource::metadata_bytes)] = bytes;
+    if (!fits || !entry.lease.resize(usage))
+        return Error{ErrorKind::resource, 0, "prepared metadata quota exceeded", "54000"};
     const uint64_t new_id = next_id_;
     entries_.emplace(new_id, std::move(entry));
     ++next_id_;

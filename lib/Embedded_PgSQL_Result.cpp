@@ -33,6 +33,8 @@ bool valid_text(const std::string& s) {
 }
 bool descriptor(const PgSQLColumn& c) {
     switch (c.kind) {
+        case TypeKind::boolean:
+            return c.oid == 16 && c.length == 1 && c.modifier == -1;
         case TypeKind::signed_integer:
             return c.oid == 20 && c.length == 8 && c.modifier == -1;
         case TypeKind::unsigned_integer:
@@ -109,6 +111,10 @@ Status pgsql_describe_columns(const std::vector<Column>& in,
             }
             PgSQLColumn d{c.type.kind, c.type.nullable, c.name, 0, -1, -1};
             switch (c.type.kind) {
+                case TypeKind::boolean:
+                    d.oid = 16;
+                    d.length = 1;
+                    break;
                 case TypeKind::signed_integer:
                     d.oid = 20;
                     d.length = 8;
@@ -193,7 +199,12 @@ Status pgsql_encode_field(const PgSQLColumn& c, int16_t f, const Value& v,
         auto kind = c.kind;
         Status s;
         char buf[128];
-        if (auto x = std::get_if<int64_t>(&v);
+        if (auto x = std::get_if<bool>(&v);
+            x && (kind == TypeKind::boolean || kind == TypeKind::dynamic)) {
+            // Dynamic TEXT uses PostgreSQL canonical boolean text.
+            unsigned char b = (f == 1 && kind == TypeKind::boolean) ? (*x ? 1 : 0) : (*x ? 't' : 'f');
+            s = append(&b, 1);
+        } else if (auto x = std::get_if<int64_t>(&v);
             x && (kind == TypeKind::signed_integer || kind == TypeKind::dynamic)) {
             if (f == 1 && kind == TypeKind::signed_integer) {
                 if (budget < 8)

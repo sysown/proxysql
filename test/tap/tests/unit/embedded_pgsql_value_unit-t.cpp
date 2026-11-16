@@ -236,10 +236,20 @@ void unsupported_families() {
     expect_null_success(pgsql_oid_int4, 1, "binary int4 NULL succeeds");
     expect_null_success(pgsql_oid_bytea, 1, "binary bytea NULL succeeds");
 
-    expect_error_wire(16, 0, text("t"), ErrorKind::unsupported, "0A000",
-                      "BOOL text is unsupported");
-    expect_error_raw(16, 0, nullptr, -1, ErrorKind::unsupported, "0A000",
-                     "BOOL NULL is unsupported");
+    expect_null_success(pgsql_oid_bool, 0, "BOOL NULL succeeds");
+    expect_error_wire(pgsql_oid_bool, 0, text("o"), ErrorKind::invalid_parameter, "22P02", "ambiguous BOOL prefix fails");
+    expect_error_wire(pgsql_oid_bool, 1, Wire{1, 0}, ErrorKind::invalid_parameter, "08P01", "binary BOOL length fails");
+    for (const auto& item : {std::pair<const char*, bool>{" TrU ", true}, {"of", false}, {"y", true}, {"0", false}}) {
+        Value v; auto e = decode_wire(pgsql_oid_bool, 0, text(item.first), v);
+        ok(!e && std::holds_alternative<bool>(v) && std::get<bool>(v) == item.second, "BOOL text %s", item.first);
+    }
+    expect_error_wire(pgsql_oid_bool, 0, text("true"), ErrorKind::resource, "54000", "BOOL input budget", 3);
+    expect_error_wire(pgsql_oid_bool, 0, text("truex"), ErrorKind::invalid_parameter, "22P02", "BOOL overlong prefix rejected");
+    { Value v = Text{"false"}; const auto& input = std::get<Text>(v).bytes;
+      auto e = pgsql_decode_parameter(pgsql_oid_bool, 0, reinterpret_cast<const unsigned char*>(input.data()), input.size(), v);
+      ok(!e && std::holds_alternative<bool>(v) && !std::get<bool>(v), "aliased Boolean text decode"); }
+    { Value v; auto e = decode_wire(pgsql_oid_bool, 1, Wire{255}, v);
+      ok(!e && std::holds_alternative<bool>(v) && std::get<bool>(v), "binary BOOL accepts nonzero"); }
     expect_error_wire(1082, 0, text("2020-01-01"), ErrorKind::unsupported,
                       "0A000", "DATE text is unsupported");
     expect_error_wire(1114, 0, text("2020-01-01 00:00:00"),
@@ -1109,6 +1119,8 @@ int main() {
     ok(!embedded::pgsql_utf8_text_valid(nullptr, 1), "shared UTF-8 validator rejects missing nonempty data");
     const unsigned char invalid_utf8[] = {0xed, 0xa0, 0x80};
     ok(!embedded::pgsql_utf8_text_valid(invalid_utf8, sizeof(invalid_utf8)), "shared UTF-8 validator rejects surrogate encoding");
+    { Value v; auto e = decode_wire(16, 0, text(" true "), v);
+      ok(!e && std::holds_alternative<bool>(v) && std::get<bool>(v), "BOOL text decodes to true"); }
     oid_format_and_null_matrix();
     unsupported_families();
     framing_errors();

@@ -4,7 +4,7 @@
 #include "tap.h"
 using namespace embedded;
 int main() {
-    plan(39);
+    plan(47);
     std::vector<PgSQLColumn> c;
     ok(!pgsql_describe_columns({Column{"n", Type{TypeKind::signed_integer, 0, 0, true}}},
                                c) &&
@@ -135,5 +135,13 @@ int main() {
                            n) &&
            p == std::vector<unsigned char>({255, 240, 0, 0, 0, 0, 0, 0}),
        "negative infinity binary");
+    ok(!pgsql_describe_columns({Column{"b", Type{TypeKind::boolean, 0, 0, true}}}, c) && c[0].oid == 16 && c[0].length == 1 && c[0].modifier == -1, "boolean metadata");
+    ok(!pgsql_encode_field(c[0], 0, Value{true}, p, n) && p == std::vector<unsigned char>{'t'}, "boolean true text");
+    ok(!pgsql_encode_field(c[0], 1, Value{false}, p, n) && p == std::vector<unsigned char>{0}, "boolean false binary");
+    ok(!pgsql_encode_field(c[0], 1, Value{true}, p, n) && p == std::vector<unsigned char>{1}, "boolean true binary");
+    ok(!pgsql_encode_field(c[0], 0, Value{}, p, n) && n, "boolean NULL");
+    ok(pgsql_encode_field(c[0], 0, Value{true}, p, n, 0).has_value(), "boolean budget");
+    ok(!pgsql_describe_columns({Column{"d", Type{TypeKind::dynamic, 0, 0, true}}}, c) && !pgsql_encode_field(c[0], 1, Value{true}, p, n) && p == std::vector<unsigned char>{'t'}, "dynamic Boolean uses canonical text");
+    ok(!pgsql_encode_field(c[0], 0, Value{false}, p, n) && p == std::vector<unsigned char>{'f'}, "dynamic false text");
     return exit_status();
 }

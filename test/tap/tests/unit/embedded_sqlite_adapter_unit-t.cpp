@@ -415,6 +415,16 @@ void binding_ownership_and_isolation() {
     ExecInfo info;
     Row row;
     bool done = true;
+    {
+        std::unique_ptr<Statement> handle;
+        status_ok(adapter.prepare("SELECT ?, ?, ?", handle), "prepare boolean binds");
+        status_ok(adapter.bind(*handle, {true, false, std::monostate{}}), "bind boolean values and NULL");
+        status_ok(adapter.execute(*handle, info), "execute boolean binds");
+        status_ok(adapter.fetch(*handle, row, done, 16), "fetch boolean binds");
+        ok(!done && row.size() == 3 && std::get<int64_t>(row[0]) == 1 && std::get<int64_t>(row[1]) == 0 && std::holds_alternative<std::monostate>(row[2]), "SQLite stores boolean binds as integers");
+        adapter.finalize(std::move(handle));
+    }
+
 
     {
         std::unique_ptr<Statement> handle;

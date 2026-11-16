@@ -1,12 +1,14 @@
 #pragma once
 #include "Embedded_Execution.h"
+#include "Embedded_Quota.h"
 #include <map>
 
 namespace embedded {
 class Session {
 public:
     explicit Session(Adapter&, EndpointPolicy&, size_t max_statements = 128,
-                     size_t result_budget = 64u * 1024u * 1024u);
+                     size_t result_budget = 64u * 1024u * 1024u,
+                     QuotaPool* quota = nullptr);
     ~Session();
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
@@ -26,7 +28,8 @@ private:
     };
     using Handle = std::unique_ptr<Statement, Deleter>;
     struct Entry {
-        explicit Entry(Adapter& adapter) : handle(nullptr, Deleter{&adapter}) {}
+        Entry(Adapter& adapter, QuotaPool& pool) : lease(pool), handle(nullptr, Deleter{&adapter}) {}
+        QuotaLease lease;
         std::string sql;
         Handle handle;
         std::vector<Type> parameters;
@@ -37,6 +40,7 @@ private:
     EndpointPolicy& policy_;
     size_t max_statements_;
     size_t result_budget_;
+    QuotaPool& quota_;
     uint64_t next_id_ = 1;
     std::map<uint64_t, Entry> entries_;
 };

@@ -46,7 +46,8 @@
 //    and other no-result statement kinds belongs to the endpoint policy.
 //
 // Binding:
-//  * Accepted values are NULL, int64, uint64 up to INT64_MAX, non-NaN double,
+//  * Accepted values are NULL, bool (bound as native INTEGER 0/1), int64,
+//    uint64 up to INT64_MAX, non-NaN double,
 //    explicit-length Text, and explicit-length Bytes. Empty text/blob keeps a
 //    non-null value and a zero byte length. NaN is rejected because SQLite
 //    would turn it into NULL. Decimal and every other unsupported conversion

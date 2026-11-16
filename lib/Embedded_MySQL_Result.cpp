@@ -91,6 +91,9 @@ Status dynamic_text_size(const Value& value, size_t& length) {
             if constexpr (std::is_same_v<T, std::monostate>) {
                 return fail(ErrorKind::internal,
                             "NULL reached dynamic text rendering");
+            } else if constexpr (std::is_same_v<T, bool>) {
+                length = 1;
+                return {};
             } else if constexpr (std::is_same_v<T, int64_t> ||
                                  std::is_same_v<T, uint64_t>) {
                 return integer_text_size(item, length);
@@ -136,6 +139,10 @@ Status append_dynamic(std::vector<unsigned char>& out, const Value& value) {
             if constexpr (std::is_same_v<T, std::monostate>) {
                 return fail(ErrorKind::internal,
                             "NULL reached dynamic value encoding");
+            } else if constexpr (std::is_same_v<T, bool>) {
+                const unsigned char digit = item ? '1' : '0';
+                append_variable(out, &digit, 1);
+                return {};
             } else if constexpr (std::is_same_v<T, int64_t> ||
                                  std::is_same_v<T, uint64_t>) {
                 char text[32];
@@ -183,6 +190,10 @@ Status append_dynamic(std::vector<unsigned char>& out, const Value& value) {
 Status fixed_value_size(const MySQLColumn& column, const Value& value,
                         size_t& wire_size) {
     switch (column.kind) {
+        case TypeKind::boolean:
+            if (!std::holds_alternative<bool>(value)) return fail(ErrorKind::invalid_parameter, "boolean column requires a bool value");
+            wire_size = 1;
+            return {};
         case TypeKind::signed_integer:
             if (!std::holds_alternative<int64_t>(value)) {
                 return fail(ErrorKind::invalid_parameter,
@@ -248,6 +259,9 @@ Status variable_value_size(const MySQLColumn& column, const Value& value,
 Status append_fixed(std::vector<unsigned char>& out,
                     const MySQLColumn& column, const Value& value) {
     switch (column.kind) {
+        case TypeKind::boolean:
+            out.push_back(std::get<bool>(value) ? 1 : 0);
+            return {};
         case TypeKind::signed_integer:
             append_le64(out,
                         static_cast<uint64_t>(std::get<int64_t>(value)));
@@ -316,6 +330,7 @@ bool known_kind(TypeKind kind) {
         case TypeKind::text:
         case TypeKind::bytes:
         case TypeKind::decimal:
+        case TypeKind::boolean:
             return true;
         case TypeKind::unknown:
         default:
@@ -354,6 +369,12 @@ Status mysql_describe_columns(const std::vector<Column>& columns,
             target.flags = 0;
 
             switch (source.type.kind) {
+                case TypeKind::boolean:
+                    target.wire_type = MYSQL_TYPE_TINY;
+                    target.charset = 63;
+                    target.flags = NUM_FLAG;
+                    target.length = 1;
+                    break;
                 case TypeKind::dynamic:
                     target.wire_type = MYSQL_TYPE_VAR_STRING;
                     target.charset = 63;

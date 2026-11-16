@@ -53,6 +53,7 @@ class OutputFailureGuard {
 
 bool supported_oid(uint32_t oid) {
     switch (oid) {
+        case pgsql_oid_bool:
         case pgsql_oid_bytea:
         case pgsql_oid_int8:
         case pgsql_oid_int2:
@@ -804,6 +805,30 @@ Status decode_bytea_text(const unsigned char* data, size_t length,
 Status decode_value(uint32_t oid, int16_t format, const unsigned char* data,
                     size_t length, size_t budget, Value& local) {
     switch (oid) {
+        case pgsql_oid_bool: {
+            if (format == 1) {
+                if (length != 1) return fail(ErrorKind::invalid_parameter, "08P01", "invalid binary BOOL length");
+                local = data[0] != 0;
+                return {};
+            }
+            size_t start = 0, end = length;
+            while (start < end && is_ascii_space(data[start])) ++start;
+            while (end > start && is_ascii_space(data[end - 1])) --end;
+            const size_t n = end - start;
+            const char* words[] = {"true", "false", "yes", "no", "on", "off", "1", "0"};
+            for (size_t i = 0; i < 8; ++i) {
+                const size_t m = std::strlen(words[i]);
+                if (!n || n > m || (i >= 4 && i <= 5 && n < 2) || (i >= 6 && n != 1)) continue;
+                bool match = true;
+                for (size_t j = 0; j < n; ++j) {
+                    unsigned char c = data[start + j];
+                    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+                    if (c != static_cast<unsigned char>(words[i][j])) { match = false; break; }
+                }
+                if (match) { local = (i % 2 == 0); return {}; }
+            }
+            return fail(ErrorKind::invalid_parameter, "22P02", "invalid BOOL text");
+        }
         case pgsql_oid_int2:
         case pgsql_oid_int4:
         case pgsql_oid_int8:

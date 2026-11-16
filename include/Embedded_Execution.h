@@ -23,17 +23,18 @@ struct Decimal { std::string exact; };
 struct Text { std::string bytes; };
 struct Bytes { std::vector<uint8_t> bytes; };
 // Temporal values are intentionally unsupported until units and timezone are specified.
-using Value = std::variant<std::monostate, int64_t, uint64_t, double, Text, Bytes, Decimal>;
+using Value = std::variant<std::monostate, int64_t, uint64_t, double, Text, Bytes, Decimal, bool>;
 inline size_t value_payload_bytes(const Value& value) {
  return std::visit([](const auto& v) -> size_t {
   using T = std::decay_t<decltype(v)>;
   if constexpr (std::is_same_v<T, std::monostate>) return 0;
   else if constexpr (std::is_same_v<T, Text> || std::is_same_v<T, Bytes>) return v.bytes.size();
   else if constexpr (std::is_same_v<T, Decimal>) return v.exact.size();
+  else if constexpr (std::is_same_v<T, bool>) return 1; // Boolean payload is one byte.
   else return 8;
  }, value);
 }
-enum class TypeKind { unknown, dynamic, signed_integer, unsigned_integer, floating, text, bytes, decimal };
+enum class TypeKind { unknown, dynamic, signed_integer, unsigned_integer, floating, text, bytes, decimal, boolean };
 struct Type { TypeKind kind = TypeKind::unknown; int32_t precision = 0; int32_t scale = 0; bool nullable = true; };
 struct Column { std::string name; Type type; };
 using Row = std::vector<Value>; // Owned by caller, valid until caller changes it.

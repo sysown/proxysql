@@ -202,6 +202,7 @@ static void execution_reset() {
 }
 
 static void payload_budget() {
+    ok(value_payload_bytes(Value{true}) == 1 && value_payload_bytes(Value{false}) == 1, "Boolean payload is one byte");
     ok(value_payload_bytes(std::monostate{}) == 0, "NULL payload is zero");
     ok(value_payload_bytes(Text{""}) == 0 && value_payload_bytes(Bytes{}) == 0, "empty text and bytes payload is zero");
     ok(value_payload_bytes(int64_t(1)) == 8 && value_payload_bytes(uint64_t(1)) == 8 && value_payload_bytes(1.0) == 8,
@@ -224,8 +225,33 @@ static void payload_budget() {
     }
 }
 
+static void shared_quota() {
+    QuotaLimits limits; limits.values = {{1, 4, 4096, 100, 100}};
+    QuotaPool pool(limits); Fake fake; Policy policy;
+    Session first(fake, policy, 10, 1024, &pool), second(fake, policy, 10, 1024, &pool);
+    uint64_t a = 0, b = 0;
+    policy.allow = false;
+    ok(bool(first.prepare("no", a)) && pool.snapshot() == ResourceUsage{}, "policy refusal does not charge quota");
+    policy.allow = true;
+    ok(!first.prepare("1234", a), "first session consumes exact SQL and handle quota");
+    auto denied = second.prepare("x", b);
+    ok(denied && denied->kind == ErrorKind::resource && denied->sqlstate == "54000" && fake.prepares == 1, "shared quota denies before native prepare");
+    ok(!first.reset(a) && bool(second.prepare("x", b)), "reset retains quota");
+    ok(!first.close(a) && !second.prepare("x", b), "close allows other session to reuse quota");
+    ok(!second.close(b) && pool.snapshot() == ResourceUsage{}, "close releases all charges");
+    limits.values[2] = 0; QuotaPool no_metadata(limits);
+    Session third(fake, policy, 10, 1024, &no_metadata);
+    int finals = fake.finals;
+    auto metadata_error = third.prepare("x", b);
+    ok(metadata_error && metadata_error->sqlstate == "54000" && fake.finals == finals + 1 && no_metadata.snapshot() == ResourceUsage{}, "metadata rejection finalizes handle and releases quota");
+    fake.throw_describe = true;
+    try { third.prepare("x", b); } catch (const std::runtime_error&) {}
+    ok(no_metadata.snapshot() == ResourceUsage{} && fake.finals == finals + 2, "exception releases handle and quota");
+}
+
 int main() {
     plan(NO_PLAN);
+    shared_quota();
     lifecycle();
     ownership_and_policy();
     fetch_behaviour();

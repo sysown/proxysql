@@ -16,6 +16,8 @@ Status limit() {
 }
 uint32_t infer(TypeKind k) {
     switch (k) {
+    case TypeKind::boolean:
+        return pgsql_oid_bool;
     case TypeKind::signed_integer:
         return pgsql_oid_int8;
     case TypeKind::floating:

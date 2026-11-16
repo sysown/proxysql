@@ -33,7 +33,7 @@ real-client test passes 23 checks, with runtime read-only enforcement and statis
 freshness. Admin/STATS PostgreSQL now supports shared read-only prepared execution;
 its real libpq/packet client passes 53 checks. Explicit transactions and prepared
 writes are refused in this initial PostgreSQL slice. DuckDB listeners remain
-unregistered. The native DuckDB SELECT adapter has a separate 61-check unit proof,
+unregistered. The native DuckDB SELECT adapter has a separate 65-check unit proof,
 including native parameter
 positions, and still awaits registration.
 See [the support and limits](../../../doc/embedded-prepared-statements.md).
@@ -43,9 +43,9 @@ ParserSQL draft [PR #72](https://github.com/ProxySQL/ParserSQL/pull/72), head
 comment provenance. It passes 695 local parser tests and upstream CI. ProxySQL
 still vendors 1.1.1; no upstream release, merge, tag or vendor bump has occurred.
 
-PostgreSQL codec prerequisites now pass 298 parameter and 39 result assertions,
+PostgreSQL codec prerequisites now pass 308 parameter and 47 result assertions,
 including sanitizer runs. Native parameter-position metadata passes 31 SQLite
-checks and is covered by the DuckDB adapter tests. The read-only controller adds 64 component checks, the strict SQLite result
+checks and is covered by the DuckDB adapter tests. The read-only controller adds 66 component checks, the strict SQLite result
 profile adds 157, and PostgreSQL policy/statistics dialect checks pass. These
 components are integrated into Admin/STATS read-only extended execution. The
 packet frontend passes 39 checks and sanitizer validation; full transaction and
@@ -55,8 +55,9 @@ Next: finish cross-endpoint resource/ownership acceptance; implement the shared
 remaining PostgreSQL transaction/type coverage and public versioned registration; register the native DuckDB adapter; complete scoped
 analytical SQL translation after the ParserSQL dependency update. Admin extension
 and view/trigger authorization must be proved rather than inherited from the
-SQLite3 listener policy. Global cross-session quotas and temporal values remain
-open framework work. Keep PR #6648 in draft until its advertised scope is reviewed
+SQLite3 listener policy. Core cross-session handle/SQL/metadata quotas now have 13 helper and 95 lifecycle
+checks; frontend bind/result accounting and temporal values remain open framework
+work. Keep PR #6648 in draft until its advertised scope is reviewed
 and the corresponding acceptance gates pass.
 
 ## 1. Goal

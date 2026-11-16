@@ -30,6 +30,7 @@ Status error(ErrorKind kind, const char* message) { return Error{kind, 0, messag
 Type map_type(duckdb_logical_type t) {
  Type x; if (!t) return x;
  switch (duckdb_get_type_id(t)) {
+ case DUCKDB_TYPE_BOOLEAN: x.kind=TypeKind::boolean; break;
  case DUCKDB_TYPE_TINYINT: case DUCKDB_TYPE_SMALLINT: case DUCKDB_TYPE_INTEGER: case DUCKDB_TYPE_BIGINT: x.kind=TypeKind::signed_integer; break;
  case DUCKDB_TYPE_UTINYINT: case DUCKDB_TYPE_USMALLINT: case DUCKDB_TYPE_UINTEGER: case DUCKDB_TYPE_UBIGINT: x.kind=TypeKind::unsigned_integer; break;
  case DUCKDB_TYPE_FLOAT: case DUCKDB_TYPE_DOUBLE: x.kind=TypeKind::floating; break;
@@ -193,6 +194,7 @@ Status DuckDBAdapter::bind(Statement& s,const std::vector<Value>& values) {
             using T = std::decay_t<decltype(v)>;
             auto idx = i + 1;
             if constexpr (std::is_same_v<T, std::monostate>) return duckdb_bind_null(p->stmt, idx);
+            else if constexpr (std::is_same_v<T, bool>) return duckdb_bind_boolean(p->stmt, idx, v);
             else if constexpr (std::is_same_v<T, int64_t>) return duckdb_bind_int64(p->stmt, idx, v);
             else if constexpr (std::is_same_v<T, uint64_t>) return duckdb_bind_uint64(p->stmt, idx, v);
             else if constexpr (std::is_same_v<T, double>) return duckdb_bind_double(p->stmt, idx, v);
@@ -265,6 +267,7 @@ Status DuckDBAdapter::fetch(Statement& s,Row& row,bool& done,size_t budget) {
   if (mask && !duckdb_validity_row_is_valid(mask,r)) { row.emplace_back(std::monostate{}); continue; }
   auto data=duckdb_vector_get_data(vec); Value v;
   switch (p->native_types[i]) {
+   case DUCKDB_TYPE_BOOLEAN: v=static_cast<bool*>(data)[r]; break;
    case DUCKDB_TYPE_TINYINT: v=int64_t(((int8_t*)data)[r]); break;
    case DUCKDB_TYPE_SMALLINT: v=int64_t(((int16_t*)data)[r]); break;
    case DUCKDB_TYPE_INTEGER: v=int64_t(((int32_t*)data)[r]); break;
