@@ -5,6 +5,9 @@
 #include "MySQL_Data_Stream.h"
 #include "MySQL_Session.h"
 #include "mysql_connection.h"
+#include "MySQL_PreparedStatement.h"
+#include "MySQL_HostGroups_Manager.h"
+#include "mysql_backend.h"
 #include <cstring>
 #include <limits>
 
@@ -43,6 +46,45 @@ int main() {
         if (stream.PSarrayOUT->len==3) ok(u16(static_cast<unsigned char*>(stream.PSarrayOUT->pdata[2].ptr)+7)==SERVER_STATUS_IN_TRANS, "EOF uses supplied transaction status");
         else ok(false,"parameter-only response contains EOF");
         clear(stream);
+        // Exercise the legacy wrapper through the real session transaction lookup.
+        MYSQL_STMT native_stmt{};
+        native_stmt.param_count = 1;
+        char username[] = "user", schema[] = "db", query[] = "?";
+        MySQL_STMT_Global_info legacy(9, username, schema, query, 1, nullptr, &native_stmt, 1);
+        session.mybes = nullptr;
+        session.autocommit = true;
+        ok(protocol.generate_STMT_PREPARE_RESPONSE(1, &legacy, 0) && stream.PSarrayOUT->len == 3 &&
+           u16(static_cast<unsigned char*>(stream.PSarrayOUT->pdata[2].ptr) + 7) == SERVER_STATUS_AUTOCOMMIT,
+           "legacy prepare metadata EOF excludes transaction status without an active backend");
+        clear(stream);
+        MyHGC hostgroup(0);
+        char address[] = "127.0.0.1", comment[] = "";
+        MySrvC server(address, 3306, 0, 1, MYSQL_SERVER_STATUS_ONLINE, 0, 10, 0, 0, 0, comment);
+        server.myhgc = &hostgroup;
+        MySQL_Connection backend_conn;
+        MYSQL backend_mysql{};
+        backend_mysql.server_status = SERVER_STATUS_IN_TRANS;
+        backend_conn.mysql = &backend_mysql;
+        backend_conn.parent = &server;
+        MySQL_Data_Stream backend_stream;
+        backend_stream.myconn = &backend_conn;
+        MySQL_Backend backend;
+        backend.server_myds = &backend_stream;
+        PtrArray backends;
+        backends.add(&backend);
+        session.mybes = &backends;
+        ok(session.FindOneActiveTransaction() == 0 &&
+           protocol.generate_STMT_PREPARE_RESPONSE(1, &legacy, 0) && stream.PSarrayOUT->len == 3 &&
+           u16(static_cast<unsigned char*>(stream.PSarrayOUT->pdata[2].ptr) + 7) ==
+               (SERVER_STATUS_IN_TRANS | SERVER_STATUS_AUTOCOMMIT),
+           "legacy prepare metadata EOF includes transaction status for active hostgroup zero");
+        clear(stream);
+        session.mybes = nullptr;
+        backend.server_myds = nullptr;
+        backend_stream.myconn = nullptr;
+        backend_conn.mysql = nullptr;
+        backend_conn.parent = nullptr;
+        server.myhgc = nullptr;
         conn.options.client_flag |= CLIENT_DEPRECATE_EOF;
         ok(protocol.generate_STMT_PREPARE_RESPONSE(1, 2, 1, 1, fields, 0, 0) && stream.PSarrayOUT->len==3, "deprecate EOF omits both EOF packets");
         clear(stream);

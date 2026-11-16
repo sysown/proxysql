@@ -74,6 +74,8 @@ struct ResetFailureAdapter : embedded::Adapter {
     int* active = nullptr;
     int unguarded = 0;
     int native_calls = 0;
+    int resets = 0, finalizes = 0;
+    bool throw_fetch = false;
     void check() { ++native_calls; if (active && !*active) ++unguarded; }
     explicit ResetFailureAdapter(sqlite3* db) : inner(db) {}
     embedded::Status prepare(const std::string& q, std::unique_ptr<embedded::Statement>& o) override { check(); return inner.prepare(q, o); }
@@ -81,13 +83,14 @@ struct ResetFailureAdapter : embedded::Adapter {
     embedded::Status describe_result(embedded::Statement& s, std::vector<embedded::Column>& o) override { check(); return inner.describe_result(s, o); }
     embedded::Status bind(embedded::Statement& s, const std::vector<embedded::Value>& v) override { check(); return inner.bind(s, v); }
     embedded::Status execute(embedded::Statement& s, embedded::ExecInfo& o) override { check(); return inner.execute(s, o); }
-    embedded::Status fetch(embedded::Statement& s, embedded::Row& r, bool& d, size_t b) override { check(); return inner.fetch(s, r, d, b); }
+    embedded::Status fetch(embedded::Statement& s, embedded::Row& r, bool& d, size_t b) override { check(); if (throw_fetch) throw std::runtime_error("injected fetch exception"); return inner.fetch(s, r, d, b); }
     embedded::Status reset(embedded::Statement& s) override {
         check();
+        ++resets;
         if (fail_reset) return embedded::Error{embedded::ErrorKind::engine, SQLITE_BUSY, "injected reset failure", "HY000"};
         return inner.reset(s);
     }
-    void finalize(std::unique_ptr<embedded::Statement> s) noexcept override { check(); inner.finalize(std::move(s)); }
+    void finalize(std::unique_ptr<embedded::Statement> s) noexcept override { check(); ++finalizes; inner.finalize(std::move(s)); }
 };
 
 int main() {
@@ -155,7 +158,17 @@ int main() {
             if (deny) return embedded::Error{embedded::ErrorKind::resource, 0, "denied", "HY000"};
             out.reset(new Guard(active)); return {};
         };
-        embedded::register_mysql_prepared(*g, guarded, policy, [] { return uint16_t(0); }, {}, factory);
+        bool throw_status = true;
+        embedded::register_mysql_prepared(*g, guarded, policy, [&]() -> uint16_t {
+            if (throw_status) throw std::runtime_error("injected status exception");
+            return 0;
+        }, {}, factory);
+        auto failed_prep = make_packet({0x16, 'S','E','L','E','C','T',' ','1'});
+        try { embedded::handle_mysql_prepared(*g, failed_prep); } catch (const std::runtime_error&) {}
+        free(failed_prep.ptr);
+        ok(guarded.finalizes == 1 && active == 0 && guarded.unguarded == 0,
+           "throwing prepare status callback finalizes the unregistered statement under guard");
+        throw_status = false;
         auto prep = make_packet({0x16, 'S','E','L','E','C','T',' ','1'});
         embedded::handle_mysql_prepared(*g, prep);
         auto bytes = static_cast<unsigned char*>(gs->PSarrayOUT->index(0)->ptr);
@@ -167,6 +180,14 @@ int main() {
         ok(active == 0 && guarded.native_calls >= 6 && guarded.unguarded == 0,
            "prepare describe bind execute and fetch remain guarded until return");
         clear_ps(gs->PSarrayOUT);
+        int resets_before = guarded.resets;
+        guarded.throw_fetch = true;
+        auto failed_fetch = make_packet(exbody);
+        try { embedded::handle_mysql_prepared(*g, failed_fetch); } catch (const std::runtime_error&) {}
+        free(failed_fetch.ptr);
+        guarded.throw_fetch = false;
+        ok(guarded.resets == resets_before + 2 && active == 0 && guarded.unguarded == 0,
+           "throwing fetch resets the native cursor under guard");
         auto unknown_body = exbody; memset(unknown_body.data() + 1, 0xff, 4);
         auto unknown = make_packet(unknown_body); embedded::handle_mysql_prepared(*g, unknown);
         ok(known_sql_seen && unknown_sql_seen, "execute guard receives original SQL only for known statement");

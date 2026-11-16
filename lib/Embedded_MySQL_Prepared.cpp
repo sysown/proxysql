@@ -1,3 +1,4 @@
+#include <exception>
 #include "Embedded_MySQL_Prepared.h"
 #include "Embedded_MySQL_Result.h"
 
@@ -246,6 +247,21 @@ Status make_status(ErrorKind kind, int code, const std::string& message, const s
     return Error{kind, code, message, valid_sqlstate_or_hy000(sqlstate.empty() ? std::string("HY000") : sqlstate)};
 }
 
+struct MetadataDeleter {
+    void operator()(stmt_execute_metadata_t* value) const noexcept {
+        if (!value) return;
+        for (uint16_t i = 0; i < value->num_params; ++i) {
+            const auto type = value->binds[i].buffer_type;
+            if (type == MYSQL_TYPE_TIME || type == MYSQL_TYPE_DATE ||
+                type == MYSQL_TYPE_TIMESTAMP || type == MYSQL_TYPE_DATETIME) {
+                free(value->binds[i].buffer);
+                value->binds[i].buffer = nullptr;
+            }
+        }
+        delete value;
+    }
+};
+
 // Clients cache parameter types when sending EXECUTE, before seeing its result.
 // A provider guard can refuse engine access, but a valid packet must still leave
 // its transport metadata ready for the client's next types-omitted execution.
@@ -261,20 +277,7 @@ void remember_rejected_execute_types(SharedState& state, StmtState& stmt, PtrSiz
                                                            &state.longdata, &unused, nullptr);
         if (!decoded) return;
         decoded->pkt = nullptr; // The packet handler retains sole ownership.
-        struct MetadataOwner {
-            stmt_execute_metadata_t* value;
-            ~MetadataOwner() {
-                for (uint16_t i = 0; i < value->num_params; ++i) {
-                    const auto type = value->binds[i].buffer_type;
-                    if (type == MYSQL_TYPE_TIME || type == MYSQL_TYPE_DATE ||
-                        type == MYSQL_TYPE_TIMESTAMP || type == MYSQL_TYPE_DATETIME) {
-                        free(value->binds[i].buffer);
-                        value->binds[i].buffer = nullptr;
-                    }
-                }
-                delete value;
-            }
-        } owner{decoded};
+        std::unique_ptr<stmt_execute_metadata_t, MetadataDeleter> owner(decoded);
         std::vector<unsigned char> types(bytes + flag + 1, bytes + flag + 1 + count * 2);
         stmt.effective_types.swap(types);
     } catch (...) {
@@ -511,11 +514,21 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             return true;
         }
 
+        struct PreparedRollback {
+            embedded::Session& core;
+            uint64_t id;
+            bool active = true;
+            ~PreparedRollback() noexcept {
+                if (active) {
+                    try { core.close(id); } catch (...) {}
+                }
+            }
+        } rollback{state->core, core_id};
+
         // describe
         std::vector<Type> params;
         std::vector<Column> columns;
         if (auto err = state->core.describe(core_id, params, columns)) {
-            state->core.close(core_id);
             send_err(session, rseq + 1, mysql_error_code(*err),
                      err->sqlstate, err->message);
             finish_consume();
@@ -524,13 +537,11 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
 
         // limits params/columns
         if (params.size() > std::min<size_t>(65535, state->limits.parameters_per_statement)) {
-            state->core.close(core_id);
             send_err(session, rseq + 1, 1105, "HY000", "parameter count limit exceeded");
             finish_consume();
             return true;
         }
         if (columns.size() > state->limits.columns_per_statement) {
-            state->core.close(core_id);
             send_err(session, rseq + 1, 1105, "HY000", "column count limit exceeded");
             finish_consume();
             return true;
@@ -539,7 +550,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         // mysql describe columns
         std::vector<MySQLColumn> mysql_columns;
         if (auto st = mysql_describe_columns(columns, mysql_columns)) {
-            state->core.close(core_id);
             send_err(session, rseq + 1, 1105, "HY000", st->message);
             finish_consume();
             return true;
@@ -550,7 +560,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         for (const auto& c : columns) meta += c.name.size() + 64;
         meta += params.size() * 16;
         if (state->metadata_total_used + meta > state->limits.metadata_total) {
-            state->core.close(core_id);
             send_err(session, rseq + 1, 1105, "HY000", "metadata total limit exceeded");
             finish_consume();
             return true;
@@ -559,7 +568,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         bool deprecate_prepare = session.client_myds->myconn &&
             (session.client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF);
         if (!metadata_fits(columns, params.size(), true, deprecate_prepare, state->limits.response_bytes)) {
-            state->core.close(core_id);
             send_err(session, rseq + 1, 1105, "HY000", "response bytes limit exceeded");
             finish_consume();
             return true;
@@ -578,7 +586,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             fields[i].db = (char*)empty;
             fields[i].table = (char*)empty;
             fields[i].org_table = (char*)empty;
-            fields[i].name = strdup(names[i].c_str());
+            fields[i].name = const_cast<char*>(names[i].c_str());
             fields[i].org_name = (char*)empty;
             fields[i].db_length = 0;
             fields[i].table_length = 0;
@@ -611,8 +619,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             ds->PSarrayOUT = original_ptr;
             ds->pkt_sid = output_swap.old_sid;
             output_swap.committed = true;
-            state->core.close(core_id);
-            for (auto& f : fields) free(f.name);
             send_err(session, rseq + 1, 1105, "HY000", "statement IDs exhausted");
             finish_consume();
             return true;
@@ -629,8 +635,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
                                                      fieldptrs.data(), warnings, server_status);
         }
 
-        // cleanup fields
-        for (size_t i = 0; i < columns.size(); i++) free(fields[i].name);
 
         size_t prepare_size = 0;
         for (unsigned i = 0; i < temp.len; ++i) prepare_size += temp.index(i)->size;
@@ -640,17 +644,10 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             ds->PSarrayOUT = original_ptr;
             ds->pkt_sid = output_swap.old_sid;
             output_swap.committed = true;
-            state->core.close(core_id);
             send_err(session, rseq + 1, 1105, "HY000", "prepare response failed");
             finish_consume();
             return true;
         }
-
-        // commit temp
-        original_ptr->copy_add(&temp, 0, temp.len);
-        temp.len = 0;
-        output_swap.committed = true;
-        ds->PSarrayOUT = original_ptr;
 
         // allocate state
         auto stmt = std::make_unique<StmtState>();
@@ -662,8 +659,15 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         stmt->mysql_columns = mysql_columns;
         stmt->metadata_bytes = meta;
         state->statements[wire_id] = std::move(stmt);
+        rollback.active = false;
         state->sql_total_used += sql.size();
         state->metadata_total_used += meta;
+
+        // commit temp
+        original_ptr->copy_add(&temp, 0, temp.len);
+        temp.len = 0;
+        output_swap.committed = true;
+        ds->PSarrayOUT = original_ptr;
 
         finish_consume();
         return true;
@@ -933,8 +937,9 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             finish_consume();
             return true;
         }
-        // detach pkt
+        // The packet handler retains ownership; the decoded binds belong to us.
         meta->pkt = nullptr;
+        std::unique_ptr<stmt_execute_metadata_t, MetadataDeleter> meta_owner(meta);
 
         // update effective types if new_flag
         if (num_params > 0 && new_flag) {
@@ -961,15 +966,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             // Actually offset: 5 stmt_id(4), 9 flags(1), 10 iteration count(4)
             memcpy(&iter, base + 10, 4);
             if (iter != 1) {
-                // free meta temporal buffers
-                for (uint16_t i = 0; i < num_params; i++) {
-                    enum_field_types t = meta->binds[i].buffer_type;
-                    if (t == MYSQL_TYPE_TIME || t == MYSQL_TYPE_DATE || t == MYSQL_TYPE_TIMESTAMP || t == MYSQL_TYPE_DATETIME) {
-                        if (meta->binds[i].buffer) free(meta->binds[i].buffer);
-                        meta->binds[i].buffer = nullptr;
-                    }
-                }
-                delete meta;
                 send_err(session, rseq + 1, 1210, "HY000", "Malformed COM_STMT_EXECUTE");
                 finish_consume();
                 return true;
@@ -977,14 +973,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         }
         // flags byte at offset 9 must be 0
         if (base[9] != 0) {
-            for (uint16_t i = 0; i < num_params; i++) {
-                enum_field_types t = meta->binds[i].buffer_type;
-                if (t == MYSQL_TYPE_TIME || t == MYSQL_TYPE_DATE || t == MYSQL_TYPE_TIMESTAMP || t == MYSQL_TYPE_DATETIME) {
-                    if (meta->binds[i].buffer) free(meta->binds[i].buffer);
-                    meta->binds[i].buffer = nullptr;
-                }
-            }
-            delete meta;
             send_err(session, rseq + 1, 1210, "HY000", "Malformed COM_STMT_EXECUTE");
             finish_consume();
             return true;
@@ -1000,19 +988,11 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             MYSQL_BIND& b = meta->binds[i];
             if (*b.is_null) {
                 values.emplace_back(std::monostate{});
-                // free temporal buffer if any
-                if (b.buffer_type == MYSQL_TYPE_TIME || b.buffer_type == MYSQL_TYPE_DATE ||
-                    b.buffer_type == MYSQL_TYPE_TIMESTAMP || b.buffer_type == MYSQL_TYPE_DATETIME) {
-                    if (b.buffer) free(b.buffer);
-                    b.buffer = nullptr;
-                }
                 continue;
             }
             enum_field_types t = b.buffer_type;
             // temporal unsupported
             if (t == MYSQL_TYPE_TIME || t == MYSQL_TYPE_DATE || t == MYSQL_TYPE_TIMESTAMP || t == MYSQL_TYPE_DATETIME) {
-                if (b.buffer) free(b.buffer);
-                b.buffer = nullptr;
                 conversion_ok = false;
                 conv_msg = "temporal binding unsupported";
                 break;
@@ -1091,18 +1071,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             if (!conversion_ok) break;
         }
 
-        // free temporal buffers (none for supported) already handled
-        // free meta temporal buffers just in case
-        for (uint16_t i = 0; i < num_params; i++) {
-            enum_field_types t = meta->binds[i].buffer_type;
-            if (t == MYSQL_TYPE_TIME || t == MYSQL_TYPE_DATE || t == MYSQL_TYPE_TIMESTAMP || t == MYSQL_TYPE_DATETIME) {
-                if (meta->binds[i].buffer) free(meta->binds[i].buffer);
-                meta->binds[i].buffer = nullptr;
-            }
-        }
-
         if (!conversion_ok) {
-            delete meta;
             send_err(session, rseq + 1, conv_code, "HY000", conv_msg);
             finish_consume();
             return true;
@@ -1116,16 +1085,27 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             : metadata_fits(st.columns, 0, false, result_deprecate, response_remaining, &response_remaining) &&
               charge(response_remaining, result_deprecate ? max_ok_packet_size(session) : 9);
         if (!budget_ok) {
-            delete meta;
             send_err(session, rseq + 1, 1105, "HY000", "response bytes limit exceeded");
             finish_consume();
             return true;
         }
 
+        // Reset an active native result before the operation guard is released if
+        // execution or response materialization throws.
+        struct ExceptionReset {
+            embedded::Session& core;
+            uint64_t id;
+            int exceptions = std::uncaught_exceptions();
+            ~ExceptionReset() noexcept {
+                if (std::uncaught_exceptions() > exceptions) {
+                    try { core.reset(id); } catch (...) {}
+                }
+            }
+        } exception_reset{state->core, st.core_id};
+
         // execute core
         ExecInfo info;
         if (auto err = state->core.execute(st.core_id, values, info)) {
-            delete meta;
             // clear longdata
             state->longdata.reset(wid);
             state->longdata_total_used -= st.longdata_bytes;
@@ -1159,7 +1139,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
                                        state->status_cb ? state->status_cb() : 0, 0, nullptr, false);
             if (okptr) ds->PSarrayOUT->add(okptr, oksz);
             clear_longdata();
-            delete meta;
             finish_consume();
             return true;
         }
@@ -1188,7 +1167,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             fields[i].db = (char*)empty;
             fields[i].table = (char*)empty;
             fields[i].org_table = (char*)empty;
-            fields[i].name = strdup(names[i].c_str());
+            fields[i].name = const_cast<char*>(names[i].c_str());
             fields[i].org_name = (char*)empty;
             fields[i].name_length = (unsigned long)names[i].size();
             fields[i].charsetnr = st.mysql_columns[i].charset;
@@ -1207,7 +1186,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             if (p) temp.add(p, sz);
             seq++;
         }
-        for (size_t i = 0; i < st.columns.size(); i++) free(fields[i].name);
 
         // first EOF if not deprecate
         bool deprecate = (session.client_myds->myconn &&
@@ -1258,7 +1236,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             // reset core
             state->core.reset(st.core_id);
             clear_longdata();
-            delete meta;
             send_err(session, rseq + 1, 1105, "HY000", fail_msg);
             finish_consume();
             return true;
@@ -1288,7 +1265,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             output_swap.committed = true;
             state->core.reset(st.core_id);
             clear_longdata();
-            delete meta;
             send_err(session, rseq + 1, 1105, "HY000", "response bytes limit exceeded");
             finish_consume();
             return true;
@@ -1301,7 +1277,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         ds->PSarrayOUT = original_ptr;
 
         clear_longdata();
-        delete meta;
         finish_consume();
         return true;
     }

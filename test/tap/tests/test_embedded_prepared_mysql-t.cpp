@@ -508,7 +508,7 @@ int main() {
         if (mysql_stmt_prepare(cstmt.get(), cursor_sql.c_str(), static_cast<unsigned long>(cursor_sql.size())) != 0) {
             BAIL_OUT("prepare cursor SELECT failed: %s", mysql_stmt_error(cstmt.get()));
         }
-        unsigned int cursor_type = CURSOR_TYPE_READ_ONLY;
+        unsigned long cursor_type = CURSOR_TYPE_READ_ONLY;
         ok(mysql_stmt_attr_set(cstmt.get(), STMT_ATTR_CURSOR_TYPE, &cursor_type) == 0,
            "set read-only cursor attribute");
         int crc = mysql_stmt_execute(cstmt.get());
@@ -516,7 +516,7 @@ int main() {
         ok(mysql_stmt_errno(cstmt.get()) == ER_NOT_SUPPORTED_YET,
            "read-only cursor unsupported error is 1235 (got %u)", mysql_stmt_errno(cstmt.get()));
 
-        unsigned int no_cursor = CURSOR_TYPE_NO_CURSOR;
+        unsigned long no_cursor = CURSOR_TYPE_NO_CURSOR;
         if (mysql_stmt_attr_set(cstmt.get(), STMT_ATTR_CURSOR_TYPE, &no_cursor) != 0) {
             BAIL_OUT("clear cursor attribute failed: %s", mysql_stmt_error(cstmt.get()));
         }

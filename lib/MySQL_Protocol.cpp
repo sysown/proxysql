@@ -960,7 +960,7 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 // see https://dev.mysql.com/doc/internals/en/com-stmt-prepare-response.html
 bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info, uint32_t _stmt_id) {
 	pthread_rwlock_rdlock(&stmt_info->rwlock_);
-	unsigned int Trx_id = (*myds)->sess->FindOneActiveTransaction();
+	int Trx_id = (*myds)->sess->FindOneActiveTransaction();
 	int setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0);
 	if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 	bool result = generate_STMT_PREPARE_RESPONSE(sequence_id,
