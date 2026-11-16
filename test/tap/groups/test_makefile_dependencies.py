@@ -341,6 +341,50 @@ class MakefileDependencyTest(unittest.TestCase):
                         self.assertEqual(sum(Path(arg).name == source for arg in command), 1, compile_line)
                         self.assertEqual(sum(Path(arg).name == source for arg in prerequisites), 1, dependency_line)
 
+    def test_custom_prepared_clients_propagate_instrumentation_flags(self):
+        targets = (
+            "test_embedded_prepared_mysql-t",
+            "test_embedded_prepared_admin_mysql-t",
+            "test_embedded_prepared_schema_mysql-t",
+            "test_embedded_prepared_admin_pgsql-t",
+            "test_duckdb_prepared_mysql-t",
+            "test_duckdb_prepared_pgsql-t",
+            "test_duckdb_prepared_pgsql_extended-t",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            probe_makefile = Path(tmp) / "prerequisites.mk"
+            probe_makefile.write_text(
+                "$(POSTGRESQL_STATIC_LIBS) $(MARIADB_LDIR)/libmariadbclient.a "
+                "$(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a "
+                "$(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a:\n\t@:\n"
+            )
+            for target in targets:
+                with self.subTest(target=target):
+                    result = subprocess.run(
+                        [
+                            "make", "--no-print-directory", "-B", "-n",
+                            "-C", str(TAP_TESTS_DIR), "-f", "Makefile",
+                            "-f", str(probe_makefile), "MAKE=true",
+                            "CXX=instrument-test-cxx",
+                            "WGCOV=-fprofile-arcs -ftest-coverage",
+                            "LWGCOV=--coverage", "WASAN=-fsanitize=address", target,
+                        ],
+                        cwd=ROOT, text=True, capture_output=True, check=False, timeout=30,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(result.returncode, 0, output)
+                    lines = result.stdout.replace("\\\n", " ").splitlines()
+                    line = self.required_output_line(
+                        lines,
+                        lambda item: item.startswith("instrument-test-cxx ") and
+                        f"-o {target}" in item,
+                        f"compile and link command for {target}", output,
+                    )
+                    command = shlex.split(line)
+                    self.assertIn(f"{target}.cpp", command, line)
+                    for flag in ("-fprofile-arcs", "-ftest-coverage", "--coverage", "-fsanitize=address"):
+                        self.assertIn(flag, command, line)
+
     def test_mysqlx_bridge_targets_share_one_unit_submake(self):
         result = subprocess.run(
             [
