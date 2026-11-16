@@ -242,7 +242,8 @@ coercion on that value unless collation/type rules are established.
 | `ORDER BY col [ASC|DESC]` | OK, complete | order items | Candidate | Determinism, null ordering, collation/type rules. |
 | `WITH ROLLUP` | OK, complete | group-by value `WITH ROLLUP` | Deferred | DuckDB rollup/summary semantics and null labeling need rules. |
 | `COUNT(*)` | OK, complete | function call | Candidate | Multiplicity semantics. |
-| `COUNT(expr)`, `SUM`, `AVG`, `MIN`, `MAX` | OK, complete | function calls | Candidate | Exact numeric types; overflow/scale/date rules; no implicit coercion. |
+| `COUNT(expr)`, `SUM`, `MIN`, `MAX` | OK, complete | function calls | Candidate | Exact numeric types; overflow/scale/date rules; no implicit coercion. |
+| `AVG` | OK, complete | function call | Deferred | Native DuckDB loses exact-value precision in the [semantic baseline](mysql-semantic-baseline.md); requires a separately proven rewrite. |
 | `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, `AVG(DISTINCT ...)` | OK but partial | `full_input=false`, emits `SELECT ` | Parser gap | Refused until upstream fix; see §4. |
 | `GROUP_CONCAT(...)` | OK, complete | preserved | Deferred | Separator/order/result limits and collation. |
 | `DATE_FORMAT(d, '%Y-%m')` | OK, complete | preserved | Deferred | First dialect-specific candidate after date/time and format-token rules. |
@@ -347,13 +348,15 @@ auto result = parser.parse(sql, std::strlen(sql));
 
 No fact below may be discovered by executing the user query. Task 2 should
 consume already-known session/catalog state; unknown remains unknown and causes
-an explicit refusal.
+an explicit refusal when the operation requires that fact. These are required
+inputs, not guarantees that current providers expose every fact; the metadata
+prerequisite below records their actual availability.
 
 | Fact | Needed by | Source without running the query |
 |---|---|---|
-| Selected schema/database | identifier resolution | session `COM_INIT_DB`/default database state |
+| Selected schema/database | identifier resolution | Explicitly tracked native namespace; the current plugin COM_INIT_DB acknowledgement does not establish this fact. |
 | Relation existence and column names | projections, joins, aliases | catalog/relation metadata resolver |
-| Column type, signedness, precision/scale | arithmetic, casts, aggregates, metadata | catalog metadata, not query execution |
+| Column type, signedness, precision/scale | arithmetic, casts, aggregates, metadata | Native catalog facts; original MySQL type provenance remains unknown unless independently established. |
 | Nullability | joins, predicates, ORDER BY, aggregates | catalog metadata |
 | Charset and collation per column/expression | string comparison/grouping/order | catalog + session collation state |
 | `sql_mode` (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`, `PIPES_AS_CONCAT`, `ONLY_FULL_GROUP_BY`, strict modes) | quoting, escapes, `\|\|`, grouping | effective session settings |
@@ -384,7 +387,7 @@ anything the audit cannot prove end-to-end. The first subset is:
 5. `GROUP BY` and explicit `ORDER BY` over admitted expressions. LIMIT is
    admitted only with integer literals and, for claimed row equivalence, an
    explicit deterministic `ORDER BY`.
-6. `COUNT(*)`, `COUNT(expr)`, `SUM`, `AVG`, `MIN`, `MAX` over exact admitted
+6. `COUNT(*)`, `COUNT(expr)`, `SUM`, `MIN`, `MAX` over exact admitted
    types. `DISTINCT` inside aggregates is excluded by the parser gap.
 7. Backtick identifiers, including doubled backticks, with all quoting and
    case rules resolved from session/catalog state.

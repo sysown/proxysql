@@ -93,6 +93,17 @@ explicit unknown MySQL provenance and bounded diagnostics without executing user
 SQL. Its 26 checks pass in the canonical static build and ASan/UBSan. It does not
 enable translation.
 
+The handwritten [semantic baseline](../../../doc/duckdb/mysql-semantic-baseline.md)
+now reproduces 12 matching query pairs and five expected differences against
+MySQL 8.0.46 and DuckDB 2.0.0. A deliberately incorrect LIMIT offset fails the
+comparator. Exact-value AVG is deferred until a rewrite proves MySQL precision;
+these observations do not constitute production translator acceptance.
+
+CI exposed missing transitive sources in legacy DuckDB listener/Admin-schema
+unit link recipes. The repaired targets and session/policy tests build and pass
+locally. Remote Linux CI must pass on the updated commit before this milestone
+can be treated as CI-validated.
+
 Next: complete scoped analytical SQL translation after
 the ParserSQL dependency update. Admin extension and view/trigger authorization
 must be proved rather than inherited from the SQLite3 listener policy. Core
