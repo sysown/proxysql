@@ -295,7 +295,7 @@ kill_connection2_fixture-t: kill_connection2_fixture-t.cpp kill_connection2-t.cp
 unit/obj/tap.o unit/obj/tap_noise_stubs.o:
 	$(MAKE) -C unit $(patsubst unit/%,%,$@)
 
-test_embedded_prepared_mysql-t: test_embedded_prepared_mysql-t.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t: %: %.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 	$(CXX) $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(MARIADB_IDIR) $(STDCPP) -O0 -ggdb \
 		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm -o $@
 

@@ -8,12 +8,7 @@
 #include <utility>
 
 namespace embedded {
-namespace {
-using namespace sql_parser;
-Status error(ErrorKind kind, const char* message, int code = 0) {
- return Error{kind, code, message, kind == ErrorKind::internal ? "HY000" : "42000"};
-}
-bool safe_function(const AstNode& n) {
+bool sqlite_prepared_function_allowed(const std::string& input) {
  static const std::unordered_set<std::string> names = {
   "count","sum","avg","min","max","abs","round","length","lower","upper",
   "coalesce","ifnull","nullif","substr","substring","hex","typeof","sqlite_version",
@@ -23,10 +18,17 @@ bool safe_function(const AstNode& n) {
   "json_valid","json_error_position","json_pretty","jsonb","jsonb_array",
   "jsonb_object","jsonb_extract"
  };
- if (!n.value_ptr) return false;
- std::string name(n.value_ptr, n.value_len);
+ std::string name = input;
  std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
  return names.count(name) != 0;
+}
+namespace {
+using namespace sql_parser;
+Status error(ErrorKind kind, const char* message, int code = 0) {
+ return Error{kind, code, message, kind == ErrorKind::internal ? "HY000" : "42000"};
+}
+bool safe_function(const AstNode& n) {
+ return n.value_ptr && sqlite_prepared_function_allowed(std::string(n.value_ptr, n.value_len));
 }
 bool root_matches(StmtType s, NodeType n) {
  switch (s) {

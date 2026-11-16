@@ -28,8 +28,9 @@ notes below remain historical context, not a request to reimplement merged work.
 The continuation is tracked in draft [PR #6648](https://github.com/sysown/proxysql/pull/6648).
 The shared native lifecycle and SQLite adapter are implemented. The SQLite3 MySQL
 listener now supports prepared execution through the shared controller; its real
-MariaDB C API acceptance test passed 39 checks on 2026-11-16. This does not enable
-prepared statements on Admin, PostgreSQL or DuckDB listeners. The native DuckDB
+MariaDB C API acceptance test passed 39 checks on 2026-11-16. Admin/STATS MySQL prepared queries are now also integrated: their dedicated
+real-client test passes 23 checks, with runtime read-only enforcement and statistics
+freshness. PostgreSQL and DuckDB listeners remain unregistered. The native DuckDB
 SELECT adapter has a separate 40-check unit proof and still awaits registration.
 See [the support and limits](../../../doc/embedded-prepared-statements.md).
 
@@ -38,9 +39,8 @@ ParserSQL draft [PR #72](https://github.com/ProxySQL/ParserSQL/pull/72), head
 comment provenance. It passes 695 local parser tests and upstream CI. ProxySQL
 still vendors 1.1.1; no upstream release, merge, tag or vendor bump has occurred.
 
-Next: finish prepared-controller resource/ownership review; integrate Admin with
-its existing startup/global SQL lock, dynamic roles, statistics refresh and a
-separate authorization policy; implement the shared PostgreSQL frontend and public
+Next: finish cross-endpoint resource/ownership acceptance; implement the shared
+PostgreSQL frontend and public
 versioned registration; register the native DuckDB adapter; complete scoped
 analytical SQL translation after the ParserSQL dependency update. Admin extension
 and view/trigger authorization must be proved rather than inherited from the

@@ -1218,6 +1218,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_clear_bindings = NULL;
 	proxy_sqlite3_close_v2 = NULL;
 	proxy_sqlite3_get_autocommit = NULL;
+	proxy_sqlite3_set_authorizer = NULL;
 	proxy_sqlite3_free = NULL;
 	proxy_sqlite3_status = NULL;
 	proxy_sqlite3_status64 = NULL;
@@ -1274,6 +1275,14 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 			proxy_load_sqlite3 = (int (*)()) dlsym(handle_sqlite3_plugin, "proxy_load_sqlite3"); dlsym_error = dlerror();
 			if (dlsym_error!=NULL) { cerr << "Cannot load symbol proxy_load_sqlite3: " << dlsym_error << '\n'; exit(EXIT_FAILURE); }
 			(*proxy_load_sqlite3)();
+			// An older SQLite plugin may not expose this optional capability.
+			// Preserve a pointer supplied by its loader and consume optional lookup
+			// errors so they cannot contaminate later required symbol checks.
+			if (!proxy_sqlite3_set_authorizer) {
+				dlerror();
+				proxy_sqlite3_set_authorizer = reinterpret_cast<decltype(proxy_sqlite3_set_authorizer)>(dlsym(handle_sqlite3_plugin, "sqlite3_set_authorizer"));
+				dlerror();
+			}
 		}
 		if (handle_sqlite3_plugin==NULL || dlsym_error) {
 			proxy_error("Unable to load SQLite3 plugin from %s\n", plugin_name);
@@ -1310,6 +1319,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_clear_bindings = sqlite3_clear_bindings;
 		proxy_sqlite3_close_v2 = sqlite3_close_v2;
 		proxy_sqlite3_get_autocommit = sqlite3_get_autocommit;
+		proxy_sqlite3_set_authorizer = sqlite3_set_authorizer;
 		proxy_sqlite3_free = sqlite3_free;
 		proxy_sqlite3_status = sqlite3_status;
 		proxy_sqlite3_status64 = sqlite3_status64;

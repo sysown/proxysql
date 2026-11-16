@@ -41,6 +41,7 @@ int (*proxy_sqlite3_reset)(sqlite3_stmt *) = sqlite3_reset;
 int (*proxy_sqlite3_clear_bindings)(sqlite3_stmt*) = sqlite3_clear_bindings;
 int (*proxy_sqlite3_close_v2)(sqlite3*) = sqlite3_close_v2;
 int (*proxy_sqlite3_get_autocommit)(sqlite3*) = sqlite3_get_autocommit;
+int (*proxy_sqlite3_set_authorizer)(sqlite3*, int (*)(void*, int, const char*, const char*, const char*, const char*), void*) = sqlite3_set_authorizer;
 void (*proxy_sqlite3_free)(void*) = sqlite3_free;
 int (*proxy_sqlite3_status)(int, int*, int*, int) = sqlite3_status;
 int (*proxy_sqlite3_status64)(int, long long*, long long*, int) = sqlite3_status64;

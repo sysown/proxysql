@@ -35,10 +35,16 @@ Status register_mysql_prepared(MySQL_Session& session, Adapter& adapter,
                               MySQLPreparedLimits limits = {}, GuardFactory guard_factory = {});
 
 void unregister_mysql_prepared(MySQL_Session& session) noexcept;
+// Call when the session itself is destroyed, after endpoint teardown.
+void destroy_mysql_prepared(MySQL_Session& session) noexcept;
 
 // Unregistered sessions are a successful no-op; registered sessions require their owner thread.
 Status reset_mysql_prepared(MySQL_Session& session);
 
 bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& packet);
+
+// Endpoint setup failures use the shared protocol mapping and packet ownership.
+// CLOSE and SEND_LONG_DATA retain their no-response semantics.
+void consume_mysql_prepared_error(MySQL_Session&, PtrSize_t&, const Error&);
 
 }  // namespace embedded

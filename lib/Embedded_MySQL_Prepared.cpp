@@ -45,16 +45,16 @@ struct SharedState {
     GuardFactory guard_factory;
     Session core;
     StmtLongDataHandler longdata;
-    uint64_t next_wire_id = 1;
+    std::shared_ptr<uint64_t> next_wire_id;
     std::map<uint32_t, std::unique_ptr<StmtState>> statements;
     size_t sql_total_used = 0;
     size_t longdata_total_used = 0;
     size_t metadata_total_used = 0;
     SharedState(MySQL_Session& s, Adapter& a, EndpointPolicy& p, MySQLStatus cb,
-               MySQLPreparedLimits l, GuardFactory factory)
+               MySQLPreparedLimits l, GuardFactory factory, std::shared_ptr<uint64_t> wire_counter)
         : session(&s), owner_thread(std::this_thread::get_id()), adapter(&a),
           policy(&p), status_cb(std::move(cb)), limits(l), guard_factory(std::move(factory)),
-          core(a, p, l.statements, l.response_bytes) {}
+          core(a, p, l.statements, l.response_bytes), next_wire_id(std::move(wire_counter)) {}
 };
 
 // Intentionally process-lifetime objects: sessions may be destroyed during static teardown.
@@ -62,6 +62,10 @@ std::mutex& registry_mutex() { static auto* mutex = new std::mutex; return *mute
 std::map<MySQL_Session*, std::shared_ptr<SharedState>>& registry() {
     static auto* states = new std::map<MySQL_Session*, std::shared_ptr<SharedState>>;
     return *states;
+}
+std::map<MySQL_Session*, std::shared_ptr<uint64_t>>& wire_counters() {
+    static auto* counters = new std::map<MySQL_Session*, std::shared_ptr<uint64_t>>;
+    return *counters;
 }
 void free_temp_packets(PtrSizeArray& temp);
 struct OutputSwap {
@@ -242,6 +246,42 @@ Status make_status(ErrorKind kind, int code, const std::string& message, const s
     return Error{kind, code, message, valid_sqlstate_or_hy000(sqlstate.empty() ? std::string("HY000") : sqlstate)};
 }
 
+// Clients cache parameter types when sending EXECUTE, before seeing its result.
+// A provider guard can refuse engine access, but a valid packet must still leave
+// its transport metadata ready for the client's next types-omitted execution.
+void remember_rejected_execute_types(SharedState& state, StmtState& stmt, PtrSize_t& packet) noexcept {
+    try {
+        const size_t count = stmt.params.size();
+        const auto* bytes = static_cast<const unsigned char*>(packet.ptr);
+        const size_t flag = 14 + (count + 7) / 8;
+        if (!count || !bytes || packet.size <= flag || bytes[flag] != 1 ||
+            packet.size - flag - 1 < count * 2) return;
+        stmt_execute_metadata_t* unused = nullptr;
+        auto* decoded = MySQL_Protocol::decode_stmt_execute(packet, static_cast<uint16_t>(count),
+                                                           &state.longdata, &unused, nullptr);
+        if (!decoded) return;
+        decoded->pkt = nullptr; // The packet handler retains sole ownership.
+        struct MetadataOwner {
+            stmt_execute_metadata_t* value;
+            ~MetadataOwner() {
+                for (uint16_t i = 0; i < value->num_params; ++i) {
+                    const auto type = value->binds[i].buffer_type;
+                    if (type == MYSQL_TYPE_TIME || type == MYSQL_TYPE_DATE ||
+                        type == MYSQL_TYPE_TIMESTAMP || type == MYSQL_TYPE_DATETIME) {
+                        free(value->binds[i].buffer);
+                        value->binds[i].buffer = nullptr;
+                    }
+                }
+                delete value;
+            }
+        } owner{decoded};
+        std::vector<unsigned char> types(bytes + flag + 1, bytes + flag + 1 + count * 2);
+        stmt.effective_types.swap(types);
+    } catch (...) {
+        // Preserve the original guard error if transport bookkeeping fails.
+    }
+}
+
 Status acquire_guard(SharedState& state, Operation operation, std::unique_ptr<OperationGuard>& guard,
                      const std::string* sql = nullptr) {
     if (!state.guard_factory) return {};
@@ -273,6 +313,19 @@ void close_all(SharedState& state) {
 
 }  // namespace
 
+void consume_mysql_prepared_error(MySQL_Session& session, PtrSize_t& packet, const Error& error) {
+    const auto* data = static_cast<const unsigned char*>(packet.ptr);
+    const uint8_t command = data && packet.size >= 5 ? data[4] : 0;
+    if (command != 0x18 && command != 0x19)
+        send_err(session, request_seq(packet) + 1, mysql_error_code(error), error.sqlstate, error.message);
+    free_packet(packet);
+    if (session.client_myds) {
+        session.client_myds->setDSS_STATE_QUERY_SENT_NET();
+        session.client_myds->DSS = STATE_SLEEP;
+    }
+    session.status = WAITING_CLIENT_DATA;
+}
+
 Status register_mysql_prepared(MySQL_Session& session, Adapter& adapter,
                               EndpointPolicy& policy, MySQLStatus status,
                               MySQLPreparedLimits limits, GuardFactory guard_factory) {
@@ -283,8 +336,21 @@ Status register_mysql_prepared(MySQL_Session& session, Adapter& adapter,
     if (registry().count(&session)) {
         return make_status(ErrorKind::invalid_parameter, 1105, "session already registered", "HY000");
     }
-    auto state = std::make_shared<SharedState>(session, adapter, policy, std::move(status), limits, std::move(guard_factory));
-    registry()[&session] = state;
+    auto it = wire_counters().find(&session);
+    auto counter = it == wire_counters().end() ? std::make_shared<uint64_t>(1) : it->second;
+    auto state = std::make_shared<SharedState>(session, adapter, policy, std::move(status), limits, std::move(guard_factory), counter);
+    // Preserve the previous registration semantics if either map allocation throws.
+    bool inserted_counter = false;
+    try {
+        if (it == wire_counters().end()) {
+            wire_counters().emplace(&session, counter);
+            inserted_counter = true;
+        }
+        registry().emplace(&session, state);
+    } catch (...) {
+        if (inserted_counter) wire_counters().erase(&session);
+        throw;
+    }
     return {};
 }
 
@@ -307,6 +373,13 @@ void unregister_mysql_prepared(MySQL_Session& session) noexcept {
         std::fprintf(stderr, "embedded prepared: disconnect guard threw; terminating\n");
         std::terminate();
     }
+}
+
+void destroy_mysql_prepared(MySQL_Session& session) noexcept {
+    unregister_mysql_prepared(session);
+    std::lock_guard<std::mutex> lock(registry_mutex());
+    // A wrong-thread unregister leaves the registration alive.
+    if (!registry().count(&session)) wire_counters().erase(&session);
 }
 
 Status reset_mysql_prepared(MySQL_Session& session) {
@@ -355,7 +428,15 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
     if (operation == Operation::execute && pkt.size >= 9) {
         uint32_t id = static_cast<uint32_t>(read_uint_le(base + 5, 4));
         auto it = state->statements.find(id);
-        if (it != state->statements.end()) operation_sql = &it->second->sql;
+        if (it != state->statements.end()) {
+            operation_sql = &it->second->sql;
+            const size_t count = it->second->params.size();
+            const size_t flag = 14 + (count + 7) / 8;
+            // An invalid replacement must never leave old signedness/types
+            // available for a subsequent client packet that omits its types.
+            if (count && pkt.size > flag && base[flag] == 1)
+                it->second->effective_types.clear();
+        }
     }
     std::unique_ptr<OperationGuard> guard;
     if (auto error = acquire_guard(*state, operation, guard, operation_sql)) {
@@ -364,6 +445,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             auto it = state->statements.find(id);
             if (it != state->statements.end()) {
                 auto& stmt = *it->second;
+                remember_rejected_execute_types(*state, stmt, pkt);
                 state->longdata.reset(id);
                 state->longdata_total_used -= stmt.longdata_bytes;
                 stmt.longdata_bytes = 0;
@@ -525,7 +607,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
 
         uint16_t warnings = 0;
         uint16_t server_status = state->status_cb ? state->status_cb() : 0;
-        if (state->next_wire_id > std::numeric_limits<uint32_t>::max()) {
+        if (*state->next_wire_id > std::numeric_limits<uint32_t>::max()) {
             ds->PSarrayOUT = original_ptr;
             ds->pkt_sid = output_swap.old_sid;
             output_swap.committed = true;
@@ -535,7 +617,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             finish_consume();
             return true;
         }
-        uint32_t wire_id = static_cast<uint32_t>(state->next_wire_id++);
+        uint32_t wire_id = static_cast<uint32_t>((*state->next_wire_id)++);
 
         bool ok = true;
         if (columns.empty()) {
@@ -788,6 +870,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         } cleanup{*state, st, wid};
         uint32_t iteration = static_cast<uint32_t>(read_uint_le(base + 10, 4));
         if (base[9] != 0 || iteration != 1) {
+            remember_rejected_execute_types(*state, st, pkt);
             send_err(session, rseq + 1, base[9] ? 1235 : 1210, "HY000", "unsupported cursor or malformed iteration count");
             finish_consume();
             return true;
@@ -795,6 +878,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
 
         // deferred error check
         if (st.has_deferred_error) {
+            remember_rejected_execute_types(*state, st, pkt);
             std::string msg = st.deferred_message;
             uint16_t code = st.deferred_code;
             // clear

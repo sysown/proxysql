@@ -4,6 +4,7 @@
 #include <string>
 struct sqlite3;
 namespace embedded {
+bool sqlite_prepared_function_allowed(const std::string& name);
 // The connection and callbacks must outlive this policy. Calls are synchronous.
 //
 // This policy authorizes the source AST and transaction state; it is not a

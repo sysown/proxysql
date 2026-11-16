@@ -1,6 +1,6 @@
 # Embedded prepared execution
 
-This is an internal C++17 framework, integrated with the SQLite3 MySQL listener. It is not a plugin ABI or a complete K1/#6298 implementation. One adapter instance is bound to one engine connection and must outlive its session. The session is neither copyable nor thread-safe. Destroy it before the adapter or connection. It owns statement IDs and finalizes each acquired handle on close or destruction, including a handle supplied with a failed prepare or metadata description. Failed prepare does not consume statement capacity. IDs are never reused during a session. Metadata and values are owned copies; bind must not retain references. Rows returned by fetch are owned by the caller.
+This is an internal C++17 framework, integrated with the SQLite3, Admin and STATS MySQL listeners. It is not a plugin ABI or a complete K1/#6298 implementation. One adapter instance is bound to one engine connection and must outlive its session. The session is neither copyable nor thread-safe. Destroy it before the adapter or connection. It owns statement IDs and finalizes each acquired handle on close or destruction, including a handle supplied with a failed prepare or metadata description. Failed prepare does not consume statement capacity. IDs are never reused during a session. Metadata and values are owned copies; bind must not retain references. Rows returned by fetch are owned by the caller.
 
 The endpoint policy is mandatory and must use the actual endpoint's authorization rules. It is called before native prepare and before every execute and fetch. The caller must arrange any required lock or guard across native operations and the complete lifetime of a live result; these callbacks do not supply one. The adapter and policy must enforce single-statement admission and reject unsupported SQL. Embedded NUL is rejected by the registry. Describing metadata must never execute SQL. Unknown and dynamic metadata are explicit; no wire type mapping is implied.
 
@@ -56,7 +56,7 @@ encoders and checks descriptor pointers before queuing any output. Callers suppl
 transaction status and keep all NUL-terminated field strings alive through the
 synchronous call. The proxy wrapper still holds its metadata lock and uses the
 same existing status calculation. All 18 direct metadata-packet checks pass.
-Prepared commands are enabled on the SQLite3 MySQL listener. Admin, PostgreSQL and DuckDB listener registration remain to be implemented.
+Prepared commands are enabled on the SQLite3 MySQL listener. Admin and STATS MySQL listeners are also integrated within the restrictions below. PostgreSQL and DuckDB listener registration remain to be implemented.
 
 
 The SQLite3 listener now registers one shared MySQL prepared controller per
@@ -126,3 +126,52 @@ registration uses no guard. The Admin provider must still supply its actual lock
 startup policy and authorization lease; this hook alone enables no Admin queries.
 Independent controller validation now passes 63 checks, including guard lifetime,
 throwing factories, rejected-execute stale-data cleanup and malformed execution.
+
+
+Admin/STATS prepared execution now borrows the correct role's shared database
+and holds the existing startup gate and re-entrant Admin SQL lock through each
+native operation and all response materialization. It rechecks runtime read-only
+state on execution. SELECT is supported on the role's `main` database; prepared
+DML is limited to `mysql_servers`, `mysql_users` and `mysql_query_rules`. Utility
+commands, transaction control, cross-schema references, CTEs and statistics reset
+projections are explicitly unsupported. Text Admin command handling is unchanged.
+
+The scoped native authorizer enforces function, relation, schema and write rules
+through views/triggers and automatic reprepare. A direct trusted `PRAGMA
+function_list` inspection rejects overrides of allowlisted built-ins. The provider
+owns the authorizer slot; native cleanup occurs before releasing the Admin lock.
+The optional `sqlite3_set_authorizer` capability is required for Admin prepared
+execution, without becoming a new mandatory custom SQLite-plugin startup symbol.
+Custom SQLite plugin loading remains disabled by the existing production guard.
+
+Statistics refresh requests come exclusively from ParserSQL relation nodes and
+an exact standard-table allowlist, never from original SQL text. String literals,
+comments and column aliases cannot request a destructive reset. Uppercase table
+references receive the same refresh. Hidden dynamic view dependencies without an
+established refresh are refused; the standard PostgreSQL activity view dependency
+is handled explicitly. Statistics reset tables are denied through native view
+expansion as well as source admission. Unknown dynamic plugin views remain a
+future capability rather than a freshness guarantee.
+
+Session-lifetime wire-ID allocation survives provider replacement and connection
+reset; retired IDs cannot execute newly prepared statements. The final Session
+destructor releases the allocator. Valid transport types survive operation-guard
+rejection. Failed replacement metadata invalidates the previous type cache, so a
+retry cannot silently use stale signedness; clients must resend types after such
+protocol errors. Statement reset still retains valid parameter bindings.
+
+Admin/STATS real-client validation passes 23 checks, including native binary/NULL
+values, prepare metadata, repeated execution/reset, runtime `PROXYSQL READONLY`
+changes and uppercase statistics-query freshness across a backend configuration
+load. The existing SQLite client remains at 39 passing checks. The Admin test
+uses TAP_HOST, TAP_ADMINPORT, TAP_ADMINUSERNAME, TAP_ADMINPASSWORD,
+TAP_STATSUSERNAME and TAP_STATSPASSWORD against a dedicated fixture initially in
+read-write mode. It creates a unique temporary server configuration and restores
+it without SAVE commands. Pure statistics-admission tests pass 12 checks; native
+Admin policy tests pass 43. The complete controller suite passes 79 checks after final integration validation.
+
+A separate MySQL 8.0.46 oracle probe confirmed long-data/NULL precedence, empty
+chunks, reset and cached-type error recovery against the SQLite listener. SQLite
+continues to advertise its documented binary VAR_STRING dynamic metadata; engine
+error codes and the client call at which a buffered-result error appears need not
+match MySQL's streaming behavior.

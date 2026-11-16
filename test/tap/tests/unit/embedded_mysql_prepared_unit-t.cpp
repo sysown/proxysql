@@ -2,6 +2,7 @@
 #include "test_globals.h"
 #include "test_init.h"
 #include "Embedded_MySQL_Prepared.h"
+#include "Embedded_Admin_MySQL_Prepared.h"
 #include "Embedded_SQLite_Adapter.h"
 #include "MySQL_Protocol.h"
 #include "MySQL_Data_Stream.h"
@@ -213,6 +214,53 @@ int main() {
         delete gs->myconn; gs->myconn = nullptr; delete g;
     }
 
+    // Retired wire IDs cannot address statements from a replacement provider.
+    {
+        MySQL_Data_Stream* ws = nullptr; MySQL_Protocol* wp = nullptr;
+        MySQL_Session* w = make_session(ws, wp);
+        embedded::SQLiteAdapter replacement(db);
+        proxy_sqlite3_exec(db, "CREATE TABLE wire_lifetime (v INTEGER)", nullptr, nullptr, nullptr);
+        auto prepare = [&](const char* sql) {
+            std::vector<unsigned char> body{0x16};
+            body.insert(body.end(), sql, sql + strlen(sql));
+            auto p = make_packet(body); embedded::handle_mysql_prepared(*w, p);
+            uint32_t id = 0;
+            if (ws->PSarrayOUT->len && static_cast<unsigned char*>(ws->PSarrayOUT->index(0)->ptr)[4] == 0)
+                memcpy(&id, static_cast<unsigned char*>(ws->PSarrayOUT->index(0)->ptr) + 5, 4);
+            clear_ps(ws->PSarrayOUT); return id;
+        };
+        auto unknown = [&](uint32_t id) {
+            std::vector<unsigned char> body{0x17, 0,0,0,0, 0,1,0,0,0};
+            memcpy(body.data() + 1, &id, 4);
+            auto p = make_packet(body); embedded::handle_mysql_prepared(*w, p);
+            bool result = ws->PSarrayOUT->len == 1 && ws->PSarrayOUT->index(0)->size >= 7 &&
+                static_cast<unsigned char*>(ws->PSarrayOUT->index(0)->ptr)[4] == 0xff &&
+                static_cast<unsigned char*>(ws->PSarrayOUT->index(0)->ptr)[5] == 0xdb &&
+                static_cast<unsigned char*>(ws->PSarrayOUT->index(0)->ptr)[6] == 0x04;
+            clear_ps(ws->PSarrayOUT); return result;
+        };
+        embedded::register_mysql_prepared(*w, adapter, policy, [] { return uint16_t(0); });
+        uint32_t first = prepare("SELECT 1");
+        embedded::unregister_mysql_prepared(*w);
+        embedded::register_mysql_prepared(*w, replacement, policy, [] { return uint16_t(0); });
+        uint32_t second = prepare("INSERT INTO wire_lifetime VALUES (1)");
+        ok(first && second > first, "provider replacement preserves monotonic wire IDs");
+        ok(unknown(first), "retired provider ID returns unknown statement");
+        sqlite3_stmt* count = nullptr;
+        proxy_sqlite3_prepare_v2(db, "SELECT count(*) FROM wire_lifetime", -1, &count, nullptr);
+        bool empty = proxy_sqlite3_step(count) == SQLITE_ROW && proxy_sqlite3_column_int(count, 0) == 0;
+        proxy_sqlite3_finalize(count);
+        ok(empty, "retired provider ID cannot execute replacement statement");
+        embedded::reset_mysql_prepared(*w);
+        uint32_t third = prepare("SELECT 3");
+        ok(third > second && unknown(second), "reset retires IDs while retaining allocator");
+        embedded::destroy_mysql_prepared(*w);
+        embedded::register_mysql_prepared(*w, adapter, policy, [] { return uint16_t(0); });
+        ok(prepare("SELECT 4") == 1, "destroy releases the session wire allocator");
+        embedded::destroy_mysql_prepared(*w);
+        delete ws->myconn; ws->myconn = nullptr; delete w;
+    }
+
     // register
     MySQL_Data_Stream* st = nullptr; MySQL_Protocol* pr = nullptr;
     MySQL_Session* s = make_session(st, pr);
@@ -222,6 +270,27 @@ int main() {
     limits.response_bytes = 1024 * 1024;
     embedded::Status reg = embedded::register_mysql_prepared(*s, adapter, policy, status_cb, limits);
     ok(!reg, "registration succeeds");
+    embedded::unregister_admin_mysql_prepared(*s);
+    {
+        PtrSize_t known_owner = make_packet({0x17,99,0,0,0,0,1,0,0,0});
+        ok(embedded::handle_mysql_prepared(*s, known_owner) && !known_owner.ptr,
+           "Admin provider cleanup preserves another embedded provider registration");
+        if (known_owner.ptr) free(known_owner.ptr);
+        clear_ps(st->PSarrayOUT);
+    }
+    {
+        embedded::Error error{embedded::ErrorKind::unsupported, 5, "setup failed", "HY000"};
+        PtrSize_t failed = make_packet({0x16,'S'});
+        embedded::consume_mysql_prepared_error(*s, failed, error);
+        ok(!failed.ptr && st->PSarrayOUT->len == 1 &&
+           static_cast<unsigned char*>(st->PSarrayOUT->index(0)->ptr)[4] == 0xff,
+           "endpoint setup error consumes packet and uses shared ERR response");
+        clear_ps(st->PSarrayOUT);
+        failed = make_packet({0x19,1,0,0,0});
+        embedded::consume_mysql_prepared_error(*s, failed, error);
+        ok(!failed.ptr && st->PSarrayOUT->len == 0, "endpoint close setup failure retains no-response semantics");
+    }
+
 
     // reject ordinary proxy mysql session
     {
@@ -477,6 +546,17 @@ int main() {
             auto* bytes = static_cast<unsigned char*>(packet->ptr);
             return std::vector<unsigned char>(bytes + 4, bytes + packet->size);
         };
+        deny_execute = true;
+        run({0,1,MYSQL_TYPE_BLOB,0,1,'q'});
+        ok(vs->PSarrayOUT->len == 1 && static_cast<unsigned char*>(vs->PSarrayOUT->index(0)->ptr)[4] == 0xff,
+           "first execute can be rejected by an operation guard");
+        clear_ps(vs->PSarrayOUT);
+        deny_execute = false;
+        run({0,0,1,'z'});
+        auto cached_after_error = row();
+        ok(cached_after_error.size() == 4 && cached_after_error[2] == 1 && cached_after_error[3] == 'z',
+           "valid first-execute type metadata survives guard rejection for client reuse");
+        clear_ps(vs->PSarrayOUT);
         PtrSize_t stale = make_packet({0x18,(unsigned char)id,0,0,0,0,0,'a','b'});
         embedded::handle_mysql_prepared(*v, stale);
         deny_execute = true;
@@ -529,6 +609,26 @@ int main() {
         ok(recovered.size() == 4 && recovered[2] == 1 && recovered[3] == 'z',
            "execute recovers after long data overflow");
         clear_ps(vs->PSarrayOUT);
+        for (bool reject_guard : {false, true}) {
+            run({0,1,MYSQL_TYPE_TINY,0,1});
+            auto signed_row = row();
+            ok(signed_row.size() == 4 && signed_row[3] == '1', "establish signed TINY cache before invalid new types");
+            clear_ps(vs->PSarrayOUT);
+            PtrSize_t invalid_long = make_packet({0x18,(unsigned char)id,0,0,0,0,0,'x'});
+            embedded::handle_mysql_prepared(*v, invalid_long);
+            deny_execute = reject_guard;
+            run({0,1,MYSQL_TYPE_TINY,128,255});
+            ok(vs->PSarrayOUT->len == 1 && static_cast<unsigned char*>(vs->PSarrayOUT->index(0)->ptr)[4] == 0xff,
+               "invalid long-data integer execution is rejected");
+            clear_ps(vs->PSarrayOUT);
+            deny_execute = false;
+            run({0,0,255});
+            const auto* failure = vs->PSarrayOUT->len ? static_cast<unsigned char*>(vs->PSarrayOUT->index(0)->ptr) : nullptr;
+            ok(failure && vs->PSarrayOUT->index(0)->size >= 7 && failure[4] == 0xff &&
+               failure[5] == (1210 & 255) && failure[6] == (1210 >> 8),
+               "failed new-type decoding invalidates the old signedness cache");
+            clear_ps(vs->PSarrayOUT);
+        }
         embedded::unregister_mysql_prepared(*v); delete vs->myconn; vs->myconn = nullptr; delete v;
     }
 
