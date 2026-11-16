@@ -131,10 +131,13 @@ struct Fixture {
             pid = -1;
         }
     }
-    Fixture() {
+    Fixture(const char *mysql_dialect = "native") {
         const char *external = getenv("TAP_EMBEDDED_PREPARED_EXTERNAL");
-        if (external && std::string(external) == "1")
+        if (external && std::string(external) == "1") {
+            if (std::string(mysql_dialect) != "native")
+                BAIL_OUT("analytical tests require an owned fixture");
             return;
+        }
         active = this;
         std::atexit(exit_cleanup);
         char path[] = "/tmp/proxysql-prepared-XXXXXX";
@@ -164,7 +167,8 @@ struct Fixture {
             admin, "INSERT OR REPLACE INTO disk.global_variables VALUES('duckdb-database_path'," +
                        quote(dir + "/prepared.duckdb") + "),('duckdb-mysql_ifaces'," +
                        quote("127.0.0.1:" + std::to_string(d)) + "),('duckdb-pgsql_ifaces'," +
-                       quote("127.0.0.1:" + std::to_string(dp)) + "),('duckdb-threads','2')");
+                       quote("127.0.0.1:" + std::to_string(dp)) + "),('duckdb-threads','2')," +
+                       "('duckdb-mysql_dialect'," + quote(mysql_dialect) + ")");
         stop();
         if (!configured || !start(true)) {
             cleanup();

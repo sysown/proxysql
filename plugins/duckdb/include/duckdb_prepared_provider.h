@@ -15,6 +15,8 @@ class DuckDBPreparedProvider {
     ~DuckDBPreparedProvider();
     DuckDBPreparedProvider(const DuckDBPreparedProvider &) = delete;
     DuckDBPreparedProvider &operator=(const DuckDBPreparedProvider &) = delete;
+    // Set before registration; PostgreSQL providers always remain native.
+    void set_mysql_analytical(bool enabled) noexcept;
     const ProxySQL_Embedded_EngineV1 *engine() const noexcept;
     const ProxySQL_Embedded_PolicyV1 *policy() const noexcept;
 

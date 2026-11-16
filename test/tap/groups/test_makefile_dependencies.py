@@ -341,8 +341,59 @@ class MakefileDependencyTest(unittest.TestCase):
                         self.assertEqual(sum(Path(arg).name == source for arg in command), 1, compile_line)
                         self.assertEqual(sum(Path(arg).name == source for arg in prerequisites), 1, dependency_line)
 
+    def test_parsersql_archive_rebuilds_its_direct_consumers(self):
+        """ParserSQL ABI changes must invalidate each object which includes its headers."""
+        cases = (
+            (ROOT / "lib", ".oo", (
+                "Query_Processor_ParserSQL", "Embedded_Admin_Statistics",
+                "Embedded_SQLite_Policy", "Embedded_Admin_PgSQL_Prepared")),
+            (ROOT / "plugins/duckdb", ".o", (
+                "duckdb_prepared_policy", "duckdb_mysql_set", "duckdb_mysql_select_compat")),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = Path(tmp)
+            archive = scratch / "libsqlparser.a"
+            archive.touch()
+            duckdb_archive = scratch / "libduckdb_static.a"
+            duckdb_archive.touch()
+            stamp = scratch / "buildflags"
+            stamp.touch()
+            object_dir = scratch / "obj"
+            object_dir.mkdir()
+            plugin = scratch / "plugin"
+            (plugin / "src").mkdir(parents=True)
+            for name in cases[1][2]:
+                (plugin / "src" / f"{name}.cpp").touch()
+            for directory, suffix, names in cases:
+                with self.subTest(directory=directory):
+                    objects = [object_dir / f"{name}{suffix}" for name in names]
+                    for obj in objects:
+                        obj.touch()
+                    command = [
+                        "make", "--no-print-directory", "-n", "-C", str(directory),
+                        "MAKE=true", "CXX=parser-test-cxx", f"ODIR={object_dir}",
+                        f"PARSERSQL_LDIR={scratch}", "HEADERS=", f"BUILD_FLAGS_STAMP={stamp}",
+                        f"BUILDFLAGS_STAMP={stamp}", f"DUCKDB_AR={duckdb_archive}",
+                        f"PLUGIN_DIR={plugin}", "-o", str(stamp), "-o", str(duckdb_archive),
+                        "-W", str(archive), *(str(obj) for obj in objects),
+                    ]
+                    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True,
+                                            check=False, timeout=30)
+                    output = result.stdout + result.stderr
+                    self.assertEqual(result.returncode, 0, output)
+                    for obj in objects:
+                        line = self.required_output_line(
+                            result.stdout.splitlines(),
+                            lambda item: item.startswith("parser-test-cxx ") and
+                            f"-o {obj} " in item,
+                            f"recompile for {obj.name}", output,
+                        )
+                        self.assertIn(f"{obj.stem}.cpp", line, line)
+
+
     def test_custom_prepared_clients_propagate_instrumentation_flags(self):
         targets = (
+            "test_duckdb_mysql_analytical-t",
             "test_embedded_prepared_mysql-t",
             "test_embedded_prepared_admin_mysql-t",
             "test_embedded_prepared_schema_mysql-t",

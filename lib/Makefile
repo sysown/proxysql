@@ -214,6 +214,9 @@ $(ODIR)/proxy_sqlite3_symbols.oo: proxy_sqlite3_symbols.cpp $(HEADERS) $(BUILD_F
 # external plugin builds consume this header directly.
 $(ODIR)/ProxySQL_PluginManager.oo: ../include/ProxySQL_ServerDiscovery.h
 
+# ParserSQL header/ABI updates accompany its rebuilt archive.
+$(addprefix $(ODIR)/,Query_Processor_ParserSQL.oo Embedded_Admin_Statistics.oo Embedded_SQLite_Policy.oo Embedded_Admin_PgSQL_Prepared.oo): $(PARSERSQL_LDIR)/libsqlparser.a
+
 $(ODIR)/%.oo: %.cpp $(HEADERS) $(BUILD_FLAGS_STAMP)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 

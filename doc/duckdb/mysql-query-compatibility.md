@@ -1,13 +1,15 @@
-# MySQL analytical SELECT compatibility contract (ParserSQL 1.1.1)
+# MySQL analytical SELECT compatibility contract
 
-Status: Task 1 baseline contract and parser capability audit. This document
-publishes what the vendored parser can prove, what it silently changes, and the
-bounded subset proposed for later admission/translation. It does **not** claim
-DuckDB semantic equivalence and does not authorize production translation.
+Status: the original Task 1 audit below records ParserSQL 1.1.1 behavior. The
+current dependency also applies the local analytical AST patch; historical gap
+rows are not current test expectations. The capability fixture has been updated
+to the patched parser. The pure translator is enabled by the opt-in `mysql_analytical` listener mode;
+see the current subset below and the configuration reference.
 
 - Worktree baseline: `663e84aa6f498cc18bc6a81e0d6c98c68b43504d`
   (merged v3.0; same commit as the design baseline).
-- Vendored parser: ParserSQL `1.1.1` tarball plus `utf8-identifiers.patch`.
+- Vendored parser: original ParserSQL `1.1.1` tarball plus
+  `utf8-identifiers.patch` and `mysql-analytical-ast.patch`.
   Tarball SHA-256:
   `3c4f4916c38d89ad9ea584e6f6ba7caaf38d0daba8b3053cd088f98bb572fe38`.
 - Capability target:
@@ -395,9 +397,10 @@ anything the audit cannot prove end-to-end. The first subset is:
    versioned comment, index/partition hint, user variable, system variable,
    placeholder, locking clause, `INTO`, or unknown/side-effecting function.
 
-The identifier and LIMIT slices have useful AST coverage, but enabling even
-these slices waits for the upstream silent-corruption/provenance fixes and a
-reviewed dependency update. String
+The identifier and LIMIT slices require the silent-corruption/provenance fixes
+now carried in the reproducible local ParserSQL analytical patch. The user
+authorized this local development workflow on 2026-11-16; upstream publication
+is tracked for the final ParserSQL PR and is not an implementation gate. String
 projection may be permitted while string comparison/grouping/ordering remains
 refused until collation/padding rules exist.
 
@@ -453,60 +456,37 @@ git -C /home/rene/.codex/worktrees/1382/duckdb-mysql-replica diff --check
 git -C /home/rene/.codex/worktrees/1382/duckdb-mysql-replica status --short
 ```
 
-## 8. Unresolved risks and follow-up requirements
+## 8. Current boundaries and ParserSQL change tracking
 
-1. **Silent parser corruption blocks production admission.** `<=>`, `&&` and
-   executable comments can return complete ASTs for different semantics.
-   Operator allowlists alone cannot detect this; fix and test ParserSQL upstream,
-   then update the vendored release. Upstream work is in progress in a separate
-   clone; no parser workaround or dependency modification has been introduced here.
-2. **Aggregate DISTINCT is blocked** by ParserSQL 1.1.1 until the partial-AST
-   gap is fixed upstream. Do not emulate it with text rewriting.
-3. **SQL mode is invisible to the parser.** `ANSI_QUOTES`,
-   `NO_BACKSLASH_ESCAPES`, and `PIPES_AS_CONCAT` must be known session facts or
-   the affected queries must be refused.
-4. **System variables are indistinguishable from columns** in the AST
-   (`@@version` as `NODE_COLUMN_REF`). Admission needs an explicit identifier
-   policy in addition to `has_user_variables`.
-5. **Root shapes differ.** CTE and compound queries do not have a
-   `NODE_SELECT_STMT` root; a future root-aware gate must still enforce nested
-   admission and single-statement framing.
-6. **Comments are not preserved** by the emitter. Anything that requires
-   byte-for-byte preservation of comments must not use this emission path.
-7. **This audit does not prove MySQL/DuckDB result equivalence.** Type,
-   collation, timezone, division, NULL-ordering and overflow rules remain
-   Task 2/Task 4 obligations with independent MySQL and DuckDB oracles.
-8. **No production translation is implemented or claimed.** The capability
-   target is the authoritative executable record of what was observed; the
-   matrix records the proposed admission boundary.
+The original operator/provenance gaps are fixed by the vendored local patch;
+production code does not compensate with a private lexer. The capability fixture
+now passes 843 assertions. The patch also bounds recursive expression/query
+parsing at 128 active entries; the current focused upstream suite passes 199
+checks, including MySQL/PostgreSQL depth, reuse and configuration boundaries.
+These bounds do not claim to cover every unrelated DDL grammar.
 
-### Independent review additions
+The analytical translator uses ParserSQL token framing and a complete SELECT AST.
+Session-sensitive syntax, comments, variables and unsupported root shapes remain
+refused. Aggregate DISTINCT remains a parser/semantic follow-up. The original
+matrix above is historical evidence, and its candidate rows do not imply current
+admission. Actual differential results cover only the fixture inputs described
+in the linked baselines.
 
-Codex added the two executable-comment reproductions above, connected this target
-to the standard unit Makefile, and independently rebuilt/reran it. The baseline
-records ParserSQL 1.1.1 behavior intentionally; update these expectations together
-with an upstream dependency bump. This characterization target is not a production
-SQL admission implementation. Independent root validation: `make -C test/tap/tests/unit PROXYSQL40=1
-duckdb_mysql_select_compat_unit-t` rebuilt the target successfully; executing it
-passed all 834 checks (zero failures). Further implementation results are recorded
-in the implementation ledger.
-
-### Upstream prerequisite
-
-[ParserSQL PR #72](https://github.com/ProxySQL/ParserSQL/pull/72) is a draft of
-the provenance, operator, SELECT-option and conservative expression-refusal fixes.
-Codex independently compiled and ran 689 parser-only tests across 94 suites at
-commit `24bae10`. The full engine/client-linked suite was not run in that clone.
-ProxySQL still uses the original vendored 1.1.1 source plus its existing UTF-8
-patch. The characterization expectations above intentionally describe that
-baseline; no production translation is enabled by this PR or this document.
+[ParserSQL PR #72](https://github.com/ProxySQL/ParserSQL/pull/72) tracks the upstream
+provenance/operator work. The reproducible local patch starts at the original
+1.1.1 release, applies after the UTF-8 patch, and includes the additional recursive
+query/expression guard. All changes and regression tests are retained in
+`deps/parsersql/mysql-analytical-ast.patch`; consolidate them into the final
+ParserSQL PR at the end of this goal. Upstream publication is not a development
+gate under the user's 2026-11-16 authorization.
 
 ## Native metadata prerequisite (2026-11-16)
 
 The read-only `duckdb_mysql_select_metadata` component provides facts for the
-future translator through DuckDB's table-description C API. It executes no user
+translator through DuckDB's table-description C API. It executes no user
 SQL, caches no metadata, and requires the caller's connection ownership guard.
-It does not enable SQL translation or bypass the ParserSQL dependency gate.
+It supplies native facts; admission, canonical name resolution and execution
+protection remain separate responsibilities.
 
 | Fact | Available evidence | Translation boundary |
 | --- | --- | --- |
@@ -528,3 +508,23 @@ unknown provenance, request spelling versus native column spelling, missing
 relations, malformed names, budget/column limits, fresh metadata after DDL and
 preservation of an existing client transaction. The canonical static build and
 ASan/UBSan run pass with the DuckDB library itself uninstrumented.
+
+## Current pure translator slice
+
+`duckdb_translate_mysql_select` consumes only the locally patched ParserSQL AST.
+It emits owned DuckDB SQL and stable refusal reasons without executing a query;
+its caller supplies bounded relation facts. The initial implemented slice covers
+one resolved table, aliases and qualified column references, typed projections,
+nonnegative signed-range integer and NULL literals, signed-integer comparisons,
+NULL predicates, AND/OR, aggregate-only COUNT, numeric ordering with explicit
+MySQL NULL placement, and integer-literal LIMIT with a proven strictly unique
+ordering key. Identifiers and duplicate labels are preserved.
+
+Unknown types, ambiguous ORDER BY aliases, comments, session-sensitive quoting,
+string literals/comparison/ordering, arithmetic, AVG, grouping, joins, subqueries,
+CTEs, windows, variables and unknown functions are currently refused. Later
+roadmap slices remain outstanding; these refusals do not complete the goal.
+Native catalog facts describe the MySQL-facing mapping of native objects, not
+original replication-source metadata. Text projection does not establish a
+collation suitable for comparison. See the [actual translator differential
+baseline](mysql-translation-baseline.md) for tested results and its limits.

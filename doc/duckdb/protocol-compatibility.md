@@ -10,7 +10,7 @@ not attempt complete dialect or wire-feature compatibility.
 |---|---|---|
 | Authentication | `mysql_users` | `pgsql_users` |
 | Simple text query | Supported | Supported |
-| Client prepared statements | Read-only native SELECT subset | Read-only native SELECT subset |
+| Client prepared statements | Read-only native SELECT; opt-in translated zero-parameter subset | Read-only native SELECT subset |
 | Extended-query protocol | N/A | Supported for the prepared subset |
 | Multiple statements in one request | Rejected | Rejected |
 | Transaction status | Protocol OK/status behavior | `ReadyForQuery` I/T/E |
@@ -19,7 +19,13 @@ not attempt complete dialect or wire-feature compatibility.
 ## Prepared queries
 
 Both listeners support client prepared SELECT through the shared ABI 17 execution
-service. Use native DuckDB SQL, not MySQL dialect translation. Preparation is
+service. Native DuckDB SQL is the default. With startup-only
+`duckdb-mysql_dialect=mysql_analytical`, the MySQL listener translates the
+[bounded analytical subset](mysql-query-compatibility.md) for text and
+zero-parameter prepared queries. Analytical placeholders are currently refused;
+the native mode retains its documented typed-parameter support. Original SQL is
+re-admitted against current metadata before every analytical prepared execution.
+Preparation is
 limited to implicit, autocommit client cycles: explicit client transactions,
 prepared DML and RETURNING, temporal and nested values, cursors and
 cancellation are unsupported. MySQL clients must negotiate UTF-8 or issue a

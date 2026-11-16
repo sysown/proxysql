@@ -12,8 +12,12 @@ struct State {
     bool failed = false;
     bool fail_reset = false;
 };
-static uint8_t status(void *p) noexcept { return static_cast<State *>(p)->client; }
-static void failure(void *p) noexcept { static_cast<State *>(p)->failed = true; }
+static uint8_t status(void *p) noexcept {
+    return static_cast<State *>(p)->client;
+}
+static void failure(void *p) noexcept {
+    static_cast<State *>(p)->failed = true;
+}
 static bool reset_client(void *p, duckdb_connection *out) noexcept {
     auto *state = static_cast<State *>(p);
     if (state->fail_reset)
@@ -275,6 +279,94 @@ int main() {
            "failed reset leaves client transaction untouched");
         duckdb_destroy_result(&pending);
         query(conn, "ROLLBACK");
+    }
+    {
+        State state;
+        state.conn = &conn;
+        state.db = db;
+        DuckDBPreparedProvider provider(conn, status, failure, reset_client, &state,
+                                        embedded::DuckDBSourceDialect::mysql);
+        provider.set_mysql_analytical(true);
+        const auto *engine = provider.engine();
+        const auto *policy = provider.policy();
+        ProxySQL_Embedded_Error err{};
+        void *guard = nullptr, *stmt = nullptr;
+        query(conn, "CREATE TABLE prep_a (id BIGINT, value BIGINT)");
+        query(conn, "INSERT INTO prep_a VALUES (1,10),(2,20),(3,30)");
+        const char *sql = "SELECT COUNT(*) FROM prep_a WHERE id > 1";
+        ok(policy->authorize_prepare(policy->context, bytes(sql), &err) != 0 &&
+               err.kind == ProxySQL_Embedded_ERROR_TRANSACTION,
+           "analytical admission refuses calls outside a private guard");
+        REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_PREPARE, {},
+                                    &guard, &err) == 0,
+                "analytical prepare enters guard");
+        REQUIRE(policy->authorize_prepare(policy->context, bytes(sql), &err) == 0,
+                "analytical policy accepts typed count");
+        REQUIRE(engine->prepare(engine->context, bytes(sql), &stmt, &err) == 0 && stmt,
+                "analytical provider prepares translated SQL");
+        engine->guard_leave(engine->context, guard);
+        guard = nullptr;
+        REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_EXECUTE, {},
+                                    &guard, &err) == 0,
+                "analytical execute enters guard");
+        REQUIRE(policy->authorize_execute(policy->context, bytes(sql), nullptr, 0, &err) == 0,
+                "fresh metadata admits unchanged predicate");
+        ProxySQL_Embedded_ExecInfo info{};
+        ok(engine->execute(engine->context, stmt, &info, &err) == 0, "translated COUNT executes");
+        engine->guard_leave(engine->context, guard);
+        guard = nullptr;
+        query(conn, "CREATE TABLE \"odd`name\" (id BIGINT PRIMARY KEY, \"a`b\" BIGINT)");
+        query(conn, "INSERT INTO \"odd`name\" VALUES (1,10),(2,20),(3,30)");
+        const char *quoted = "SELECT `a``b` FROM `odd``name` ORDER BY id LIMIT 1, 1";
+        void *quoted_stmt = nullptr;
+        REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_PREPARE, {},
+                                    &guard, &err) == 0,
+                "escaped prepare enters guard");
+        REQUIRE(policy->authorize_prepare(policy->context, bytes(quoted), &err) == 0 &&
+                    engine->prepare(engine->context, bytes(quoted), &quoted_stmt, &err) == 0 &&
+                    quoted_stmt,
+                "analytical prepare translates backticks and comma LIMIT");
+        engine->guard_leave(engine->context, guard);
+        guard = nullptr;
+        REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_EXECUTE, {},
+                                    &guard, &err) == 0,
+                "escaped execute enters guard");
+        REQUIRE(policy->authorize_execute(policy->context, bytes(quoted), nullptr, 0, &err) == 0 &&
+                    engine->execute(engine->context, quoted_stmt, &info, &err) == 0,
+                "translated escaped prepared SELECT executes");
+        engine->guard_leave(engine->context, guard);
+        guard = nullptr;
+        REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_FETCH, {}, &guard,
+                                    &err) == 0,
+                "escaped fetch enters guard");
+        const ProxySQL_Embedded_Value *row = nullptr;
+        size_t count = 0;
+        uint8_t done = 0;
+        REQUIRE(engine->fetch(engine->context, quoted_stmt, &row, &count, &done, 128, &err) == 0 &&
+                    !done && count == 1,
+                "fetch translated result");
+        ok(row[0].kind == ProxySQL_Embedded_VALUE_INT64 && row[0].payload.int64_value == 20,
+           "comma LIMIT returns the intended row");
+        engine->guard_leave(engine->context, guard);
+        guard = nullptr;
+        engine->finalize(engine->context, quoted_stmt);
+        query(conn, "ALTER TABLE prep_a ALTER id TYPE VARCHAR");
+        REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_EXECUTE, {},
+                                    &guard, &err) == 0,
+                "schema drift check enters guard");
+        ok(policy->authorize_execute(policy->context, bytes(sql), nullptr, 0, &err) != 0 &&
+               err.kind == ProxySQL_Embedded_ERROR_SCHEMA_CHANGED,
+           "predicate type drift refuses even when COUNT output type is unchanged");
+        engine->guard_leave(engine->context, guard);
+        guard = nullptr;
+        engine->finalize(engine->context, stmt);
+        REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_PREPARE, {},
+                                    &guard, &err) == 0,
+                "placeholder test enters guard");
+        ok(policy->authorize_prepare(policy->context, bytes("SELECT ?"), &err) != 0 &&
+               err.kind == ProxySQL_Embedded_ERROR_UNSUPPORTED,
+           "analytical placeholders are refused");
+        engine->guard_leave(engine->context, guard);
     }
     duckdb_disconnect(&conn);
     duckdb_close(&db);

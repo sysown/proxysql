@@ -69,6 +69,7 @@ private:
 	int signal_pipe_[2] { -1, -1 };
 
 	DuckDBEngine* engine_ { nullptr };
+	bool mysql_analytical_ { false };
 	const ProxySQL_Embedded_ServiceV1* prepared_service_ { nullptr };
 
 	mutable pthread_mutex_t mutex_;

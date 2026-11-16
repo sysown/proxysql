@@ -7,7 +7,7 @@
 #include <vector>
 
 int main() {
-	plan(26);
+	plan(31);
 
 	// --- iface parsing -------------------------------------------------
 	std::vector<DuckDBIface> ifaces;
@@ -56,6 +56,17 @@ int main() {
 	// kDefaultEnableExternalAccess in duckdb_config.cpp.
 	ok(cfg.enable_external_access() == false, "enable_external_access defaults to false");
 	ok(cfg.max_connections() > 0, "max_connections has a positive default");
+
+	ok(cfg.mysql_dialect() == "native", "MySQL dialect defaults to native");
+	ok(cfg.set("mysql_dialect", "mysql_analytical", err) && cfg.mysql_dialect() == "mysql_analytical",
+	   "MySQL analytical dialect is accepted");
+	ok(!cfg.set("mysql_dialect", "MYSQL_ANALYTICAL", err) && !err.empty() &&
+	   cfg.mysql_dialect() == "mysql_analytical", "invalid dialect is rejected without changing the value");
+	ok(!cfg.set("mysql_dialect", "", err) && !cfg.set("mysql_dialect", "true", err) &&
+	   !cfg.set("mysql_dialect", "native ", err) && cfg.mysql_dialect() == "mysql_analytical",
+	   "empty, boolean and whitespace variants are rejected without changing the value");
+	ok(cfg.set("mysql_dialect", "native", err) && cfg.mysql_dialect() == "native",
+	   "native dialect is accepted");
 
 	// --- set / get -----------------------------------------------------
 	err.clear();

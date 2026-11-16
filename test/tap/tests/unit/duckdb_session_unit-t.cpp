@@ -192,6 +192,46 @@ int main() {
 	}
 
 	{
+		auto result = duckdb_execute_mysql_analytical(conn, "SELECT 1", false);
+		ok(result.decision == DuckDBAnalyticalDecision::supported && result.outcome.ok && result.healthy,
+		   "analytical executor runs admitted SELECT in private transaction");
+		delete result.outcome.result;
+	}
+	{
+		duckdb_result setup {};
+		for (const char* q : {"CREATE TABLE \"odd`table\" (id BIGINT PRIMARY KEY, \"a`b\" BIGINT)",
+		                      "INSERT INTO \"odd`table\" VALUES (1, 10), (2, 20), (3, 30)",
+		                      "CREATE SEQUENCE analytical_seq", "CREATE VIEW analytical_view AS SELECT nextval('analytical_seq') AS v"}) {
+			if (duckdb_query(conn, q, &setup) != DuckDBSuccess) BAIL_OUT("analytical setup failed: %s", duckdb_result_error(&setup));
+			duckdb_destroy_result(&setup);
+		}
+		auto admitted = duckdb_execute_mysql_analytical(conn, "SELECT `a``b` FROM `odd``table` ORDER BY id LIMIT 1, 1", false);
+		ok(admitted.decision == DuckDBAnalyticalDecision::supported && admitted.outcome.ok && admitted.outcome.result &&
+		   admitted.outcome.result->rows.size() == 1 && std::string(admitted.outcome.result->rows[0]->fields[0]) == "20",
+		   "analytical execution translates escaped identifier and comma LIMIT");
+		delete admitted.outcome.result;
+		for (const char* q : {"DELETE FROM `odd``table`", "SELECT nextval('analytical_seq')", "SELECT @x", "SELECT 1 /*! + 1 */"}) {
+			auto refused = duckdb_execute_mysql_analytical(conn, q, false);
+			ok(!refused.outcome.ok && refused.decision != DuckDBAnalyticalDecision::supported && refused.healthy,
+			   "analytical executor refuses %s", q);
+		}
+		auto malformed = duckdb_execute_mysql_analytical(conn, "SELECT FROM", false);
+		ok(!malformed.outcome.ok && malformed.decision == DuckDBAnalyticalDecision::invalid && malformed.healthy,
+		   "invalid analytical SQL has a distinct parser decision");
+		auto hidden = duckdb_execute_mysql_analytical(conn, "SELECT v FROM analytical_view", false);
+		ok(!hidden.outcome.ok && hidden.healthy, "read-only transaction blocks a side effect hidden in a view");
+		ok(scalar_count(conn, "SELECT nextval('analytical_seq')") == 1, "blocked view did not advance its sequence");
+		auto after = duckdb_execute_mysql_analytical(conn, "SELECT 1", false);
+		ok(after.outcome.ok && after.healthy, "private transaction is cleaned up after failed execution");
+		delete after.outcome.result;
+		auto begin = duckdb_execute_effective(conn, "BEGIN");
+		auto client = duckdb_execute_mysql_analytical(conn, "SELECT 1", true);
+		ok(begin.ok && !client.outcome.ok && client.healthy && duckdb_pgsql_transaction_status(conn) == 'T',
+		   "explicit client transaction is refused and remains owned by client");
+		auto end = duckdb_execute_effective(conn, "ROLLBACK");
+		ok(end.ok, "client can roll back its own transaction");
+	}
+	{
 		auto native = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'", DuckDBResultProtocol::pgsql);
 		ok(native.ok && native.result && std::string(native.result->rows[0]->fields[0]) == "t" &&
 		   std::string(native.result->rows[0]->fields[1]) == "f" && !native.result->rows[0]->fields[2],

@@ -224,3 +224,11 @@ Codex reviews and freezes the initial operation matrix and opt-in endpoint mode
 before their consumers are implemented, informed by the MyDuck reuse matrix. Execution uses user-requested OpenCode opencode-go Beam Free / Deepseek v4.1 flash
 or GPT-6.1 Terra workers where practical. Codex owns design, integration and
 independent validation. No implementation task is complete merely by approval.
+
+## ParserSQL development authorization — 2026-11-16
+
+The user authorized local ParserSQL modifications during implementation. Keep the
+released archive unchanged, carry reproducible local patches with pinned upstream
+base/head and regression tests, and consolidate all parser changes into the final
+upstream ParserSQL PR. Upstream merge/tag/release is not a prerequisite for this
+goal. Production recognition still uses only the vendored ParserSQL code.

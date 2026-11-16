@@ -37,14 +37,29 @@ read-only prepared SELECT subset. Native adapter/provider/policy checks pass
 81/41/47 assertions; real clients pass 47 MySQL and 29 PostgreSQL assertions.
 MySQL connection reset finalizes handles before replacing the native connection,
 rolling back pending writes and discarding temporary tables. Statement reset
-retains the client transaction. These are incremental milestones, not complete
-#6282/#6298 acceptance.
+retains the client transaction. These are incremental milestones with the explicit capability boundaries
+recorded below.
+
+The first opt-in analytical mode now supports the bounded identifier/LIMIT,
+projection, integer predicate, COUNT and ordering slice documented in the
+[compatibility contract](../../../doc/duckdb/mysql-query-compatibility.md).
+Its actual translator differential probe matches 11 MySQL/DuckDB query pairs.
+The owned wire test passes 42 direct/routed MySQL assertions, including translated
+prepared queries, type-change re-admission (1615), UTF-8 enforcement and hidden
+view write prevention. All seven native endpoint drivers still pass. Pure
+translation/context/provider checks pass 37/28/59 under ASan/UBSan; canonical
+config/Admin/listener/session checks pass 31/30/25/128. Parameter placeholders,
+groups/joins and further functions remain follow-up slices, not implied support.
 See [the support and limits](../../../doc/embedded-prepared-statements.md).
 
 ParserSQL draft [PR #72](https://github.com/ProxySQL/ParserSQL/pull/72), head
 `71dca32`, fixes analytical AST admission and provides expression source spans and
 comment provenance. It passes 695 local parser tests and upstream CI. ProxySQL
-still vendors 1.1.1; no upstream release, merge, tag or vendor bump has occurred.
+vendors the original 1.1.1 archive plus reproducible local patches. On 2026-11-16
+the user explicitly authorized developing with local ParserSQL changes and
+consolidating them into the final upstream PR after implementation. The
+analytical AST patch tracks the exact upstream base/head in deps/parsersql/README.md;
+no upstream release, merge, tag or release-version bump is required to continue.
 
 PostgreSQL codec prerequisites now pass 312 parameter and 47 result assertions,
 including sanitizer runs. Native parameter-position metadata passes 31 SQLite

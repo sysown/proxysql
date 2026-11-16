@@ -2,6 +2,10 @@
 #include "duckdb_engine.h"
 #include "duckdb_result.h"
 #include "duckdb_mysql_set.h"
+#include "duckdb_mysql_select_context.h"
+#include "MySQL_Variables.h"
+#include <cstdlib>
+#include <strings.h>
 #include "proxysql_find_charset.h"
 #include "sqlite3db.h"
 
@@ -1187,6 +1191,68 @@ void duckdb_send_result(PgSQL_Session* sess, SQLite3_result* r, char* err,
 	replace_packet(*packets->index(first), replacement.first, replacement.second);
 }
 
+DuckDBAnalyticalOutcome duckdb_execute_mysql_analytical(duckdb_connection conn,
+    const std::string& sql, bool client_transaction) {
+	DuckDBAnalyticalOutcome result;
+	if (!conn || client_transaction || duckdb_pgsql_transaction_status(conn) != 'I') {
+		result.outcome.ok = false;
+		result.outcome.error = "Analytical SELECT requires an idle connection";
+		return result;
+	}
+	auto control = [&](const char* command) {
+		duckdb_result r {};
+		const bool ok = duckdb_query(conn, command, &r) == DuckDBSuccess;
+		if (!ok) {
+			const char* message = duckdb_result_error(&r);
+			result.outcome.ok = false;
+			result.outcome.error = message ? message : "DuckDB transaction control failed";
+			result.outcome.error_type = duckdb_result_error_type(&r);
+		}
+		duckdb_destroy_result(&r);
+		return ok;
+	};
+	result.decision = DuckDBAnalyticalDecision::supported;
+	if (!control("BEGIN TRANSACTION READ ONLY")) return result;
+	bool active = true;
+	auto rollback = [&]() {
+		if (active) {
+			if (!control("ROLLBACK")) result.healthy = false;
+			active = false;
+		}
+	};
+	try {
+		auto context = duckdb_mysql_select_context(conn);
+		auto translated = duckdb_translate_mysql_select(sql, context);
+		if (translated.decision != DuckDBMySQLSelectDecision::supported) {
+			result.decision = translated.decision == DuckDBMySQLSelectDecision::invalid
+				? DuckDBAnalyticalDecision::invalid : DuckDBAnalyticalDecision::unsupported;
+			result.outcome.ok = false;
+			result.outcome.error = "MySQL analytical SELECT: " + translated.reason;
+			rollback();
+			return result;
+		}
+		result.decision = DuckDBAnalyticalDecision::supported;
+		result.outcome = duckdb_execute_effective(conn, translated.sql, DuckDBResultProtocol::mysql);
+		if (!result.outcome.ok) { rollback(); return result; }
+		if (!control("COMMIT")) {
+			delete result.outcome.result;
+			result.outcome.result = nullptr;
+			result.outcome.has_resultset = false;
+			rollback();
+			return result;
+		}
+		active = false;
+		return result;
+	} catch (...) {
+		delete result.outcome.result;
+		result.outcome.result = nullptr;
+		result.outcome.ok = false;
+		result.outcome.error = "Analytical SELECT failed";
+		rollback();
+		return result;
+	}
+}
+
 // --- error emitters ----------------------------------------------------
 
 void duckdb_send_mysql_error(MySQL_Session* sess, uint16_t code,
@@ -1345,6 +1411,7 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 	}
 	case DuckDBIntercept::ok_noop:
 		if constexpr (std::is_same_v<S, MySQL_Session>) {
+			if (duckdb_session_state().mysql_analytical) break;
 			duckdb_send_mysql_error(sess, 1064, "42000", "Invalid or unsupported session setting");
 			return;
 		}
@@ -1362,6 +1429,37 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		else
 			duckdb_send_pgsql_error(sess, "08003", "No DuckDB connection for this session");
 		return;
+	}
+
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
+		if (st.mysql_analytical && (kind == DuckDBIntercept::none || kind == DuckDBIntercept::ok_noop)) {
+			const char* value = mysql_variables.client_get_value(sess, SQL_CHARACTER_SET_CLIENT);
+			char* end = nullptr;
+			unsigned long id = value ? strtoul(value, &end, 10) : 0;
+			const auto* cs = value && *value && end && !*end && id <= UINT32_MAX
+				? proxysql_find_charset_nr(id) : nullptr;
+			if (!cs || !cs->csname || (strcasecmp(cs->csname, "utf8") &&
+			    strcasecmp(cs->csname, "utf8mb3") && strcasecmp(cs->csname, "utf8mb4"))) {
+				duckdb_send_mysql_error(sess, 1235, "0A000", "MySQL analytical SELECT requires UTF-8 client encoding");
+				return;
+			}
+			auto analytical = duckdb_execute_mysql_analytical(st.conn, sql, !sess->autocommit);
+			if (!analytical.healthy) { sess->healthy = false; return; }
+			if (!analytical.outcome.ok) {
+				if (analytical.decision == DuckDBAnalyticalDecision::unsupported)
+					duckdb_send_mysql_error(sess, 1235, "0A000", analytical.outcome.error.c_str());
+				else if (analytical.decision == DuckDBAnalyticalDecision::invalid)
+					duckdb_send_mysql_error(sess, 1064, "42000", analytical.outcome.error.c_str());
+				else
+					duckdb_send_mysql_error(sess, duckdb_mysql_errno(analytical.outcome.error_type, analytical.outcome.error),
+						duckdb_mysql_sqlstate(analytical.outcome.error_type, analytical.outcome.error), analytical.outcome.error.c_str());
+				return;
+			}
+			duckdb_send_result(sess, analytical.outcome.result, nullptr, analytical.outcome.affected_rows,
+				sql.c_str(), &analytical.outcome.column_types);
+			delete analytical.outcome.result;
+			return;
+		}
 	}
 
 	// Reject client changes to Admin-managed global settings. Session-local

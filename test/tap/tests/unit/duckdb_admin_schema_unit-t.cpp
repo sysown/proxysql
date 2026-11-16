@@ -52,7 +52,7 @@ ProxySQL_PluginCommandResult run(const char* command, SQLite3DB& db) {
 extern "C" const ProxySQL_PluginDescriptor* proxysql_plugin_descriptor_v1();
 
 int main() {
-	plan(25);
+	plan(30);
 
 	SQLite3DB db;
 	const int rc = db.open((char*)":memory:", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
@@ -85,11 +85,24 @@ int main() {
 	std::string err;
 	ok(duckdb_prepare_variables_for_startup(db, *plugin_ctx.config_store, err),
 	   "fresh startup seeds and validates DuckDB global variables");
-	ok(cell(db, "SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'duckdb-%'") == "8",
-	   "Main contains all eight duckdb-prefixed defaults");
+	ok(cell(db, "SELECT COUNT(*) FROM global_variables WHERE variable_name LIKE 'duckdb-%'") == "9",
+	   "Main contains all nine duckdb-prefixed defaults");
 	ok(!table_exists(db, "main", "duckdb_variables") &&
 	   !table_exists(db, "main", "runtime_duckdb_variables"),
 	   "fresh Admin schema exposes neither removed DuckDB table");
+
+	db.execute("UPDATE global_variables SET variable_value='mysql_analytical' WHERE variable_name='duckdb-mysql_dialect'");
+	ok(duckdb_prepare_variables_for_startup(db, *plugin_ctx.config_store, err) &&
+	   plugin_ctx.config_store->mysql_dialect() == "mysql_analytical",
+	   "startup accepts the configured analytical dialect");
+	db.execute("UPDATE global_variables SET variable_value='invalid' WHERE variable_name='duckdb-mysql_dialect'");
+	ok(!duckdb_prepare_variables_for_startup(db, *plugin_ctx.config_store, err) &&
+	   plugin_ctx.config_store->mysql_dialect() == "mysql_analytical",
+	   "invalid startup dialect leaves the existing snapshot unchanged");
+	db.execute("UPDATE global_variables SET variable_value='native' WHERE variable_name='duckdb-mysql_dialect'");
+	if (!duckdb_prepare_variables_for_startup(db, *plugin_ctx.config_store, err)) {
+		BAIL_OUT("native startup configuration must be valid");
+	}
 
 	plugin_ctx.engine = std::make_unique<DuckDBEngine>();
 	err.clear();
@@ -102,7 +115,7 @@ int main() {
 	db.execute("INSERT INTO runtime_global_variables VALUES ('mysql-threads','4')");
 	runtime_view.refresh(&db, runtime_view.opaque);
 	ok(cell(db, "SELECT variable_value FROM runtime_global_variables WHERE variable_name='mysql-threads'") == "4" &&
-	   cell(db, "SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'duckdb-%'") == "8",
+	   cell(db, "SELECT COUNT(*) FROM runtime_global_variables WHERE variable_name LIKE 'duckdb-%'") == "9",
 	   "runtime refresh replaces only the duckdb namespace");
 
 	db.execute("UPDATE global_variables SET variable_value='4' WHERE variable_name='duckdb-threads'");
@@ -148,6 +161,20 @@ int main() {
 	   "external access cannot be re-enabled live");
 	db.execute("UPDATE global_variables SET variable_value='false' WHERE variable_name='duckdb-enable_external_access'");
 
+	db.execute("UPDATE global_variables SET variable_value='mysql_analytical' WHERE variable_name='duckdb-mysql_dialect'");
+	db.execute("UPDATE global_variables SET variable_value='7' WHERE variable_name='duckdb-threads'");
+	result = run("LOAD DUCKDB VARIABLES TO RUNTIME", db);
+	ok(result.error_code != 0 && std::string(result.message).find("mysql_dialect") != std::string::npos,
+	   "changing MySQL dialect is rejected while the plugin is running");
+	runtime_view.refresh(&db, runtime_view.opaque);
+	ok(cell(db, "SELECT variable_value FROM runtime_global_variables WHERE variable_name='duckdb-mysql_dialect'") == "native" &&
+	   cell(db, "SELECT variable_value FROM runtime_global_variables WHERE variable_name='duckdb-threads'") == "4",
+	   "rejected dialect change leaves all effective settings unchanged");
+	db.execute("UPDATE global_variables SET variable_value='native' WHERE variable_name='duckdb-mysql_dialect'");
+	db.execute("UPDATE global_variables SET variable_value='4' WHERE variable_name='duckdb-threads'");
+	result = run("LOAD DUCKDB VARIABLES TO RUNTIME", db);
+	ok(result.error_code == 0, "unchanged MySQL dialect is accepted during runtime LOAD");
+
 	db.execute("UPDATE global_variables SET variable_value='9' WHERE variable_name='duckdb-threads'");
 	result = run("SAVE DUCKDB VARIABLES TO MEMORY", db);
 	ok(result.error_code == 0 &&
@@ -156,7 +183,7 @@ int main() {
 
 	result = run("SAVE DUCKDB VARIABLES TO DISK", db);
 	ok(result.error_code == 0 &&
-	   cell(db, "SELECT COUNT(*) FROM disk.global_variables WHERE variable_name LIKE 'duckdb-%'") == "8",
+	   cell(db, "SELECT COUNT(*) FROM disk.global_variables WHERE variable_name LIKE 'duckdb-%'") == "9",
 	   "SAVE TO DISK copies only the complete duckdb-prefixed Main slice");
 	db.execute("UPDATE disk.global_variables SET variable_value='5' WHERE variable_name='duckdb-threads'");
 	result = run("LOAD DUCKDB VARIABLES FROM DISK", db);

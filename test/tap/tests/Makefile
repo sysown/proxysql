@@ -712,6 +712,12 @@ pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-local_error_tx
 test_duckdb_prepared_pgsql_extended-t: test_duckdb_prepared_pgsql_extended-t.cpp pg_lite_client.cpp pg_lite_client.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< pg_lite_client.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) -I$(LIBSCRAM_IDIR) -I$(LIBUSUAL_IDIR) -I$(SSL_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
 
+# Owned analytical mode acceptance through direct and ordinary routed listeners.
+test_duckdb_mysql_analytical-t: test_duckdb_mysql_analytical-t.cpp prepared_owned_fixture.h duckdb_replica_test_utils.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(MARIADB_LDIR)/libmariadbclient.a $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) \
+		$(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
+
 # Prepared acceptance clients use the same owned child and tier-4 plugin.
 test_duckdb_prepared_mysql-t test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t test_embedded_prepared_admin_pgsql-t test_embedded_prepared_schema_mysql-t: prepared_owned_fixture.h duckdb_replica_test_utils.h
 
@@ -720,7 +726,7 @@ ifeq ($(PROXYSQL40),1)
 .PHONY: prepared-duckdb-plugin
 prepared-duckdb-plugin:
 	$(MAKE) -C unit duckdb_plugin_build
-test_duckdb_prepared_mysql-t test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t test_embedded_prepared_admin_pgsql-t test_embedded_prepared_schema_mysql-t: | prepared-duckdb-plugin
+test_duckdb_mysql_analytical-t test_duckdb_prepared_mysql-t test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t test_embedded_prepared_admin_pgsql-t test_embedded_prepared_schema_mysql-t: | prepared-duckdb-plugin
 endif
 
 test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_admin_pgsql-t: $(MARIADB_LDIR)/libmariadbclient.a

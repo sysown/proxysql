@@ -221,6 +221,7 @@ bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::st
 
 	listeners_ = std::move(bound);
 	engine_ = &engine;
+	mysql_analytical_ = cfg.mysql_dialect() == "mysql_analytical";
 	prepared_service_ = service;
 	shutdown_.store(false);
 	running_.store(true);
@@ -448,6 +449,7 @@ void DuckDBListener::run_session(int client_fd) {
 	if (!engine_->connect(&st.conn, cerr)) { close(client_fd); return; }
 	st.engine = engine_;
 	st.pgsql_txn_status = 'I';
+	st.mysql_analytical = std::is_same_v<Thr, MySQL_Thread> && mysql_analytical_;
 	st.database_name = engine_->database_path();
 	if (st.database_name.empty() || st.database_name == ":memory:") {
 		st.database_name = "memory";
@@ -554,6 +556,7 @@ void DuckDBListener::run_session(int client_fd) {
 				return true;
 			};
 			provider = std::make_unique<DuckDBPreparedProvider>(st.conn, idle, failure, reset_client, &prepared_status, dialect);
+			provider->set_mysql_analytical(st.mysql_analytical);
 			ProxySQL_Embedded_RequestV1 request{};
 			request.abi_version = ProxySQL_Embedded_ABI_V1; request.struct_size = sizeof(request);
 			request.engine = provider->engine(); request.policy = provider->policy();
@@ -652,7 +655,7 @@ void DuckDBListener::run_session(int client_fd) {
 			if (myds->net_failure) break;
 		}
 		sess->to_process = 1;
-		if (sess->handler() == -1) break;
+		if (sess->handler() == -1 || !sess->healthy) break;
 		if (sess->status == CONNECTING_CLIENT && connect_timeout_ms > 0 &&
 			thr->curtime - handshake_start > connect_timeout_ms * 1000ULL) {
 			proxy_warning("Closing not established DuckDB client connection %s:%d after %llums\n",

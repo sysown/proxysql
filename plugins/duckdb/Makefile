@@ -97,7 +97,7 @@ CXXFLAGS += -fstack-protector-strong
 DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
 DUCKDB_ARCHIVE_LISTER := $(PROXYSQL_PATH)/deps/duckdb/list-static-archives.sh
 
-SRCS := $(PLUGIN_DIR)/src/duckdb_mysql_select_metadata.cpp $(PLUGIN_DIR)/src/duckdb_prepared_adapter.cpp $(PLUGIN_DIR)/src/duckdb_prepared_provider.cpp $(PLUGIN_DIR)/src/duckdb_prepared_policy.cpp $(PLUGIN_DIR)/src/duckdb_mysql_set.cpp $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp $(PLUGIN_DIR)/src/duckdb_listener.cpp $(PLUGIN_DIR)/src/duckdb_replica.cpp $(PLUGIN_DIR)/src/duckdb_replica_types.cpp $(PLUGIN_DIR)/src/duckdb_replica_admin.cpp $(PLUGIN_DIR)/src/duckdb_replica_snapshot.cpp $(PLUGIN_DIR)/src/duckdb_replica_values.cpp $(PLUGIN_DIR)/src/duckdb_replica_binlog.cpp
+SRCS := $(PLUGIN_DIR)/src/duckdb_mysql_select_compat.cpp $(PLUGIN_DIR)/src/duckdb_mysql_select_context.cpp $(PLUGIN_DIR)/src/duckdb_mysql_select_metadata.cpp $(PLUGIN_DIR)/src/duckdb_prepared_adapter.cpp $(PLUGIN_DIR)/src/duckdb_prepared_provider.cpp $(PLUGIN_DIR)/src/duckdb_prepared_policy.cpp $(PLUGIN_DIR)/src/duckdb_mysql_set.cpp $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp $(PLUGIN_DIR)/src/duckdb_listener.cpp $(PLUGIN_DIR)/src/duckdb_replica.cpp $(PLUGIN_DIR)/src/duckdb_replica_types.cpp $(PLUGIN_DIR)/src/duckdb_replica_admin.cpp $(PLUGIN_DIR)/src/duckdb_replica_snapshot.cpp $(PLUGIN_DIR)/src/duckdb_replica_values.cpp $(PLUGIN_DIR)/src/duckdb_replica_binlog.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
@@ -149,6 +149,9 @@ $(BUILDFLAGS_STAMP): FORCE | $(ODIR)
 	@if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$(CXXFLAGS)" ]; then \
 		echo "$(CXXFLAGS)" > $@; \
 	fi
+
+# Recompile ParserSQL consumers when its headers and archive are rebuilt.
+$(addprefix $(ODIR)/,duckdb_prepared_policy.o duckdb_mysql_set.o duckdb_mysql_select_compat.o): $(PARSERSQL_LDIR)/libsqlparser.a
 
 $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) $(BUILDFLAGS_STAMP) | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(DEPFLAGS) $(IDIRS)

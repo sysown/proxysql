@@ -51,6 +51,7 @@ struct DuckDBSessionState {
 	duckdb_connection conn { nullptr };
 	DuckDBEngine* engine { nullptr };
 	bool pgsql_extended_error { false };
+	bool mysql_analytical { false };
 	char pgsql_txn_status { 'I' };
 	std::string database_name { "memory" };
 };
@@ -112,6 +113,17 @@ struct DuckDBExecOutcome {
 // selected prepared statement exactly once.
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
                                          DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql);
+
+enum class DuckDBAnalyticalDecision { supported, unsupported, invalid };
+struct DuckDBAnalyticalOutcome {
+	DuckDBExecOutcome outcome;
+	DuckDBAnalyticalDecision decision { DuckDBAnalyticalDecision::unsupported };
+	bool healthy { true };
+};
+// Runs only admitted MySQL SELECTs within a private read-only transaction.
+// Callers retain ownership of any client transaction and of outcome.result.
+DuckDBAnalyticalOutcome duckdb_execute_mysql_analytical(duckdb_connection conn,
+    const std::string& sql, bool client_transaction);
 
 // Rejects client SET statements for Admin-managed engine-global settings.
 // Returns false with an error for a rejected statement; unhandled session SET

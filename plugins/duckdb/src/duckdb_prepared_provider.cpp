@@ -1,4 +1,5 @@
 #include "duckdb_prepared_provider.h"
+#include "duckdb_mysql_select_context.h"
 #include "duckdb_prepared_adapter.h"
 #include <cstring>
 #include <string>
@@ -68,6 +69,7 @@ struct DuckDBPreparedProvider::Impl {
     ProxySQL_Embedded_PolicyV1 policy{};
     std::string message;
     bool active = false, failed = false, poisoned = false;
+    bool mysql_analytical = false;
     char passive_guard = 0;
     char session_reset_guard = 0;
     Impl(duckdb_connection c, Status s, Failure f, ResetClient r, void *arg, DuckDBSourceDialect d)
@@ -158,8 +160,39 @@ struct DuckDBPreparedProvider::Impl {
         }
         return r;
     }
-    static Impl &self(void *p) { return *static_cast<Impl *>(p); }
-    static NativeStatement &statement(void *p) { return *static_cast<NativeStatement *>(p); }
+    int translate(ProxySQL_Embedded_BytesView sql, std::string &emitted, E *e,
+                  bool schema_recheck) {
+        if (!active)
+            return error(e, ErrorKind::transaction,
+                         "analytical operation requires a read-only guard");
+        if (!sql.data && sql.size)
+            return error(e, ErrorKind::invalid_parameter, "invalid SQL");
+        if (sql.size > 65536)
+            return error(e, ErrorKind::resource, "analytical SQL input limit exceeded");
+        std::string text(reinterpret_cast<const char *>(
+                             sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
+                         sql.size);
+        auto context = duckdb_mysql_select_context(conn);
+        auto translated = duckdb_translate_mysql_select(text, context);
+        if (translated.decision != DuckDBMySQLSelectDecision::supported) {
+            if (schema_recheck)
+                return error(e, ErrorKind::schema_changed,
+                             "analytical statement no longer admitted");
+            return error(e,
+                         translated.decision == DuckDBMySQLSelectDecision::invalid
+                             ? ErrorKind::syntax
+                             : ErrorKind::unsupported,
+                         "analytical SQL not admitted");
+        }
+        emitted = std::move(translated.sql);
+        return 0;
+    }
+    static Impl &self(void *p) {
+        return *static_cast<Impl *>(p);
+    }
+    static NativeStatement &statement(void *p) {
+        return *static_cast<NativeStatement *>(p);
+    }
 #define CATCH(c, e)                                                                                \
     catch (...) {                                                                                  \
         return self(c).error(e, ErrorKind::internal, "DuckDB provider exception");                 \
@@ -171,11 +204,17 @@ struct DuckDBPreparedProvider::Impl {
                 return p.error(e, ErrorKind::invalid_parameter, "invalid SQL");
             *out = nullptr;
             auto s = std::make_unique<NativeStatement>();
-            auto r = p.adapter.prepare(
-                std::string(reinterpret_cast<const char *>(
-                                sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
-                            sql.size),
-                s->stmt);
+            std::string prepared_sql;
+            if (p.mysql_analytical) {
+                if (p.translate(sql, prepared_sql, e, false))
+                    return 1;
+            } else {
+                prepared_sql.assign(
+                    reinterpret_cast<const char *>(
+                        sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
+                    sql.size);
+            }
+            auto r = p.adapter.prepare(prepared_sql, s->stmt);
             if (r)
                 return p.result(e, r);
             *out = s.release();
@@ -447,6 +486,10 @@ struct DuckDBPreparedProvider::Impl {
             auto &p = self(c);
             if (!sql.data && sql.size)
                 return p.error(e, ErrorKind::invalid_parameter, "invalid SQL");
+            if (p.mysql_analytical) {
+                std::string emitted;
+                return p.translate(sql, emitted, e, false);
+            }
             std::string text(reinterpret_cast<const char *>(
                                  sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
                              sql.size);
@@ -457,17 +500,29 @@ struct DuckDBPreparedProvider::Impl {
         }
         CATCH(c, e)
     }
-    static int authorize_execute(void *, ProxySQL_Embedded_BytesView, const V *, size_t,
-                                 E *) noexcept {
+    static int authorize_execute(void *c, ProxySQL_Embedded_BytesView sql, const V *, size_t,
+                                 E *e) noexcept {
+        try {
+            auto &p = self(c);
+            if (!p.mysql_analytical)
+                return 0;
+            std::string emitted;
+            return p.translate(sql, emitted, e, true);
+        }
+        CATCH(c, e)
+    }
+    static int authorize_fetch(void *, ProxySQL_Embedded_BytesView, E *) noexcept {
         return 0;
     }
-    static int authorize_fetch(void *, ProxySQL_Embedded_BytesView, E *) noexcept { return 0; }
 #undef CATCH
 };
 DuckDBPreparedProvider::DuckDBPreparedProvider(duckdb_connection c, Status s, Failure f,
                                                ResetClient r, void *p, DuckDBSourceDialect d)
     : impl_(std::make_unique<Impl>(c, s, f, r, p, d)) {}
 DuckDBPreparedProvider::~DuckDBPreparedProvider() = default;
+void DuckDBPreparedProvider::set_mysql_analytical(bool enabled) noexcept {
+    impl_->mysql_analytical = enabled && impl_->dialect == embedded::DuckDBSourceDialect::mysql;
+}
 const ProxySQL_Embedded_EngineV1 *DuckDBPreparedProvider::engine() const noexcept {
     return &impl_->api;
 }
