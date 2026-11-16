@@ -8,6 +8,7 @@
 class DuckDBConfigStore;
 class DuckDBEngine;
 class DuckDBListener;
+class DuckDBReplica;
 
 // Process-wide plugin state. The chassis gives callbacks no context
 // pointer, so the plugin reaches its own state through this accessor.
@@ -26,6 +27,7 @@ struct DuckDBPluginContext {
 	std::unique_ptr<DuckDBConfigStore> config_store;
 	std::unique_ptr<DuckDBEngine> engine;
 	std::unique_ptr<DuckDBListener> listener;
+	std::unique_ptr<DuckDBReplica> replica;
 };
 
 DuckDBPluginContext& duckdb_context();

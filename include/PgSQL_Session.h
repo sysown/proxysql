@@ -95,10 +95,11 @@ public:
 	  * function returns a default DateStyle with none format and order.
 	  *
 	  * @param input A string_view representing the DateStyle input to be parsed.
+	  * @param reset_datestyle The session's reset value, used for the word DEFAULT; when null, DEFAULT is refused.
 	  * @return A PgSQL_DateStyle_t structure containing the parsed DateStyle format and order.
 	  *
 	  */
-	static PgSQL_DateStyle_t parse_datestyle(std::string_view input);
+	static PgSQL_DateStyle_t parse_datestyle(std::string_view input, const PgSQL_DateStyle_t* reset_datestyle = nullptr);
 
 	/**
 	  * @brief Converts a PgSQL_DateStyle_t structure to a string representation.
@@ -158,6 +159,11 @@ enum ExtendedQueryPhase : uint8_t {
 // What a handler did with a message ProxySQL may answer itself: nothing (it goes on to the backend),
 // sent a reply, or sent an error. An error ends an extended-query unit, so the caller has to know.
 enum class PgSQL_Local_Reply : uint8_t { NONE, SENT, SENT_ERROR };
+
+// What PgSQL_Session::apply_tracked_variable() did with a value. UNCHANGED: DateStyle '' (PostgreSQL
+// keeps the current one). LOCK: a TimeZone value starting with INTERVAL. ERROR_SENT: the validator
+// refused the value and the 22023 packet is queued. FAILED: client_set_value() failed.
+enum class PgSQL_Apply_Result : uint8_t { APPLIED, UNCHANGED, LOCK, ERROR_SENT, FAILED };
 
 #define EXTQ_PHASE_PROCESSING_MASK \
     (EXTQ_PHASE_PROCESSING_PARSE | EXTQ_PHASE_PROCESSING_DESCRIBE | \
@@ -223,6 +229,11 @@ public:
 	uint64_t stmt_cache_key[4] {};
 	bool stmt_cache_valid { false };
 #endif
+	// Simple-query cache seed, computed at lookup and reused when the result is stored.
+	// 0 means not computed for this query; begin() clears it so no query uses another's.
+	uint64_t simple_cache_seed {};
+	// PGSQL_SCAN_* targets found in this query by pgsql_query_scan(); begin() clears them.
+	uint32_t scan_found {};
 	PgSQL_Session* sess;
 	unsigned char* QueryPointer;
 	SQP_par_t QueryParserArgs;
@@ -414,6 +425,15 @@ private:
 
 	bool is_multi_statement_command(const char* cmd);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_SET_command(const char* dig, bool* lock_hostgroup);
+	// Records `value` (already unquoted or decoded) as the client's tracked variable `idx`, the way
+	// SET does: validator and transform, then the stored value when it changed, plus any
+	// ParameterStatus that is owed, appended to `param_status`. SET and set_config() both use it.
+	PgSQL_Apply_Result apply_tracked_variable(int idx, std::string value,
+		std::vector<std::pair<std::string, std::string>>& param_status);
+	// set_config(): records the calls ProxySQL can follow (answered locally in the simple
+	// protocol), locks the hostgroup for any other one, answers PostgreSQL's predictable errors.
+	// Reads the PGSQL_SCAN_* bits of the query, or at Execute of the statement being executed.
+	PgSQL_Local_Reply handle_set_config(const char* dig, bool* lock_hostgroup);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_RESET_command(const char* dig, bool* lock_hostgroup);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DISCARD_command(const char* dig);
 	PgSQL_Local_Reply handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___handle_DEALLOCATE_command(const char* dig);

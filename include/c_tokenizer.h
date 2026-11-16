@@ -3,6 +3,9 @@
 #ifndef C_TOKENIZER_H
 #define C_TOKENIZER_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 #define PROXYSQL_TOKENIZER_BUFFSIZE	128
 
 #ifndef FIRST_COMMENT_MAX_LENGTH
@@ -85,14 +88,30 @@ const char* pgsql_digest_next_stmt(const char* stmt, const char** lost);
 // starts at the unterminated comment or quote, so a word inside that comment counts too.
 bool pgsql_text_has_word(const char* text, const char* keyword);
 
-// True when any statement of `digest` begins with `keyword`, by the same rule as
-// pgsql_stmt_first_keyword_is(). A Simple Query can carry several statements, and checking
-// only the first lets `SELECT 1; LISTEN ch` through (issue #6438). From the point the scan is
-// lost at -- the opening of an unterminated comment or quote -- any whole-word occurrence
-// counts, so a damaged digest errs toward a match. That includes the text of a kept comment
-// cut at FIRST_COMMENT_MAX_LENGTH: `/* ... listen ... */ SELECT 1` with a comment that long
-// is taken for LISTEN (fail-closed), not only a LISTEN that follows the cut comment.
-bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword);
+// What pgsql_digest_scan() and pgsql_query_scan() report, as bits.
+enum : uint32_t {
+	PGSQL_SCAN_LISTEN      = 1u << 0, // a statement starts with LISTEN
+	PGSQL_SCAN_DO          = 1u << 1, // a statement starts with DO
+	PGSQL_SCAN_SET_CONFIG  = 1u << 2, // the word set_config anywhere (also "set_config")
+	PGSQL_SCAN_PG_SETTINGS = 1u << 3, // the word pg_settings anywhere (also "pg_settings")
+	PGSQL_SCAN_ALL         = PGSQL_SCAN_LISTEN | PGSQL_SCAN_DO | PGSQL_SCAN_SET_CONFIG | PGSQL_SCAN_PG_SETTINGS,
+};
+
+// Every target found in `digest`, in one walk over it: a statement keyword when any statement
+// begins with it, by the rule of pgsql_stmt_first_keyword_is() (a Simple Query can carry several
+// statements, and checking only the first lets `SELECT 1; LISTEN ch` through, issue #6438); a
+// word target when it stands as a whole word outside kept comments, or as a quoted identifier.
+// A U&"..." identifier cannot be compared, so it counts as every word target: it can over-match.
+// From the point the scan is lost at -- the opening of an unterminated comment or quote -- any
+// whole-word occurrence of any target counts, so a damaged digest errs toward a match. That
+// includes the text of a kept comment cut at FIRST_COMMENT_MAX_LENGTH.
+uint32_t pgsql_digest_scan(const char* digest);
+
+// Every target standing as a whole word anywhere in `text`, statement keywords included, by the
+// boundary rule of pgsql_text_has_word(). Raw text: words inside literals and comments count.
+// A U&"..." identifier counts as every word target, as in pgsql_digest_scan().
+// Reads at most `len` bytes and stops at a NUL, so a query buffer is read in place.
+uint32_t pgsql_text_find_words(const char* text, size_t len = SIZE_MAX);
 
 // Digest of the whole of `query` (NUL-terminated), with the current query_digests_* options
 // except that nothing is cut at query_digests_max_query_length and comments are dropped.
@@ -100,15 +119,14 @@ bool pgsql_digest_has_stmt_keyword(const char* digest, const char* keyword);
 // that may be cut. The caller frees the result; NULL for a NULL or oversized query.
 char* pgsql_query_full_digest(const char* query);
 
-// Whether any statement of a query begins with `keyword`, the way
-// pgsql_digest_has_stmt_keyword() tells it, for the LISTEN gate. `digest` is the session's
+// The targets of a query, the way pgsql_digest_scan() reports them. `digest` is the session's
 // digest of `query` and is used as is unless it is NULL (pgsql-query_digests off), empty, or
 // the query is longer than query_digests_max_query_length -- then the digest can end before a
 // trailing statement. In those cases a present-but-empty digest is not trusted either: the
 // raw query is read instead, its first statement directly and then all of it digested in
-// full; only when it holds the keyword as a word at all, so other queries pay one scan of
-// their text.
-bool pgsql_query_has_stmt_keyword(const char* digest, const char* query, const char* keyword);
+// full; only when it holds a target as a word at all, so other queries pay one scan of
+// their text. Only the bits in `targets` are looked for and reported.
+uint32_t pgsql_query_scan(const char* digest, const char* query, uint32_t targets = PGSQL_SCAN_ALL);
 
 // For TAP Test
 char* mysql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf);

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-archive=${1:-"${script_dir}/duckdb-1.4.5.tar.gz"}
+archive=${1:-"${script_dir}/duckdb-2.0.0.tar.xz"}
 checksum_file=${2:-"${archive}.sha256"}
-required_root=duckdb-1.4.5
+required_root=duckdb-2.0.0
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -26,8 +26,8 @@ actual=$(sha256_file "${archive}")
 # awk waits for the complete listing before printing the first entry's root.
 # This keeps tar's exit status meaningful: truncated or otherwise corrupt
 # streams must fail verification even if their first member was readable.
-if ! root=$(tar -tzf "${archive}" | awk -F/ 'NR == 1 { root = $1 } END { print root }'); then
-	fail "cannot read complete archive listing: ${archive}"
+if ! root=$(tar -tf "${archive}" | awk -F/ 'NR == 1 { root = $1 } END { print root }'); then
+	fail "cannot read complete archive listing: ${archive} (tar needs XZ decompression support)"
 fi
 [[ "${root}" == "${required_root}" ]] || \
 	fail "unexpected archive root '${root}', expected '${required_root}'"

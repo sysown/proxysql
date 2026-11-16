@@ -149,9 +149,9 @@ typedef struct _main_args {
 	volatile int *shutdown;
 } main_args;
 
-typedef struct _ifaces_desc_t {
+typedef struct _sqlite3_ifaces_desc_t {
 		char **mysql_ifaces;
-} ifaces_desc_t;
+} sqlite3_ifaces_desc_t;
 
 #define MAX_IFACES	128
 #define MAX_SQLITE3SERVER_LISTENERS 128
@@ -213,7 +213,7 @@ class sqlite3server_main_loop_listeners {
 		pthread_rwlock_unlock(&rwlock);
 	}
 	ifaces_desc *ifaces_mysql;
-	ifaces_desc_t descriptor_new;
+	sqlite3_ifaces_desc_t descriptor_new;
 	sqlite3server_main_loop_listeners() {
 		pthread_rwlock_init(&rwlock, NULL);
 		ifaces_mysql=new ifaces_desc();

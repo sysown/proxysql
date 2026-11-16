@@ -138,7 +138,7 @@ class MakefileDependencyTest(unittest.TestCase):
                     result.stdout,
                 )
                 self.assertIn(
-                    "-DPROXYSQL_VENDORED_OPENSSL_VERSION=\\\"3.5.7\\\"",
+                    "-DPROXYSQL_VENDORED_OPENSSL_VERSION=\\\"3.5.9\\\"",
                     compile_line,
                     result.stdout,
                 )

@@ -125,7 +125,7 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 
-libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a libhttpserver/raw_request_target.patch
+libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a libhttpserver/raw_request_target.patch libhttpserver/client_cert_verification.patch
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-*.tar.gz
 	cd libhttpserver/libhttpserver && patch -p1 < ../noexcept.patch
@@ -135,11 +135,12 @@ libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmi
 	cd libhttpserver/libhttpserver && patch -p0 < ../expose_raw_url.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../replace_static_global_strings.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../raw_request_target.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../client_cert_verification.patch
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
-	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS="-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include -I$(ABSL_INSTALL)/include" ../configure --disable-shared --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
+	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS="-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include -I$(ABSL_INSTALL)/include $(shell pkg-config --cflags gnutls)" LIBS="$(shell pkg-config --libs gnutls)" ../configure --disable-shared --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
 
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
@@ -287,7 +288,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
-mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP) mariadb-client-library/x509cache.patch
+mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP) mariadb-client-library/x509cache.patch mariadb-client-library/mariadb_rpl_rows.patch
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
@@ -340,6 +341,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../x509cache.patch
 	# patches for replication testing
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_rpl.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_rpl_rows.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../cmakelists.txt.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.metadata_column_check.patch
 	# new compilers fix
@@ -445,7 +447,7 @@ pcre/pcre/.libs/libpcre.a:
 pcre: pcre/pcre/.libs/libpcre.a
 
 pcre2/pcre2/.libs/libpcre2-8.a:
-	cd pcre2 && rm -rf pcre2-*/ || true
+	cd pcre2 && rm -rf pcre2-*/ pcre2 || true
 	cd pcre2 && tar -zxf pcre2-10.47.tar.gz
 	cd pcre2 && mv pcre2-10.47 pcre2
 	cd pcre2/pcre2 && ./configure --disable-shared --enable-static \
@@ -499,10 +501,11 @@ libscram/lib/libscram.a: postgresql/postgresql/src/interfaces/libpq/libpq.a $(OP
 libscram: libscram/lib/libscram.a
 
 
-parsersql/parsersql/libsqlparser.a:
+parsersql/parsersql/libsqlparser.a: parsersql/utf8-identifiers.patch
 	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 	cd parsersql && tar -zxf parsersql-*.tar.gz
 	cd parsersql && for d in ParserSQL-*/; do [ -d "$$d" ] && mv "$$d" "parsersql-$${d#ParserSQL-}"; done || true
+	cd parsersql/parsersql && patch -p1 < ../utf8-identifiers.patch
 	cd parsersql/parsersql && CC=${CC} CXX=${CXX} ${MAKE} lib
 
 parsersql: parsersql/parsersql/libsqlparser.a

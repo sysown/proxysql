@@ -9,6 +9,9 @@
 #include <any>
 #include <sstream>
 #include <type_traits>
+#include <memory>
+#include <fcntl.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include "test_globals.h"
@@ -84,10 +87,34 @@ extern "C" Session_Run_Result __wrap__ZN13MySQL_Session8run_stepE23PgSQL_Pool_Ac
     return s->status == CONNECTING_SERVER ? Session_Run_Result::WaitBackend : Session_Run_Result::WaitIO;
 }
 
+static void frontend_sockets(int (&fds)[2], bool tcp) {
+	if (!tcp) {
+		if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds)) BAIL_OUT("socketpair failed");
+	} else {
+		int listener = socket(AF_INET, SOCK_STREAM, 0);
+		sockaddr_in addr {};
+		addr.sin_family = AF_INET;
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		if (listener < 0 || bind(listener, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) || listen(listener, 1))
+			BAIL_OUT("loopback listener failed");
+		socklen_t len = sizeof(addr);
+		if (getsockname(listener, reinterpret_cast<sockaddr*>(&addr), &len)) BAIL_OUT("loopback address failed");
+		fds[1] = socket(AF_INET, SOCK_STREAM, 0);
+		if (fds[1] < 0 || connect(fds[1], reinterpret_cast<sockaddr*>(&addr), sizeof(addr))) BAIL_OUT("loopback connect failed");
+		fds[0] = accept(listener, nullptr, nullptr);
+		close(listener);
+		if (fds[0] < 0) BAIL_OUT("loopback accept failed");
+	}
+	for (int fd : fds) {
+		int flags = fcntl(fd, F_GETFL);
+		if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK)) BAIL_OUT("nonblocking frontend failed");
+	}
+}
+
 template<class Worker, class Session, class Stream>
-Session *new_waiter(Worker& worker, int& peer, unsigned hid = 1, unsigned long long deadline = 0) {
+Session *new_waiter(Worker& worker, int& peer, unsigned hid = 1, unsigned long long deadline = 0, bool tcp = false) {
 	int fds[2];
-	if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds)) BAIL_OUT("socketpair failed");
+	frontend_sockets(fds, tcp);
 	peer = fds[1];
 	auto *sess = new Session();
 	sess->connections_handler = true;
@@ -137,7 +164,7 @@ void test_protocol(const char *name) {
 		const bool waiting = expected == Outcome::wait;
 		ok(worker.waiter_lists.empty() != waiting, "%s: outcome %d retains only active checkout waiters", name, int(expected));
 		ok(worker.mysql_sessions->len == (terminal ? 0u : 1u), "%s: outcome %d disposes only terminal sessions", name, int(expected));
-		ok(worker.mypolls.len == baseline_polls + (expected == Outcome::complete ? 1u : 0u), "%s: outcome %d restores polling only for a live completed client", name, int(expected));
+		ok(worker.mypolls.len == baseline_polls + (terminal ? 0u : 1u), "%s: outcome %d retains polling for every live client", name, int(expected));
 		while (worker.mysql_sessions->len) {
 			auto *s = static_cast<Session*>(worker.mysql_sessions->index(0));
 			worker.unregister_session(0);
@@ -223,6 +250,109 @@ void test_protocol(const char *name) {
 	worker.mysql_sessions->remove_index_fast(0);
 	delete sess;
 	ok(worker.mypolls.len == baseline_polls && worker.waiter_lists.empty(), "%s: direct waiter destruction leaves no dangling poll entry", name);
+	close(peer);
+}
+
+template<class Worker, class Session, class Stream>
+void test_waiter_disconnect_poll_unix(const char *name) {
+	for (bool buffered : {false, true}) {
+		Worker worker;
+		if (!worker.init()) BAIL_OUT("worker init failed");
+		worker.maintenance_loop = false;
+		worker.curtime = 1000000;
+		worker.last_b_rearm_us = worker.curtime;
+		const unsigned baseline = worker.mypolls.len;
+		int head_peer, tail_peer;
+		auto *head = new_waiter<Worker, Session, Stream>(worker, head_peer);
+		auto *tail = new_waiter<Worker, Session, Stream>(worker, tail_peer);
+		subject = head;
+		outcome = Outcome::wait;
+		tail->pause_until = worker.curtime + 10000000;
+		if (send(head_peer, "h", 1, 0) != 1 || (buffered && send(tail_peer, "t", 1, 0) != 1)) BAIL_OUT("queued frontend input failed");
+		worker.template ProcessAllMyDS_BeforePoll<Worker>();
+		ok(head->client_myds->poll_fds_idx >= 0 && tail->client_myds->poll_fds_idx >= 0,
+			"%s: waiters retain disconnect watches between read rearms (buffered=%d)", name, buffered);
+		ok(poll(worker.mypolls.fds, worker.mypolls.len, 0) == 0,
+			"%s: queued waiter input does not wake the disconnect-only poll (buffered=%d)", name, buffered);
+		close(tail_peer);
+		ok(poll(worker.mypolls.fds, worker.mypolls.len, 100) > 0,
+			"%s: a waiter disconnect wakes poll before the next read rearm (buffered=%d)", name, buffered);
+		worker.template run_SetAllSession_ToProcess0<Worker, Session>();
+		if constexpr (std::is_same_v<Worker, PgSQL_Thread>) worker.ProcessAllMyDS_AfterPoll();
+		else worker.template ProcessAllMyDS_AfterPoll<Worker>();
+		worker.process_all_sessions();
+		ok(worker.mysql_sessions->len == 1 && worker.waiter_lists.head(1) == &head->waiter_node &&
+			worker.mypolls.len == baseline + 1,
+			"%s: a paused disconnected tail is reaped behind a still-starved head (buffered=%d)", name, buffered);
+		char byte = 0;
+		ok(recv(head->client_myds->fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == 1 && byte == 'h',
+			"%s: disconnect handling does not consume the live waiter's input (buffered=%d)", name, buffered);
+		worker.leave_waiter(head);
+		const int idx = head->client_myds->poll_fds_idx;
+		ok(idx >= 0 && (worker.mypolls.fds[idx].events & POLLIN),
+			"%s: leaving the waiter queue restores readable polling (buffered=%d)", name, buffered);
+		while (worker.mysql_sessions->len) {
+			std::unique_ptr<Session> s(static_cast<Session*>(worker.mysql_sessions->index(0)));
+			worker.unregister_session(0);
+		}
+		close(head_peer);
+	}
+}
+
+template<class Worker, class Session, class Stream>
+void test_waiter_disconnect_poll_tcp(const char *name) {
+	for (bool reset : {false, true}) {
+		Worker worker;
+		if (!worker.init()) BAIL_OUT("worker init failed");
+		worker.maintenance_loop = false;
+		worker.curtime = 1000000;
+		const unsigned baseline = worker.mypolls.len;
+		int peer;
+		auto *sess = new_waiter<Worker, Session, Stream>(worker, peer, 1, 0, true);
+		subject = sess;
+		outcome = Outcome::wait;
+		sess->pause_until = worker.curtime + 10000000;
+		if (send(peer, "pending", 7, 0) != 7) BAIL_OUT("queued TCP input failed");
+		if (reset) {
+			linger immediate {1, 0};
+			if (setsockopt(peer, SOL_SOCKET, SO_LINGER, &immediate, sizeof(immediate))) BAIL_OUT("reset linger failed");
+			close(peer);
+		} else if (shutdown(peer, SHUT_WR)) BAIL_OUT("TCP half-close failed");
+		ok(poll(worker.mypolls.fds, worker.mypolls.len, 1000) > 0,
+			"%s: queued TCP input does not hide a waiter's %s", name, reset ? "reset" : "half-close");
+		worker.template run_SetAllSession_ToProcess0<Worker, Session>();
+		if constexpr (std::is_same_v<Worker, PgSQL_Thread>) worker.ProcessAllMyDS_AfterPoll();
+		else worker.template ProcessAllMyDS_AfterPoll<Worker>();
+		worker.process_all_sessions();
+		ok(worker.mysql_sessions->len == 0 && worker.waiter_lists.empty() && worker.mypolls.len == baseline,
+			"%s: a TCP %s removes the paused waiter and its poll entry", name, reset ? "reset" : "half-close");
+		while (worker.mysql_sessions->len) {
+			std::unique_ptr<Session> s(static_cast<Session*>(worker.mysql_sessions->index(0)));
+			worker.unregister_session(0);
+		}
+		if (!reset) close(peer);
+	}
+}
+
+template<class Worker, class Session, class Stream>
+void test_waiter_invalid_fd(const char *name) {
+	Worker worker;
+	if (!worker.init()) BAIL_OUT("worker init failed");
+	worker.maintenance_loop = false;
+	worker.curtime = 1000000;
+	const unsigned baseline = worker.mypolls.len;
+	int peer;
+	auto *sess = new_waiter<Worker, Session, Stream>(worker, peer);
+	sess->pause_until = worker.curtime + 10000000;
+	close(sess->client_myds->fd);
+	ok(poll(worker.mypolls.fds, worker.mypolls.len, 0) > 0,
+		"%s: an invalid waiter descriptor wakes poll", name);
+	worker.template run_SetAllSession_ToProcess0<Worker, Session>();
+	if constexpr (std::is_same_v<Worker, PgSQL_Thread>) worker.ProcessAllMyDS_AfterPoll();
+	else worker.template ProcessAllMyDS_AfterPoll<Worker>();
+	worker.process_all_sessions();
+	ok(worker.mysql_sessions->len == 0 && worker.waiter_lists.empty() && worker.mypolls.len == baseline,
+		"%s: an invalid descriptor removes the paused waiter and its poll entry", name);
 	close(peer);
 }
 
@@ -393,6 +523,11 @@ void test_processlist(const char *name, Manager *manager, Slot *&slots, unsigned
 		sess->client_myds->myconn = new Connection();
 	sess->client_myds->client_addr = static_cast<sockaddr*>(calloc(1, sizeof(sockaddr)));
 	sess->client_myds->client_addr->sa_family = AF_UNIX;
+#ifdef PROXYSQL31
+	// Exercise absent/stale poll metadata separately from the persistent
+	// disconnect watch now installed by enter_waiter().
+	worker.drop_from_poll(sess->client_myds);
+#endif
 	sess->start_time = 100000;
 	processlist_config_t config {};
 	auto check_time = [&](const char *expected, const char *context) {
@@ -554,11 +689,38 @@ static void test_stable_tier() {
 }
 #endif // PROXYSQL31
 
+template<class Worker, class Session, class Stream>
+void test_frontend_pollerr(const char *name) {
+	Worker worker;
+	if (!worker.init()) BAIL_OUT("worker init failed");
+	worker.curtime = 1000000;
+	int peer;
+	auto *sess = new_waiter<Worker, Session, Stream>(worker, peer);
+	auto *stream = sess->client_myds;
+	stream->pkts_recv = 1;
+	if (send(peer, "x", 1, 0) != 1) BAIL_OUT("readable error input failed");
+	stream->revents = POLLERR | POLLIN;
+	ok(stream->read_from_net() == 1 && stream->active && !stream->net_failure,
+		"%s: readable frontend bytes are consumed before a poll error", name);
+	stream->revents = POLLERR;
+	ok(stream->read_from_net() == -1, "%s: frontend POLLERR without POLLIN is terminal", name);
+	ok(!stream->active && stream->net_failure, "%s: frontend POLLERR deactivates the stream rather than only setting a flag", name);
+	stream->active = true;
+	stream->net_failure = false;
+	stream->myds_type = MYDS_BACKEND;
+	ok(stream->read_from_net() == 0 && stream->active && !stream->net_failure,
+		"%s: backend POLLERR remains owned by its connection state machine", name);
+	stream->myds_type = MYDS_FRONTEND;
+	std::unique_ptr<Session> cleanup(sess);
+	worker.unregister_session(0);
+	close(peer);
+}
+
 int main() {
 #ifdef PROXYSQL31
-	plan(80);
+	plan(124);
 #else
-	plan(19);
+	plan(27);
 #endif
 	if (test_init_minimal() || test_init_query_processor() || test_init_hostgroups()) BAIL_OUT("init failed");
 	GloMyLogger = new MySQL_Logger();
@@ -566,7 +728,15 @@ int main() {
 #ifdef PROXYSQL31
 	test_protocol<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
 	test_protocol<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
+	test_waiter_invalid_fd<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
+	test_waiter_invalid_fd<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
+	test_waiter_disconnect_poll_unix<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
+	test_waiter_disconnect_poll_tcp<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
+	test_waiter_disconnect_poll_unix<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
+	test_waiter_disconnect_poll_tcp<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
 #endif
+	test_frontend_pollerr<MySQL_Thread, MySQL_Session, MySQL_Data_Stream>("MySQL");
+	test_frontend_pollerr<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream>("PgSQL");
 	test_processlist<MySQL_Thread, MySQL_Session, MySQL_Data_Stream, MySQL_Connection>("MySQL", GloMTH, GloMTH->mysql_threads, 12);
 	test_processlist<PgSQL_Thread, PgSQL_Session, PgSQL_Data_Stream, PgSQL_Connection>("PgSQL", GloPTH, GloPTH->pgsql_threads, 14);
 #ifdef PROXYSQL31

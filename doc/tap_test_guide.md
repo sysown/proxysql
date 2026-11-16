@@ -432,7 +432,8 @@ The CI system uses `groups.json` to:
 
 For example:
 
-- `legacy-g1`, `legacy-g2`, `legacy-g3`: Multiple instances running integration tests in parallel
+- `legacy-g1`, `legacy-g2`, `legacy-g4`: Multiple instances running integration tests in parallel
+- `mysql57-core-g1`, `mysql57-core-g2`: MySQL 5.7 tests using one primary and two replicas. All shards in `mysql57-core` share this MySQL-only infrastructure.
 - `mysql84-g1`, `mysql90-g1`, `mysql-multiplexing=false-g1`: Infrastructures with different MySQL versions and ProxySQL configuration.
 - `unit-tests-g1`: Self-contained unit tests that don't require external infrastructure
 
@@ -458,7 +459,7 @@ For integration tests that require a running ProxySQL instance and backend datab
 }
 ```
 
-If you are new to this project, you can assign tests to any of the default groups (`legacy-g1`, `legacy-g2`, `legacy-g3`, etc.). The distribution does not need to be perfectly balanced—the CI system will handle the workload. Additionally, ProxySQL maintainers periodically rearrange tests and improve group balance.
+If you are new to this project, you can assign tests to any of the default groups (`legacy-g1`, `legacy-g2`, `legacy-g4`, etc.). The distribution does not need to be perfectly balanced—the CI system will handle the workload. Additionally, ProxySQL maintainers periodically rearrange tests and improve group balance.
 
 ## 8. Common Pitfalls
 

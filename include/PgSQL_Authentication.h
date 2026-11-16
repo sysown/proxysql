@@ -47,9 +47,9 @@ typedef std::map<uint64_t, pgsql_account_details_t*> umap_pgauth;
 
 class PtrArray;
 
-#ifndef CREDS_GROUPS_T
-#define CREDS_GROUPS_T
-typedef struct _creds_group_t {
+#ifndef PGSQL_CREDS_GROUPS_T
+#define PGSQL_CREDS_GROUPS_T
+typedef struct _pgsql_creds_group_t {
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_t lock;
 #else
@@ -57,8 +57,8 @@ typedef struct _creds_group_t {
 #endif
 	umap_pgauth bt_map;
 	PtrArray *cred_array;
-} creds_group_t;
-#endif // CREDS_GROUPS_T
+} pgsql_creds_group_t;
+#endif // PGSQL_CREDS_GROUPS_T
 
 class PgSQL_Authentication {
 	private:
@@ -67,8 +67,8 @@ class PgSQL_Authentication {
 	 *  'CLUSTER_QUERY_PGSQL_USERS'.
 	 */
 	std::unique_ptr<SQLite3_result> pgsql_users_resultset { nullptr };
-	creds_group_t creds_backends;
-	creds_group_t creds_frontends;
+	pgsql_creds_group_t creds_backends;
+	pgsql_creds_group_t creds_frontends;
 	/**
 	 * @brief Scope holding 'admin-admin_credentials' / 'admin-stats_credentials'.
 	 * @details Mirrors MySQL_Authentication::creds_admins. Only populated when
@@ -77,8 +77,8 @@ class PgSQL_Authentication {
 	 *   'pgsql_users' and behaviour is unchanged. Never walked by
 	 *   dump_all_users(), so 'runtime_pgsql_users' and the checksum are unaffected.
 	 */
-	creds_group_t creds_admins;
-	creds_group_t& creds_for(enum cred_username_type usertype);
+	pgsql_creds_group_t creds_admins;
+	pgsql_creds_group_t& creds_for(enum cred_username_type usertype);
 	bool _reset(enum cred_username_type usertype);
 	uint64_t _get_runtime_checksum(enum cred_username_type usertype);
 	public:

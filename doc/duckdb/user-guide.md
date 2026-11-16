@@ -69,7 +69,8 @@ COMMIT;
 ```
 
 On the PostgreSQL protocol, `ReadyForQuery` reports idle, in-transaction, or
-failed-transaction state based on the actual DuckDB connection. After an error
+failed-transaction state by tracking supported text transaction commands and
+their outcomes. After an error
 invalidates an explicit transaction, issue `ROLLBACK` before continuing.
 
 ## Session settings
@@ -126,16 +127,45 @@ CURRENT_DATABASE()` return `memory` for `:memory:` and the configured
 
 ## Result values
 
-Both frontend protocols currently describe all columns as text. SQL NULL is
+Both frontend protocols expose numeric column types, including decimal scale
+and unsigned ranges. Booleans use MySQL TINYINT with 0/1 values or PostgreSQL
+BOOLEAN with f/t values. BLOBs use MySQL binary metadata or PostgreSQL BYTEA with
+hex text encoding. MySQL DATE, TIME and microsecond TIMESTAMP use native temporal
+metadata; exceptional dates/floats use text fallback. Other temporal variants
+and unmapped columns use text metadata. SQL NULL is
 preserved as a real null value, and embedded NUL bytes in supported strings are
-length-aware internally.
+length-aware internally. See [Protocol compatibility](protocol-compatibility.md)
+for the type mappings and text fallbacks.
+
+Finite `DOUBLE` values are rendered with enough significant digits to preserve
+their value when parsed back as a double by a client.
+
+Second-, millisecond-, and nanosecond-resolution timestamps convert directly,
+including in `RETURNING` results. They retain text metadata and preserve the
+original timestamp precision without casting neighboring columns to text.
+
+`TIME WITH TIME ZONE` (`TIMETZ`) also converts directly, preserving fractional
+seconds and UTC offsets, including in `RETURNING`. It retains text metadata.
+
+`TIMESTAMP WITH TIME ZONE` (`TIMESTAMPTZ`) converts directly with text metadata,
+including in `RETURNING`. With ICU loaded, the connection's TimeZone and Calendar
+settings control the display. The stored instant is preserved. Loading ICU
+requires external access; see [Extension behavior](security.md#extension-behavior).
+
+UUID values also convert directly, including in `RETURNING`, as canonical
+lowercase strings with text metadata.
+
+`TIME_NS`, `ENUM`, and `BIT` support direct `RETURNING` results with text
+metadata. Nanosecond precision, enum labels, and leading zeroes in bit strings
+are preserved.
 
 Many DuckDB values are rendered directly. For types outside the direct
-compatibility list, the plugin prepares a wrapper that casts result columns to
+compatibility list, the plugin prepares a wrapper that casts only unsupported columns to
 `VARCHAR` before executing the statement. This makes common nested and special
 types readable without executing the original statement twice. A DML
-`RETURNING` shape that cannot be wrapped can still return NULL for an
-unsupported result type; see [Protocol compatibility](protocol-compatibility.md).
+`RETURNING` shape that cannot be wrapped is rejected before execution when its
+result type is unsupported. Cast the returned expression to `VARCHAR`; see
+[Protocol compatibility](protocol-compatibility.md).
 
 ## One statement per request
 
@@ -167,7 +197,12 @@ Choose APIs that issue simple text queries:
 - MySQL: `mysql_query`, `mysql_real_query`, or equivalent non-prepared APIs.
 - PostgreSQL: `PQexec` or a driver mode that uses the simple Query message.
 
-Do not use client-side prepared-statement APIs for this initial plugin version.
+Client-side prepared-statement APIs are not available yet. The core framework
+is tracked in [#6298](https://github.com/sysown/proxysql/issues/6298), followed by
+the DuckDB adapter in [#6282](https://github.com/sysown/proxysql/issues/6282).
+New dialect compatibility in [#6284](https://github.com/sysown/proxysql/issues/6284)
+must use vendored ParserSQL; the experimental custom SELECT translator has been
+removed. Use native DuckDB SQL.
 PostgreSQL drivers often choose extended protocol automatically for parameters;
 configure simple-query mode or send fully formed trusted SQL where appropriate.
 Never replace parameter binding with unsafe string concatenation for untrusted

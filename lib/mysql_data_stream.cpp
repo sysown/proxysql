@@ -680,6 +680,12 @@ void MySQL_Data_Stream::check_data_flow() {
 }
 
 int MySQL_Data_Stream::read_from_net() {
+	if (myds_type == MYDS_FRONTEND && (revents & POLLERR) && !(revents & POLLIN)) {
+		// An error-only event has no POLLIN to drive recv(). Deactivate the
+		// frontend now so paused sessions are reaped by the worker too.
+		shut_soft();
+		return -1;
+	}
 	if (encrypted) {
 		//proxy_info("Entering\n");
 	}
@@ -1861,9 +1867,13 @@ void MySQL_Data_Stream::unplug_backend() {
 	DSS=STATE_NOT_INITIALIZED;
 	myconn=NULL;
 	myds_type=MYDS_BACKEND_NOT_CONNECTED;
-  mypolls->remove_index_fast(poll_fds_idx);
-  mypolls=NULL;
-  fd=0;
+	// Idle-backend pings can complete or fail before poll registration,
+	// leaving mypolls == NULL with no poll entry to remove. Calling a member
+	// through NULL is undefined even when poll_fds_idx == -1; this caused
+	// crashes in v3.0.12. See https://github.com/sysown/proxysql/pull/6626.
+	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
+	mypolls=NULL;
+	fd=0;
 }
 
 void MySQL_Data_Stream::set_net_failure() {
