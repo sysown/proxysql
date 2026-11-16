@@ -84,6 +84,10 @@ SQLite/Admin/DuckDB MySQL; native PostgreSQL extended checks pass 18. Ordinary
 proxy prepared regressions pass 9 MySQL and 14 PostgreSQL assertions against
 real local backends (and separately against each backend directly).
 
+The seven live acceptance clients now run with isolated owned child processes
+and are registered in tier-4 duckdb-e2e-g1. All seven and the full repository CI
+lint suite pass locally, including explicit TAP bailout cleanup verification.
+
 Next: complete scoped analytical SQL translation after
 the ParserSQL dependency update. Admin extension and view/trigger authorization
 must be proved rather than inherited from the SQLite3 listener policy. Core

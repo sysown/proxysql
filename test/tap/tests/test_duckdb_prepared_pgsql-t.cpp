@@ -1,3 +1,4 @@
+#include "prepared_owned_fixture.h"
 #include "libpq-fe.h"
 #include "tap.h"
 #include <cstdlib>
@@ -13,6 +14,7 @@ static bool good(PGresult *r, ExecStatusType s) {
     return r && PQresultStatus(r) == s;
 }
 int main() {
+    prepared_owned_fixture::Fixture fixture;
     plan(NO_PLAN);
     const char *host = getenv("TAP_HOST"), *port = getenv("TAP_DUCKDB_PGSQL_PORT"),
                *user = getenv("TAP_USERNAME"), *pass = getenv("TAP_PASSWORD");

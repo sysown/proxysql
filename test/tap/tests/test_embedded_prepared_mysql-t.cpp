@@ -1,3 +1,4 @@
+#include "prepared_owned_fixture.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -43,6 +44,7 @@ static long count_rows(MYSQL* mysql, const std::string& table) {
 }
 
 int main() {
+    prepared_owned_fixture::Fixture fixture;
     plan(NO_PLAN);
 
     const char* host_env = std::getenv("TAP_HOST");

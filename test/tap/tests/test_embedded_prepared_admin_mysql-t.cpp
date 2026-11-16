@@ -1,3 +1,4 @@
+#include "prepared_owned_fixture.h"
 #include <mysql.h>
 #include "tap.h"
 #include <cstdlib>
@@ -32,6 +33,7 @@ struct Cleanup {
  }
 };
 int main() {
+    prepared_owned_fixture::Fixture fixture;
  plan(NO_PLAN);
  const char* host = required("TAP_HOST");
  int port = std::atoi(required("TAP_ADMINPORT"));

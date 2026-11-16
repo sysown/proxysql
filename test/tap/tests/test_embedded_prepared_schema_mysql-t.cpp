@@ -1,3 +1,4 @@
+#include "prepared_owned_fixture.h"
 #include "tap.h"
 #include <cstdlib>
 #include <cstring>
@@ -156,6 +157,7 @@ static void run(const Endpoint &e, const std::string &suffix) {
     mysql_close(c);
 }
 int main() {
+    prepared_owned_fixture::Fixture fixture;
     plan(NO_PLAN);
     const char *host = required("TAP_HOST");
     Endpoint endpoints[] = {

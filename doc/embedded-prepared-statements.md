@@ -97,10 +97,11 @@ Validation on 2026-11-16: the real MariaDB C API acceptance client passed 39
 checks against the rebuilt isolated SQLite3 listener, including repeated types,
 exact binary values, duplicate-key recovery, unsigned overflow without effects,
 long data, reset, unsupported SQL/cursors and transaction rollback/status.
-Run `test/tap/tests/test_embedded_prepared_mysql-t` with TAP_HOST,
-TAP_SQLITE_PORT, TAP_USERNAME and TAP_PASSWORD for a dedicated SQLite3 test
-listener. It creates and drops a uniquely named test table. This live test is
-currently manual; its unit components are registered in unit-tests-g1.
+For an existing dedicated SQLite3 test listener, run
+`test/tap/tests/test_embedded_prepared_mysql-t` with
+`TAP_EMBEDDED_PREPARED_EXTERNAL=1`, TAP_HOST, TAP_SQLITE_PORT, TAP_USERNAME and
+TAP_PASSWORD. It creates and drops a uniquely named test table. These live clients are registered in duckdb-e2e-g1 for tier 4; their unit
+components are registered in unit-tests-g1.
 
 A native DuckDB SELECT-only adapter is implemented and registered on both native listeners.
 It borrows one connection, describes native types without execution, binds exact
@@ -354,5 +355,17 @@ DuckDB, and 18 native PostgreSQL extended checks for binary formats, portals,
 suspension, Sync recovery and schema changes. Ordinary proxy routes pass 9 MySQL
 and 14 PostgreSQL prepared regression checks against local MySQL 8.0.46 and
 PostgreSQL 16.15 backends, independently rerun against their direct endpoints.
-The isolated live targets require explicitly configured TAP listener credentials;
-they create and remove uniquely named test objects.
+The live targets start an isolated ProxySQL child by default and create and
+remove uniquely named test objects. Set `TAP_EMBEDDED_PREPARED_EXTERNAL=1` with
+the documented listener credentials to test existing dedicated endpoints.
+
+
+All seven prepared acceptance clients are registered in `duckdb-e2e-g1` for tier
+4. Their shared fixture reserves loopback ports, creates a private data directory,
+starts its own ProxySQL with SQLite and DuckDB listeners, and configures test-only
+users. It cleans up the child and directory on normal return and TAP bailout.
+`TAP_PROXYSQL_BINARY` and `TAP_DUCKDB_PLUGIN` override the compiled artifact paths;
+no listener credentials are required in the default owned-fixture mode. External
+endpoint mode requires `TAP_EMBEDDED_PREPARED_EXTERNAL=1` and the endpoint's TAP
+variables. The fixture and full repository CI lint suite were independently
+validated, including an intentional bailout cleanup check.

@@ -1,3 +1,4 @@
+#include "prepared_owned_fixture.h"
 /** Live read-only PostgreSQL admin prepared-statement acceptance test.
  * Set TAP_PGSQL_ADMINHOST, TAP_PGSQL_ADMINPORT, TAP_PGSQL_ADMINUSERNAME,
  * TAP_PGSQL_ADMINPASSWORD. Optional TAP_PGSQL_STATSUSERNAME and
@@ -171,6 +172,7 @@ static void wire_checks(const char* host, const char* port, const char* user, co
     }
 }
 int main() {
+    prepared_owned_fixture::Fixture fixture;
     const char* host = env("TAP_PGSQL_ADMINHOST"), *port = env("TAP_PGSQL_ADMINPORT");
     const char* user = env("TAP_PGSQL_ADMINUSERNAME"), *pass = env("TAP_PGSQL_ADMINPASSWORD");
     if (!host || !port || !user || !pass) { diag("Set TAP_PGSQL_ADMINHOST/ADMINPORT/ADMINUSERNAME/ADMINPASSWORD"); return EXIT_FAILURE; }

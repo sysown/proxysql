@@ -1,3 +1,4 @@
+#include "prepared_owned_fixture.h"
 #include "mysql.h"
 #include "tap.h"
 #include <cstdlib>
@@ -22,6 +23,7 @@ static MYSQL_STMT *prepare(MYSQL *c, const char *sql) {
     return s;
 }
 int main() {
+    prepared_owned_fixture::Fixture fixture;
     plan(NO_PLAN);
     const char *host = getenv("TAP_HOST"), *port = getenv("TAP_DUCKDB_MYSQL_PORT"),
                *user = getenv("TAP_USERNAME"), *pass = getenv("TAP_PASSWORD");

@@ -1,3 +1,4 @@
+#include "prepared_owned_fixture.h"
 #include "libpq-fe.h"
 #include "pg_lite_client.h"
 #include "tap.h"
@@ -48,6 +49,7 @@ static std::vector<std::vector<uint8_t>> row(const Messages &messages) {
     return {};
 }
 int main() {
+    prepared_owned_fixture::Fixture fixture;
     alarm(60);
     plan(NO_PLAN);
     const char *host = getenv("TAP_HOST"), *port = getenv("TAP_DUCKDB_PGSQL_PORT");
