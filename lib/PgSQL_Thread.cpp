@@ -3997,13 +3997,15 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 #endif
 			// only if we aren't using MariaDB Client Library
 			int rb = 0;
-			// TLS: read the socket once per poll pass, then only decrypt what is already buffered.
-			// Reading it on every turn of these loops let a peer that keeps sending hold the thread
-			// here; what is left in the socket is reported by the next poll().
+			// TLS in fast forward (COPY included): read the socket once per poll pass, then only decrypt
+			// what is already buffered. Reading it on every turn of these loops let a peer that keeps
+			// sending hold the thread here; what is left in the socket is reported by the next poll().
+			// Other sessions read the socket on every turn, as before.
+			const bool fast_forward = myds->sess->session_fast_forward != SESSION_FORWARD_TYPE_NONE;
 			bool allow_recv = true;
 			do {
 				rb = myds->read_from_net(allow_recv);
-				allow_recv = false;
+				allow_recv = !fast_forward;
 				if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
 					status_variables.stvar[st_var_queries_frontends_bytes_recv] += rb;
 				}

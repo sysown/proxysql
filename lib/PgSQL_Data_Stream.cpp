@@ -600,10 +600,12 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 		if (!allow_recv && !data_in_rbio()) {
 			return 0;
 		}
-		// One socket read takes as much as a plain read does (a whole queueIN).
+		// In fast forward one socket read takes as much as a plain read does (a whole queueIN), as the
+		// socket is read once per poll pass. Other sessions read MY_SSL_BUFFER on every turn, as before.
 		char buf[QUEUE_T_DEFAULT_SIZE];
+		const size_t recv_len = (sess && sess->session_fast_forward) ? sizeof(buf) : MY_SSL_BUFFER;
 		//ssize_t n = read(fd, buf, sizeof(buf));
-		int n = allow_recv ? recv(fd, buf, sizeof(buf), 0) : 0;
+		int n = allow_recv ? recv(fd, buf, recv_len, 0) : 0;
 		//proxy_info("SSL recv of %d bytes\n", n);
 		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %lu ,  num_read: %lu\n", sess, n, BIO_number_written(rbio_ssl), BIO_number_read(rbio_ssl));
 		if (n > 0 || BIO_number_written(rbio_ssl) > BIO_number_read(rbio_ssl)) {
