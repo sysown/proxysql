@@ -6257,7 +6257,9 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	// Query cache handling. A session locked on a hostgroup ran a change ProxySQL could not
 	// track (SET SCHEMA, SET LOCAL, a SET inside a multi-statement query, ...), so the key
 	// does not describe its settings: a cached entry may not fit it. Same rule as the extended cache.
-	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && locked_on_hostgroup < 0) {
+	// *lock_hostgroup: this query asked for the lock, which the caller takes only after we return.
+	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && locked_on_hostgroup < 0 &&
+		*lock_hostgroup == false) {
 		CurrentQuery.simple_cache_seed = simple_query_cache_seed(client_myds->myconn);
 		const std::shared_ptr<PgSQL_QC_entry_t> pgsql_qc_entry = GloPgQC->get(
 			CurrentQuery.simple_cache_seed,
