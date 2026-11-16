@@ -10,7 +10,7 @@ Null, signed and unsigned integers, floating point, text, bytes and exact decima
 
 Each explicit execute validates arity and obtains policy authorization, then resets the native statement before binding and executing. A reset error stops the operation and is returned unchanged. Native reset must release prior results and bindings without replaying SQL or committing or rolling back. Reset clears execution state and asks the adapter to release results and bindings; it does not end a transaction. Failed execute is never automatically replayed and cannot be fetched. Transaction and autocommit ownership remain with the endpoint; adapters do not implicitly commit or roll back. Structured errors retain native information; protocol SQLSTATE validation/mapping is pending. Exceptions propagate to the caller; acquired statement handles remain owned and are finalized during unwinding. Integration must establish where exceptions are translated to protocol errors.
 
-A future plugin registration must use a separately reviewed, versioned C ABI and bump the relevant plugin ABI version. No frontend, plugin registration, native adapter, global limits or wire tests are supplied by this foundation. The core library and `embedded_prepared_unit-t` target are wired into the standard Makefiles; the test requires no live server.
+A future plugin registration must use a separately reviewed, versioned C ABI and bump the relevant plugin ABI version. No frontend, plugin registration, global limits or live wire tests are supplied by this foundation. The core library and `embedded_prepared_unit-t` target are wired into the standard Makefiles; the test requires no live server.
 
 The SQLite proxy seam now also exposes native parameter counts, declared column
 metadata, binary column access and `stmt_readonly`. The wrapper regression target
@@ -28,3 +28,32 @@ protocol contract; embedded consumers must copy values and release those resourc
 before native execution. This extraction supplies no endpoint dispatch or new
 protocol parser. Independent validation passed 13 direct decoder checks and the
 existing 9 short-packet and 8 long-data type checks.
+
+The internal `SQLiteAdapter` now implements native preparation, dynamic metadata,
+binding, single-row fetch, reset and finalization on a borrowed connection. It
+supports NULL, signed integers, lossless unsigned integers through INT64_MAX,
+non-NaN doubles, text and binary bytes. It explicitly refuses Decimal binding and
+write statements returning columns. Result metadata remains dynamic; this does
+not establish a MySQL/PostgreSQL wire type policy. `last_insert_id` is currently 0.
+
+Native preparation consumes one statement. Only whitespace may follow its native
+prepare tail: comments after a terminating semicolon are explicitly unsupported
+in this initial slice. No second statement is compiled to inspect its shape and
+no private SQL/comment lexer is used. Endpoint policy must still authorize the
+whole input before native preparation, since SQLite PRAGMAs can act at prepare
+time. The adapter has no endpoint authorization or transaction-control policy.
+
+Independent standard-Makefile validation passed all 359 adapter checks, including
+constraint-error recovery, schema changes, metadata without execution, rollback
+ownership, empty/BLOB/NULL differences, payload limits and cleanup. A separate
+ASan/UBSan build passed the same 359 checks with leak detection enabled. The
+project sources were instrumented; the supplied SQLite and crypto objects were
+not rebuilt with sanitizers.
+
+The prepare-response encoder also accepts explicit metadata through a shared
+`generate_STMT_PREPARE_RESPONSE` overload. It uses the existing field and EOF
+encoders and checks descriptor pointers before queuing any output. Callers supply
+transaction status and keep all NUL-terminated field strings alive through the
+synchronous call. The proxy wrapper still holds its metadata lock and uses the
+same existing status calculation. All 18 direct metadata-packet checks pass.
+Prepared commands are not yet enabled on SQLite, Admin or DuckDB endpoints.

@@ -955,6 +955,27 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 // FIXME FIXME function not completed yet!
 // see https://dev.mysql.com/doc/internals/en/com-stmt-prepare-response.html
 bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info, uint32_t _stmt_id) {
+	pthread_rwlock_rdlock(&stmt_info->rwlock_);
+	unsigned int Trx_id = (*myds)->sess->FindOneActiveTransaction();
+	int setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0);
+	if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+	bool result = generate_STMT_PREPARE_RESPONSE(sequence_id,
+		_stmt_id ? _stmt_id : static_cast<uint32_t>(stmt_info->statement_id),
+		stmt_info->num_params, stmt_info->num_columns, stmt_info->fields,
+		stmt_info->warning_count, setStatus);
+	pthread_rwlock_unlock(&stmt_info->rwlock_);
+	return result;
+}
+
+bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, uint32_t stmt_id,
+	uint16_t num_params, uint16_t num_columns, MYSQL_FIELD *const *fields,
+	uint16_t warnings, uint16_t server_status) {
+	if (num_columns && !fields) return false;
+	for (uint16_t i = 0; i < num_columns; ++i) {
+		const MYSQL_FIELD *field = fields[i];
+		if (!field || !field->db || !field->table || !field->org_table ||
+			!field->name || !field->org_name) return false;
+	}
 	uint8_t sid=sequence_id;
 	uint16_t i;
 	char *okpack=(char *)malloc(16); // first packet
@@ -965,42 +986,33 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	okpack[4]=0;
 	okpack[13]=0;
 	okpack[15]=0;
-	pthread_rwlock_rdlock(&stmt_info->rwlock_);
-	if (_stmt_id) {
-		memcpy(okpack+5,&_stmt_id,sizeof(uint32_t));
-	} else {
-		memcpy(okpack+5,&stmt_info->statement_id,sizeof(uint32_t));
-	}
-	memcpy(okpack+9,&stmt_info->num_columns,sizeof(uint16_t));
-	memcpy(okpack+11,&stmt_info->num_params,sizeof(uint16_t));
-	memcpy(okpack+14,&stmt_info->warning_count,sizeof(uint16_t));
+	memcpy(okpack+5,&stmt_id,sizeof(uint32_t));
+	memcpy(okpack+9,&num_columns,sizeof(uint16_t));
+	memcpy(okpack+11,&num_params,sizeof(uint16_t));
+	memcpy(okpack+14,&warnings,sizeof(uint16_t));
 	(*myds)->PSarrayOUT->add((void *)okpack,16);
 	sid++;
-	int setStatus = 0;
-	unsigned int Trx_id = (*myds)->sess->FindOneActiveTransaction();
-	setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0 );
-	if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 	bool deprecate_eof_active = false;
 	if (*myds && (*myds)->myconn) {
 		if ((*myds)->myconn->options.client_flag & CLIENT_DEPRECATE_EOF) {
 			deprecate_eof_active = true;
 		}
 	}
-	if (stmt_info->num_params) {
-		for (i=0; i<stmt_info->num_params; i++) {
+	if (num_params) {
+		for (i=0; i<num_params; i++) {
 			generate_pkt_field(true,NULL,NULL,sid,
 				(char *)"", (char *)"", (char *)"", (char *)"?", (char *)"",
 				63,0,253,128,0,false,0,NULL); // NOTE: charset is 63 = binary !
 			sid++;
 		}
 		if (!deprecate_eof_active) {
-			generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
+			generate_pkt_EOF(true,NULL,NULL,sid,0,server_status);
 			sid++;
 		}
 	}
-	if (stmt_info->num_columns) {
-		for (i=0; i<stmt_info->num_columns; i++) {
-			MYSQL_FIELD *fd=stmt_info->fields[i];
+	if (num_columns) {
+		for (i=0; i<num_columns; i++) {
+			MYSQL_FIELD *fd=fields[i];
 			generate_pkt_field(true,NULL,NULL,sid,
 				fd->db,
 				fd->table, fd->org_table,
@@ -1009,11 +1021,10 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 			sid++;
 		}
 		if (!deprecate_eof_active) {
-			generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
+			generate_pkt_EOF(true,NULL,NULL,sid,0,server_status);
 			sid++;
 		}
 	}
-	pthread_rwlock_unlock(&stmt_info->rwlock_);
 	return true;
 }
 

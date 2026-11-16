@@ -179,7 +179,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	Query_Processor_ParserSQL.oo \
 	proxy_sqlite3_symbols.oo
 
-_OBJ_CXX += Embedded_Prepared.oo
+_OBJ_CXX += Embedded_Prepared.oo Embedded_SQLite_Adapter.oo
 
 ifeq ($(PROXYSQL31),1)
 _OBJ_CXX += MySQL_Caching_Sha2_RSA.oo MySQL_Server_Version_By_Interface.oo

@@ -288,6 +288,11 @@ class MySQL_Protocol {
 
 	// prepared statements
 	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info, uint32_t _stmt_id=0);
+	// Fields and their NUL-terminated db, table, org_table, name and org_name
+	// strings remain caller-owned and valid for this synchronous call.
+	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, uint32_t stmt_id,
+		uint16_t num_params, uint16_t num_columns, MYSQL_FIELD *const *fields,
+		uint16_t warnings, uint16_t server_status);
 	void generate_STMT_PREPARE_RESPONSE_OK(uint8_t sequence_id, uint32_t stmt_id);
 
 	// On success the returned metadata owns pkt.ptr; binds can borrow its bytes
