@@ -29,16 +29,27 @@ PgSQLPreparedLimits bounded(PgSQLPreparedLimits limits) {
     return limits;
 }
 struct Entry {
-    Entry(Adapter &a, EndpointPolicy &p, GuardFactory g, PgSQLPreparedLimits l)
+    Entry(Adapter &a, EndpointPolicy &p, GuardFactory g, PgSQLPreparedLimits l,
+          std::function<uint8_t()> st)
         : adapter(a), policy(p), guard(std::move(g)), controller(a, p, guard, bounded(l)),
-          limits(bounded(l)), owner(std::this_thread::get_id()) {}
+          limits(bounded(l)), status(st ? std::move(st) : [] { return uint8_t('I'); }),
+          owner(std::this_thread::get_id()) {}
     Adapter &adapter;
     EndpointPolicy &policy;
     GuardFactory guard;
     PgSQLPrepared controller;
     PgSQLPreparedLimits limits;
+    std::function<uint8_t()> status;
     std::thread::id owner;
 };
+bool transaction_status(Entry &entry, uint8_t &state) noexcept {
+    try {
+        state = entry.status();
+        return state == 'I' || state == 'T' || state == 'E';
+    } catch (...) {
+        return false;
+    }
+}
 struct Registry {
     std::mutex mutex;
     std::unordered_map<PgSQL_Session *, std::shared_ptr<Entry>> entries;
@@ -208,11 +219,12 @@ void consume(PtrSize_t &p) {
 }
 } // namespace
 Status register_pgsql_prepared(PgSQL_Session &s, Adapter &a, EndpointPolicy &p,
-                               PgSQLPreparedLimits limits, GuardFactory guard) {
+                               PgSQLPreparedLimits limits, GuardFactory guard,
+                               std::function<uint8_t()> status) {
     if (s.session_type == PROXYSQL_SESSION_PGSQL)
         return error(ErrorKind::unsupported, "proxy session");
     try {
-        auto entry = std::make_shared<Entry>(a, p, std::move(guard), limits);
+        auto entry = std::make_shared<Entry>(a, p, std::move(guard), limits, std::move(status));
         auto &r = registry();
         std::lock_guard<std::mutex> lock(r.mutex);
         if (r.entries.find(&s) != r.entries.end())
@@ -246,7 +258,7 @@ Status reset_pgsql_prepared(PgSQL_Session &s) {
         return error(ErrorKind::internal, "wrong session thread");
     try {
         auto replacement =
-            std::make_shared<Entry>(entry->adapter, entry->policy, entry->guard, entry->limits);
+            std::make_shared<Entry>(entry->adapter, entry->policy, entry->guard, entry->limits, entry->status);
         auto &r = registry();
         {
             std::lock_guard<std::mutex> lock(r.mutex);
@@ -290,8 +302,14 @@ bool handle_pgsql_prepared(PgSQL_Session &s, PtrSize_t &pkt) {
         }
         try {
             Batch errors(8192);
-            add_error(errors, *status);
-            errors.add('Z', 1, [](PG_pkt &p) { p.put_char('I'); });
+            uint8_t state;
+            if (!transaction_status(*entry, state)) {
+                add_error(errors, error(ErrorKind::internal, "invalid transaction status", "XX000"));
+                s.healthy = false;
+            } else {
+                add_error(errors, *status);
+                errors.add('Z', 1, [state](PG_pkt &p) { p.put_char(state); });
+            }
             errors.publish(s);
         } catch (...) {
             s.healthy = false;
@@ -311,8 +329,15 @@ bool handle_pgsql_prepared(PgSQL_Session &s, PtrSize_t &pkt) {
                 status = protocol("invalid control packet");
             else if (type == 'S') {
                 status = ctl.sync();
-                if (!status)
-                    batch.add('Z', 1, [](PG_pkt &p) { p.put_char('I'); });
+                if (!status) {
+                    uint8_t state;
+                    if (!transaction_status(*entry, state)) {
+                        status = error(ErrorKind::internal, "invalid transaction status", "XX000");
+                        s.healthy = false;
+                    } else {
+                        batch.add('Z', 1, [state](PG_pkt &p) { p.put_char(state); });
+                    }
+                }
             }
             consume(pkt);
         } else if (type == 'P') {

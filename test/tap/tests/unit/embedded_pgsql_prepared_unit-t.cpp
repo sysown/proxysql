@@ -20,6 +20,7 @@ struct Fake : Adapter {
     };
     int executes = 0, finals = 0, prepares = 0;
     bool mutate = false, bad_position = false, fail_fetch = false, boolean_parameters = false;
+    bool active_result = false, reset_guarded = true, fail_reset = false;
     int *guard_depth = nullptr;
     bool all_guarded = true;
     std::vector<Value> bound;
@@ -50,6 +51,7 @@ struct Fake : Adapter {
     }
     Status execute(Statement &, ExecInfo &i) override {
         ++executes;
+        active_result = true;
         i.has_result = true;
         return {};
     }
@@ -65,9 +67,14 @@ struct Fake : Adapter {
         return {};
     }
     Status reset(Statement &) override {
+        if (active_result && guard_depth) reset_guarded &= *guard_depth == 1;
+        if (active_result && fail_reset) return Error{ErrorKind::engine, 0, "reset failed", "XX000"};
+        active_result = false;
         return {};
     }
     void finalize(std::unique_ptr<Statement>) noexcept override {
+        if (active_result && guard_depth) reset_guarded &= *guard_depth == 1;
+        active_result = false;
         ++finals;
     }
 };
@@ -112,7 +119,8 @@ int main() {
     ok(!p.bind("q", "s", data, {}), "second portal succeeds");
     ok(a.executes == 0, "parse and bind never execute");
     ok(!p.close_statement("s"), "close statement preserves portals");
-    ok(!p.execute("p", 2, result) && result.rows.size() == 2 && result.suspended,
+    ok(!p.execute("p", 2, result) && result.rows.size() == 2 && result.suspended &&
+       !a.active_result && a.reset_guarded,
        "exact boundary suspends");
     ok(a.bound.size() == 3 && std::get<int64_t>(a.bound[0]) == 2 &&
            std::get<int64_t>(a.bound[1]) == 1 && std::get<int64_t>(a.bound[2]) == 2,
@@ -332,5 +340,61 @@ int main() {
        "throwing guard becomes error and poisons cycle");
     // Disconnect must succeed by contract, so use a factory that throws only on prepare.
 
+    {
+        QuotaLimits ql; ql.values = {{20, 65536, 65536, 65536, 200}};
+        QuotaPool pool(ql); Fake f1, f2;
+        f1.guard_depth = &depth; f2.guard_depth = &depth;
+        PgSQLPrepared x(f1, policy, factory, {}, &pool), y(f2, policy, factory, {}, &pool);
+        ok(!x.parse("x", "SELECT", {pgsql_oid_int8, pgsql_oid_int8}) &&
+           !y.parse("y", "SELECT", {pgsql_oid_int8, pgsql_oid_int8}), "controllers share quota pool");
+        ok(!x.bind("p", "x", data, {}) && !y.bind("p", "y", data, {}), "portal binds reserve shared pool");
+        ok(pool.snapshot()[static_cast<size_t>(Resource::bind_bytes)] > 0, "bound portal values are charged");
+        PgSQLExecution first, second;
+        ok(!x.execute("p", 1, first) && first.rows.size() == 1, "first portal materializes result");
+        auto exhausted = y.execute("p", 0, second);
+        ok(exhausted && exhausted->sqlstate == "54000" && second.rows.empty() && !f2.active_result && f2.reset_guarded, "shared result quota rejects without partial rows and resets under guard");
+        auto retained_sql = pool.snapshot()[static_cast<size_t>(Resource::sql_bytes)];
+        ok(!x.sync() && pool.snapshot()[static_cast<size_t>(Resource::sql_bytes)] < retained_sql &&
+           pool.snapshot()[static_cast<size_t>(Resource::sql_bytes)] > 0, "sync releases portal while retaining named statements");
+        ok(!y.sync() && !y.bind("again", "y", data, {}) && !y.execute("again", 0, second), "sync frees result capacity for another controller");
+        x.disconnect(); y.disconnect();
+        ok(pool.snapshot() == ResourceUsage{}, "disconnect releases frontend and core quota");
+    }
+    {
+        QuotaLimits ql; ql.values = {{20, 65536, 65536, 0, 65536}};
+        QuotaPool pool(ql); Fake f; PgSQLPrepared x(f, policy, {}, {}, &pool);
+        ok(!x.parse("", "SELECT", {pgsql_oid_int8, pgsql_oid_int8}), "unnamed statement prepared under quota");
+        auto before = pool.snapshot();
+        auto denied = x.bind("", "", data, {});
+        ok(denied && denied->sqlstate == "54000" && pool.snapshot() == before,
+           "bind quota failure releases attempted portal copies");
+        ok(!x.sync() && !x.parse("", "SELECT replacement", {pgsql_oid_int8, pgsql_oid_int8}),
+           "unnamed statement replacement succeeds with temporary reservations");
+        x.disconnect();
+        ok(pool.snapshot() == ResourceUsage{}, "replaced unnamed statement releases all quota");
+    }
+    {
+        QuotaLimits ql; ql.values = {{20, 65536, 65536, 65536, 65536}};
+        QuotaPool pool(ql); Fake f; PgSQLPrepared x(f, policy, {}, {}, &pool);
+        ok(!x.parse("s", "SELECT", {pgsql_oid_int8, pgsql_oid_int8}) && !x.bind("p", "s", data, {}), "fetch failure fixture prepared");
+        f.fail_fetch = true; PgSQLExecution failed;
+        auto e = x.execute("p", 0, failed);
+        ok(e && failed.rows.empty() && pool.snapshot()[static_cast<size_t>(Resource::result_bytes)] == 0,
+           "fetch failure exposes no rows and releases materialization lease");
+        x.disconnect(); ok(pool.snapshot() == ResourceUsage{}, "failure cleanup releases all quota");
+    }
+    {
+        QuotaLimits ql; ql.values = {{20, 65536, 65536, 65536, 65536}};
+        QuotaPool pool(ql); Fake f; f.guard_depth = &depth;
+        PgSQLPrepared x(f, policy, factory, {}, &pool);
+        ok(!x.parse("s", "SELECT", {pgsql_oid_int8, pgsql_oid_int8}) && !x.bind("p", "s", data, {}), "reset failure fixture prepared");
+        f.fail_reset = true; PgSQLExecution failed;
+        int finals = f.finals;
+        auto e = x.execute("p", 0, failed);
+        ok(e && failed.rows.empty() && !f.active_result && f.reset_guarded && f.finals == finals + 1 && x.ignoring(),
+           "failed native reset finalizes under guard and publishes no rows");
+        ok(!x.sync(), "sync recovers after native reset failure");
+        x.disconnect(); ok(pool.snapshot() == ResourceUsage{}, "reset failure releases quota");
+    }
     return exit_status();
 }

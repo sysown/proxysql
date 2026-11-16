@@ -1,3 +1,5 @@
+#include "Embedded_Plugin_Service.h"
+#include "Embedded_PgSQL_Frontend.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -472,6 +474,7 @@ PgSQL_Session::PgSQL_Session() {
 }
 
 void PgSQL_Session::reset() {
+	embedded::teardown_plugin_pgsql(*this);
 	embedded::unregister_admin_pgsql_prepared(*this);
 	embedded::unregister_pgsql_prepared(*this);
 	autocommit = true;
@@ -2267,6 +2270,8 @@ __implicit_flush:
 					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
 						session_type == PROXYSQL_SESSION_SQLITE) {
 						c = *((unsigned char*)pkt.ptr);
+						if (session_type == PROXYSQL_SESSION_SQLITE &&
+						    embedded::handle_pgsql_prepared(*this, pkt)) continue;
 						if (!admin_extq_rejected && session_type != PROXYSQL_SESSION_SQLITE &&
 						    embedded::handle_admin_pgsql_prepared(*this, pkt, admin_extq_rejected)) {
 							continue;

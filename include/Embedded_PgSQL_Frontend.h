@@ -6,7 +6,8 @@ typedef struct _PtrSize_t PtrSize_t;
 namespace embedded {
 // Adapter and policy are borrowed and must outlive unregister.
 Status register_pgsql_prepared(PgSQL_Session &, Adapter &, EndpointPolicy &,
-                               PgSQLPreparedLimits = {}, GuardFactory = {});
+                               PgSQLPreparedLimits = {}, GuardFactory = {},
+                               std::function<uint8_t()> status = [] { return uint8_t('I'); });
 void unregister_pgsql_prepared(PgSQL_Session &) noexcept;
 Status reset_pgsql_prepared(PgSQL_Session &);
 // A registered session must be handled and unregistered on its owner thread.

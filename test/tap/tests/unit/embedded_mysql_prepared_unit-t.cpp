@@ -670,6 +670,44 @@ int main() {
         delete other_stream->myconn; other_stream->myconn = nullptr; delete other;
     }
 
+    {
+        embedded::QuotaLimits ql; ql.values = {{20, 65536, 65536, 3, 4096}};
+        embedded::QuotaPool pool(ql); embedded::MySQLPreparedLimits small; small.response_bytes = 1024;
+        ResetFailureAdapter counted(db);
+        MySQL_Data_Stream *a_stream = nullptr, *b_stream = nullptr; MySQL_Protocol *a_proto = nullptr, *b_proto = nullptr;
+        MySQL_Session *a = make_session(a_stream, a_proto), *b = make_session(b_stream, b_proto);
+        embedded::register_mysql_prepared(*a, counted, policy, status_cb, small, {}, &pool);
+        embedded::register_mysql_prepared(*b, counted, policy, status_cb, small, {}, &pool);
+        auto prep = [&](MySQL_Session *client, MySQL_Data_Stream *stream) {
+            auto packet = make_packet({0x16,'S','E','L','E','C','T',' ','?'});
+            embedded::handle_mysql_prepared(*client, packet);
+            bool success = stream->PSarrayOUT->len && static_cast<unsigned char*>(stream->PSarrayOUT->index(0)->ptr)[4] != 0xff;
+            clear_ps(stream->PSarrayOUT); return success;
+        };
+        ok(prep(a, a_stream) && prep(b, b_stream), "two MySQL clients prepare with shared pool");
+        auto long_data = [&](MySQL_Session *client) {
+            auto packet = make_packet({0x18,1,0,0,0,0,0,'a','b','c'});
+            embedded::handle_mysql_prepared(*client, packet);
+        };
+        long_data(a); long_data(b);
+        ok(a_stream->PSarrayOUT->len == 0 && b_stream->PSarrayOUT->len == 0 &&
+           pool.snapshot()[static_cast<size_t>(embedded::Resource::bind_bytes)] == 3,
+           "long data quota exhaustion defers response and keeps first client's bytes");
+        int calls_before = counted.native_calls;
+        auto exec = make_packet({0x17,1,0,0,0,0,1,0,0,0,0,1,MYSQL_TYPE_STRING,0});
+        embedded::handle_mysql_prepared(*b, exec);
+        ok(b_stream->PSarrayOUT->len == 1 && static_cast<unsigned char*>(b_stream->PSarrayOUT->index(0)->ptr)[4] == 0xff && counted.native_calls == calls_before,
+           "deferred global quota error is returned without native execution");
+        clear_ps(b_stream->PSarrayOUT);
+        auto reset = make_packet({0x1a,1,0,0,0}); embedded::handle_mysql_prepared(*a, reset); clear_ps(a_stream->PSarrayOUT);
+        long_data(b);
+        ok(pool.snapshot()[static_cast<size_t>(embedded::Resource::bind_bytes)] == 3, "reset releases bind capacity for another client");
+        embedded::unregister_mysql_prepared(*a); embedded::unregister_mysql_prepared(*b);
+        ok(pool.snapshot() == embedded::ResourceUsage{}, "disconnect releases shared quota");
+        delete a_stream->myconn; a_stream->myconn = nullptr; delete a;
+        delete b_stream->myconn; b_stream->myconn = nullptr; delete b;
+    }
+
     // unregister
     embedded::unregister_mysql_prepared(*s);
     {

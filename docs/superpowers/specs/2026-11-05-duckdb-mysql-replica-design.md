@@ -45,20 +45,37 @@ still vendors 1.1.1; no upstream release, merge, tag or vendor bump has occurred
 
 PostgreSQL codec prerequisites now pass 308 parameter and 47 result assertions,
 including sanitizer runs. Native parameter-position metadata passes 31 SQLite
-checks and is covered by the DuckDB adapter tests. The read-only controller adds 66 component checks, the strict SQLite result
+checks and is covered by the DuckDB adapter tests. The read-only controller adds 85 component checks, the strict SQLite result
 profile adds 157, and PostgreSQL policy/statistics dialect checks pass. These
 components are integrated into Admin/STATS read-only extended execution. The
 packet frontend passes 39 checks and sanitizer validation; full transaction and
 writable PostgreSQL acceptance remain pending.
 
-Next: finish cross-endpoint resource/ownership acceptance; implement the shared
-remaining PostgreSQL transaction/type coverage and public versioned registration; register the native DuckDB adapter; complete scoped
-analytical SQL translation after the ParserSQL dependency update. Admin extension
-and view/trigger authorization must be proved rather than inherited from the
-SQLite3 listener policy. Core cross-session handle/SQL/metadata quotas now have 13 helper and 95 lifecycle
-checks; frontend bind/result accounting and temporal values remain open framework
-work. Keep PR #6648 in draft until its advertised scope is reviewed
-and the corresponding acceptance gates pass.
+The public V1 native execution service is now implemented through the tail of
+PluginServices ABI 17, with Phase B returning no service. The older supported ABI
+prefixes remain accepted. The C-shaped callback bridge passes 126 checks,
+including independent ASan/UBSan validation; ABI and plugin lifecycle checks pass
+60 and 100 assertions. The MySQL controller passes 86 checks and PostgreSQL
+controller 85 (also ASan/UBSan). Frontends now use the process quota pool for
+retained SQL, metadata, long-data/bind and bounded result storage; engine RSS,
+scratch allocations and ordinary network output queues are outside this accounting.
+See [the public contract](../../../doc/embedded-execution-plugin-contract.md).
+The rebuilt ABI 17 core also passes the live 39/23/53 endpoint checks above and
+the existing 15-check PostgreSQL Sync regression.
+
+Public-service tests pass 40 assertions, including both actual session destructors
+finalizing live provider handles under the disconnect guard before borrowed contexts
+expire, and MySQL prepared reset preserving registration without reusing IDs.
+
+Next: register and validate the native DuckDB
+provider through ABI 17, with provider-owned read-only transactions and explicit
+refusal of client transactions in the first SELECT slice. Then complete remaining
+PostgreSQL transaction/type coverage and scoped analytical SQL translation after
+the ParserSQL dependency update. Admin extension and view/trigger authorization
+must be proved rather than inherited from the SQLite3 listener policy. Core
+cross-session handle/SQL/metadata quotas have 13 helper and 95 lifecycle checks;
+temporal values and full framework acceptance remain open. Keep PR #6648 in draft
+until its advertised scope is reviewed and the corresponding acceptance gates pass.
 
 ## 1. Goal
 

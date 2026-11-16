@@ -42,7 +42,8 @@ struct PgSQLExecution {
 };
 class PgSQLPrepared {
   public:
-    PgSQLPrepared(Adapter &, EndpointPolicy &, GuardFactory = {}, PgSQLPreparedLimits = {});
+    PgSQLPrepared(Adapter &, EndpointPolicy &, GuardFactory = {}, PgSQLPreparedLimits = {},
+                  QuotaPool * = nullptr);
     ~PgSQLPrepared();
     PgSQLPrepared(const PgSQLPrepared &) = delete;
     PgSQLPrepared &operator=(const PgSQLPrepared &) = delete;

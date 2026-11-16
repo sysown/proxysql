@@ -68,6 +68,8 @@
   "embedded_pgsql_prepared_unit-t" : [ "unit-tests-g1" ],
   "embedded_pgsql_result_unit-t" : [ "unit-tests-g1" ],
   "embedded_pgsql_value_unit-t" : [ "unit-tests-g1" ],
+  "embedded_plugin_adapter_unit-t" : [ "unit-tests-g1" ],
+  "embedded_plugin_service_unit-t" : [ "unit-tests-g1" ],
   "embedded_prepared_unit-t" : [ "unit-tests-g1" ],
   "embedded_quota_unit-t" : [ "unit-tests-g1" ],
   "embedded_sqlite_adapter_unit-t" : [ "unit-tests-g1" ],

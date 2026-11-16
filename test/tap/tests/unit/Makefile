@@ -649,6 +649,8 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	sqlite3db_unit-t \
 	embedded_prepared_unit-t \
 	embedded_quota_unit-t \
+	embedded_plugin_adapter_unit-t \
+	embedded_plugin_service_unit-t \
 	embedded_sqlite_adapter_unit-t \
 	embedded_sqlite_pg_profile_unit-t \
 	embedded_parameter_positions_unit-t \
@@ -1086,6 +1088,11 @@ test_duckdb_plugin_load-t: ../test_duckdb_plugin_load-t.cpp $(TEST_HELPERS_OBJ) 
 		-DPROXYSQL_DUCKDB_PLUGIN_PATH='"$(DUCKDB_PLUGIN_SO)"' \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+embedded_plugin_adapter_unit-t: embedded_plugin_adapter_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Plugin_Adapter.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/include/Embedded_Plugin_Adapter.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/ProxySQL_EmbeddedExecution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Plugin_Adapter.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
 embedded_quota_unit-t: embedded_quota_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/include/Embedded_Quota.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \

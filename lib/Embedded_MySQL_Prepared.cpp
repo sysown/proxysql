@@ -20,6 +20,13 @@ namespace embedded {
 namespace {
 
 struct StmtState {
+    explicit StmtState(QuotaPool& pool) : lease(pool) {}
+    QuotaLease lease;
+    bool charge(Resource resource, size_t bytes) {
+        auto usage = lease.usage();
+        usage[static_cast<size_t>(resource)] = bytes;
+        return lease.resize(usage);
+    }
     uint32_t wire_id = 0;
     uint64_t core_id = 0;
     std::string sql;
@@ -44,6 +51,7 @@ struct SharedState {
     MySQLStatus status_cb;
     MySQLPreparedLimits limits;
     GuardFactory guard_factory;
+    QuotaPool& quota;
     Session core;
     StmtLongDataHandler longdata;
     std::shared_ptr<uint64_t> next_wire_id;
@@ -52,10 +60,10 @@ struct SharedState {
     size_t longdata_total_used = 0;
     size_t metadata_total_used = 0;
     SharedState(MySQL_Session& s, Adapter& a, EndpointPolicy& p, MySQLStatus cb,
-               MySQLPreparedLimits l, GuardFactory factory, std::shared_ptr<uint64_t> wire_counter)
+               MySQLPreparedLimits l, GuardFactory factory, std::shared_ptr<uint64_t> wire_counter, QuotaPool* q)
         : session(&s), owner_thread(std::this_thread::get_id()), adapter(&a),
           policy(&p), status_cb(std::move(cb)), limits(l), guard_factory(std::move(factory)),
-          core(a, p, l.statements, l.response_bytes), next_wire_id(std::move(wire_counter)) {}
+          quota(q ? *q : process_quota_pool()), core(a, p, l.statements, l.response_bytes, &quota), next_wire_id(std::move(wire_counter)) {}
 };
 
 // Intentionally process-lifetime objects: sessions may be destroyed during static teardown.
@@ -331,7 +339,7 @@ void consume_mysql_prepared_error(MySQL_Session& session, PtrSize_t& packet, con
 
 Status register_mysql_prepared(MySQL_Session& session, Adapter& adapter,
                               EndpointPolicy& policy, MySQLStatus status,
-                              MySQLPreparedLimits limits, GuardFactory guard_factory) {
+                              MySQLPreparedLimits limits, GuardFactory guard_factory, QuotaPool* quota) {
     if (is_ordinary_proxy_mysql(session)) {
         return make_status(ErrorKind::unsupported, 1235, "ordinary proxy MySQL sessions are not prepared endpoints", "HY000");
     }
@@ -341,7 +349,7 @@ Status register_mysql_prepared(MySQL_Session& session, Adapter& adapter,
     }
     auto it = wire_counters().find(&session);
     auto counter = it == wire_counters().end() ? std::make_shared<uint64_t>(1) : it->second;
-    auto state = std::make_shared<SharedState>(session, adapter, policy, std::move(status), limits, std::move(guard_factory), counter);
+    auto state = std::make_shared<SharedState>(session, adapter, policy, std::move(status), limits, std::move(guard_factory), counter, quota);
     // Preserve the previous registration semantics if either map allocation throws.
     bool inserted_counter = false;
     try {
@@ -452,6 +460,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
                 state->longdata.reset(id);
                 state->longdata_total_used -= stmt.longdata_bytes;
                 stmt.longdata_bytes = 0;
+                if (!stmt.charge(Resource::bind_bytes, 0)) std::terminate();
                 stmt.longdata_entries.clear();
                 stmt.has_deferred_error = false;
                 stmt.deferred_sqlstate = "HY000";
@@ -485,6 +494,14 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             send_err(session, rseq + 1, 1105, "HY000", "sql limit exceeded");
             finish_consume();
             return true;
+        }
+        auto stmt = std::make_unique<StmtState>(state->quota);
+        QuotaLease response_lease(state->quota);
+        ResourceUsage response_usage{};
+        response_usage[static_cast<size_t>(Resource::result_bytes)] = state->limits.response_bytes;
+        if (!stmt->charge(Resource::sql_bytes, sql_len) || !response_lease.resize(response_usage)) {
+            send_err(session, rseq + 1, 1105, "54000", "prepared query resource limit exceeded");
+            finish_consume(); return true;
         }
         std::string sql(sql_ptr, sql_len);
 
@@ -547,6 +564,20 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             return true;
         }
 
+        // Reserve persistent duplicate metadata before constructing frontend copies.
+        size_t global_meta = sizeof(StmtState) + params.size() * (sizeof(Type) + 2) +
+                             columns.size() * (sizeof(Column) + sizeof(MySQLColumn));
+        for (const auto& c : columns) {
+            if (c.name.size() > (SIZE_MAX - global_meta) / 2) {
+                send_err(session, rseq + 1, 1105, "54000", "prepared query resource limit exceeded");
+                finish_consume(); return true;
+            }
+            global_meta += c.name.size() * 2;
+        }
+        if (!stmt->charge(Resource::metadata_bytes, global_meta)) {
+            send_err(session, rseq + 1, 1105, "54000", "prepared query resource limit exceeded");
+            finish_consume(); return true;
+        }
         // mysql describe columns
         std::vector<MySQLColumn> mysql_columns;
         if (auto st = mysql_describe_columns(columns, mysql_columns)) {
@@ -650,7 +681,6 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         }
 
         // allocate state
-        auto stmt = std::make_unique<StmtState>();
         stmt->wire_id = wire_id;
         stmt->core_id = core_id;
         stmt->sql = sql;
@@ -719,6 +749,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         state->longdata.reset(wid);
         state->longdata_total_used -= it->second->longdata_bytes;
         it->second->longdata_bytes = 0;
+        if (!it->second->charge(Resource::bind_bytes, 0)) std::terminate();
         it->second->longdata_entries.clear();
         it->second->has_deferred_error = false;
         it->second->deferred_sqlstate = "HY000";
@@ -804,11 +835,25 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             finish_consume();
             return true;
         }
+        if (st.has_deferred_error) { finish_consume(); return true; }
+        if (!st.charge(Resource::bind_bytes, st.longdata_bytes + chunk_size)) {
+            st.has_deferred_error = true; st.deferred_code = 1105;
+            st.deferred_sqlstate = "54000"; st.deferred_message = "prepared query resource limit exceeded";
+            finish_consume(); return true;
+        }
+        // Roll back the reservation if the handler fails to retain the chunk.
+        struct ChunkReservation {
+            StmtState& stmt; bool committed = false;
+            ~ChunkReservation() { if (!committed && !stmt.charge(Resource::bind_bytes, stmt.longdata_bytes)) std::terminate(); }
+        } chunk_reservation{st};
+        // Insert before modifying the handler so allocation failure leaves it unchanged.
+        if (new_entry) st.longdata_entries.insert(param_id);
         // empty chunks count as present
         char empty = 0;
         const void* data_ptr = chunk_size > 0 ? chunk_data : &empty;
         if (chunk_size > std::numeric_limits<unsigned long>::max() ||
             !state->longdata.add_checked(wid, param_id, data_ptr, static_cast<unsigned long>(chunk_size))) {
+            if (new_entry) st.longdata_entries.erase(param_id);
             st.has_deferred_error = true;
             st.deferred_code = 1105;
             st.deferred_message = "long data allocation failed";
@@ -818,15 +863,16 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         unsigned long* stored_size = nullptr; my_bool* stored_null = nullptr;
         void* stored = state->longdata.get(wid, param_id, &stored_size, &stored_null);
         if (!stored_size || (chunk_size && !stored)) {
+            if (new_entry) st.longdata_entries.erase(param_id);
             st.has_deferred_error = true;
             st.deferred_code = 1105;
             st.deferred_message = "long data allocation failed";
             finish_consume();
             return true;
         }
-        if (new_entry) st.longdata_entries.insert(param_id);
         st.longdata_bytes += chunk_size;
         state->longdata_total_used += chunk_size;
+        chunk_reservation.committed = true;
         finish_consume();
         return true;
     }
@@ -843,6 +889,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
                     state->longdata.reset(id);
                     state->longdata_total_used -= stmt.longdata_bytes;
                     stmt.longdata_bytes = 0;
+                if (!stmt.charge(Resource::bind_bytes, 0)) std::terminate();
                     stmt.longdata_entries.clear();
                     stmt.has_deferred_error = false;
                     stmt.deferred_sqlstate = "HY000";
@@ -867,6 +914,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
                 state.longdata.reset(id);
                 state.longdata_total_used -= stmt.longdata_bytes;
                 stmt.longdata_bytes = 0;
+                if (!stmt.charge(Resource::bind_bytes, 0)) std::terminate();
                 stmt.longdata_entries.clear();
                 stmt.has_deferred_error = false;
                 stmt.deferred_sqlstate = "HY000";
@@ -889,6 +937,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             state->longdata.reset(wid);
             state->longdata_total_used -= st.longdata_bytes;
             st.longdata_bytes = 0;
+            if (!st.charge(Resource::bind_bytes, 0)) std::terminate();
             st.longdata_entries.clear();
             st.has_deferred_error = false;
             send_err(session, rseq + 1, code, st.deferred_sqlstate, msg);
@@ -1090,6 +1139,15 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             return true;
         }
 
+        // Conservative reservation covers private serialized response buffers;
+        // network queues, native engine and row/encoding scratch are excluded.
+        QuotaLease response_lease(state->quota);
+        ResourceUsage response_usage{};
+        response_usage[static_cast<size_t>(Resource::result_bytes)] = state->limits.response_bytes;
+        if (!response_lease.resize(response_usage)) {
+            send_err(session, rseq + 1, 1105, "54000", "prepared query resource limit exceeded");
+            finish_consume(); return true;
+        }
         // Reset an active native result before the operation guard is released if
         // execution or response materialization throws.
         struct ExceptionReset {
@@ -1110,6 +1168,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             state->longdata.reset(wid);
             state->longdata_total_used -= st.longdata_bytes;
             st.longdata_bytes = 0;
+            if (!st.charge(Resource::bind_bytes, 0)) std::terminate();
             st.longdata_entries.clear();
             st.has_deferred_error = false;
             send_err(session, rseq + 1, mysql_error_code(*err),
@@ -1128,6 +1187,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             state->longdata.reset(wid);
             state->longdata_total_used -= st.longdata_bytes;
             st.longdata_bytes = 0;
+            if (!st.charge(Resource::bind_bytes, 0)) std::terminate();
             st.longdata_entries.clear();
             st.has_deferred_error = false;
         };

@@ -1,3 +1,4 @@
+#include "Embedded_Plugin_Service.h"
 #include "../deps/json/json.hpp"
 #include <atomic>
 using json = nlohmann::json;
@@ -1310,6 +1311,7 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
+	embedded::teardown_plugin_mysql(*this);
 	embedded::unregister_admin_mysql_prepared(*this);
 	embedded::destroy_mysql_prepared(*this);
 #ifdef PROXYSQL31

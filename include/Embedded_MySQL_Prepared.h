@@ -32,7 +32,8 @@ using MySQLStatus = std::function<uint16_t()>;
 
 Status register_mysql_prepared(MySQL_Session& session, Adapter& adapter,
                               EndpointPolicy& policy, MySQLStatus status,
-                              MySQLPreparedLimits limits = {}, GuardFactory guard_factory = {});
+                              MySQLPreparedLimits limits = {}, GuardFactory guard_factory = {},
+                              QuotaPool* quota = nullptr);
 
 void unregister_mysql_prepared(MySQL_Session& session) noexcept;
 // Call when the session itself is destroyed, after endpoint teardown.

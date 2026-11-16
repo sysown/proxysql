@@ -36,6 +36,8 @@ struct EmptyGuard : OperationGuard {};
 } // namespace
 struct PgSQLPrepared::Impl {
     struct Stmt {
+        explicit Stmt(QuotaPool &pool) : lease(pool) {}
+        QuotaLease lease;
         uint64_t id = 0;
         std::string sql;
         std::vector<uint32_t> oids, positions;
@@ -43,6 +45,8 @@ struct PgSQLPrepared::Impl {
         std::vector<PgSQLColumn> columns;
     };
     struct Portal {
+        explicit Portal(QuotaPool &pool) : lease(pool), result_lease(pool) {}
+        QuotaLease lease, result_lease;
         uint64_t id = 0;
         std::string sql;
         std::vector<Value> values;
@@ -52,6 +56,7 @@ struct PgSQLPrepared::Impl {
         size_t cursor = 0, bind_bytes = 0, result_bytes = 0;
         bool started = false, complete = false;
     };
+    QuotaPool &quota;
     Session session;
     GuardFactory factory;
     PgSQLPreparedLimits limits;
@@ -72,8 +77,9 @@ struct PgSQLPrepared::Impl {
         l.result_total = std::min(l.result_total, hard.result_total);
         return l;
     }
-    Impl(Adapter &a, EndpointPolicy &p, GuardFactory f, PgSQLPreparedLimits l)
-        : session(a, p, bounded(l).statements + bounded(l).portals + 2, bounded(l).result_total),
+    Impl(Adapter &a, EndpointPolicy &p, GuardFactory f, PgSQLPreparedLimits l, QuotaPool *q)
+        : quota(q ? *q : process_quota_pool()),
+          session(a, p, bounded(l).statements + bounded(l).portals + 2, bounded(l).result_total, &quota),
           factory(std::move(f)), limits(bounded(l)) {}
     Status guard(Operation op, const std::string *sql, std::unique_ptr<OperationGuard> &g) {
         if (!factory) {
@@ -150,8 +156,8 @@ struct PgSQLPrepared::Impl {
         return n;
     }
 };
-PgSQLPrepared::PgSQLPrepared(Adapter &a, EndpointPolicy &p, GuardFactory f, PgSQLPreparedLimits l)
-    : impl_(new Impl(a, p, std::move(f), l)) {}
+PgSQLPrepared::PgSQLPrepared(Adapter &a, EndpointPolicy &p, GuardFactory f, PgSQLPreparedLimits l, QuotaPool *q)
+    : impl_(new Impl(a, p, std::move(f), l, q)) {}
 PgSQLPrepared::~PgSQLPrepared() {
     disconnect();
 }
@@ -178,7 +184,10 @@ Status PgSQLPrepared::parse(const std::string &name, const std::string &sql,
         std::unique_ptr<OperationGuard> g;
         if (auto e = s.guard(Operation::prepare, &sql, g))
             return s.fail(e);
-        Impl::Stmt st;
+        Impl::Stmt st(s.quota);
+        ResourceUsage statement_usage{};
+        statement_usage[static_cast<size_t>(Resource::sql_bytes)] = sql.size();
+        if (!st.lease.resize(statement_usage)) return s.fail(limit());
         st.sql = sql;
         if (auto e = s.session.prepare(sql, st.id))
             return s.fail(e);
@@ -224,6 +233,8 @@ Status PgSQLPrepared::parse(const std::string &name, const std::string &sql,
         if (new_meta > s.limits.metadata_total ||
             s.metadata_bytes() - old_meta > s.limits.metadata_total - new_meta)
             return s.fail(limit());
+        statement_usage[static_cast<size_t>(Resource::metadata_bytes)] = new_meta;
+        if (!st.lease.resize(statement_usage)) return s.fail(limit());
         st.oids = supplied;
         st.oids.resize(count, 0);
         for (size_t i = 0; i < types.size(); ++i) {
@@ -313,7 +324,11 @@ Status PgSQLPrepared::bind(const std::string &name, const std::string &statement
         if (new_meta > s.limits.metadata_total ||
             s.metadata_bytes() - old_meta > s.limits.metadata_total - new_meta)
             return s.fail(limit());
-        Impl::Portal p;
+        Impl::Portal p(s.quota);
+        ResourceUsage portal_usage{};
+        portal_usage[static_cast<size_t>(Resource::sql_bytes)] = st.sql.size();
+        portal_usage[static_cast<size_t>(Resource::metadata_bytes)] = new_meta;
+        if (!p.lease.resize(portal_usage)) return s.fail(limit());
         p.sql = st.sql;
         p.columns = st.columns;
         p.bind_bytes = bytes;
@@ -342,6 +357,8 @@ Status PgSQLPrepared::bind(const std::string &name, const std::string &statement
             s.bind_bytes() - prior > s.limits.bind_total - expanded)
             return s.fail(limit());
         p.bind_bytes = expanded;
+        portal_usage[static_cast<size_t>(Resource::bind_bytes)] = expanded;
+        if (!p.lease.resize(portal_usage)) return s.fail(limit());
         p.values.reserve(st.positions.size());
         for (auto pos : st.positions)
             p.values.push_back(logical[pos - 1]);
@@ -469,10 +486,28 @@ Status PgSQLPrepared::execute(const std::string &name, uint32_t max_rows, PgSQLE
             std::unique_ptr<OperationGuard> g;
             if (auto e = s.guard(Operation::execute, &p.sql, g))
                 return s.fail(e);
+            // Keep native cursor cleanup inside the operation guard even when
+            // materialization fails or throws. A failed reset must finalize it.
+            struct NativeResultCleanup {
+                Session &session;
+                uint64_t id;
+                bool active = true;
+                void close() noexcept {
+                    try { session.close(id); } catch (...) { std::terminate(); }
+                }
+                ~NativeResultCleanup() noexcept {
+                    if (!active) return;
+                    try {
+                        if (session.reset(id)) close();
+                    } catch (...) { close(); }
+                }
+            } native_cleanup{s.session, p.id};
             ExecInfo info;
             if (auto e = s.session.execute(p.id, p.values, info))
                 return s.fail(e);
             size_t used = s.result_bytes();
+            QuotaLease materialized(s.quota);
+            ResourceUsage result_usage{};
             std::vector<PgSQLFieldRow> rows;
             if (info.has_result)
                 for (;;) {
@@ -506,10 +541,21 @@ Status PgSQLPrepared::execute(const std::string &name, uint32_t max_rows, PgSQLE
                     }
                     if (frame > size_t(INT32_MAX) - 4)
                         return s.fail(limit());
+                    result_usage[static_cast<size_t>(Resource::result_bytes)] = used - s.result_bytes();
+                    if (!materialized.resize(result_usage)) return s.fail(limit());
                     rows.push_back(std::move(fields));
                 }
+            // No cached rows are published until the native cursor is reset.
+            if (auto e = s.session.reset(p.id)) {
+                native_cleanup.close();
+                native_cleanup.active = false;
+                return s.fail(e);
+            }
+            native_cleanup.active = false;
             p.result_bytes = used - s.result_bytes();
             p.rows = std::move(rows);
+            // Retain conservative charge even after rows transfer to the transport.
+            p.result_lease = std::move(materialized);
         }
         size_t remaining = p.rows.size() - p.cursor;
         size_t n = max_rows ? std::min(remaining, size_t(max_rows)) : remaining;
