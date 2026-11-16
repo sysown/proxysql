@@ -18,3 +18,13 @@ covers embedded NUL bytes, empty BLOB versus NULL, and read-only classification
 without executing the prepared INSERT. This is groundwork for the SQLite adapter,
 not a prepared-protocol endpoint. Independent integrated validation passed 86
 lifecycle checks and 87 SQLite wrapper checks on 2026-11-16.
+
+The MySQL bind decoder is now shared through
+`MySQL_Protocol::decode_stmt_execute`, taking explicit parameter count, long-data
+storage and cached types. The proxy path calls the same implementation. A cache
+with a different parameter count and a first execution without types are rejected
+before array access. Packet and temporal-buffer ownership remain the existing
+protocol contract; embedded consumers must copy values and release those resources
+before native execution. This extraction supplies no endpoint dispatch or new
+protocol parser. Independent validation passed 13 direct decoder checks and the
+existing 9 short-packet and 8 long-data type checks.

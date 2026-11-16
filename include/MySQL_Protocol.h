@@ -43,6 +43,8 @@ enum proxysql_auth_plugins {
 #endif
 };
 
+class StmtLongDataHandler;
+
 class MySQL_ResultSet {
 	private:
 	bool deprecate_eof_active;
@@ -287,6 +289,19 @@ class MySQL_Protocol {
 	// prepared statements
 	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info, uint32_t _stmt_id=0);
 	void generate_STMT_PREPARE_RESPONSE_OK(uint8_t sequence_id, uint32_t stmt_id);
+
+	// On success the returned metadata owns pkt.ptr; binds can borrow its bytes
+	// or long_data buffers. On failure the caller retains the packet and any
+	// cached metadata. Release old packet/temporal buffers before reuse.
+	// effective_types, when supplied, must have 2 * num_params bytes.
+	// A cached metadata object must have the same parameter count. A fresh
+	// execution must supply packet types or effective_types when parameters exist.
+	// long_data may be null; the cache pointer itself must not be null.
+	static stmt_execute_metadata_t *decode_stmt_execute(
+		PtrSize_t& pkt, uint16_t num_params, StmtLongDataHandler *long_data,
+		stmt_execute_metadata_t **stmt_meta, const unsigned char *effective_types = nullptr,
+		const char *query = "", const char *username = "", const char *schemaname = ""
+	);
 
 	stmt_execute_metadata_t * get_binds_from_pkt(
 		PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta,

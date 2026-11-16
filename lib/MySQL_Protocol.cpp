@@ -4314,6 +4314,7 @@ static bool is_long_data_param_type(enum enum_field_types buffer_type) {
 /** @brief Detects unsupported long-data parameters, including empty entries. */
 static bool has_invalid_long_data(StmtLongDataHandler* handler, uint32_t stmt_id,
 	const MYSQL_BIND* binds, uint16_t num_params) {
+	if (!handler) return false;
 #ifdef PROXYSQL31
 	if (!handler->has_data(stmt_id)) return false;
 #endif
@@ -4333,12 +4334,27 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta,
 	const unsigned char *effective_types
 ) {
+	// Legacy callers may use an uninitialized protocol for short-packet checks.
+	if (pkt.size < 14) return nullptr;
+	return decode_stmt_execute(pkt, stmt_info->num_params,
+		myds && *myds && (*myds)->sess ? (*myds)->sess->SLDH : nullptr,
+		stmt_meta, effective_types, stmt_info->query, stmt_info->username, stmt_info->schemaname);
+}
+
+stmt_execute_metadata_t * MySQL_Protocol::decode_stmt_execute(
+	PtrSize_t& pkt, uint16_t num_params, StmtLongDataHandler *long_data,
+	stmt_execute_metadata_t **stmt_meta, const unsigned char *effective_types,
+	const char *query, const char *username, const char *schemaname
+) {
 	stmt_execute_metadata_t *ret=NULL; //return NULL in case of failure
-	if (pkt.size < 14) {
-		// some error!
-		return ret;
+	if (!stmt_meta || !pkt.ptr || pkt.size < 14) return ret;
+	// Cached bind arrays were allocated for their original parameter count.
+	if (*stmt_meta && (*stmt_meta)->num_params != num_params) return ret;
+	if (num_params && !*stmt_meta && !effective_types) {
+		const size_t flag_offset = 14 + (static_cast<size_t>(num_params) + 7) / 8;
+		if (pkt.size <= flag_offset || !static_cast<unsigned char*>(pkt.ptr)[flag_offset])
+			return ret;
 	}
-	uint16_t num_params=stmt_info->num_params;
 	if (num_params==2) {
 		PROXY_TRACE();
 	}
@@ -4466,7 +4482,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 		// client library read sizeof(type) bytes from the long data buffer and
 		// send them as a binary value of that type (e.g. a whole MYSQL_TIME read
 		// from a shorter buffer). Checked before any bind buffer is allocated.
-		if (has_invalid_long_data((*myds)->sess->SLDH, ret->stmt_id, binds, num_params)) {
+		if (has_invalid_long_data(long_data, ret->stmt_id, binds, num_params)) {
 			// Required to prevent double-free in dtor
 			ret->pkt = NULL;
 			// Only free when metadata not obtained from cache (i.e. first execute)
@@ -4487,7 +4503,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				if (t == MYSQL_TYPE_TIME || t == MYSQL_TYPE_DATE || t == MYSQL_TYPE_TIMESTAMP || t == MYSQL_TYPE_DATETIME) {
 					unsigned long *_l = NULL;
 					my_bool *_is_null = NULL;
-					if (binds[j].buffer && binds[j].buffer != (*myds)->sess->SLDH->get(ret->stmt_id, j, &_l, &_is_null)) {
+					if (binds[j].buffer && binds[j].buffer != (long_data ? long_data->get(ret->stmt_id, j, &_l, &_is_null) : nullptr)) {
 						free(binds[j].buffer);
 					}
 				}
@@ -4502,7 +4518,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 		for (i=0;i<num_params;i++) {
 			unsigned long *_l = 0;
 			my_bool * _is_null = NULL;
-			void *_data = (*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
+			void *_data = long_data ? long_data->get(ret->stmt_id, i, &_l, &_is_null) : nullptr;
 			if (_l) {
 				// Data was sent via STMT_SEND_LONG_DATA so no data in the packet.
 				binds[i].length = _l;
@@ -4633,7 +4649,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				default:
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
-							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
+							buffer_type, i, query, username, schemaname);
 					return malformed(i);
 			}
 		}
