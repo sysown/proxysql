@@ -11,6 +11,9 @@
 #include "proxysql_utils.h"
 #include "MySQL_Query_Processor.h"
 #include "SQLite3_Server.h"
+#include "Embedded_MySQL_Prepared.h"
+#include "Embedded_SQLite_Adapter.h"
+#include "Embedded_SQLite_Policy.h"
 #include "gen_utils.h"
 #ifdef TEST_RDS_BGD
 #include "MySQL_Monitor.hpp"
@@ -1282,11 +1285,31 @@ static void *child_mysql(void *arg) {
 	sess->session_type = PROXYSQL_SESSION_SQLITE;
 	sess->handler_function=SQLite3_Server_session_handler;
 	MySQL_Data_Stream *myds=sess->client_myds;
+	// This endpoint owns a standard SQLite connection. Keep extension loading
+	// disabled; the prepared policy requires immutable built-ins and trusted
+	// native functions reachable through views and triggers.
+	sqlite3 *prepared_db = sqlite_sess->sessdb->get_db();
+	embedded::SQLiteAdapter prepared_adapter(prepared_db);
+	embedded::SQLitePolicy prepared_policy(prepared_db, [sess] { return sess->autocommit; });
 
 	fds[0].fd=client;
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
 	free(arg);
+	if (!prepared_db || !proxy_sqlite3_enable_load_extension ||
+		proxy_sqlite3_enable_load_extension(prepared_db, 0) != SQLITE_OK) {
+		proxy_error("Cannot initialize SQLite prepared connection policy\n");
+		goto __exit_child_mysql;
+	}
+	if (auto error = embedded::register_mysql_prepared(*sess, prepared_adapter, prepared_policy,
+		[sess, prepared_db]() -> uint16_t {
+			uint16_t status = sess->autocommit ? SERVER_STATUS_AUTOCOMMIT : 0;
+			if (!proxy_sqlite3_get_autocommit(prepared_db)) status |= SERVER_STATUS_IN_TRANS;
+			return status;
+		})) {
+		proxy_error("Cannot register SQLite prepared frontend: %s\n", error->message.c_str());
+		goto __exit_child_mysql;
+	}
 	if (sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true) == false) {
 		goto __exit_child_mysql;
 	}
@@ -1350,6 +1373,8 @@ static void *child_mysql(void *arg) {
 	}
 
 __exit_child_mysql:
+	// Native handles must be finalized while their borrowed connection lives.
+	embedded::unregister_mysql_prepared(*sess);
 	delete sqlite_sess;
 	mysql_thr->gen_args = NULL;
 	delete mysql_thr;

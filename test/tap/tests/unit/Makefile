@@ -649,6 +649,10 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	sqlite3db_unit-t \
 	embedded_prepared_unit-t \
 	embedded_sqlite_adapter_unit-t \
+	embedded_sqlite_policy_unit-t \
+	embedded_mysql_result_unit-t \
+	embedded_mysql_prepared_unit-t \
+	duckdb_prepared_adapter_unit-t \
 	pgsql_error_helper_unit-t \
 	pgsql_native_params_unit-t \
 	pgsql_native_tier_policy_unit-t \
@@ -1087,6 +1091,13 @@ embedded_sqlite_adapter_unit-t: embedded_sqlite_adapter_unit-t.cpp $(PROXYSQL_PA
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@
 
+embedded_sqlite_policy_unit-t: embedded_sqlite_policy_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Policy.cpp $(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp $(PROXYSQL_PATH)/include/Embedded_SQLite_Policy.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/sqlite3db.h $(PARSERSQL_LDIR)/libsqlparser.a $(SQLITE3_LDIR)/sqlite3.o $(SSL_LDIR)/libcrypto.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_SQLite_Policy.cpp \
+		$(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp \
+		$(SQLITE3_LDIR)/sqlite3.o $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) -I$(PARSERSQL_IDIR) \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@
+
 # Characterize the vendored parser independently of engine and core runtime.
 duckdb_mysql_select_compat_unit-t: duckdb_mysql_select_compat_unit-t.cpp $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
@@ -1127,7 +1138,7 @@ $(DUCKDB_AR):
 $(DUCKDB_STATIC_LOADER_SRCS): $(DUCKDB_AR)
 	@test -s $@ || { echo "ERROR: missing DuckDB static extension loader: $@; rebuild deps/duckdb" >&2; exit 1; }
 
-duckdb_engine_unit-t duckdb_result_unit-t duckdb_session_unit-t duckdb_listener_unit-t duckdb_admin_schema_unit-t duckdb_replica_storage_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
+duckdb_engine_unit-t duckdb_result_unit-t duckdb_session_unit-t duckdb_listener_unit-t duckdb_admin_schema_unit-t duckdb_replica_storage_unit-t duckdb_prepared_adapter_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
 
 DUCKDB_LINK_GROUP_START :=
 DUCKDB_LINK_GROUP_END :=
@@ -1145,6 +1156,11 @@ duckdb_engine_unit-t: duckdb_engine_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/s
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+duckdb_prepared_adapter_unit-t: duckdb_prepared_adapter_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_adapter.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(DUCKDB_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) -lpthread -ldl -lm -o $@
 
 duckdb_result_unit-t: duckdb_result_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \

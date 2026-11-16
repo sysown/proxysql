@@ -290,6 +290,15 @@ sh-%:
 # The lifecycle regression includes the real fixture implementation.
 kill_connection2_fixture-t: kill_connection2_fixture-t.cpp kill_connection2-t.cpp
 
+# The embedded acceptance client only needs TAP and the native client library.
+# Reuse the unit TAP objects without the broader integration helper dependencies.
+unit/obj/tap.o unit/obj/tap_noise_stubs.o:
+	$(MAKE) -C unit $(patsubst unit/%,%,$@)
+
+test_embedded_prepared_mysql-t: test_embedded_prepared_mysql-t.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(MARIADB_IDIR) $(STDCPP) -O0 -ggdb \
+		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm -o $@
+
 # Owns an isolated ProxySQL child for real SIGKILL recovery testing.
 test_duckdb_replica_recovery-t test_duckdb_replica_bench-t test_duckdb_mysql_types-t: %: %.cpp duckdb_replica_test_utils.h $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) \

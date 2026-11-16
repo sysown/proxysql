@@ -6,6 +6,7 @@
 #include "MySQL_Session.h"
 #include "mysql_connection.h"
 #include <cstring>
+#include <limits>
 
 static uint16_t u16(const unsigned char* p) { uint16_t v; memcpy(&v,p,2); return v; }
 static uint32_t u32(const unsigned char* p) { uint32_t v; memcpy(&v,p,4); return v; }
@@ -62,6 +63,21 @@ int main() {
             ok(!protocol.generate_STMT_PREPARE_RESPONSE(1, 3, 0, 1, fields, 0, 0) &&
                !stream.PSarrayOUT->len, "null %s refused before output", names[i]);
             *members[i] = saved;
+        }
+        // OK packets must retain the full native affected-row count.
+        for (uint64_t affected : {uint64_t(0), uint64_t(0x100000000ULL), std::numeric_limits<uint64_t>::max()}) {
+            void* packet = nullptr; unsigned int size = 0;
+            ok(protocol.generate_pkt_OK64(false, &packet, &size, 9, affected, 0, 0, 0, nullptr), "wide OK encodes affected rows");
+            auto* bytes = static_cast<unsigned char*>(packet);
+            uint64_t decoded = 0;
+            if (packet && size >= 7) {
+                if (affected == 0) decoded = bytes[5];
+                else if (size >= 15 && bytes[5] == 0xfe)
+                    for (unsigned i=0; i<8; ++i) decoded |= uint64_t(bytes[6+i]) << (8*i);
+            }
+            ok(packet && bytes[3] == 9 && bytes[4] == 0 && decoded == affected,
+               "wide OK preserves exact 64-bit wire value");
+            if (packet) l_free(size, packet);
         }
         stream.myconn = nullptr;
     }

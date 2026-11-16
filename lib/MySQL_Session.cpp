@@ -18,6 +18,7 @@ using json = nlohmann::json;
 #include "MySQL_Query_Processor.h"
 #include "Query_Processor_ParserSQL.h"
 #include "MySQL_PreparedStatement.h"
+#include "Embedded_MySQL_Prepared.h"
 // GenAI_Thread.h, AI_Features_Manager.h, LLM_Bridge.h moved to
 // plugins/genai/include/ in Step 5.  Step 4.A removed all session-side
 // GENAI:/LLM: prefix dispatch, so MySQL_Session no longer references
@@ -1207,6 +1208,10 @@ MySQL_Session::MySQL_Session() {
  * @brief Resets the MySQL session to its initial state.
  */
 void MySQL_Session::reset() {
+	// Registered embedded endpoints own native statements outside proxy metadata.
+	if (auto error = embedded::reset_mysql_prepared(*this)) {
+		proxy_error("Embedded prepared reset failed: %s\n", error->message.c_str());
+	}
 #ifndef PROXYSQL31
 	pending_user_variable_set.reset();
 #endif
@@ -1303,6 +1308,7 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
+	embedded::unregister_mysql_prepared(*this);
 #ifdef PROXYSQL31
 	if (thread) {
 		thread->cancel_session_continuation(this);
@@ -5404,6 +5410,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PAC
 // here we only process the not so common ones
 // we return false if the enum_mysql_command is not found
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass) {
+	if (embedded::handle_mysql_prepared(*this, *pkt)) return true;
 	unsigned char c;
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	switch ((enum_mysql_command)c) {
@@ -5704,6 +5711,7 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 
 
 void MySQL_Session::GPFC_PreparedStatements(PtrSize_t& pkt, unsigned char c) {
+	if (embedded::handle_mysql_prepared(*this, pkt)) return;
 	switch ((enum_mysql_command)c) {
 		case _MYSQL_COM_STMT_PREPARE:
 			if (GloMyLdapAuth) {

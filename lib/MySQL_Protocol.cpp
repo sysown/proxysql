@@ -510,6 +510,10 @@ MySQLFrontendAuthError MySQL_Protocol::consume_frontend_auth_error() {
 #endif
 
 bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg, bool eof_identifier) {
+	return generate_pkt_OK64(send, ptr, len, sequence_id, affected_rows, last_insert_id, status, warnings, msg, eof_identifier);
+}
+
+bool MySQL_Protocol::generate_pkt_OK64(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg, bool eof_identifier) {
 	if ((*myds)->sess->mirror==true) {
 		return true;
 	}
