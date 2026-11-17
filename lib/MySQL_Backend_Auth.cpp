@@ -3,6 +3,7 @@
 #include "MySQL_Backend_Auth.h"
 #include "MySQL_Authentication.hpp"
 
+#include <algorithm>
 #include <vector>
 
 namespace {
@@ -35,12 +36,18 @@ bool is_dns_label(const std::string& label) {
 	return true;
 }
 
-bool split_rds_endpoint(const std::string& endpoint, std::string& endpoint_region) {
+std::string ascii_lower(std::string s) {
+	for (char& c : s) {
+		if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+	}
+	return s;
+}
+
+/** Split a host name into lower-case DNS labels; false if it is not a valid host name. */
+bool split_dns_labels(const std::string& endpoint, std::vector<std::string>& labels) {
 	if (endpoint.empty() || endpoint.size() > 253 || endpoint.back() == '.') {
 		return false;
 	}
-
-	std::vector<std::string> labels;
 	size_t begin = 0;
 	while (begin < endpoint.size()) {
 		const size_t end = endpoint.find('.', begin);
@@ -48,37 +55,61 @@ bool split_rds_endpoint(const std::string& endpoint, std::string& endpoint_regio
 		if (!is_dns_label(label)) {
 			return false;
 		}
-		labels.push_back(label);
+		labels.push_back(ascii_lower(label));
 		if (end == std::string::npos) {
 			break;
 		}
 		begin = end + 1;
 	}
+	return true;
+}
 
+/**
+ * Index of the first suffix label if 'labels' ends with one of 'suffixes' and has
+ * at least 'min_prefix' labels before it; 0 if none matches.
+ */
+size_t matching_suffix_start(const std::vector<std::string>& labels,
+	const std::vector<std::vector<std::string>>& suffixes, size_t min_prefix) {
+	for (const auto& suffix : suffixes) {
+		if (labels.size() < suffix.size() + min_prefix) {
+			continue;
+		}
+		const size_t start = labels.size() - suffix.size();
+		if (std::equal(suffix.begin(), suffix.end(), labels.begin() + start)) {
+			return start;
+		}
+	}
+	return 0;
+}
+
+bool split_rds_endpoint(const std::string& endpoint, std::string& endpoint_region) {
 	static const std::vector<std::vector<std::string>> suffixes {
 		{ "rds", "amazonaws", "com" },
 		{ "rds", "amazonaws", "com", "cn" },
 		{ "rds", "c2s", "ic", "gov" },
 		{ "rds", "sc2s", "sgov", "gov" },
 	};
-	for (const auto& suffix : suffixes) {
-		if (labels.size() <= suffix.size() + 1) {
-			continue;
-		}
-		const size_t suffix_start = labels.size() - suffix.size();
-		bool suffix_matches = true;
-		for (size_t i = 0; i < suffix.size(); ++i) {
-			if (labels[suffix_start + i] != suffix[i]) {
-				suffix_matches = false;
-				break;
-			}
-		}
-		if (suffix_matches) {
-			endpoint_region = labels[suffix_start - 1];
-			return true;
-		}
+	std::vector<std::string> labels;
+	if (!split_dns_labels(endpoint, labels)) {
+		return false;
 	}
-	return false;
+	// At least a host label and the region label before the suffix.
+	const size_t start = matching_suffix_start(labels, suffixes, 2);
+	if (start == 0) {
+		return false;
+	}
+	endpoint_region = labels[start - 1];
+	return true;
+}
+
+bool is_azure_mysql_endpoint(const std::string& endpoint) {
+	static const std::vector<std::vector<std::string>> suffixes {
+		{ "mysql", "database", "azure", "com" },
+		{ "mysql", "database", "chinacloudapi", "cn" },
+		{ "mysql", "database", "usgovcloudapi", "net" },
+	};
+	std::vector<std::string> labels;
+	return split_dns_labels(endpoint, labels) && matching_suffix_start(labels, suffixes, 1) != 0;
 }
 
 /**
@@ -177,9 +208,40 @@ const char* mysql_backend_auth_type_name(MySQLBackendAuthType type) {
 			return "aws_iam";
 		case MySQLBackendAuthType::INVALID:
 			return "invalid";
+		case MySQLBackendAuthType::AZURE_ENTRA:
+			return "azure_entra";
 	}
 	return "invalid";
 }
+
+bool mysql_backend_auth_uses_token(MySQLBackendAuthType type) {
+	return type == MySQLBackendAuthType::AWS_IAM || type == MySQLBackendAuthType::AZURE_ENTRA;
+}
+
+const char* backend_token_log_label(MySQLBackendAuthType type) {
+	return type == MySQLBackendAuthType::AZURE_ENTRA ? "Azure Entra" : "AWS IAM";
+}
+
+bool backend_token_provider_for(MySQLBackendAuthType type, BackendTokenProvider& out) {
+	switch (type) {
+		case MySQLBackendAuthType::AWS_IAM:
+			out = BackendTokenProvider::AWS_IAM;
+			return true;
+		case MySQLBackendAuthType::AZURE_ENTRA:
+			out = BackendTokenProvider::AZURE_ENTRA;
+			return true;
+		default:
+			return false;
+	}
+}
+
+#ifdef PROXYSQL40
+AwsIamTokenSourceLease acquire_backend_token_source_for(MySQLBackendAuthType type) {
+	BackendTokenProvider provider;
+	if (!backend_token_provider_for(type, provider)) return {};
+	return acquire_backend_token_source(provider);
+}
+#endif // PROXYSQL40
 
 MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 	std::string_view database_user,
@@ -222,11 +284,14 @@ MySQLBackendAuthPolicy parse_mysql_backend_auth_policy(
 	if (!type->is_string()) {
 		return invalid_backend_auth_policy(database_user, "type_not_string");
 	}
-	if (type->get<std::string>() != "aws_iam") {
+	const std::string& type_name = type->get_ref<const std::string&>();
+	if (type_name == "aws_iam") {
+		policy.type = MySQLBackendAuthType::AWS_IAM;
+	} else if (type_name == "azure_entra") {
+		policy.type = MySQLBackendAuthType::AZURE_ENTRA;
+	} else {
 		return invalid_backend_auth_policy(database_user, "type_unsupported");
 	}
-
-	policy.type = MySQLBackendAuthType::AWS_IAM;
 	policy.ignored_password = backend_password_is_nonempty;
 	return policy;
 }
@@ -311,7 +376,7 @@ AwsIamConnectionConfigResult validate_mysql_aws_iam_connection(
 	if (!split_rds_endpoint(input.configured_endpoint, endpoint_region)) {
 		return invalid_connection_config(AwsIamConnectionConfigStatus::INVALID_ENDPOINT, "invalid_endpoint");
 	}
-	if (endpoint_region != input.region) {
+	if (endpoint_region != ascii_lower(input.region)) {
 		return invalid_connection_config(AwsIamConnectionConfigStatus::REGION_ENDPOINT_MISMATCH,
 			"region_endpoint_mismatch");
 	}
@@ -324,6 +389,48 @@ AwsIamConnectionConfigResult validate_mysql_aws_iam_connection(
 
 	AwsIamConnectionConfigResult result;
 	result.status = AwsIamConnectionConfigStatus::OK;
-	result.key = { input.configured_endpoint, input.port, input.region, input.database_user };
+	// Lower case: the match above ignores case, and a SigV4 scope like "US-EAST-1" is rejected.
+	result.key = { ascii_lower(input.configured_endpoint), input.port, endpoint_region, input.database_user };
 	return result;
+}
+
+AwsIamConnectionConfigResult validate_mysql_azure_entra_connection(
+	const AwsIamConnectionConfigInput& input)
+{
+	if (!input.support_compiled) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::SUPPORT_NOT_COMPILED,
+			"support_not_compiled");
+	}
+	if (input.port == 0) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::UNIX_SOCKET_NOT_ALLOWED,
+			"unix_socket_not_allowed");
+	}
+	// One Entra token is valid for every Azure MySQL server in the tenant: never send it elsewhere.
+	if (!is_azure_mysql_endpoint(input.configured_endpoint)) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::INVALID_ENDPOINT, "invalid_endpoint");
+	}
+	if (!input.use_ssl) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::TLS_REQUIRED, "tls_required");
+	}
+	if (input.ssl_ca.empty() && input.ssl_capath.empty()) {
+		return invalid_connection_config(AwsIamConnectionConfigStatus::CA_TRUST_REQUIRED, "ca_trust_required");
+	}
+
+	AwsIamConnectionConfigResult result;
+	result.status = AwsIamConnectionConfigStatus::OK;
+	result.key = { ascii_lower(input.configured_endpoint), input.port, "", input.database_user };
+	return result;
+}
+
+AwsIamConnectionConfigResult validate_mysql_backend_token_connection(
+	MySQLBackendAuthType type, const AwsIamConnectionConfigInput& input)
+{
+	switch (type) {
+		case MySQLBackendAuthType::AWS_IAM:
+			return validate_mysql_aws_iam_connection(input);
+		case MySQLBackendAuthType::AZURE_ENTRA:
+			return validate_mysql_azure_entra_connection(input);
+		default:
+			return invalid_connection_config(AwsIamConnectionConfigStatus::INVALID_ENDPOINT, "not_token_auth");
+	}
 }

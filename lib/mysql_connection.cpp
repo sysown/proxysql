@@ -590,7 +590,7 @@ MySQL_Connection::~MySQL_Connection() {
 
 #ifdef PROXYSQL40
 void MySQL_Connection::set_backend_auth_type(MySQLBackendAuthType type) {
-	if (type != MySQLBackendAuthType::AWS_IAM) {
+	if (!mysql_backend_auth_uses_token(type)) {
 		clear_aws_iam_handshake_secret();
 		aws_iam_identity_.reset();
 	}
@@ -744,8 +744,13 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 
 #ifdef PROXYSQL40
 bool MySQL_Connection::backend_auth_compatible(
-	const char *requested_username, MySQLBackendAuthType) const
+	const char *requested_username, MySQLBackendAuthType requested_type) const
 {
+	// A switch to Azure Entra drops the password connections at once (#6649).
+	if (requested_type == MySQLBackendAuthType::AZURE_ENTRA &&
+		backend_auth_type_ != MySQLBackendAuthType::AZURE_ENTRA) {
+		return false;
+	}
 	// Authentication is established when the connection opens. Its original
 	// mode and token lifetime do not change the authenticated username.
 	return requested_username != nullptr && userinfo != nullptr &&
@@ -1182,13 +1187,14 @@ void MySQL_Connection::connect_start() {
 	}
 #endif
 #ifdef PROXYSQL40
-	if (backend_auth_type_ == MySQLBackendAuthType::AWS_IAM) {
+	if (mysql_backend_auth_uses_token(backend_auth_type_)) {
 		const bool valid_iam_handshake = parent->port != 0 && aws_iam_identity_ &&
 			!aws_iam_identity_->handshake_token.empty();
 		if (!valid_iam_handshake) {
 			mysql->net.last_errno = CR_CONNECTION_ERROR;
 			std::snprintf(mysql->net.last_error, sizeof(mysql->net.last_error),
-				"AWS IAM backend authentication requires a TCP endpoint and handshake token");
+				"%s backend authentication requires a TCP endpoint and handshake token",
+				backend_token_log_label(backend_auth_type_));
 			std::strncpy(mysql->net.sqlstate, "HY000", sizeof(mysql->net.sqlstate));
 			mysql->net.sqlstate[sizeof(mysql->net.sqlstate) - 1] = '\0';
 			ret_mysql = nullptr;
@@ -1255,7 +1261,7 @@ void MySQL_Connection::change_user_start() {
 	// path with an IAM identity would turn an ephemeral token into a reusable
 	// password; all session/reset callers must replace the connection instead.
 #ifdef PROXYSQL40
-	assert(backend_auth_type_ != MySQLBackendAuthType::AWS_IAM);
+	assert(!mysql_backend_auth_uses_token(backend_auth_type_));
 	assert(!has_aws_iam_handshake_secret());
 #endif // PROXYSQL40
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
@@ -1510,7 +1516,7 @@ handler_again:
 			}
 			if (!ret_mysql) {
 				int myerr = mysql_errno(mysql);
-				if (backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+				if (mysql_backend_auth_uses_token(backend_auth_type())) {
 					proxy_error("Failed to connect IAM backend on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: authentication details redacted.\n",
 						parent->myhgc->hid, parent->address, parent->port,
 						mysql->net.fd, myds->fd, myerr);

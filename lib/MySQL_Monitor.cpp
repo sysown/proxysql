@@ -23,6 +23,8 @@ using json = nlohmann::json;
 #include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
+#include "MySQL_Monitor_Token_Auth.h"
+#include "mysqld_error.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "ProxySQL_Cluster.hpp"
 #include "proxysql.h"
@@ -1684,11 +1686,42 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_monitor");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", hostname);
 	MYSQL *myrc=NULL;
-	if (port) {
-		myrc=mysql_real_connect(mysql, MySQL_Monitor::dns_lookup(hostname).c_str(), mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
-	} else {
-		myrc=mysql_real_connect(mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
+	const char *monitor_password = mysql_thread___monitor_password;
+#ifdef PROXYSQL40
+	// #6649: with mysql-monitor_backend_auth='azure_entra' the monitor sends an
+	// Entra token over verified TLS and never falls back to the password.
+	MonitorTokenAuth token_auth;
+	const bool entra = mysql_thread___monitor_backend_auth != nullptr &&
+		strcmp(mysql_thread___monitor_backend_auth, "azure_entra") == 0;
+	if (entra) {
+		if (!prepare_monitor_token_auth(mysql, hostname, port, use_ssl, ssl_params.get(),
+				mysql_thread___monitor_username, mysql_thread___monitor_connect_timeout, token_auth)) {
+			mysql_error_msg = strdup(("azure_entra: " + token_auth.failure_code).c_str());
+			proxy_error("Azure Entra monitor connection failure user='%s' endpoint='%s' port=%d category='%s'\n",
+				mysql_thread___monitor_username, hostname, port, token_auth.failure_code.c_str());
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, 9002);
+			mysql_close(mysql);
+			mysql = NULL;
+			return false;
+		}
+		monitor_password = token_auth.token.c_str();
 	}
+#endif // PROXYSQL40
+	if (port) {
+		myrc=mysql_real_connect(mysql, MySQL_Monitor::dns_lookup(hostname).c_str(), mysql_thread___monitor_username, monitor_password, NULL, port, NULL, 0);
+	} else {
+		myrc=mysql_real_connect(mysql, "localhost", mysql_thread___monitor_username, monitor_password, NULL, 0, hostname, 0);
+	}
+#ifdef PROXYSQL40
+	if (entra) {
+		cleanse_monitor_connector_password(mysql);
+		if (myrc == NULL && mysql_errno(mysql) == ER_ACCESS_DENIED_ERROR) {
+			AwsIamTokenSourceLease source = acquire_backend_token_source(BackendTokenProvider::AZURE_ENTRA);
+			if (source) source->invalidate(token_auth.key, token_auth.generation);
+		}
+		token_auth.token.clear();
+	}
+#endif // PROXYSQL40
 	if (myrc==NULL) {
 		mysql_error_msg=strdup(mysql_error(mysql));
 		int myerrno=mysql_errno(mysql);

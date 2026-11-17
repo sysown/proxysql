@@ -410,6 +410,16 @@ bool install_aws_iam_token_source_service(
 	return install_global_aws_iam_token_source(source, destroy, module_handle);
 }
 
+bool install_azure_entra_token_source_service(
+	AwsIamTokenSource *source, void (*destroy)(AwsIamTokenSource *), void *module_handle) {
+	if (g_registry_target == nullptr) {
+		proxy_warning("Azure Entra token source installation attempted outside plugin init phase\n");
+		return false;
+	}
+	return install_global_backend_token_source(
+		BackendTokenProvider::AZURE_ENTRA, source, destroy, module_handle);
+}
+
 bool uninstall_aws_iam_token_source_service(AwsIamTokenSource *expected_source) {
 	if (g_registry_target == nullptr) {
 		proxy_warning("AWS IAM token source removal attempted outside plugin init phase\n");
@@ -738,6 +748,7 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.install_aws_metadata_provider = &install_aws_metadata_provider_service;
 	services_.refresh_mysql_aws_locality_stats = &refresh_mysql_aws_locality_stats_service;
 	services_.uninstall_aws_iam_token_source = &uninstall_aws_iam_token_source_service;
+	services_.install_azure_entra_token_source = &install_azure_entra_token_source_service;
 	services_.register_server_module = &register_server_module_unsupported;
 	services_.install_server_discovery_controller = &install_server_discovery_controller_service;
 	services_.uninstall_server_discovery_controller = &uninstall_server_discovery_controller_service;
@@ -860,7 +871,7 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// safe via the tail-append pattern -- fields the plugin didn't define
 	// are never dereferenced (see handling of register_schemas below).
 	//
-	// abi_version carries the ABI 1..16 layout-version number in its low
+	// abi_version carries the ABI 1..17 layout-version number in its low
 	// bits and PROXYSQL_PLUGIN_ABI_DEBUG_BIT as a separate, independent
 	// tag (see the long comment on PROXYSQL_PLUGIN_ABI_DEBUG_BIT in
 	// ProxySQL_Plugin.h for the dump_pkt/DSS-offset-shift mechanism this
@@ -976,7 +987,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		//
 		// abi_version must be masked before this comparison: it carries
 		// PROXYSQL_PLUGIN_ABI_DEBUG_BIT in a high bit orthogonal to the
-		// ABI 1..16 layout-version number (see the contract comment next
+		// ABI 1..17 layout-version number (see the contract comment next
 		// to PROXYSQL_PLUGIN_ABI_DEBUG_BIT in ProxySQL_Plugin.h). A
 		// DEBUG-tagged ABI-1 descriptor has abi_version == 0x40000001,
 		// which satisfies a raw ">= 2u" and would wrongly dereference
