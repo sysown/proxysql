@@ -490,6 +490,18 @@ public:
 		return error_info.code;
 	}
 
+	// The code that labels this connection's failed connect in the pgsql error counter, as the native
+	// protocol reports it. A timeout leaves no error (08001), and libpq reports its own failures
+	// (refused, DNS, TLS) without a SQLSTATE, which set_error_from_PQerrorMessage() fills with P0001.
+	inline
+	const char* get_connect_error_code_str() const {
+		if (async_state_machine == ASYNC_CONNECT_TIMEOUT)
+			return PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION);
+		if (!native_mode && error_info.code == PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION)
+			return PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE);
+		return error_info.sqlstate;
+	}
+
 	// PostgreSQL refused a kept statement because its result columns changed since it was prepared
 	// ("cached plan must not change result type"). Only the routine tells it from any other 0A000.
 	inline

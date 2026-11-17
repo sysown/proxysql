@@ -1074,9 +1074,8 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_PING_TIMEOUT);
 			}
 			else { // rc==-1
-				int myerr = 0; // TODO: fix this mysql_errno(myconn->pgsql);
 				detected_broken_connection(__FILE__, __LINE__, __func__, "during ping", myconn,  true);
-				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
+				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_error_code_str());
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
@@ -1131,7 +1130,7 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 					myconn->parent->myhgc->hid,
 					myconn->parent->address,
 					myconn->parent->port,
-					(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
+					error_present ? std::string(myconn->get_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
 				);
 				if (error_present) {
 					proxy_error("Detected an error during Reset Session on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myconn->get_error_code_with_message().c_str());
@@ -1183,7 +1182,7 @@ int PgSQL_Session::handler_again___status_RESYNCHRONIZING_CONNECTION() {
 			PgSQL_Result_to_PgSQL_wire(myconn, myds);
 			if (failed) {
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid,
-					myconn->parent->address, myconn->parent->port, 9999);
+					myconn->parent->address, myconn->parent->port, myconn->get_error_code_str());
 				handler_minus1_LogErrorDuringQuery(myconn);
 				RequestEnd(myds, true);
 				handler_minus1_HandleBackendConnection(myds);
@@ -1213,7 +1212,7 @@ int PgSQL_Session::handler_again___status_RESYNCHRONIZING_CONNECTION() {
 			proxy_error("Detected an error during Resynchronization on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %s , %s\n", 
 				myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, code, msg);
 
-			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, 9999);
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_error_code_str());
 
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
@@ -1351,7 +1350,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV)
+				myconn->is_error_present() ? std::string(myconn->get_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
 			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
@@ -1481,7 +1480,7 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
+				error_present ? std::string(myconn->get_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
 			);
 			if (error_present == false || (error_present == true && myconn->is_connection_in_reusable_state() == false)) {
 				bool retry_conn = false;
@@ -1753,7 +1752,7 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 				p_pgsql_error_type::pgsql, 
 				myconn->parent->myhgc->hid, 
 				myconn->parent->address, 
-				myconn->parent->port, 9999 /* TODO: fix this mysql_errno(myconn->pgsql)*/);
+				myconn->parent->port, myconn->get_connect_error_code_str());
 
 			if (myds->connect_retries_on_failure > 0) {
 				myds->connect_retries_on_failure--;
@@ -1866,7 +1865,7 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
+				error_present ? std::string(myconn->get_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
 			);
 			if (error_present == false || (error_present == true && myconn->is_connection_in_reusable_state() == false)) {
 				bool retry_conn = false;
@@ -4277,7 +4276,7 @@ handler_again:
 				if (rc == -1) {
 					// the query failed
 					//bool is_error_present = myconn->is_error_present(); // false means failure is due to server being in OFFLINE state
-					PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, 9999); // TOFIX
+					PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_error_code_str());
 					//CurrentQuery.mysql_stmt = NULL; // immediately reset mysql_stmt
 					int rc1 = handler_ProcessingQueryError_CheckBackendConnectionStatus(myds);
 					if (rc1 == -1) {
@@ -10009,7 +10008,7 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 	if (backend_error) {
 		// The error reached the client in its place in the batch, and the backend has concluded it.
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid,
-			myconn->parent->address, myconn->parent->port, 9999);
+			myconn->parent->address, myconn->parent->port, myconn->get_error_code_str());
 		myconn->reset_error();
 	}
 	if (active_transactions != 0 && myconn->IsKnownActiveTransaction() == false && myconn->is_pipeline_active() == false) {
