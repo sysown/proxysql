@@ -116,5 +116,14 @@ static_assert(offsetof(ProxySQL_PluginServices, post_server_desired_set) ==
 	offsetof(DiscoveryAbi14, post_server_desired_set), "ABI-14 post_server_desired_set slot moved");
 static_assert(offsetof(ProxySQL_PluginServices, lock_configuration) == sizeof(DiscoveryAbi14),
 	"managed-configuration ABI-15 must follow the complete ABI-14 prefix");
+
+// ABI 17 (#6649) appends the Azure Entra token-source install service after the
+// complete ABI-16 layout; nothing before it may move.
+static_assert(offsetof(ProxySQL_PluginServices, install_azure_entra_token_source) ==
+	offsetof(ProxySQL_PluginServices, destroy_managed_prepared_runtime) + sizeof(void (*)()),
+	"ABI-17 install_azure_entra_token_source must follow the last ABI-16 slot");
+static_assert(sizeof(ProxySQL_PluginServices) ==
+	offsetof(ProxySQL_PluginServices, install_azure_entra_token_source) + sizeof(void (*)()),
+	"ABI-17 install_azure_entra_token_source must be the tail of ProxySQL_PluginServices");
 } // namespace plugin_services_abi_layout_test
 #endif

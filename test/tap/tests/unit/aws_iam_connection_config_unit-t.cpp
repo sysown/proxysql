@@ -59,6 +59,17 @@ void test_valid_rds_endpoint_shapes() {
 		"ISO RDS endpoint is accepted");
 	ok_status(valid_input("instance.abcdef.us-isob-east-1.rds.sc2s.sgov.gov", "us-isob-east-1"),
 		"ISOB RDS endpoint is accepted");
+	// DNS names are case-insensitive (#6649 keeps both token types consistent), but
+	// the signer gets lower case: a SigV4 credential scope of "US-EAST-1" is rejected.
+	const AwsIamConnectionConfigResult upper_endpoint = validate_mysql_aws_iam_connection(
+		valid_input("DB.cluster-x.us-east-1.RDS.amazonaws.com", "us-east-1"));
+	ok(upper_endpoint.status == AwsIamConnectionConfigStatus::OK &&
+		upper_endpoint.key.endpoint == "db.cluster-x.us-east-1.rds.amazonaws.com",
+		"upper-case RDS endpoint is accepted and keyed in lower case");
+	const AwsIamConnectionConfigResult upper_region = validate_mysql_aws_iam_connection(
+		valid_input("db.cluster-x.us-east-1.rds.amazonaws.com", "US-EAST-1"));
+	ok(upper_region.status == AwsIamConnectionConfigStatus::OK && upper_region.key.region == "us-east-1",
+		"upper-case region matches and is keyed in lower case");
 }
 
 void test_validation_failures() {
