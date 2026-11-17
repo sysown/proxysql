@@ -491,13 +491,16 @@ public:
 	}
 
 	// The code that labels this connection's failed connect in the pgsql error counter, as the native
-	// protocol reports it. A timeout leaves no error (08001), and libpq reports its own failures
-	// (refused, DNS, TLS) without a SQLSTATE, which set_error_from_PQerrorMessage() fills with P0001.
+	// protocol reports it. A timeout leaves no error (08001). A connect ProxySQL fails itself (the
+	// backend's TLS could not be handed to a fast forward session) leaves no error either, and libpq
+	// reports its own failures (refused, DNS, TLS) without a SQLSTATE, which
+	// set_error_from_PQerrorMessage() fills with P0001: both are 08006. A P0001 the backend sent keeps it.
 	inline
 	const char* get_connect_error_code_str() const {
 		if (async_state_machine == ASYNC_CONNECT_TIMEOUT)
 			return PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION);
-		if (!native_mode && error_info.code == PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION)
+		if (error_info.sqlstate[0] == '\0' ||
+			(error_without_sqlstate && error_info.code == PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION))
 			return PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE);
 		return error_info.sqlstate;
 	}
@@ -539,7 +542,7 @@ public:
 		}
 	}
 
-	void reset_error() { reset_error_info(error_info, false); }
+	void reset_error() { reset_error_info(error_info, false); error_without_sqlstate = false; }
 
 	bool reset_session_in_txn = false;
 	bool reset_session_in_pipeline = false;
@@ -798,6 +801,8 @@ public:
 
 	PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
+	// error_info came from a libpq failure with no SQLSTATE, which set_error_from_PQerrorMessage() fills with P0001
+	bool error_without_sqlstate = false;
 	PGconn* pgsql_conn;
 	bool native_mode = false;          // true → native wire protocol, false → libpq
 	class PgSQL_Backend_Protocol* bp = NULL;  // owned in native mode only; NULL in libpq mode

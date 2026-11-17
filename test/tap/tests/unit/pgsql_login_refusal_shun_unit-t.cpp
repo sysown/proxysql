@@ -21,11 +21,12 @@
  *  - a failure of the server itself (57P03 starting up, 53300 server full, 42501 from a file
  *    permission or binary upgrade mode) still shuns it;
  *  - every failure is still counted in the server's connect_ERR, and in the pgsql error
- *    counter under its SQLSTATE (it was labelled 9999).
+ *    counter under its SQLSTATE (it was labelled 9999), a P0001 from the backend included.
  *
  * Session: a connect that fails without a backend error is counted by the connection and by the
  * session, both under the code the native protocol gives it: 08001 for a timeout (the session
- * labelled it XXXXX), 08006 for a refused port (libpq mode labelled it P0001).
+ * labelled it XXXXX), 08006 for a refused port (libpq mode labelled it P0001). A connect that
+ * fails with no error at all is labelled 08006 too.
  *
  * Monitor: a server whose last pgsql-monitor_ping_max_failures pings all failed is shunned and
  * its connections killed. Only "password authentication failed" was left out of that count, so
@@ -191,6 +192,8 @@ static PgSQL_SrvC* add_server(int hid, unsigned short port) {
 	opts.max_conns = 100;
 	opts.use_ssl = 0;
 	PgHGM->wrlock();
+	// find_server_in_hg() searches the last hostgroup when `hid` has none yet: create it first.
+	PgHGM->MyHGC_lookup(hid);
 	const int rc = PgHGM->create_new_server_in_hg(hid, info, opts);
 	PgHGM->wrunlock();
 	if (rc != 0) return nullptr;
@@ -286,6 +289,10 @@ static const Case CASES[] = {
 		PGSQL_ERROR_CODES::ERRCODE_TOO_MANY_CONNECTIONS, true, "server connection limit" },
 	{ "57P03", "the database system is starting up",
 		PGSQL_ERROR_CODES::ERRCODE_CANNOT_CONNECT_NOW, true, "server starting up" },
+	// A P0001 the backend sends (a RAISE EXCEPTION in a PostgreSQL 17 login event trigger) keeps its
+	// label in libpq mode too: only a libpq failure without a SQLSTATE is labelled 08006.
+	{ "P0001", "logins are closed",
+		PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, true, "RAISE EXCEPTION in a login event trigger" },
 };
 static const int CHECKS_PER_CASE = 4;
 
@@ -467,9 +474,11 @@ static void check_session_connect_failure(PgSQL_Thread* thr, int hid, bool nativ
 // is longer than pgsql-shun_recovery_time_sec, shun_and_killall() moves time_last_detected_error
 // forward by the difference. It read MySQL's monitor variables, which a PgSQL monitor thread never
 // sets, so the server came back before the next ping.
-static void check_monitor_shun_recovery_time(int hid) {
-	PgSQL_SrvC* srv = add_server(hid, 2);
-	if (srv == nullptr) BAIL_OUT("could not add the test server to hostgroup %d", hid);
+// The same server in two hostgroups: each one waits out the same 30 s, not 30 s more per hostgroup.
+static void check_monitor_shun_recovery_time(int hid1, int hid2) {
+	PgSQL_SrvC* srv1 = add_server(hid1, 2);
+	PgSQL_SrvC* srv2 = add_server(hid2, 2);
+	if (srv1 == nullptr || srv2 == nullptr) BAIL_OUT("could not add the test server to hostgroups %d and %d", hid1, hid2);
 	const bool saved_enabled = pgsql_thread___monitor_enabled;
 	const int saved_interval = pgsql_thread___monitor_ping_interval;
 	pgsql_thread___monitor_enabled = true;
@@ -479,10 +488,23 @@ static void check_monitor_shun_recovery_time(int hid) {
 	const time_t after = time(NULL);
 	pgsql_thread___monitor_enabled = saved_enabled;
 	pgsql_thread___monitor_ping_interval = saved_interval;
-	const time_t last = srv->time_last_detected_error;
-	ok(shunned && srv->status == MYSQL_SERVER_STATUS_SHUNNED && last >= before + 20 && last <= after + 20,
-		"monitor: a server shunned by its pings waits out the 30 s ping interval, not the 10 s recovery time "
-		"(time_last_detected_error = now%+ld s)", (long)(last - after));
+	const time_t last1 = srv1->time_last_detected_error;
+	const time_t last2 = srv2->time_last_detected_error;
+	ok(shunned && srv1->status == MYSQL_SERVER_STATUS_SHUNNED && srv2->status == MYSQL_SERVER_STATUS_SHUNNED &&
+		last1 >= before + 20 && last1 <= after + 20 && last2 == last1,
+		"monitor: a server shunned by its pings waits out the 30 s ping interval, not the 10 s recovery time, "
+		"in each of its hostgroups (time_last_detected_error = now%+ld s and now%+ld s)",
+		(long)(last1 - after), (long)(last2 - after));
+}
+
+// A connect that fails with no error set (the backend's TLS could not be handed to a fast forward
+// session) is labelled as a connection failure, 08006, not XXXXX.
+static void check_connect_failure_without_error() {
+	Conn* c = new Conn(false);
+	c->async_state_machine = ASYNC_CONNECT_FAILED;
+	const std::string label = c->get_connect_error_code_str();
+	delete c;
+	ok(label == "08006", "a connect that failed with no error is labelled 08006 (got '%s')", label.c_str());
 }
 
 // --- monitor pings ---------------------------------------------------------------------------
@@ -568,7 +590,7 @@ int main() {
 
 	const int ncases = sizeof(CASES) / sizeof(CASES[0]);
 	const int npings = sizeof(PINGS) / sizeof(PINGS[0]);
-	plan(2 * ncases * CHECKS_PER_CASE + 2 * 2 + 1 + 2 * 2 * 2 + 1 + npings);
+	plan(2 * ncases * CHECKS_PER_CASE + 2 * 2 + 1 + 2 * 2 * 2 + 1 + 1 + npings);
 
 	int hid = 9600;
 	for (bool native : { true, false }) {
@@ -580,11 +602,13 @@ int main() {
 		check_empty_password(sess, hid++, native);
 	}
 	check_undefined_database(hid++);
-	check_monitor_shun_recovery_time(hid++);
+	check_monitor_shun_recovery_time(hid, hid + 1);
+	hid += 2;
 	for (bool native : { true, false }) {
 		check_session_connect_failure(thr, hid++, native, true);
 		check_session_connect_failure(thr, hid++, native, false);
 	}
+	check_connect_failure_without_error();
 	check_monitor_pings();
 
 	return exit_status();

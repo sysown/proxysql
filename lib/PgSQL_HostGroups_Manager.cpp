@@ -3929,6 +3929,19 @@ void PgSQL_HostGroups_Manager::read_only_action_v2(
 // return true if the status was changed
 bool PgSQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 	time_t t = time(NULL);
+	// if Monitor is enabled and pgsql-monitor_ping_interval is
+	// set too high, ProxySQL will unshun hosts that are not
+	// available. For this reason time_last_detected_error will
+	// be tuned in the future.
+	// Tuned once, before the loop: the same server in several hostgroups waits the same time.
+	if (pgsql_thread___monitor_enabled) {
+		int a = pgsql_thread___shun_recovery_time_sec;
+		int b = pgsql_thread___monitor_ping_interval;
+		b = b/1000;
+		if (b > a) {
+			t = t + (b - a);
+		}
+	}
 	bool ret = false;
 	wrlock();
 	PgSQL_SrvC *mysrvc=NULL;
@@ -3957,18 +3970,6 @@ bool PgSQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 							break;
 						default:
 							break;
-					}
-					// if Monitor is enabled and pgsql-monitor_ping_interval is
-					// set too high, ProxySQL will unshun hosts that are not
-					// available. For this reason time_last_detected_error will
-					// be tuned in the future
-					if (pgsql_thread___monitor_enabled) {
-						int a = pgsql_thread___shun_recovery_time_sec;
-						int b = pgsql_thread___monitor_ping_interval;
-						b = b/1000;
-						if (b > a) {
-							t = t + (b - a);
-						}
 					}
 					mysrvc->time_last_detected_error = t;
 				}

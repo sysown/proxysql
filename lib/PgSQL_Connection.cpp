@@ -6469,6 +6469,7 @@ void PgSQL_Connection::set_error_from_PQerrorMessage() {
 	std::string_view sqlstate = lookup("C", PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION));
 	std::string_view primary_msg = lookup("M", "");
 	std::string_view lib_errmsg = lookup("LE", "");
+	error_without_sqlstate = lookup("C", "").empty();
 
 	// we are currently distinguishing between server errors and library-generated errors. 
 	// A library-generated error is only set when a server error is not available.

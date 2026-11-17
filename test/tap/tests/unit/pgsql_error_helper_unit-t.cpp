@@ -558,7 +558,7 @@ int main() {
 	plan(141);
 	test_init_minimal();
 
-	test_get_error_code();                  // 8
+	test_get_error_code();                  // 10
 	test_get_severity();                    // 9
 	test_fill_error_info_syntax_error();    // 6
 	test_fill_error_info_connection_exception(); // 4
