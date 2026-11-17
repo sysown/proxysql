@@ -19,9 +19,11 @@
  *    option the client sent that PostgreSQL rejects (22023, 42704, 55P02, 25001, 42602, 42601,
  *    0A000, 42501 "permission denied to set");
  *  - a failure of the server itself (57P03 starting up, 53300 server full, 42501 from a file
- *    permission or binary upgrade mode) still shuns it;
+ *    permission or binary upgrade mode) still shuns it, and so does a 42501 or 53300 without a
+ *    message;
  *  - every failure is still counted in the server's connect_ERR, and in the pgsql error
- *    counter under its SQLSTATE (it was labelled 9999), a P0001 from the backend included.
+ *    counter under its SQLSTATE (it was labelled 9999), a P0001 from the backend included; the
+ *    monitor's error numbers label its counts, and an error without a SQLSTATE is XXXXX.
  *
  * Session: a connect that fails without a backend error is counted by the connection and by the
  * session, both under the code the native protocol gives it: 08001 for a timeout (the session
@@ -31,7 +33,9 @@
  * Monitor: a server whose last pgsql-monitor_ping_max_failures pings all failed is shunned and
  * its connections killed. Only "password authentication failed" was left out of that count, so
  * a monitor login refused for any other reason shunned every server. Checked through
- * server_responds_to_ping(), which runs the shunning query itself.
+ * server_responds_to_ping(), which runs the shunning query itself. shun_and_killall() delays the
+ * server's return only when the monitor is enabled and its ping interval is longer than
+ * pgsql-shun_recovery_time_sec.
  */
 
 #include "tap.h"
@@ -362,6 +366,19 @@ static void check_undefined_database(int hid) {
 		CONNECTS, (int)srv->status);
 }
 
+// 42501 and 53300 are told apart by the message. Without one, nothing says the client caused it:
+// the failure counts.
+static void check_refusal_without_message(int hid, unsigned short port, PGSQL_ERROR_CODES code) {
+	PgSQL_SrvC* srv = add_server(hid, port);
+	if (srv == nullptr) BAIL_OUT("could not add the test server to hostgroup %d", hid);
+	for (int i = 0; i < CONNECTS; i++) {
+		srv->connect_error(code, nullptr);
+	}
+	ok(srv->status == MYSQL_SERVER_STATUS_SHUNNED,
+		"%s without a message: the server is shunned after %d failures (status=%d)",
+		PgSQL_Error_Helper::get_error_code(code), CONNECTS, (int)srv->status);
+}
+
 // --- session connect failures -----------------------------------------------------------------
 
 static double error_count(const std::string& metric_id) {
@@ -497,6 +514,43 @@ static void check_monitor_shun_recovery_time(int hid1, int hid2) {
 		(long)(last1 - after), (long)(last2 - after));
 }
 
+// Without the monitor, or with a ping interval no longer than pgsql-shun_recovery_time_sec, the
+// next ping comes in time: the server waits out the recovery time from now.
+static void check_monitor_shun_no_delay(int hid, unsigned short port, bool enabled, int interval_ms, const char* what) {
+	PgSQL_SrvC* srv = add_server(hid, port);
+	if (srv == nullptr) BAIL_OUT("could not add the test server to hostgroup %d", hid);
+	const bool saved_enabled = pgsql_thread___monitor_enabled;
+	const int saved_interval = pgsql_thread___monitor_ping_interval;
+	pgsql_thread___monitor_enabled = enabled;
+	pgsql_thread___monitor_ping_interval = interval_ms;
+	const time_t before = time(NULL);
+	const bool shunned = PgHGM->shun_and_killall(const_cast<char*>("127.0.0.1"), port);
+	const time_t after = time(NULL);
+	pgsql_thread___monitor_enabled = saved_enabled;
+	pgsql_thread___monitor_ping_interval = saved_interval;
+	const time_t last = srv->time_last_detected_error;
+	ok(shunned && srv->status == MYSQL_SERVER_STATUS_SHUNNED && last >= before && last <= after,
+		"monitor: %s, a shunned server waits out the recovery time from now (time_last_detected_error = now%+ld s)",
+		what, (long)(last - after));
+}
+
+// The monitor counts its own failures under ProxySQL's error numbers, through the counter's int
+// overload; any other caller that has no SQLSTATE is counted as XXXXX.
+static void check_error_counter_labels(int hid) {
+	char addr[] = "127.0.0.1";
+	PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, hid, addr, 7, (unsigned int)ER_PROXYSQL_CONNECT_TIMEOUT);
+	const std::string id = std::to_string(hid) + ":127.0.0.1:7:" + std::to_string(ER_PROXYSQL_CONNECT_TIMEOUT);
+	const auto& errors = PgHGM->status.p_pgsql_errors_map;
+	const auto it = errors.find(id);
+	const double timeouts = (it == errors.end()) ? 0 : it->second->Value();
+	ok(timeouts == 1, "error counter: the monitor's error number labels its count (%s = %.0f)", id.c_str(), timeouts);
+	PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, hid, addr, 8, std::string());
+	const std::string unknown_id = std::to_string(hid) + ":127.0.0.1:8:XXXXX";
+	const auto it2 = errors.find(unknown_id);
+	const double unknown = (it2 == errors.end()) ? 0 : it2->second->Value();
+	ok(unknown == 1, "error counter: an error without a SQLSTATE is labelled XXXXX (%s = %.0f)", unknown_id.c_str(), unknown);
+}
+
 // A connect that fails with no error set (the backend's TLS could not be handed to a fast forward
 // session) is labelled as a connection failure, 08006, not XXXXX.
 static void check_connect_failure_without_error() {
@@ -590,7 +644,7 @@ int main() {
 
 	const int ncases = sizeof(CASES) / sizeof(CASES[0]);
 	const int npings = sizeof(PINGS) / sizeof(PINGS[0]);
-	plan(2 * ncases * CHECKS_PER_CASE + 2 * 2 + 1 + 2 * 2 * 2 + 1 + 1 + npings);
+	plan(2 * ncases * CHECKS_PER_CASE + 2 * 2 + 1 + 2 + 1 + 2 + 2 * 2 * 2 + 1 + 2 + npings);
 
 	int hid = 9600;
 	for (bool native : { true, false }) {
@@ -602,13 +656,18 @@ int main() {
 		check_empty_password(sess, hid++, native);
 	}
 	check_undefined_database(hid++);
+	check_refusal_without_message(hid++, 3, PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE);
+	check_refusal_without_message(hid++, 4, PGSQL_ERROR_CODES::ERRCODE_TOO_MANY_CONNECTIONS);
 	check_monitor_shun_recovery_time(hid, hid + 1);
 	hid += 2;
+	check_monitor_shun_no_delay(hid++, 5, true, 5000, "a 5 s ping interval within the 10 s recovery time");
+	check_monitor_shun_no_delay(hid++, 6, false, 30000, "with the monitor disabled");
 	for (bool native : { true, false }) {
 		check_session_connect_failure(thr, hid++, native, true);
 		check_session_connect_failure(thr, hid++, native, false);
 	}
 	check_connect_failure_without_error();
+	check_error_counter_labels(hid++);
 	check_monitor_pings();
 
 	return exit_status();
