@@ -232,7 +232,7 @@ bool uninstall_global_aws_iam_token_source(AwsIamTokenSource *expected_source);
 // follow the AWS_IAM slot only.
 /**
  * @brief Publish a source in a slot without ownership. Refused while the slot
- *   retires or holds a plugin-owned source.
+ *   retires, or when the slot holds a different plugin-owned source.
  * @param provider The token slot.
  * @param source The source, or nullptr to clear the slot.
  */
@@ -252,7 +252,7 @@ bool install_global_backend_token_source(BackendTokenProvider, AwsIamTokenSource
  *   lease ends, then destroys it.
  * @param provider The token slot.
  * @param expected_source The source the caller installed.
- * @return false if the slot holds another source or none.
+ * @return false unless expected_source is the plugin-installed source of the slot.
  */
 bool uninstall_global_backend_token_source(BackendTokenProvider, AwsIamTokenSource *expected_source);
 /**

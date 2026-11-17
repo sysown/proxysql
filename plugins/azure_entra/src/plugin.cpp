@@ -73,8 +73,7 @@ bool init(ProxySQL_PluginServices *services) {
 
 bool start() { return true; }
 
-// Core retires the source at process shutdown; the uninstall service is only
-// for rolling back a failed init (include/ProxySQL_Plugin.h).
+// Core retires the source at process shutdown.
 bool stop() { return true; }
 
 const char *status_json() {
