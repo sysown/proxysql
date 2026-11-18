@@ -3739,6 +3739,8 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 	}
 
 	if (vars1.password == NULL) {
+		if ((*myds)->sess->session_type == PROXYSQL_SESSION_DUCKDB)
+			return false;
 		// this is a workaround for bug #603
 		if (
 			((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN)
@@ -3746,8 +3748,6 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			((*myds)->sess->session_type == PROXYSQL_SESSION_STATS)
 			||
 			((*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE)
-			||
-			((*myds)->sess->session_type == PROXYSQL_SESSION_DUCKDB)
 		) {
 			PPHR_5passwordFalse_0(ret, vars1, reply, account_details);
 		} else {

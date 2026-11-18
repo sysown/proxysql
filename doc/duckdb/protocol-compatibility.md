@@ -125,7 +125,8 @@ Other statements, including DuckDB-native `SET` commands, go to DuckDB.
 
 Both DuckDB listeners use the dedicated `PROXYSQL_SESSION_DUCKDB` core session
 type. They authenticate using frontend credentials and dispatch to DuckDB's
-handler. Authentication audit events use the `DuckDB_*` prefix for MySQL and
+handler. Monitoring credentials are scoped to the legacy listeners.
+Authentication audit events use the `DuckDB_*` prefix for MySQL and
 `PGSQL_DuckDB_*` for PostgreSQL.
 
 With `duckdb-mysql_dialect=mysql_analytical`, MySQL database names select
