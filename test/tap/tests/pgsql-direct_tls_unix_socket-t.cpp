@@ -28,6 +28,7 @@
 #include "proxysql_utils.h"
 #include "tap.h"
 #include "utils.h"
+#include "pgsql_raw_client.h"
 
 using std::string;
 namespace fs = std::filesystem;
@@ -105,29 +106,12 @@ int unix_connect(const fs::path& socket_path) {
 	return fd;
 }
 
-/** Protocol 3.0 StartupMessage for tapuser/postgres. */
-std::vector<uint8_t> startup_packet() {
-	std::vector<uint8_t> pkt(4);
-	pkt.insert(pkt.end(), { 0x00, 0x03, 0x00, 0x00 });
-	for (const string& p : { string("user"), string("tapuser"), string("database"), string("postgres") }) {
-		pkt.insert(pkt.end(), p.begin(), p.end());
-		pkt.push_back(0);
-	}
-	pkt.push_back(0);
-	const uint32_t len = pkt.size();
-	pkt[0] = (len >> 24) & 0xFF;
-	pkt[1] = (len >> 16) & 0xFF;
-	pkt[2] = (len >> 8) & 0xFF;
-	pkt[3] = len & 0xFF;
-	return pkt;
-}
-
 /** Plaintext startup over the Unix socket; returns the type byte of the first reply, '?' when none. */
 char plaintext_startup_reply(const fs::path& socket_path) {
 	char type = '?';
 	const int fd = unix_connect(socket_path);
 	if (fd == -1) return type;
-	const std::vector<uint8_t> pkt = startup_packet();
+	const std::vector<uint8_t> pkt = startup_packet(0x00030000, "tapuser");
 	if (send(fd, pkt.data(), pkt.size(), MSG_NOSIGNAL) == static_cast<ssize_t>(pkt.size())) {
 		if (recv(fd, &type, 1, 0) != 1) type = '?';
 	}
