@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 #include "libpq-fe.h"
 #include "pg_lite_client.h"
@@ -339,7 +340,7 @@ static void wire_checks(const char* host, const char* port, const char* user, co
         BAIL_OUT("wire protocol connection failed");
     }
 }
-int main() {
+int main(int argc, char** argv) {
     prepared_owned_fixture::Fixture fixture("native", false);
     const char* host = env("TAP_PGSQL_ADMINHOST"), *port = env("TAP_PGSQL_ADMINPORT");
     const char* user = env("TAP_PGSQL_ADMINUSERNAME"), *pass = env("TAP_PGSQL_ADMINPASSWORD");
@@ -347,6 +348,26 @@ int main() {
     const char* su = env("TAP_PGSQL_STATSUSERNAME"), *sp = env("TAP_PGSQL_STATSPASSWORD");
     if (!!su != !!sp) { diag("Set both optional stats credentials"); return EXIT_FAILURE; }
     alarm(60); // Bound connect, DNS and libpq operations as well as socket reads.
+    if (argc == 2 && !strcmp(argv[1], "--expect-legacy")) {
+        plan(su ? 4 : 2);
+        for (const auto& credentials : {std::pair{user, pass}, std::pair{su, sp}}) {
+            if (!credentials.first) continue;
+            PGconn* connection = connect_user(host, port, credentials.first, credentials.second);
+            if (PQstatus(connection) != CONNECTION_OK) BAIL_OUT("Admin/STATS connection failed");
+            const char* value = "17";
+            PGresult* result = PQexecParams(connection, "SELECT $1::int", 1, nullptr,
+                                            &value, nullptr, nullptr, 0);
+            ok(state(result, "0A000"), "legacy PostgreSQL Admin/STATS rejects parameterized SELECT");
+            PQclear(result);
+            result = PQexec(connection, "SELECT 17");
+            ok(PQresultStatus(result) == PGRES_TUPLES_OK && PQntuples(result) == 1 &&
+               !strcmp(PQgetvalue(result, 0, 0), "17"),
+               "legacy PostgreSQL Admin/STATS still accepts simple queries after Sync");
+            PQclear(result);
+            PQfinish(connection);
+        }
+        return exit_status();
+    }
     constexpr int wire_count = 19;
     plan(32 + wire_count + (su ? 23 + wire_count : 0) + (fixture.admin ? 7 : 0));
     if (fixture.admin) {

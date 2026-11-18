@@ -1276,6 +1276,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 			proxy_load_sqlite3 = (int (*)()) dlsym(handle_sqlite3_plugin, "proxy_load_sqlite3"); dlsym_error = dlerror();
 			if (dlsym_error!=NULL) { cerr << "Cannot load symbol proxy_load_sqlite3: " << dlsym_error << '\n'; exit(EXIT_FAILURE); }
 			(*proxy_load_sqlite3)();
+#ifdef PROXYSQL40
 			// An older SQLite plugin may not expose this optional capability.
 			// Preserve a pointer supplied by its loader and consume optional lookup
 			// errors so they cannot contaminate later required symbol checks.
@@ -1289,6 +1290,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 				proxy_sqlite3_set_authorizer = reinterpret_cast<decltype(proxy_sqlite3_set_authorizer)>(dlsym(handle_sqlite3_plugin, "sqlite3_set_authorizer"));
 				dlerror();
 			}
+#endif
 		}
 		if (handle_sqlite3_plugin==NULL || dlsym_error) {
 			proxy_error("Unable to load SQLite3 plugin from %s\n", plugin_name);
@@ -1347,10 +1349,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_bind_null);
 	assert(proxy_sqlite3_bind_text);
 	assert(proxy_sqlite3_bind_blob);
-	assert(proxy_sqlite3_bind_parameter_count);
 	assert(proxy_sqlite3_column_name);
-	assert(proxy_sqlite3_column_blob);
-	assert(proxy_sqlite3_column_decltype);
 	assert(proxy_sqlite3_column_text);
 	assert(proxy_sqlite3_column_bytes);
 	assert(proxy_sqlite3_column_type);
@@ -1379,7 +1378,12 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_prepare_v2);
 	assert(proxy_sqlite3_open_v2);
 	assert(proxy_sqlite3_exec);
+#ifdef PROXYSQL40
+	assert(proxy_sqlite3_bind_parameter_count);
+	assert(proxy_sqlite3_column_blob);
+	assert(proxy_sqlite3_column_decltype);
 	assert(proxy_sqlite3_stmt_readonly);
+#endif
 	{
 		/* moved here, so if needed by multiple modules it applies to all of them */
 		int i=(*proxy_sqlite3_config)(SQLITE_CONFIG_URI, 1);

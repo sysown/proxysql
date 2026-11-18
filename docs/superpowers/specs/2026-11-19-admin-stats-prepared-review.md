@@ -168,6 +168,21 @@ All 11 Makefile dependency checks pass with the restored suite registered.
   where the test expected 0. The v3.0 baseline failed the same assertions
   with the same values. [Integration](https://github.com/sysown/proxysql/actions/runs/44392506978)
 
+## Build flag
+
+`PROXYSQL40=1` enables the DuckDB plugin chassis and the MySQL and
+PostgreSQL Admin/STATS prepared providers. The default build uses legacy
+Admin/STATS command handling. Run both Admin wire suites with
+`--expect-legacy` and `TAP_PROXYSQL_BINARY` pointing to a default-build
+binary to check prepare rejection and simple-query recovery for both roles.
+Run the same suites without that option against a `PROXYSQL40=1` binary
+to check prepared execution.
+
+All eight legacy-mode checks passed on the gated 3.0 build and on the
+`663e84aa6` baseline. The previous draft failed the four prepare-rejection
+checks. A `PROXYSQL40=1` debug build passed 42 MySQL Admin/STATS, 100
+PostgreSQL Admin/STATS, 10 two-node Cluster, and 325 DuckDB assertions.
+
 ## Proposed MySQL prepared-write slice
 
 The proposed first write change covers parameterized SQLite-native

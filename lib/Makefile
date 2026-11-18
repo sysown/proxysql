@@ -179,7 +179,11 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	Query_Processor_ParserSQL.oo \
 	proxy_sqlite3_symbols.oo
 
-_OBJ_CXX += Embedded_Prepared.oo Embedded_Quota.oo Embedded_Plugin_Adapter.oo Embedded_Plugin_Service.oo Embedded_MySQL_Result.oo Embedded_MySQL_Prepared.oo Embedded_PgSQL_Value.oo Embedded_PgSQL_Result.oo Embedded_PgSQL_Prepared.oo Embedded_PgSQL_Frontend.oo Embedded_SQLite_Adapter.oo Embedded_SQLite_Policy.oo Embedded_Admin_SQLite_Policy.oo Embedded_Admin_Statistics.oo Embedded_Admin_PgSQL_Prepared.oo Embedded_Admin_MySQL_Prepared.oo
+_OBJ_CXX += Embedded_Prepared.oo Embedded_Quota.oo Embedded_Plugin_Adapter.oo Embedded_Plugin_Service.oo Embedded_MySQL_Result.oo Embedded_MySQL_Prepared.oo Embedded_PgSQL_Value.oo Embedded_PgSQL_Result.oo Embedded_PgSQL_Prepared.oo Embedded_PgSQL_Frontend.oo
+
+ifeq ($(PROXYSQL40),1)
+_OBJ_CXX += Embedded_SQLite_Adapter.oo Embedded_SQLite_Policy.oo Embedded_Admin_SQLite_Policy.oo Embedded_Admin_Statistics.oo Embedded_Admin_PgSQL_Prepared.oo Embedded_Admin_MySQL_Prepared.oo
+endif
 
 ifeq ($(PROXYSQL31),1)
 _OBJ_CXX += MySQL_Caching_Sha2_RSA.oo MySQL_Server_Version_By_Interface.oo

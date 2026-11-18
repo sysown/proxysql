@@ -332,7 +332,9 @@ private:
 	// rejection ErrorResponse was sent: further extended-query messages are
 	// discarded until Sync, which is answered with a single ReadyForQuery.
 	bool admin_extq_rejected { false };
+#ifdef PROXYSQL40
 	bool admin_prepared_registered { false };
+#endif
 	std::queue<PktType> extended_query_frame;
 	std::unique_ptr<const PgSQL_Bind_Message> bind_waiting_for_execute;
 

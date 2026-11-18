@@ -604,7 +604,9 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 
 	 // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 	bool use_ldap_auth;
+#ifdef PROXYSQL40
 	bool admin_prepared_registered { false };
+#endif
 
 	/**
 	 * @brief Set to @c true when this session's credential came from the

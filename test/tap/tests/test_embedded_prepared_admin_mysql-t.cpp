@@ -121,7 +121,7 @@ struct Cleanup {
   query(admin, "LOAD MYSQL SERVERS TO RUNTIME");
  }
 };
-int main() {
+int main(int argc, char** argv) {
     prepared_owned_fixture::Fixture fixture("native", false);
  plan(NO_PLAN);
  const char* host = required("TAP_HOST");
@@ -131,6 +131,21 @@ int main() {
  MYSQL* a = mysql_init(nullptr); MYSQL* st = mysql_init(nullptr);
  if (!a || !st || !mysql_real_connect(a, host, au, ap, nullptr, port, nullptr, 0) ||
      !mysql_real_connect(st, host, su, sp, nullptr, port, nullptr, 0)) BAIL_OUT("Admin/STATS connection failed");
+ if (argc == 2 && !strcmp(argv[1], "--expect-legacy")) {
+  for (MYSQL* connection : {a, st}) {
+   MYSQL_STMT* stmt = mysql_stmt_init(connection);
+   if (!stmt) BAIL_OUT("cannot allocate a MySQL prepared statement");
+   const char sql[] = "SELECT ?";
+   ok(mysql_stmt_prepare(stmt, sql, sizeof(sql) - 1) != 0,
+      "legacy MySQL Admin/STATS rejects parameterized prepare");
+   mysql_stmt_close(stmt);
+   ok(duckdb_replica_test::cell(connection, "SELECT 17") == "17",
+      "legacy MySQL Admin/STATS still accepts simple queries");
+  }
+  mysql_close(st);
+  mysql_close(a);
+  return exit_status();
+ }
  if (fixture.admin) {
   MYSQL* frontend = duckdb_replica_test::connect(host, fixture.m, "fixture_client", "fixture_client");
   ok(frontend && admin_login_denied(host, port, "fixture_client", "fixture_client"),
