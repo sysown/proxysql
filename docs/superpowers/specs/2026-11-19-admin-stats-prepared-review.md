@@ -104,7 +104,7 @@ bidirectional synchronization, and exceeded the five-second shutdown
 deadline on both nodes. A temporary control that used simple queries in
 place of prepared statements reproduced the two shutdown timeouts on
 both `663e84aa6` and `af040de87`. The control passed the other eight
-checks on both heads. Sanitizer integration CI remains pending for the split branch.
+checks on both heads.
 Prepared MySQL writes require their own review.
 
 ## Authorization and packet regressions
@@ -144,6 +144,29 @@ The restored suite and the 45-check plugin service suite both also pass
 under local ASan and TSan. These runs exercise the controllers and their
 ownership and cleanup paths without launching a full server.
 All 11 Makefile dependency checks pass with the restored suite registered.
+
+## CI on the published split
+
+- On DuckDB commit `e0a43b209`, the TSan unit job passed and all 76
+  `legacy-g4` test programs passed, including the five DuckDB wire suites.
+  The integration step exited with code 6 after the tests, during `fastcov`
+  collection. The shared `GH-Actions` checkout at `ccf920c95` excludes
+  `plugins/duckdb`. Replaying the run's counter artifacts with that checkout
+  reproduced the 31 missing-source errors and exit code 6. Adding
+  `plugins/duckdb` to the sparse checkout made the same replay exit 0.
+  [TSan](https://github.com/sysown/proxysql/actions/runs/44392507558) ·
+  [Integration](https://github.com/sysown/proxysql/actions/runs/44392507396)
+- The first DuckDB ASan job ran out of runner disk space while linking,
+  before running tests. GitHub accepted one retry of the failed job.
+  [ASan attempts](https://github.com/sysown/proxysql/actions/runs/44392507382)
+- On Admin draft commit `07ec29f59`, the ASan and TSan unit jobs passed,
+  including the shared, MySQL, and PostgreSQL prepared suites.
+  [ASan](https://github.com/sysown/proxysql/actions/runs/44392535868) ·
+  [TSan](https://github.com/sysown/proxysql/actions/runs/44392535796)
+- DuckDB `legacy-g6` failed assertions 341 and 692 of
+  `pgsql-query_cache_test-t`. Both had `Query_Cache_count_GET` equal to 1
+  where the test expected 0. The v3.0 baseline failed the same assertions
+  with the same values. [Integration](https://github.com/sysown/proxysql/actions/runs/44392506978)
 
 ## Proposed MySQL prepared-write slice
 
