@@ -258,6 +258,19 @@ int main(int argc, char **argv) {
                                  "170141183460469231731687303715884105727','0'),(3,NULL,NULL)";
         mysql_exec(f.mysql, "INSERT INTO wide_probe VALUES " + wide_rows);
         duck_exec(f.duck, "INSERT INTO wide_probe VALUES " + wide_rows);
+        mysql_exec(f.mysql,
+                   "CREATE TABLE date_probe (id BIGINT PRIMARY KEY, d DATE, dt DATETIME(6), txt "
+                   "VARCHAR(10))");
+        duck_exec(f.duck,
+                  "CREATE TABLE date_probe (id BIGINT PRIMARY KEY, d DATE, dt TIMESTAMP, txt "
+                  "VARCHAR)");
+        const string date_rows = "(1,'1000-01-01','1000-01-01 00:00:00.000000','x'),"
+                                 "(2,'2024-02-29','2024-02-29 00:00:00.000000','x'),"
+                                 "(3,'2024-03-01','2024-03-01 23:59:59.999999','x'),"
+                                 "(4,'9999-12-31','9999-12-31 23:59:59.999999','x'),"
+                                 "(5,NULL,NULL,NULL)";
+        mysql_exec(f.mysql, "INSERT INTO date_probe VALUES " + date_rows);
+        duck_exec(f.duck, "INSERT INTO date_probe VALUES " + date_rows);
         DuckDBMySQLSelectContext context;
         size_t calls = 0;
         context.resolve_relation = [&](const vector<string> &names, DuckDBMySQLRelation &r) {
@@ -268,6 +281,16 @@ int main(int argc, char **argv) {
                 r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
                              {"h", {DuckDBMySQLTypeKind::exact_decimal, 39, 0}},
                              {"u", {DuckDBMySQLTypeKind::exact_decimal, 39, 0}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"date_probe"}) {
+                r.canonical_name = {"date_probe"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"d", {DuckDBMySQLTypeKind::date, 0, 0}},
+                             {"dt", {DuckDBMySQLTypeKind::datetime, 0, 0}},
+                             {"txt", {DuckDBMySQLTypeKind::text, 0, 0}}};
                 r.unique_keys = {{"id"}};
                 return true;
             }
@@ -313,6 +336,8 @@ int main(int argc, char **argv) {
             bmp += "é";
         const std::string bmp256 = "SELECT 1 AS `" + bmp + "`";
         const std::string aggregate255 = "SELECT COUNT(" + std::string(247, ' ') + "*)";
+        const std::string date_format255 = "SELECT DATE_FORMAT(" + std::string(233, ' ') +
+                                           "d,'%Y-%m') FROM date_probe ORDER BY id";
         const Case cases[] = {
             {"huge extrema projection", "SELECT h,u FROM wide_probe ORDER BY id"},
             {"huge star", "SELECT * FROM wide_probe ORDER BY id"},
@@ -377,6 +402,27 @@ int main(int argc, char **argv) {
                                     "id > 9 HAVING COUNT(*) = 0"},
             {"empty grouped rows",
              "SELECT grp,COUNT(*) AS n FROM `odd``table` WHERE id > 9 GROUP BY grp ORDER BY grp"},
+            {"date format date", "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe ORDER BY id"},
+            {"date format alias",
+             "SELECT DATE_FORMAT(d,'%Y-%m') AS ym, id FROM date_probe ORDER BY id"},
+            {"date format mixed case", "SELECT date_format(d,'%Y-%m') FROM date_probe ORDER BY id"},
+            {"date format backtick label",
+             "SELECT DATE_FORMAT(`d`,'%Y-%m') FROM date_probe ORDER BY id"},
+            {"date format spaces", "SELECT DATE_FORMAT( d , '%Y-%m' ) FROM date_probe ORDER BY id"},
+            {"date format qualified",
+             "SELECT p.`d`, DATE_FORMAT(p.`d`,'%Y-%m') AS ym FROM date_probe AS p ORDER BY p.id"},
+            {"date format mixed projection",
+             "SELECT id, DATE_FORMAT(d,'%Y-%m'), d FROM date_probe ORDER BY id"},
+            {"date format duplicate aliases",
+             "SELECT DATE_FORMAT(d,'%Y-%m') AS x, DATE_FORMAT(d,'%Y-%m') AS x FROM date_probe "
+             "ORDER BY id"},
+            {"date format comma limit",
+             "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe ORDER BY id LIMIT 1, 2"},
+            {"date format null positions",
+             "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe WHERE id >= 4 ORDER BY id"},
+            {"date format empty",
+             "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe WHERE id > 99 ORDER BY id"},
+            {"date format 255-byte label", date_format255.c_str()},
         };
         int failures = 0, comparisons = 0;
         for (auto &entry : cases) {
@@ -409,14 +455,27 @@ int main(int argc, char **argv) {
                 ++failures;
         }
         // Rejecting input must not reach either engine.
-        const std::vector<std::string> rejected = {"SELECT nextval('x')",
-                                                   "SELECT @x",
-                                                   "SELECT 1; SELECT 2",
-                                                   "SELECT id FROM wide_probe WHERE h = 1.0",
-                                                   "SELECT 1 AS `" + std::string(257, 'a') + "`",
-                                                   "SELECT 1 AS `x😀y`",
-                                                   "SELECT 1 AS ` x`",
-                                                   "SELECT COUNT(" + std::string(248, ' ') + "*)"};
+        const std::vector<std::string> rejected = {
+            "SELECT nextval('x')",
+            "SELECT @x",
+            "SELECT 1; SELECT 2",
+            "SELECT id FROM wide_probe WHERE h = 1.0",
+            "SELECT 1 AS `" + std::string(257, 'a') + "`",
+            "SELECT 1 AS `x😀y`",
+            "SELECT 1 AS ` x`",
+            "SELECT COUNT(" + std::string(248, ' ') + "*)",
+            "SELECT DATE_FORMAT(dt,'%Y-%m') FROM date_probe ORDER BY id",
+            "SELECT DATE_FORMAT(d,'%Y-%m'), DATE_FORMAT(dt,'%Y-%m') FROM date_probe",
+            "SELECT DATE_FORMAT(d,'%Y-%m-%d') FROM date_probe",
+            "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe "
+            "WHERE DATE_FORMAT(d,'%Y-%m') IS NULL",
+            "SELECT DATE_FORMAT(d) FROM date_probe",
+            "SELECT DATE_FORMAT(d,'%Y-%m','x') FROM date_probe",
+            "SELECT DATE_FORMAT(txt,'%Y-%m') FROM date_probe",
+            "SELECT DATE_FORMAT (dt,'%Y-%m') FROM date_probe",
+            "SELECT DATE_FORMAT(d, \"%Y-%m\") FROM date_probe",
+            "SELECT DATE_FORMAT(d,'%Y-%m'),COUNT(*) FROM "
+            "date_probe"};
         for (const auto &sql : rejected) {
             auto x = duckdb_translate_mysql_select(sql, context);
             if (x.decision == DuckDBMySQLSelectDecision::supported || !x.sql.empty()) {
@@ -441,6 +500,20 @@ int main(int argc, char **argv) {
             left.names != right.names || left.types != right.types || left.rows != right.rows;
         cout << (caught ? "PASS" : "FAIL") << " comparator negative control (wrong LIMIT offset)\n";
         if (!caught)
+            ++failures;
+        // MySQL's DATE/DATETIME range starts at 1000, but formatting must also
+        // agree for real calendar dates below 1000 before the emitted strftime
+        // expression can be admitted for the mapped column domain.
+        auto early_left = mysql_result(f.mysql, "SELECT DATE_FORMAT('0001-01-01','%Y-%m') AS a, "
+                                                "DATE_FORMAT('0099-12-31 23:59:59','%Y-%m') AS b");
+        auto early_right = duck_result(f.duck, "SELECT strftime(DATE '0001-01-01','%Y-%m') AS a, "
+                                               "strftime(DATE '0099-12-31','%Y-%m') AS b");
+        bool early_match = early_left.names == early_right.names &&
+                           early_left.types == early_right.types &&
+                           early_left.rows == early_right.rows;
+        cout << (early_match ? "PASS" : "FAIL")
+             << " early-year DATE_FORMAT domain probe (years below 1000)\n";
+        if (!early_match)
             ++failures;
         cout << "compared=" << comparisons << " resolver_calls=" << calls
              << " failures=" << failures << "\n";

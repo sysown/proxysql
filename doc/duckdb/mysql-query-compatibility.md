@@ -248,7 +248,7 @@ coercion on that value unless collation/type rules are established.
 | `AVG` | OK, complete | function call | Deferred | Native DuckDB loses exact-value precision in the [semantic baseline](mysql-semantic-baseline.md); requires a separately proven rewrite. |
 | `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, `AVG(DISTINCT ...)` | OK but partial | `full_input=false`, emits `SELECT ` | Parser gap | Refused until upstream fix; see §4. |
 | `GROUP_CONCAT(...)` | OK, complete | preserved | Deferred | Separator/order/result limits and collation. |
-| `DATE_FORMAT(d, '%Y-%m')` | OK, complete | preserved | Deferred | First dialect-specific candidate after date/time and format-token rules. |
+| `DATE_FORMAT(d, '%Y-%m')` | OK, complete | preserved | Admitted (bounded) | SELECT-list only; first argument is a resolved DATE column (DATETIME is refused, see below) and the format is the exact single-quoted literal `'%Y-%m'`. See the current slice and its stated value-domain limit below. |
 | `COALESCE`, `IFNULL`, `NULLIF` | OK, complete | preserved | Deferred | Return-type and coercion rules. |
 | `IF`, `CASE` | OK, complete | preserved | Deferred | Branch type unification. |
 | `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `NOW()` | OK, complete | preserved | Deferred | Session time zone and statement-time semantics. |
@@ -519,9 +519,10 @@ nonnegative signed-range integer and NULL literals, nonnegative exact decimal
 literals, signed-integer comparisons, exact decimal comparisons, NULL
 predicates, AND/OR, COUNT and integer MIN/MAX, integer-key GROUP BY with
 aggregate HAVING predicates, numeric ordering with explicit MySQL NULL
-placement, and integer-literal LIMIT with a proven strictly unique ordering key
-(the full group-key tuple establishes uniqueness for grouped rows). Identifiers
-and duplicate labels are preserved.
+placement, integer-literal LIMIT with a proven strictly unique ordering key
+(the full group-key tuple establishes uniqueness for grouped rows), and the
+`DATE_FORMAT(column, '%Y-%m')` projection described below. Identifiers and
+duplicate labels are preserved.
 
 Unknown types, ambiguous ORDER BY aliases, comments, session-sensitive quoting,
 string literals/comparison/ordering, arithmetic, SUM/AVG, non-integer grouping,
@@ -537,6 +538,47 @@ session SQL mode, so it admits COUNT, MIN and MAX only when ParserSQL's tokenize
 run over the call's AST source span, shows a bare name token immediately followed
 by `(`. Spaced, tab-separated, quoted or qualified spellings are refused in
 SELECT and HAVING. Mixed-case contiguous spellings are admitted.
+
+### DATE_FORMAT year-month projection
+
+`DATE_FORMAT(column, '%Y-%m')` is the first admitted dialect-specific function,
+and only as a SELECT-list projection. The function name must be immediately
+followed by `(` with the same contiguous spelling rule as COUNT/MIN/MAX, so
+spaced names require an unknown `IGNORE_SPACE` mode and are refused; quoted
+names are refused as well. Mixed case is admitted.
+
+The first argument must be a resolved plain column (optionally qualified by the
+admitted table alias) whose mapped context type kind is `date`. Text, binary,
+integer and decimal columns, literals and expressions are refused. A `datetime`
+column is refused with the stable reason `session_time_zone_unknown` and the
+required-context hint `source_column_type_provenance`: the replica stores both
+MySQL DATETIME and MySQL TIMESTAMP in a native `TIMESTAMP`, MySQL renders a
+TIMESTAMP in the session time zone, and the translator knows neither the source
+type nor the session time zone, so a month near a boundary could differ. DATETIME
+becomes admissible when the mapped relation can prove a non-TIMESTAMP source.
+The second argument must be one single-quoted string literal whose exact source
+bytes are `'%Y-%m'`; escaped, prefixed, charset-introduced, double-quoted
+(identifier under a possible `ANSI_QUOTES`) and concatenated formats are
+refused, as are other arities and placeholders in either argument. The function
+is refused in WHERE, HAVING, GROUP BY and ORDER BY, and when combined with an
+aggregate or GROUP BY in this slice.
+
+The projection is emitted as `strftime(column, '%Y-%m')`. DuckDB's numeric
+`strftime` directives are locale-independent, return `VARCHAR`, ignore
+fractional seconds and do not convert timezone-naive values, so the result maps
+to MySQL text metadata. Without an alias the result label is the exact original
+source text of the expression, including mixed case and spaces inside the
+argument list; with an alias it is the alias. The existing 255-byte implicit
+function-label limit applies: longer labels are refused rather than truncated.
+
+The admitted value domain is MySQL's DATE range, `1000-01-01` through
+`9999-12-31`. Zero and invalid dates cannot be stored as a DuckDB DATE, so they
+cannot appear in an admitted projection. Real calendar dates below 1000 format
+identically on both engines (`0001-01`, `0099-12`), but they are not MySQL DATE
+column values in strict mode; negative years, years above 9999 and any value
+outside MySQL's range are outside the admitted domain. The translator is pure
+and cannot inspect stored values, so this range is a precondition on the mapped
+data, not a per-row check. NULL input returns NULL.
 
 ### Exact decimals
 

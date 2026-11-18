@@ -276,7 +276,8 @@ struct Translator {
         const auto open = tokens.next_token();
         const auto expected = name == "COUNT" ? TokenType::TK_COUNT
                               : name == "MIN" ? TokenType::TK_MIN
-                                              : TokenType::TK_MAX;
+                              : name == "MAX" ? TokenType::TK_MAX
+                                              : TokenType::TK_IDENTIFIER;
         // IGNORE_SPACE changes MySQL's resolution of spaced native names.
         // ParserSQL supplies token/source identity; no private SQL lexer is used.
         if (function.type != expected || function.source.ptr != node->source_ptr ||
@@ -313,6 +314,52 @@ struct Translator {
             return false;
         out = name + "(" + quote(c->canonical_name) + ")";
         type = name == "COUNT" ? DuckDBMySQLTypeKind::signed_integer : c->type.kind;
+        return true;
+    }
+    // The accepted format is one fixed literal, so its rendering cannot depend
+    // on a format-token parser, charset, locale or sql_mode.
+    bool year_month_literal(const N *node) {
+        if (!node || node->type != K::NODE_LITERAL_STRING || node->flags || node->first_child ||
+            !node->source_ptr || !node->value_ptr)
+            return false;
+        const auto begin = reinterpret_cast<uintptr_t>(input.data());
+        const auto inside = [&](const char *p, size_t len) {
+            const auto at = reinterpret_cast<uintptr_t>(p);
+            return at >= begin && at - begin <= input.size() && len <= input.size() - (at - begin);
+        };
+        if (!inside(node->source_ptr, node->source_len) ||
+            !inside(node->value_ptr, node->value_len))
+            return false;
+        // Exact source bytes: rejects escapes, prefixes, introducers and
+        // double quotes (identifier under a possible ANSI_QUOTES session).
+        return node->source_len == 7 &&
+               std::string(node->source_ptr, node->source_len) == "'%Y-%m'" &&
+               node->value_len == 5 && std::string(node->value_ptr, node->value_len) == "%Y-%m";
+    }
+    // SELECT-list only: DATE_FORMAT in predicates, grouping or ordering stays
+    // outside this slice and never reaches expr().
+    bool date_format_expr(const N *node, std::string &out, DuckDBMySQLTypeKind &type) {
+        if (!node || node->type != K::NODE_FUNCTION_CALL || node->flags ||
+            val(node) != "DATE_FORMAT" || !unambiguous_builtin(node, "DATE_FORMAT"))
+            return false;
+        const N *arg = node->first_child;
+        const N *format = arg ? arg->next_sibling : nullptr;
+        if (!arg || !format || format->next_sibling || !year_month_literal(format))
+            return false;
+        const auto *c = column(arg);
+        if (c && c->type.kind == DuckDBMySQLTypeKind::datetime) {
+            // A native TIMESTAMP may be a replicated MySQL TIMESTAMP, which MySQL renders in
+            // the session time zone; native metadata cannot tell it from DATETIME.
+            reason = "session_time_zone_unknown";
+            required.push_back("source_column_type_provenance");
+            return false;
+        }
+        if (!c || c->type.kind != DuckDBMySQLTypeKind::date)
+            return false;
+        // DuckDB's numeric strftime directives are locale-independent and
+        // return VARCHAR without converting a timezone-naive value.
+        out = "strftime(" + quote(c->canonical_name) + ", '%Y-%m')";
+        type = DuckDBMySQLTypeKind::text;
         return true;
     }
     bool having_pred(const N *node, std::string &out) {
@@ -654,7 +701,7 @@ struct Translator {
             if (aggregate_expr(n, s, type)) {
                 aggregate = true;
             } else {
-                if (!expr(n, s, type))
+                if (!expr(n, s, type) && !date_format_expr(n, s, type))
                     return false;
                 if (group) {
                     const auto *c = column(n);

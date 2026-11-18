@@ -224,6 +224,52 @@ static void test_decimals(MYSQL *c, const char *label) {
     ok(good, "%s fetches prepared fraction-only DECIMAL values", label);
     mysql_stmt_close(stmt);
 }
+static void test_date_format(MYSQL *c, const char *label) {
+    const char *name = "DATE_FORMAT(d,'%Y-%m')";
+    ok(text_rows(c, "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_fixture ORDER BY id", {name},
+                 {{"2024-02"}, {nullptr}, {"1000-01"}}),
+       "%s formats DATE with the MySQL source-text label and NULL", label);
+    ok(text_rows(c, "SELECT id, DATE_FORMAT(d,'%Y-%m') AS ym FROM date_fixture ORDER BY id",
+                 {"id", "ym"}, {{"1", "2024-02"}, {"2", nullptr}, {"3", "1000-01"}}),
+       "%s formats DATE with an alias beside a plain column", label);
+    MYSQL_STMT *stmt = prepare(c, "SELECT DATE_FORMAT(d,'%Y-%m') AS ym FROM date_fixture "
+                                  "ORDER BY id");
+    ok(stmt != nullptr, "%s prepares DATE_FORMAT", label);
+    if (stmt) {
+        char text[16];
+        unsigned long length = 0;
+        my_bool is_null = 0;
+        MYSQL_BIND result[1]{};
+        result[0].buffer_type = MYSQL_TYPE_STRING;
+        result[0].buffer = text;
+        result[0].buffer_length = sizeof(text);
+        result[0].length = &length;
+        result[0].is_null = &is_null;
+        bool good = !mysql_stmt_bind_result(stmt, result) && !mysql_stmt_execute(stmt);
+        for (const char *expected : {"2024-02", static_cast<const char *>(nullptr), "1000-01"}) {
+            good = good && !mysql_stmt_fetch(stmt) &&
+                   (expected ? !is_null && length == std::strlen(expected) &&
+                                   !std::memcmp(text, expected, length)
+                             : is_null);
+        }
+        good = good && mysql_stmt_fetch(stmt) == MYSQL_NO_DATA;
+        mysql_stmt_free_result(stmt);
+        ok(good, "%s fetches prepared DATE_FORMAT values", label);
+        mysql_stmt_close(stmt);
+    }
+    for (const char *bad : {"SELECT DATE_FORMAT(dt,'%Y-%m') FROM date_fixture",
+                            "SELECT DATE_FORMAT(d,'%Y-%m-%d') FROM date_fixture",
+                            "SELECT DATE_FORMAT (d,'%Y-%m') FROM date_fixture"}) {
+        const int status = mysql_query(c, bad);
+        ok(status != 0 && mysql_errno(c) == 1235 && !std::strcmp(mysql_sqlstate(c), "0A000"),
+           "%s refuses %s with 1235/0A000 (got %u/%s)", label, bad, mysql_errno(c),
+           mysql_sqlstate(c));
+    }
+    stmt = prepare(c, "SELECT DATE_FORMAT(dt,'%Y-%m') FROM date_fixture");
+    ok(!stmt, "%s refuses prepared DATETIME DATE_FORMAT", label);
+    if (stmt)
+        mysql_stmt_close(stmt);
+}
 static void test_decimal_refresh(MYSQL *c, PGconn *pg) {
     bool created = pg_exec(pg, "CREATE TABLE widen_fixture (d DECIMAL(18,4))") &&
                    pg_exec(pg, "INSERT INTO widen_fixture VALUES (2.0000)");
@@ -283,6 +329,9 @@ int main() {
         !pg_exec(pg, "CREATE TABLE decimal_fixture (id INTEGER PRIMARY KEY, f DECIMAL(2,2), "
                      "d DECIMAL(18,4))") ||
         !pg_exec(pg, "INSERT INTO decimal_fixture VALUES (1,.50,1),(2,-.25,2.5),(3,NULL,NULL)") ||
+        !pg_exec(pg, "CREATE TABLE date_fixture (id INTEGER PRIMARY KEY, d DATE, dt TIMESTAMP)") ||
+        !pg_exec(pg, "INSERT INTO date_fixture VALUES (1,'2024-02-29','2024-02-29 10:00:00'),"
+                     "(2,NULL,NULL),(3,'1000-01-01','1000-01-01 00:00:00')") ||
         !pg_exec(pg, "CREATE SEQUENCE analytical_sequence START 1") ||
         !pg_exec(
             pg,
@@ -361,6 +410,7 @@ int main() {
         mysql_stmt_close(stmt);
     test_parameters(mysql, "direct listener");
     test_decimals(mysql, "direct listener");
+    test_date_format(mysql, "direct listener");
     test_decimal_refresh(mysql, pg);
     stmt = prepare(mysql, "SELECT COUNT(*) FROM analytical_fixture WHERE n > 1");
     ok(stmt != nullptr, "prepare COUNT with referenced integer column");
@@ -445,6 +495,7 @@ int main() {
         }
         test_parameters(proxied, "ordinary routed listener");
         test_decimals(proxied, "ordinary routed listener");
+        test_date_format(proxied, "ordinary routed listener");
         mysql_close(proxied);
     }
     mysql_close(mysql);
