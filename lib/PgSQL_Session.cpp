@@ -4628,6 +4628,7 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_myds->tls13_handshake_complete = false;
 #endif
 			client_myds->ssl = GloVars.get_SSL_new();
+			SSL_set_ex_data(client_myds->ssl, pgsql_client_ssl_ex_index(), client_myds);
 			SSL_set_fd(client_myds->ssl, client_myds->fd);
 			SSL_set_accept_state(client_myds->ssl);
 			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);

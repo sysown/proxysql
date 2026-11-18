@@ -31,6 +31,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "PgSQL_Data_Stream.h"
 
 #include "SQLite3_Server.h"
 #include "MySQL_Query_Processor.h"
@@ -424,6 +425,7 @@ void ProxySQL_Main_init_SSL_module() {
 		proxy_error("Unable to initialize SSL. SSL_set_min_proto_version failed. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
+	pgsql_install_alpn(GloVars.global.ssl_ctx);
 	//SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_SSLv3); // no necessary, because of previous SSL_CTX_set_min_proto_version
 #ifdef DEBUG
 #if 0

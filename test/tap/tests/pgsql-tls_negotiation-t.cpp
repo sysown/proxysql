@@ -27,6 +27,9 @@ constexpr int TIMEOUT_SEC = 5;
 constexpr uint32_t PG_SSL_REQUEST_CODE = 80877103;
 constexpr uint32_t PG_GSS_ENCRYPT_CODE = 80877104;
 constexpr uint32_t PG_PROTOCOL_30 = 0x00030000;
+static const std::string ALPN_PG = std::string("\x0a" "postgresql", 11);
+static const std::string ALPN_FOO = std::string("\x03" "foo", 4);
+static const std::string ALPN_FOO_PG = ALPN_FOO + ALPN_PG;
 
 static std::string frontend_user;
 
@@ -216,7 +219,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(11);
+	plan(17);
 
 	frontend_user = cl.pgsql_username;
 	const std::string host = cl.pgsql_host;
@@ -325,6 +328,35 @@ int main(int argc, char** argv) {
 		ok(type == 'R', "ProxySQL still accepts a plaintext startup (got '%c')", type);
 		close_all(sock, nullptr, nullptr);
 	}
+
+	// H: ALPN after SSLRequest. Returns the TLS object (or null) and reads the first reply when startup is sent.
+	auto alpn_case = [&](const std::string& alpn, std::string& selected, bool startup) {
+		SSL_CTX* ctx = nullptr;
+		SSL* tls = nullptr;
+		int sock = create_raw_connection(host, port);
+		char reply = '?';
+		type = '?';
+		selected = "";
+		if (sock >= 0 && send_request(sock, PG_SSL_REQUEST_CODE) && read_reply_byte(sock, reply) && reply == 'S')
+			tls = tls_handshake(sock, alpn, &ctx);
+		if (tls) selected = alpn_selected(tls);
+		if (tls && startup && send_startup_pkt(sock, tls)) read_message(sock, type, body, tls);
+		const bool connected = tls != nullptr;
+		close_all(sock, tls, ctx);
+		return connected;
+	};
+	std::string sel;
+	bool tls_ok = alpn_case("", sel, true);
+	ok(tls_ok && sel == "" && type == 'R', "SSLRequest, no ALPN: accepted, nothing selected (got '%s','%c')", sel.c_str(), type);
+	tls_ok = alpn_case(ALPN_PG, sel, true);
+	ok(tls_ok && sel == "postgresql" && type == 'R', "SSLRequest, ALPN postgresql: selected (got '%s','%c')", sel.c_str(), type);
+	tls_ok = alpn_case(ALPN_FOO_PG, sel, false);
+	ok(tls_ok && sel == "postgresql", "SSLRequest, ALPN foo,postgresql: postgresql selected (got '%s')", sel.c_str());
+	tls_ok = alpn_case(ALPN_FOO, sel, false);
+	ok(!tls_ok, "SSLRequest, ALPN foo: handshake refused");
+	ok(admin_run(admin, "PROXYSQL RELOAD TLS"), "PROXYSQL RELOAD TLS succeeds");
+	tls_ok = alpn_case(ALPN_PG, sel, false);
+	ok(tls_ok && sel == "postgresql", "after RELOAD TLS: postgresql still selected (got '%s')", sel.c_str());
 
 	mysql_close(admin);
 	return exit_status();

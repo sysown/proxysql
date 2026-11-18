@@ -300,4 +300,28 @@ public:
 
 	void reset_connection();
 };
+
+/**
+ * @brief Index of the SSL ex_data slot that marks a TLS object as a PgSQL client (owner: its PgSQL_Data_Stream).
+ * @return The ex_data index.
+ */
+int pgsql_client_ssl_ex_index();
+/**
+ * @brief ALPN selection as PostgreSQL's alpn_cb(): objects not marked as PgSQL clients (MySQL) get NOACK;
+ * marked ones must offer "postgresql" or receive a fatal alert.
+ * @param ssl TLS object being negotiated.
+ * @param out Receives the selected protocol.
+ * @param outlen Receives the selected protocol length.
+ * @param in Client's ALPN protocol list (wire format).
+ * @param inlen Length of @p in.
+ * @param arg Unused.
+ * @return SSL_TLSEXT_ERR_OK, SSL_TLSEXT_ERR_NOACK or SSL_TLSEXT_ERR_ALERT_FATAL.
+ */
+int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
+	const unsigned char* in, unsigned int inlen, void* arg);
+/**
+ * @brief Installs pgsql_alpn_select_cb on a context; a null context is ignored.
+ * @param ctx Context to install it on.
+ */
+void pgsql_install_alpn(SSL_CTX* ctx);
 #endif /* PROXYSQL_PGSQL_DATA_STREAM_H */

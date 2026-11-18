@@ -1626,3 +1626,21 @@ int PgSQL_Data_Stream::buffer2array() {
 	}
 	return ret;
 }
+
+int pgsql_client_ssl_ex_index() {
+	static const int idx = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+	return idx;
+}
+
+int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
+	const unsigned char* in, unsigned int inlen, void*) {
+	if (SSL_get_ex_data(ssl, pgsql_client_ssl_ex_index()) == nullptr) return SSL_TLSEXT_ERR_NOACK;
+	static const unsigned char pg_alpn[] = { 10, 'p','o','s','t','g','r','e','s','q','l' };
+	if (SSL_select_next_proto(const_cast<unsigned char**>(out), outlen, pg_alpn, sizeof(pg_alpn), in, inlen)
+		!= OPENSSL_NPN_NEGOTIATED) return SSL_TLSEXT_ERR_ALERT_FATAL;
+	return SSL_TLSEXT_ERR_OK;
+}
+
+void pgsql_install_alpn(SSL_CTX* ctx) {
+	if (ctx) SSL_CTX_set_alpn_select_cb(ctx, pgsql_alpn_select_cb, nullptr);
+}
