@@ -9,7 +9,7 @@ catches that error. Eighteen unsupported or invalid queries are checked for
 refusal and never sent to either database.
 
 On 2026-11-18, MySQL `8.0.46-0ubuntu0.24.04.5` and DuckDB `v2.0.0` matched
-all 59 candidate queries, with zero unexpected mismatches. The negative control
+all 61 candidate queries, with zero unexpected mismatches. The negative control
 was detected. Cases cover escaped table and column names, duplicate aliases,
 table alias and qualified references, `*` over signed and unsigned integers,
 text, binary and NULL values, `COUNT(*)` and `COUNT(column)`, literal `001`
@@ -24,16 +24,19 @@ aliases, duplicates and `*`, and native HUGEINT/UHUGEINT projection. The
 fixture contains signed BIGINT extremes, the unsigned BIGINT maximum, UTF-8
 and binary bytes `00 ff`.
 
-Twelve of the 59 cases exercise `DATE_FORMAT(column, '%Y-%m')` over a DATE
-column: plain and aliased projections, mixed-case and spaced
+Fourteen of the 61 cases exercise `DATE_FORMAT(column, '%Y-%m')` over a DATE
+column and a DATETIME(6) column the resolver declares as a recorded DATETIME: plain and aliased projections, mixed-case and spaced
 spellings, qualified and backtick references, a backtick source label, mixed
 and duplicate-alias projections, comma LIMIT, NULL positions, an empty result
 and the 255-byte implicit label boundary. The fixture rows use `1000-01-01`,
 the leap day `2024-02-29` at midnight, `2024-03-01 23:59:59.999999`,
 `9999-12-31 23:59:59.999999` and NULL, so they stay inside MySQL's
-DATE/DATETIME range. The DATETIME(6) fixture column is only used by the two
-refusal checks that name it (`session_time_zone_unknown`) and nothing is
-compared for it. A separate direct expression check compares
+DATE/DATETIME range. A real MySQL `TIMESTAMP` column (`ts`) is declared as a
+recorded TIMESTAMP and only appears in the two refusal checks
+(`session_time_zone_dependent`); a separate check shows why: with
+`time_zone='+05:00'` MySQL formats the boundary row `2024-02-29 23:00:00 UTC` as
+`2024-03` while the emitted `strftime` on the naive value gives `2024-02`, and the
+probe passes only if they differ. A separate direct expression check compares
 `DATE_FORMAT('0001-01-01','%Y-%m')` and
 `DATE_FORMAT('0099-12-31 23:59:59','%Y-%m')` with the emitted `strftime`
 expression and passes, so years below 1000 have no known difference; they are

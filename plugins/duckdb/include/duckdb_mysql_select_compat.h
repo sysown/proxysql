@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 enum class DuckDBMySQLTypeKind {
@@ -21,12 +22,32 @@ struct DuckDBMySQLType {
     unsigned precision = 0;
     unsigned scale = 0;
 };
+enum class DuckDBMySQLSourceType { unknown, date, datetime, timestamp, other };
+// Original MySQL column facts recorded by the replica when it created the
+// table. They are filled only when the record is proven to describe the live
+// native column; otherwise type is unknown and the strings are empty.
+struct DuckDBMySQLColumnSource {
+    DuckDBMySQLSourceType type = DuckDBMySQLSourceType::unknown;
+    std::string charset;
+    std::string collation;
+    DuckDBMySQLColumnSource(DuckDBMySQLSourceType t = DuckDBMySQLSourceType::unknown,
+                            std::string cs = {}, std::string co = {})
+        : type(t), charset(std::move(cs)), collation(std::move(co)) {}
+    bool known() const {
+        return type != DuckDBMySQLSourceType::unknown;
+    }
+};
 // Logical types of the mapped relation under the MySQL-facing type contract.
-// Native metadata does not establish original MySQL source type/collation
-// provenance; operations requiring those additional facts remain unsupported.
+// Native metadata alone does not establish original MySQL source type/collation
+// provenance; `source` carries it when the replica recorded it, and operations
+// requiring those facts stay unsupported while it is unknown.
 struct DuckDBMySQLColumn {
     std::string canonical_name;
     DuckDBMySQLType type;
+    DuckDBMySQLColumnSource source;
+    DuckDBMySQLColumn(std::string name = {}, DuckDBMySQLType t = {},
+                      DuckDBMySQLColumnSource src = {})
+        : canonical_name(std::move(name)), type(t), source(std::move(src)) {}
 };
 struct DuckDBMySQLRelation {
     std::vector<std::string> canonical_name;

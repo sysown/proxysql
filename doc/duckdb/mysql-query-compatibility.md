@@ -248,7 +248,7 @@ coercion on that value unless collation/type rules are established.
 | `AVG` | OK, complete | function call | Deferred | Native DuckDB loses exact-value precision in the [semantic baseline](mysql-semantic-baseline.md); requires a separately proven rewrite. |
 | `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, `AVG(DISTINCT ...)` | OK but partial | `full_input=false`, emits `SELECT ` | Parser gap | Refused until upstream fix; see §4. |
 | `GROUP_CONCAT(...)` | OK, complete | preserved | Deferred | Separator/order/result limits and collation. |
-| `DATE_FORMAT(d, '%Y-%m')` | OK, complete | preserved | Admitted (bounded) | SELECT-list only; first argument is a resolved DATE column (DATETIME is refused, see below) and the format is the exact single-quoted literal `'%Y-%m'`. See the current slice and its stated value-domain limit below. |
+| `DATE_FORMAT(d, '%Y-%m')` | OK, complete | preserved | Admitted (bounded) | SELECT-list only; first argument is a resolved DATE column, or a DATETIME column the replica recorded as a MySQL DATETIME (see below) and the format is the exact single-quoted literal `'%Y-%m'`. See the current slice and its stated value-domain limit below. |
 | `COALESCE`, `IFNULL`, `NULLIF` | OK, complete | preserved | Deferred | Return-type and coercion rules. |
 | `IF`, `CASE` | OK, complete | preserved | Deferred | Branch type unification. |
 | `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `NOW()` | OK, complete | preserved | Deferred | Session time zone and statement-time semantics. |
@@ -530,6 +530,17 @@ joins, subqueries, CTEs, windows, variables and unknown functions are currently
 refused. Later roadmap slices remain outstanding; these refusals do not
 complete the goal.
 
+### Source column facts
+
+The context carries `DuckDBMySQLColumn::source` (original MySQL type kind: date,
+datetime, timestamp or other; charset; collation). It is filled only from the
+replica's `proxysql_replica.columns` record and only when that record is proven
+to describe the live native column (see the Admin reference), and is otherwise
+unknown. Operations that need it are admitted only for proven columns: today
+DATE_FORMAT of a DATETIME column (below); unknown facts change no other behavior. It is what lets later slices tell a
+DATETIME (no time zone) from a TIMESTAMP (rendered in the session time zone),
+and know whether a text comparison is byte-exact.
+
 ### Built-in function spelling
 
 MySQL resolves `COUNT (*)` only when `IGNORE_SPACE` is enabled, and a spaced
@@ -548,14 +559,17 @@ spaced names require an unknown `IGNORE_SPACE` mode and are refused; quoted
 names are refused as well. Mixed case is admitted.
 
 The first argument must be a resolved plain column (optionally qualified by the
-admitted table alias) whose mapped context type kind is `date`. Text, binary,
-integer and decimal columns, literals and expressions are refused. A `datetime`
-column is refused with the stable reason `session_time_zone_unknown` and the
-required-context hint `source_column_type_provenance`: the replica stores both
-MySQL DATETIME and MySQL TIMESTAMP in a native `TIMESTAMP`, MySQL renders a
-TIMESTAMP in the session time zone, and the translator knows neither the source
-type nor the session time zone, so a month near a boundary could differ. DATETIME
-becomes admissible when the mapped relation can prove a non-TIMESTAMP source.
+admitted table alias) whose mapped context type kind is `date`, or `datetime`
+with proven source type DATETIME. Text, binary, integer and decimal columns,
+literals and expressions are refused. The replica stores both MySQL DATETIME and
+MySQL TIMESTAMP in a native `TIMESTAMP`, and MySQL renders a TIMESTAMP in the
+session time zone, which the translator does not know, so a month near a boundary
+could differ (shown against the oracle in the baseline). A native `datetime`
+column is therefore admitted only when its recorded source type is DATETIME. A
+recorded TIMESTAMP is refused with `session_time_zone_dependent`; a column with no
+proven source (native tables, replicas snapshotted before provenance existed,
+altered columns) is refused with `session_time_zone_unknown` and the
+required-context hint `source_column_type_provenance`.
 The second argument must be one single-quoted string literal whose exact source
 bytes are `'%Y-%m'`; escaped, prefixed, charset-introduced, double-quoted
 (identifier under a possible `ANSI_QUOTES`) and concatenated formats are

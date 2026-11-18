@@ -347,14 +347,20 @@ struct Translator {
         if (!arg || !format || format->next_sibling || !year_month_literal(format))
             return false;
         const auto *c = column(arg);
-        if (c && c->type.kind == DuckDBMySQLTypeKind::datetime) {
+        if (c && c->type.kind == DuckDBMySQLTypeKind::datetime &&
+            c->source.type != DuckDBMySQLSourceType::datetime) {
             // A native TIMESTAMP may be a replicated MySQL TIMESTAMP, which MySQL renders in
-            // the session time zone; native metadata cannot tell it from DATETIME.
-            reason = "session_time_zone_unknown";
-            required.push_back("source_column_type_provenance");
+            // the session time zone. Only a recorded MySQL DATETIME has no time zone.
+            if (c->source.type == DuckDBMySQLSourceType::timestamp) {
+                reason = "session_time_zone_dependent";
+            } else {
+                reason = "session_time_zone_unknown";
+                required.push_back("source_column_type_provenance");
+            }
             return false;
         }
-        if (!c || c->type.kind != DuckDBMySQLTypeKind::date)
+        if (!c || (c->type.kind != DuckDBMySQLTypeKind::date &&
+                   c->type.kind != DuckDBMySQLTypeKind::datetime))
             return false;
         // DuckDB's numeric strftime directives are locale-independent and
         // return VARCHAR without converting a timezone-naive value.

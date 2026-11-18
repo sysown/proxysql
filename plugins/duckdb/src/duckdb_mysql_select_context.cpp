@@ -1,6 +1,7 @@
 #include "duckdb_mysql_select_context.h"
 #include "duckdb_mysql_select_metadata.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -12,14 +13,20 @@ constexpr size_t hard_columns = 4096;
 constexpr size_t hard_keys = 256;
 struct Result {
     duckdb_result value{};
-    ~Result() { duckdb_destroy_result(&value); }
+    ~Result() {
+        duckdb_destroy_result(&value);
+    }
 };
 struct Statement {
     duckdb_prepared_statement value = nullptr;
-    ~Statement() { duckdb_destroy_prepare(&value); }
+    ~Statement() {
+        duckdb_destroy_prepare(&value);
+    }
 };
 struct Free {
-    void operator()(char *p) const { duckdb_free(p); }
+    void operator()(char *p) const {
+        duckdb_free(p);
+    }
 };
 bool read_string(duckdb_result &r, idx_t column, idx_t row, size_t &remaining, std::string &out) {
     if (duckdb_value_is_null(&r, column, row))
@@ -92,6 +99,106 @@ DuckDBMySQLType map_type(const duckdb_mysql_select_metadata::Column &c) {
     }
     return out;
 }
+std::string quote_identifier(const std::string &name) {
+    std::string out = "\"";
+    for (char c : name) {
+        if (c == '"')
+            out += '"';
+        out += c;
+    }
+    return out + '"';
+}
+DuckDBMySQLSourceType source_type_of(std::string data_type) {
+    for (char &c : data_type)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (data_type == "date")
+        return DuckDBMySQLSourceType::date;
+    if (data_type == "datetime")
+        return DuckDBMySQLSourceType::datetime;
+    if (data_type == "timestamp")
+        return DuckDBMySQLSourceType::timestamp;
+    return data_type.empty() ? DuckDBMySQLSourceType::unknown : DuckDBMySQLSourceType::other;
+}
+// Attaches the original MySQL facts the replica recorded in proxysql_replica.columns. A column
+// receives them only if its table is in the replica manifest, exactly one record names it, the
+// record's native type still equals the live native type, and the facts agree with the mapped
+// kind. Anything else (no replica tables, native tables, ALTERed columns, duplicates, budget
+// overflow) leaves the column unknown; this never fails the resolution.
+void attach_source_facts(duckdb_connection conn, DuckDBMySQLRelation &relation, size_t remaining) {
+    Result present;
+    if (!execute(conn,
+                 "SELECT count(*) FROM duckdb_tables() WHERE database_name=? AND "
+                 "schema_name='proxysql_replica' AND table_name IN ('tables','columns')",
+                 {relation.canonical_name[0]}, present) ||
+        duckdb_row_count(&present.value) != 1 || duckdb_value_int64(&present.value, 0, 0) != 2)
+        return;
+    const std::string replica = quote_identifier(relation.canonical_name[0]) + ".proxysql_replica.";
+    const std::string sql =
+        "SELECT n.column_name, p.mysql_data_type, p.character_set_name, p.collation_name "
+        "FROM duckdb_columns() n JOIN " +
+        replica +
+        "\"columns\" p ON p.schema_name=n.schema_name AND p.table_name=n.table_name AND "
+        "p.column_name=n.column_name AND upper(p.duckdb_type)=upper(n.data_type) "
+        "WHERE n.database_name=? AND n.schema_name=? AND n.table_name=? AND EXISTS (SELECT 1 "
+        "FROM " +
+        replica +
+        "\"tables\" t WHERE t.schema_name=n.schema_name AND t.table_name=n.table_name) "
+        "LIMIT 8193";
+    Result facts;
+    if (!execute(conn, sql.c_str(), relation.canonical_name, facts))
+        return;
+    const idx_t rows = duckdb_row_count(&facts.value);
+    if (rows > relation.columns.size() * 2)
+        return;
+    struct Recorded {
+        std::string name;
+        DuckDBMySQLColumnSource source;
+        size_t count = 0;
+    };
+    std::vector<Recorded> recorded;
+    for (idx_t i = 0; i < rows; ++i) {
+        std::string name, data_type, charset, collation;
+        if (!read_string(facts.value, 0, i, remaining, name) ||
+            !read_string(facts.value, 1, i, remaining, data_type))
+            return;
+        // Character columns carry a charset and collation; the others store NULL or ''.
+        read_string(facts.value, 2, i, remaining, charset);
+        read_string(facts.value, 3, i, remaining, collation);
+        auto found = std::find_if(recorded.begin(), recorded.end(),
+                                  [&](const Recorded &r) { return r.name == name; });
+        if (found != recorded.end()) {
+            ++found->count;
+            continue;
+        }
+        Recorded entry;
+        entry.name = std::move(name);
+        entry.source.type = source_type_of(data_type);
+        entry.source.charset = std::move(charset);
+        entry.source.collation = std::move(collation);
+        entry.count = 1;
+        recorded.push_back(std::move(entry));
+    }
+    for (auto &entry : recorded) {
+        if (entry.count != 1)
+            continue;
+        for (auto &column : relation.columns) {
+            if (column.canonical_name != entry.name)
+                continue;
+            const auto kind = column.type.kind;
+            const auto type = entry.source.type;
+            const bool agrees =
+                (type == DuckDBMySQLSourceType::date && kind == DuckDBMySQLTypeKind::date) ||
+                ((type == DuckDBMySQLSourceType::datetime ||
+                  type == DuckDBMySQLSourceType::timestamp) &&
+                 kind == DuckDBMySQLTypeKind::datetime) ||
+                (type == DuckDBMySQLSourceType::other && kind != DuckDBMySQLTypeKind::date &&
+                 kind != DuckDBMySQLTypeKind::datetime);
+            if (agrees)
+                column.source = std::move(entry.source);
+            break;
+        }
+    }
+}
 bool resolve(duckdb_connection conn, const DuckDBMySQLContextLimits &limits,
              const std::vector<std::string> &parts, DuckDBMySQLRelation &out) {
     if (!conn || parts.empty() || parts.size() > 3)
@@ -161,6 +268,7 @@ bool resolve(duckdb_connection conn, const DuckDBMySQLContextLimits &limits,
         remaining -= metadata.metadata_bytes;
         for (const auto &column : metadata.table.columns)
             candidate.columns.push_back({column.name, map_type(column)});
+        attach_source_facts(conn, candidate, remaining);
     } else if (relation_kind == "view") {
         // Static catalog metadata only: no view expression is evaluated.
         Result cols;

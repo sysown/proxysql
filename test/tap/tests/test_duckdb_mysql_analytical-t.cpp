@@ -257,7 +257,10 @@ static void test_date_format(MYSQL *c, const char *label) {
         ok(good, "%s fetches prepared DATE_FORMAT values", label);
         mysql_stmt_close(stmt);
     }
-    for (const char *bad : {"SELECT DATE_FORMAT(dt,'%Y-%m') FROM date_fixture",
+    ok(text_rows(c, "SELECT DATE_FORMAT(dt,'%Y-%m') AS ym FROM date_fixture ORDER BY id", {"ym"},
+                 {{"2024-02"}, {nullptr}, {"1000-01"}}),
+       "%s formats a column proven to be a MySQL DATETIME", label);
+    for (const char *bad : {"SELECT DATE_FORMAT(ts,'%Y-%m') FROM date_fixture",
                             "SELECT DATE_FORMAT(d,'%Y-%m-%d') FROM date_fixture",
                             "SELECT DATE_FORMAT (d,'%Y-%m') FROM date_fixture"}) {
         const int status = mysql_query(c, bad);
@@ -265,8 +268,8 @@ static void test_date_format(MYSQL *c, const char *label) {
            "%s refuses %s with 1235/0A000 (got %u/%s)", label, bad, mysql_errno(c),
            mysql_sqlstate(c));
     }
-    stmt = prepare(c, "SELECT DATE_FORMAT(dt,'%Y-%m') FROM date_fixture");
-    ok(!stmt, "%s refuses prepared DATETIME DATE_FORMAT", label);
+    stmt = prepare(c, "SELECT DATE_FORMAT(ts,'%Y-%m') FROM date_fixture");
+    ok(!stmt, "%s refuses prepared TIMESTAMP DATE_FORMAT", label);
     if (stmt)
         mysql_stmt_close(stmt);
 }
@@ -329,9 +332,30 @@ int main() {
         !pg_exec(pg, "CREATE TABLE decimal_fixture (id INTEGER PRIMARY KEY, f DECIMAL(2,2), "
                      "d DECIMAL(18,4))") ||
         !pg_exec(pg, "INSERT INTO decimal_fixture VALUES (1,.50,1),(2,-.25,2.5),(3,NULL,NULL)") ||
-        !pg_exec(pg, "CREATE TABLE date_fixture (id INTEGER PRIMARY KEY, d DATE, dt TIMESTAMP)") ||
-        !pg_exec(pg, "INSERT INTO date_fixture VALUES (1,'2024-02-29','2024-02-29 10:00:00'),"
-                     "(2,NULL,NULL),(3,'1000-01-01','1000-01-01 00:00:00')") ||
+        !pg_exec(pg, "CREATE TABLE date_fixture (id INTEGER PRIMARY KEY, d DATE, dt TIMESTAMP, ts "
+                     "TIMESTAMP)") ||
+        !pg_exec(pg, "INSERT INTO date_fixture VALUES (1,'2024-02-29','2024-02-29 10:00:00',"
+                     "'2024-02-29 23:00:00'),(2,NULL,NULL,NULL),"
+                     "(3,'1000-01-01','1000-01-01 00:00:00','2024-03-01 00:00:00')") ||
+        !pg_exec(pg, "CREATE SCHEMA proxysql_replica") ||
+        !pg_exec(pg,
+                 "CREATE TABLE proxysql_replica.tables (source_id VARCHAR, schema_name VARCHAR, "
+                 "table_name VARCHAR, primary_key VARCHAR, "
+                 "PRIMARY KEY (source_id, schema_name, table_name))") ||
+        !pg_exec(pg, "CREATE TABLE proxysql_replica.columns (source_id VARCHAR, schema_name "
+                     "VARCHAR, table_name VARCHAR, column_name VARCHAR, ordinal INTEGER, "
+                     "mysql_data_type VARCHAR, mysql_column_type VARCHAR, character_set_name "
+                     "VARCHAR, collation_name VARCHAR, duckdb_type VARCHAR, "
+                     "PRIMARY KEY (source_id, schema_name, table_name, column_name))") ||
+        !pg_exec(pg, "INSERT INTO proxysql_replica.tables VALUES "
+                     "('fixture','main','date_fixture','id')") ||
+        !pg_exec(pg, "INSERT INTO proxysql_replica.columns VALUES "
+                     "('fixture','main','date_fixture','id',1,'int','int','','','INTEGER'),"
+                     "('fixture','main','date_fixture','d',2,'date','date','','','DATE'),"
+                     "('fixture','main','date_fixture','dt',3,'datetime','datetime(6)','','',"
+                     "'TIMESTAMP'),"
+                     "('fixture','main','date_fixture','ts',4,'timestamp','timestamp','','',"
+                     "'TIMESTAMP')") ||
         !pg_exec(pg, "CREATE SEQUENCE analytical_sequence START 1") ||
         !pg_exec(
             pg,

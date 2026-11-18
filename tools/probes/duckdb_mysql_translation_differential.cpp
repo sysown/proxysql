@@ -259,16 +259,17 @@ int main(int argc, char **argv) {
         mysql_exec(f.mysql, "INSERT INTO wide_probe VALUES " + wide_rows);
         duck_exec(f.duck, "INSERT INTO wide_probe VALUES " + wide_rows);
         mysql_exec(f.mysql,
-                   "CREATE TABLE date_probe (id BIGINT PRIMARY KEY, d DATE, dt DATETIME(6), txt "
-                   "VARCHAR(10))");
+                   "CREATE TABLE date_probe (id BIGINT PRIMARY KEY, d DATE, dt DATETIME(6), "
+                   "ts TIMESTAMP NULL, txt VARCHAR(10))");
         duck_exec(f.duck,
-                  "CREATE TABLE date_probe (id BIGINT PRIMARY KEY, d DATE, dt TIMESTAMP, txt "
-                  "VARCHAR)");
-        const string date_rows = "(1,'1000-01-01','1000-01-01 00:00:00.000000','x'),"
-                                 "(2,'2024-02-29','2024-02-29 00:00:00.000000','x'),"
-                                 "(3,'2024-03-01','2024-03-01 23:59:59.999999','x'),"
-                                 "(4,'9999-12-31','9999-12-31 23:59:59.999999','x'),"
-                                 "(5,NULL,NULL,NULL)";
+                  "CREATE TABLE date_probe (id BIGINT PRIMARY KEY, d DATE, dt TIMESTAMP, ts "
+                  "TIMESTAMP, txt VARCHAR)");
+        const string date_rows =
+            "(1,'1000-01-01','1000-01-01 00:00:00.000000','2024-02-29 23:00:00','x'),"
+            "(2,'2024-02-29','2024-02-29 00:00:00.000000','2024-02-29 23:00:00','x'),"
+            "(3,'2024-03-01','2024-03-01 23:59:59.999999','2024-03-01 00:00:00','x'),"
+            "(4,'9999-12-31','9999-12-31 23:59:59.999999','2024-12-31 23:00:00','x'),"
+            "(5,NULL,NULL,NULL,NULL)";
         mysql_exec(f.mysql, "INSERT INTO date_probe VALUES " + date_rows);
         duck_exec(f.duck, "INSERT INTO date_probe VALUES " + date_rows);
         DuckDBMySQLSelectContext context;
@@ -289,7 +290,12 @@ int main(int argc, char **argv) {
                 r.exact_name_resolution = true;
                 r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
                              {"d", {DuckDBMySQLTypeKind::date, 0, 0}},
-                             {"dt", {DuckDBMySQLTypeKind::datetime, 0, 0}},
+                             {"dt",
+                              {DuckDBMySQLTypeKind::datetime, 0, 0},
+                              {DuckDBMySQLSourceType::datetime}},
+                             {"ts",
+                              {DuckDBMySQLTypeKind::datetime, 0, 0},
+                              {DuckDBMySQLSourceType::timestamp}},
                              {"txt", {DuckDBMySQLTypeKind::text, 0, 0}}};
                 r.unique_keys = {{"id"}};
                 return true;
@@ -403,6 +409,9 @@ int main(int argc, char **argv) {
             {"empty grouped rows",
              "SELECT grp,COUNT(*) AS n FROM `odd``table` WHERE id > 9 GROUP BY grp ORDER BY grp"},
             {"date format date", "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe ORDER BY id"},
+            {"date format datetime", "SELECT DATE_FORMAT(dt,'%Y-%m') FROM date_probe ORDER BY id"},
+            {"date format datetime alias",
+             "SELECT DATE_FORMAT(dt,'%Y-%m') AS ym, id FROM date_probe ORDER BY id"},
             {"date format alias",
              "SELECT DATE_FORMAT(d,'%Y-%m') AS ym, id FROM date_probe ORDER BY id"},
             {"date format mixed case", "SELECT date_format(d,'%Y-%m') FROM date_probe ORDER BY id"},
@@ -419,7 +428,7 @@ int main(int argc, char **argv) {
             {"date format comma limit",
              "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe ORDER BY id LIMIT 1, 2"},
             {"date format null positions",
-             "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe WHERE id >= 4 ORDER BY id"},
+             "SELECT DATE_FORMAT(dt,'%Y-%m') FROM date_probe WHERE id >= 4 ORDER BY id"},
             {"date format empty",
              "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe WHERE id > 99 ORDER BY id"},
             {"date format 255-byte label", date_format255.c_str()},
@@ -464,8 +473,8 @@ int main(int argc, char **argv) {
             "SELECT 1 AS `x😀y`",
             "SELECT 1 AS ` x`",
             "SELECT COUNT(" + std::string(248, ' ') + "*)",
-            "SELECT DATE_FORMAT(dt,'%Y-%m') FROM date_probe ORDER BY id",
-            "SELECT DATE_FORMAT(d,'%Y-%m'), DATE_FORMAT(dt,'%Y-%m') FROM date_probe",
+            "SELECT DATE_FORMAT(ts,'%Y-%m') FROM date_probe ORDER BY id",
+            "SELECT DATE_FORMAT(d,'%Y-%m'), DATE_FORMAT(ts,'%Y-%m') FROM date_probe",
             "SELECT DATE_FORMAT(d,'%Y-%m-%d') FROM date_probe",
             "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe "
             "WHERE DATE_FORMAT(d,'%Y-%m') IS NULL",
@@ -514,6 +523,20 @@ int main(int argc, char **argv) {
         cout << (early_match ? "PASS" : "FAIL")
              << " early-year DATE_FORMAT domain probe (years below 1000)\n";
         if (!early_match)
+            ++failures;
+        // A recorded TIMESTAMP is refused because MySQL renders it in the session time zone while
+        // DuckDB's naive value has none. The rows below sit on a month boundary, so under
+        // UTC+05:00 MySQL and the emitted strftime must disagree, proving the refusal is needed.
+        mysql_exec(f.mysql, "SET SESSION time_zone = '+05:00'");
+        auto zone_left =
+            mysql_result(f.mysql, "SELECT DATE_FORMAT(ts,'%Y-%m') FROM date_probe WHERE id = 2");
+        mysql_exec(f.mysql, "SET SESSION time_zone = '+00:00'");
+        auto zone_right =
+            duck_result(f.duck, "SELECT strftime(ts,'%Y-%m') FROM date_probe WHERE id = 2");
+        bool zone_differs = zone_left.rows != zone_right.rows;
+        cout << (zone_differs ? "PASS" : "FAIL")
+             << " TIMESTAMP DATE_FORMAT depends on the session time zone (refusal required)\n";
+        if (!zone_differs)
             ++failures;
         cout << "compared=" << comparisons << " resolver_calls=" << calls
              << " failures=" << failures << "\n";

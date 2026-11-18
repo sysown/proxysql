@@ -157,21 +157,24 @@ int main() {
     date_context.resolve_relation = [](const std::vector<std::string> &, DuckDBMySQLRelation &out) {
         out.canonical_name = {"date_probe"};
         out.exact_name_resolution = true;
-        out.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
-                       {"d", {DuckDBMySQLTypeKind::date, 0, 0}},
-                       {"dt", {DuckDBMySQLTypeKind::datetime, 0, 0}},
-                       {"txt", {DuckDBMySQLTypeKind::text, 0, 0}},
-                       {"bin", {DuckDBMySQLTypeKind::binary, 0, 0}},
-                       {"n", {DuckDBMySQLTypeKind::exact_decimal, 10, 0}}};
+        out.columns = {
+            {"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+            {"d", {DuckDBMySQLTypeKind::date, 0, 0}},
+            {"dt", {DuckDBMySQLTypeKind::datetime, 0, 0}},
+            {"pdt", {DuckDBMySQLTypeKind::datetime, 0, 0}, {DuckDBMySQLSourceType::datetime}},
+            {"ts", {DuckDBMySQLTypeKind::datetime, 0, 0}, {DuckDBMySQLSourceType::timestamp}},
+            {"txt", {DuckDBMySQLTypeKind::text, 0, 0}},
+            {"bin", {DuckDBMySQLTypeKind::binary, 0, 0}},
+            {"n", {DuckDBMySQLTypeKind::exact_decimal, 10, 0}}};
         out.unique_keys = {{"id"}};
         return true;
     };
     duckdb_result date_rows{};
-    bool date_created =
-        created && duckdb_query(connection,
-                                "CREATE TABLE \"date_probe\" (id BIGINT, d DATE, dt TIMESTAMP, "
-                                "txt VARCHAR, bin BLOB, n DECIMAL(10,0))",
-                                &date_rows) == DuckDBSuccess;
+    bool date_created = created && duckdb_query(connection,
+                                                "CREATE TABLE \"date_probe\" (id BIGINT, d DATE, "
+                                                "dt TIMESTAMP, pdt TIMESTAMP, ts TIMESTAMP, "
+                                                "txt VARCHAR, bin BLOB, n DECIMAL(10,0))",
+                                                &date_rows) == DuckDBSuccess;
     duckdb_destroy_result(&date_rows);
     ok(date_created, "create date and datetime relation");
     auto date_format = duckdb_translate_mysql_select(
@@ -268,6 +271,23 @@ int main() {
     ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m'), DATE_FORMAT(dt,'%Y-%m') FROM date_probe") ==
            "session_time_zone_unknown",
        "one DATETIME argument refuses the whole projection");
+    ok(date_reason("SELECT DATE_FORMAT(ts,'%Y-%m') FROM date_probe") ==
+           "session_time_zone_dependent",
+       "a recorded MySQL TIMESTAMP is refused because its text depends on the session time zone");
+    auto proven_datetime = duckdb_translate_mysql_select(
+        "SELECT DATE_FORMAT(pdt,'%Y-%m') AS ym FROM date_probe ORDER BY id", date_context);
+    ok(proven_datetime.decision == DuckDBMySQLSelectDecision::supported &&
+           proven_datetime.sql == "SELECT strftime(\"pdt\", '%Y-%m') AS \"ym\" FROM \"date_probe\" "
+                                  "ORDER BY \"id\" ASC NULLS FIRST",
+       "a recorded MySQL DATETIME is admitted");
+    statement = nullptr;
+    ok(date_created && proven_datetime.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, proven_datetime.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares the proven DATETIME emission");
+    duckdb_destroy_prepare(&statement);
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m'), DATE_FORMAT(ts,'%Y-%m') FROM date_probe") ==
+           "session_time_zone_dependent",
+       "one TIMESTAMP argument refuses the whole projection");
     ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m-%d') FROM date_probe") == "unsupported_ast",
        "other DATE_FORMAT formats refused");
     ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m ') FROM date_probe") == "unsupported_ast",
