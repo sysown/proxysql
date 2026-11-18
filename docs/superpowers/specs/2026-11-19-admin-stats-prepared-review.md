@@ -93,3 +93,21 @@ Codecov separately reported 4.47% patch coverage and 52.26% project
 coverage while coverage jobs were still running. Final coverage and
 quality-gate results are pending for the split branch.
 [Codecov report](https://app.codecov.io/gh/sysown/proxysql/pull/6648)
+
+The MySQL 5.7 `CI-legacy-g7` run for `9098425b6` passed 22 of 23 tests.
+`reg_test_stmt_resultset_err_no_rows_php-t` returned `ETIME` from its
+two-second PHP subprocess wrapper without reporting the expected result.
+The same diagnostic on a matching v3.0 run has yet to be verified, so the
+cause and any relationship to the PR are open.
+[CI producer job](https://github.com/sysown/proxysql/actions/runs/44369849149/job/135034066140)
+
+## Standalone SQLite3 Server follow-up
+
+The original standalone listener work is preserved locally as
+`review/6648-sqlite3-followup` at `8483ab10a`, based on `4e73d96dd`.
+Its fixture launches SQLite3 Server with DuckDB disabled. Its live test
+passed all 39 checks. The comparison build without standalone prepared
+registration started the same fixture and rejected the first prepare.
+The three restored SQLite-focused unit suites passed 441 checks, the
+existing `sqlite3db` unit suite passed 51, and all 11 Makefile dependency
+checks passed.
