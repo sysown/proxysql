@@ -132,6 +132,10 @@ and quota recovery. Its synthetic sessions now use the prepared-capable
 DuckDB session type so destruction releases the statement ID allocator.
 The unchanged fixture failed one quota assertion on the prospective
 combined tree. The fixture update restored all 89 assertions there.
+The restored suite and the 45-check plugin service suite both also pass
+under local ASan and TSan. These runs exercise the controllers and their
+ownership and cleanup paths without launching a full server.
+All 11 Makefile dependency checks pass with the restored suite registered.
 
 ## Proposed MySQL prepared-write slice
 
