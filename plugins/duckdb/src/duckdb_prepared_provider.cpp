@@ -475,8 +475,11 @@ struct DuckDBPreparedProvider::Impl {
         }
         CATCH(c, e)
     }
-    static void finalize(void *, void *st) noexcept {
+    static void finalize(void *c, void *st) noexcept {
         try {
+            auto &p = self(c);
+            if (p.fresh_bound == st)
+                p.fresh_bound = nullptr;
             delete static_cast<NativeStatement *>(st);
         } catch (...) {
         }

@@ -36,8 +36,10 @@ Before every analytical prepared execution, the original SQL is re-admitted
 against current metadata inside the same private read-only transaction. The
 freshly translated SQL is prepared as a new native statement, so casts that
 depend on column precision or scale never come from an earlier schema. If the
-new statement's parameter or result names, types, precision, scale or
-nullability differ from the existing statement, execution fails with 1615
+new statement's parameter or result names, types, precision or scale, or its
+parameter positions or column count, differ from the existing statement
+(nullability is not compared, since the native adapter does not report it),
+execution fails with 1615
 (reprepare) before any row is produced. Otherwise the new native handle replaces
 the old one. A widened or rescaled column referenced only in a predicate
 therefore keeps working without client action. A projected column whose scale

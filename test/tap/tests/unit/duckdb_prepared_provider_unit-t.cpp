@@ -615,8 +615,8 @@ int main() {
         query(conn, "INSERT INTO decimal_rounding VALUES (.301)");
         REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_EXECUTE, {},
                                     &guard, &err) == 0 &&
-                    policy->authorize_execute(policy->context, bytes(rounding), nullptr, 0,
-                                              &err) == 0 &&
+                    policy->authorize_execute(policy->context, bytes(rounding), nullptr, 0, &err) ==
+                        0 &&
                     engine->reset(engine->context, stmt, &err) == 0 &&
                     engine->bind(engine->context, stmt, nullptr, 0, &err) == 0 &&
                     engine->execute(engine->context, stmt, &info, &err) == 0,
@@ -634,6 +634,38 @@ int main() {
            "scale increase does not silently round with a stale cast");
         engine->guard_leave(engine->context, guard);
         engine->finalize(engine->context, stmt);
+        stmt = nullptr;
+        for (const bool added : {true, false}) {
+            const char *change = added ? "ALTER TABLE drift_columns ADD COLUMN c BIGINT"
+                                       : "ALTER TABLE drift_columns RENAME COLUMN b TO c";
+            query(conn, "DROP TABLE IF EXISTS drift_columns");
+            query(conn, "CREATE TABLE drift_columns(a BIGINT, b BIGINT)");
+            query(conn, "INSERT INTO drift_columns VALUES (1,2)");
+            const char *star = "SELECT * FROM drift_columns";
+            REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_PREPARE, {},
+                                        &guard, &err) == 0 &&
+                        policy->authorize_prepare(policy->context, bytes(star), &err) == 0 &&
+                        engine->prepare(engine->context, bytes(star), &stmt, &err) == 0,
+                    "prepare star projection before column drift");
+            engine->guard_leave(engine->context, guard);
+            query(conn, change);
+            REQUIRE(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_EXECUTE, {},
+                                        &guard, &err) == 0 &&
+                        policy->authorize_execute(policy->context, bytes(star), nullptr, 0, &err) ==
+                            0 &&
+                        engine->reset(engine->context, stmt, &err) == 0,
+                    "reauthorize star projection after column drift");
+            ok(engine->bind(engine->context, stmt, nullptr, 0, &err) != 0 &&
+                   err.kind == ProxySQL_Embedded_ERROR_SCHEMA_CHANGED,
+               added ? "added column is rejected before execute"
+                     : "renamed column is rejected before execute");
+            ok(engine->execute(engine->context, stmt, &info, &err) != 0,
+               added ? "added column cannot execute the stale native statement"
+                     : "renamed column cannot execute the stale native statement");
+            engine->guard_leave(engine->context, guard);
+            engine->finalize(engine->context, stmt);
+            stmt = nullptr;
+        }
     }
     duckdb_disconnect(&conn);
     duckdb_close(&db);
