@@ -1697,6 +1697,8 @@ bool PgSQL_Data_Stream::start_client_tls() {
 		rbio_ssl = nullptr;
 		wbio_ssl = nullptr;
 		ssl = nullptr;
+		// The SSLRequest path has set encrypted already: left set, writeout() would use the null ssl.
+		encrypted = false;
 		proxy_error("Cannot start TLS for client %s:%d: out of memory\n", addr.addr, addr.port);
 		return false;
 	}

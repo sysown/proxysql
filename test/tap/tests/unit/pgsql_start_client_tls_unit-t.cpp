@@ -18,7 +18,7 @@
 #include <openssl/ssl.h>
 
 int main() {
-	plan(6);
+	plan(7);
 	test_init_minimal();
 
 	PgSQL_Data_Stream* ds = new PgSQL_Data_Stream();
@@ -26,6 +26,10 @@ int main() {
 	ok(ds->ssl == nullptr && ds->rbio_ssl == nullptr && ds->wbio_ssl == nullptr,
 	   "failure leaves no SSL object or BIOs behind");
 	ok(!ds->encrypted, "failure does not mark the stream encrypted");
+	// The SSLRequest path marks the stream encrypted before calling start_client_tls().
+	ds->encrypted = true;
+	ok(!ds->start_client_tls() && !ds->encrypted,
+	   "failure after an SSLRequest clears encrypted, so writeout() cannot use the null ssl");
 
 	GloVars.global.ssl_ctx = SSL_CTX_new(TLS_server_method());
 	if (GloVars.global.ssl_ctx == nullptr) BAIL_OUT("SSL_CTX_new failed");
