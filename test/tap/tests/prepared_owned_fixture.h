@@ -135,10 +135,11 @@ struct Fixture {
         }
         active = this;
         std::atexit(exit_cleanup);
-        // mkdtemp creates the directory with mode 0700 inside the platform temporary directory
-        // (TMPDIR when set), so other users cannot read or replace the fixture's files.
-        std::string pattern =
-            (std::filesystem::temp_directory_path() / "proxysql-prepared-XXXXXX").string();
+        // Keep fixture data in the test workspace. mkdtemp creates its own mode-0700 directory.
+        const char *workdir = getenv("TAP_WORKDIR");
+        const auto workspace = workdir && *workdir ? std::filesystem::absolute(workdir)
+                                                   : std::filesystem::current_path();
+        std::string pattern = (workspace / "proxysql-prepared-XXXXXX").string();
         char *made = mkdtemp(pattern.data());
         if (!made)
             BAIL_OUT("cannot create fixture directory");
