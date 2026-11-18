@@ -2,6 +2,21 @@
 
 This review branch stacks on the DuckDB-only candidate through `4e73d96dd`. It uses the core prepared controllers and the native SQLite adapter. The DuckDB plugin is not required. Start with read-only PostgreSQL and MySQL. Limited MySQL Admin writes require a separate reviewed commit and explicit approval.
 
+## PR #6648 review checkpoints
+
+| Commit | Scope | Local validation |
+| --- | --- | --- |
+| `0f8d83f74` | Removes the Admin/STATS and standalone SQLite3 Server prepared endpoints and restores the v3.0 Admin wire expectation. Retains the shared controllers, DuckDB adapter, analytical translation and ParserSQL changes. | DuckDB analytical and prepared driver tests passed. The unchanged legacy Admin result and Sync tests passed. |
+| `4e73d96dd` | Adds `PROXYSQL_SESSION_DUCKDB` after existing enum values and switches both DuckDB listeners. Covers authorization, dispatch, MySQL database selection and change-user, reset, logging, and teardown. | 216 analytical MySQL, 47 native MySQL, 29 native PostgreSQL, 18 PostgreSQL extended, and 11 schema and cleanup assertions passed. The analytical suite routes back to the DuckDB listener through ordinary ProxySQL query rules. |
+
+The patches can be inspected independently from the published head.
+
+```sh
+git show 0f8d83f74
+git show 4e73d96dd
+git log --oneline 4e73d96dd..review/6648-admin-stats-prepared
+```
+
 ## Dispatch and policy
 
 The existing Admin dispatcher owns simple SQL and Cluster commands, including `PROXY_SELECT`. PostgreSQL simple Query payloads are never parsed by the prepared integration. A session that has never created a prepared provider does not enter its registry on a simple Query. With an active provider, PostgreSQL may close unnamed statements and portals before passing the original packet to the existing dispatcher. During extended-query error recovery, the controller discards messages through Sync as the protocol requires.
@@ -33,6 +48,11 @@ Both unchanged legacy TAP tests passed against a separate build of the
 exact v3.0 base `663e84aa6` with DuckDB disabled. Their 38 assertion
 messages match the DuckDB-only candidate `4e73d96dd` with DuckDB disabled
 and enabled after removing timestamps.
+
+Under the same no-DuckDB fixture, the published head `9098425b6` failed
+both legacy Cluster `PROXY_SELECT` queries with `CASE … END`. It also failed
+8 of the 15 legacy extended-query rejection and recovery assertions.
+This comparison uses the unchanged v3.0 test sources for all heads.
 
 The two-node Cluster test starts private ProxySQL processes without DuckDB.
 It checks that an exact runtime query rule synchronizes in both directions,
@@ -98,6 +118,14 @@ Codecov separately reported 4.47% patch coverage and 52.26% project
 coverage while coverage jobs were still running. Final coverage and
 quality-gate results are pending for the split branch.
 [Codecov report](https://app.codecov.io/gh/sysown/proxysql/pull/6648)
+
+The `CI-legacy-g6` job failed in `pgsql-query_cache_test-t` on both
+`663e84aa6` and `9098425b6`. The TAP artifacts match. Both passed 700
+assertions and failed assertions 341 and 692 with
+`Query_Cache_count_GET` equal to 1 where 0 was expected. The published PR
+therefore reproduces the existing v3.0 failure.
+[PR CI job](https://github.com/sysown/proxysql/actions/runs/44369848911/job/135036256166)
+[v3.0 CI job](https://github.com/sysown/proxysql/actions/runs/43684682801/job/132723253159)
 
 The MySQL 5.7 `CI-legacy-g7` run for `9098425b6` passed 22 of 23 tests.
 `reg_test_stmt_resultset_err_no_rows_php-t` returned `ETIME` from its
