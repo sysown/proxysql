@@ -19,4 +19,16 @@ Create the native provider on the first supported prepared command. The role sel
 | Locking and Cluster liveness | Two owned ProxySQL nodes synchronize configuration with their real Cluster credentials while MySQL and PostgreSQL prepared clients are active. Check both nodes converge, legacy commands stay responsive, and shutdown/disconnect complete with bounded waits. Include the Admin lock regression where infrastructure permits. |
 | CI | Run the relevant integration tiers and ASan/TSan. Record the exact candidate and comparison heads. Investigate any failure before treating it as a pre-existing issue. |
 
-PostgreSQL is the first integration slice. MySQL read-only, concurrency, the two-node fixture and the combined CI evidence remain required for the separate draft PR.
+The local read-only candidate passes 62 PostgreSQL and 31 MySQL real-driver
+checks with DuckDB disabled. PostgreSQL covers a legacy `BEGIN` that leaves
+native autocommit enabled, plus a real SQLite savepoint that makes a second
+client's prepared operation fail with `25000` until release. MySQL covers
+native long data, schema invalidation with `1615`, and recovery after reaching
+the 128-statement limit. The legacy result protocol and error/Sync tests pass
+23 and 15 checks respectively with DuckDB disabled or enabled. In the combined
+build, the DuckDB analytical and native MySQL and PostgreSQL drivers pass 216,
+47 and 29 checks respectively.
+
+Concurrency, the two-node Cluster fixture, and combined integration and
+sanitizer CI evidence remain required for the separate draft PR. Prepared
+MySQL writes remain outside the read-only candidate.

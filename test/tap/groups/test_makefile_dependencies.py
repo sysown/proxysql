@@ -394,6 +394,7 @@ class MakefileDependencyTest(unittest.TestCase):
         targets = (
             "test_duckdb_mysql_analytical-t",
             "test_embedded_prepared_schema_mysql-t",
+            "test_embedded_prepared_admin_mysql-t",
             "test_embedded_prepared_admin_pgsql-t",
             "test_duckdb_prepared_mysql-t",
             "test_duckdb_prepared_pgsql-t",

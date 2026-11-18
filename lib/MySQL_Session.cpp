@@ -20,6 +20,7 @@ using json = nlohmann::json;
 #include "Query_Processor_ParserSQL.h"
 #include "MySQL_PreparedStatement.h"
 #include "Embedded_MySQL_Prepared.h"
+#include "Embedded_Admin_MySQL_Prepared.h"
 // GenAI_Thread.h, AI_Features_Manager.h, LLM_Bridge.h moved to
 // plugins/genai/include/ in Step 5.  Step 4.A removed all session-side
 // GENAI:/LLM: prefix dispatch, so MySQL_Session no longer references
@@ -1211,7 +1212,7 @@ MySQL_Session::MySQL_Session() {
 void MySQL_Session::reset() {
 	const bool was_healthy = healthy;
 	// Registered embedded endpoints own native statements outside proxy metadata.
-	if (session_type == PROXYSQL_SESSION_DUCKDB) {
+	if (session_type == PROXYSQL_SESSION_DUCKDB || admin_prepared_registered) {
 		if (auto error = embedded::reset_mysql_prepared(*this)) {
 			proxy_error("Embedded prepared reset failed: %s\n", error->message.c_str());
 			healthy = false;
@@ -1315,6 +1316,11 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
+	if (admin_prepared_registered) {
+		embedded::unregister_admin_mysql_prepared(*this);
+		embedded::destroy_mysql_prepared(*this);
+		admin_prepared_registered = false;
+	}
 	if (session_type == PROXYSQL_SESSION_DUCKDB) {
 		embedded::teardown_plugin_mysql(*this);
 		embedded::destroy_mysql_prepared(*this);
@@ -5425,6 +5431,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PAC
 // we return false if the enum_mysql_command is not found
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass) {
 	if (session_type == PROXYSQL_SESSION_DUCKDB && embedded::handle_mysql_prepared(*this, *pkt)) return true;
+	if ((session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) &&
+	    embedded::handle_admin_mysql_prepared(*this, *pkt, admin_prepared_registered))
+		return true;
 	unsigned char c;
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	switch ((enum_mysql_command)c) {
@@ -5726,6 +5735,9 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 
 void MySQL_Session::GPFC_PreparedStatements(PtrSize_t& pkt, unsigned char c) {
 	if (session_type == PROXYSQL_SESSION_DUCKDB && embedded::handle_mysql_prepared(*this, pkt)) return;
+	if ((session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) &&
+	    embedded::handle_admin_mysql_prepared(*this, pkt, admin_prepared_registered))
+		return;
 	switch ((enum_mysql_command)c) {
 		case _MYSQL_COM_STMT_PREPARE:
 			if (GloMyLdapAuth) {
