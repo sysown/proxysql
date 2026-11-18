@@ -331,6 +331,13 @@ static void test_namespace(MYSQL *c, const char *label, bool routed) {
            mysql_sqlstate(c));
         ok(text_rows(c, "SELECT DATABASE()", {"DATABASE()"}, {{"ns_other"}}),
            "%s keeps the previous database after a failed USE", label);
+        const int unknown_init = mysql_select_db(c, "no_such_database");
+        ok(unknown_init != 0 && mysql_errno(c) == 1049 &&
+               !std::strcmp(mysql_sqlstate(c), "42000"),
+           "%s refuses an unknown COM_INIT_DB with 1049/42000 (got %u/%s)", label,
+           mysql_errno(c), mysql_sqlstate(c));
+        ok(text_rows(c, "SELECT id FROM ns_same ORDER BY id", {"id"}, {{"2"}}),
+           "%s preserves the selected database after a failed COM_INIT_DB", label);
         const int reserved = mysql_query(c, "USE proxysql_replica");
         ok(reserved != 0 && mysql_errno(c) == 1049,
            "%s refuses the replica metadata schema (got %u)", label, mysql_errno(c));
@@ -545,6 +552,27 @@ int main() {
             "CREATE VIEW analytical_side_effect AS SELECT nextval('analytical_sequence') AS id"))
         BAIL_OUT("PostgreSQL fixture setup failed");
     ok(true, "native PostgreSQL listener creates tables, data, sequence and view");
+    for (const char *database : {"no_such_database", "proxysql_replica"}) {
+        MYSQL *client = mysql_init(nullptr);
+        if (!client)
+            BAIL_OUT("cannot allocate MySQL client");
+        MYSQL *connected = mysql_real_connect(client, "127.0.0.1", "fixture_client",
+                                             "fixture_client", database, fixture.d, nullptr, 0);
+        ok(!connected && mysql_errno(client) == 1049 &&
+               !std::strcmp(mysql_sqlstate(client), "42000"),
+           "handshake rejects database %s with 1049/42000 (got %u/%s)", database,
+           mysql_errno(client), mysql_sqlstate(client));
+        mysql_close(client);
+    }
+    MYSQL *with_db = mysql_init(nullptr);
+    if (!with_db)
+        BAIL_OUT("cannot allocate MySQL client");
+    ok(!mysql_options(with_db, MYSQL_SET_CHARSET_NAME, "utf8mb4") &&
+           mysql_real_connect(with_db, "127.0.0.1", "fixture_client", "fixture_client", "ns_other",
+                          fixture.d, nullptr, 0) &&
+           text_rows(with_db, "SELECT id FROM ns_same ORDER BY id", {"id"}, {{"2"}}),
+       "handshake selects the requested database before the first query");
+    mysql_close(with_db);
     MYSQL *mysql =
         duckdb_replica_test::connect("127.0.0.1", fixture.d, "fixture_client", "fixture_client");
     if (!mysql)
@@ -715,6 +743,20 @@ int main() {
         test_joins(proxied, "ordinary routed listener");
         mysql_close(proxied);
     }
+    const bool replaced =
+        pg_exec(pg, "CREATE TABLE text_saved AS SELECT * FROM text_fixture") &&
+        pg_exec(pg, "DROP TABLE text_fixture") &&
+        pg_exec(pg, "CREATE TABLE text_fixture "
+                    "(id INTEGER PRIMARY KEY, t VARCHAR COLLATE NOCASE, ai VARCHAR)") &&
+        pg_exec(pg, "INSERT INTO text_fixture SELECT * FROM text_saved");
+    ok(replaced &&
+           text_rows(mysql, "SELECT id FROM text_fixture WHERE t = 'a' ORDER BY id", {"id"},
+                     {{"1"}}),
+       "binary predicate stays case-sensitive after native replacement with the same column type");
+    ok(replaced &&
+           text_rows(mysql, "SELECT id FROM text_fixture WHERE id <= 2 ORDER BY t, id",
+                     {"id"}, {{"2"}, {"1"}}),
+       "binary ordering stays case-sensitive after native replacement");
     mysql_close(mysql);
     PQfinish(pg);
     return exit_status();

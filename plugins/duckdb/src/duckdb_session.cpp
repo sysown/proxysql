@@ -461,6 +461,8 @@ DuckDBMySQLUseResult duckdb_mysql_apply_use(DuckDBSessionState& state, duckdb_co
 	DuckDBMySQLUseResult result;
 	switch (use.kind) {
 	case DuckDBMySQLUseStatement::Kind::database: {
+		std::string selected = use.database;
+		std::string namespace_source = use.database;
 		std::string reason;
 		if (!duckdb_mysql_use_database(conn, use.database, reason)) {
 			if (reason == "unknown_database" || reason == "reserved_database") {
@@ -473,8 +475,9 @@ DuckDBMySQLUseResult duckdb_mysql_apply_use(DuckDBSessionState& state, duckdb_co
 			}
 			return result;
 		}
-		state.mysql_database = use.database;
-		state.mysql_namespace_source = use.database;
+		state.mysql_database = std::move(selected);
+		state.mysql_namespace_source = std::move(namespace_source);
+		state.mysql_namespace_ready = true;
 		state.mysql_schema_applied = true;
 		result.ok = true;
 		return result;
@@ -543,8 +546,7 @@ bool duckdb_mysql_namespace_sync(DuckDBSessionState& state, duckdb_connection co
 	}
 	const std::string current = schemaname != nullptr ? schemaname : "";
 	// Only a core-driven change (COM_CHANGE_USER) moves this spelling; a USE
-	// handled here writes both sides, and COM_INIT_DB is acknowledged by core
-	// without reaching the plugin (see doc/duckdb/protocol-compatibility.md).
+	// or COM_INIT_DB handled by the namespace selector writes both sides.
 	if (current != state.mysql_namespace_source) {
 		state.mysql_namespace_source = current;
 		return select(current, true);

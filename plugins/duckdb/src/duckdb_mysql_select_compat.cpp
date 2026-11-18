@@ -669,7 +669,13 @@ struct Translator {
             return false;
         // At least one side must be a proven text column, and never two bare
         // literals: the admitted forms are column/literal and column/column.
-        return (a_column || b_column) && !(a_literal && b_literal);
+        if (!(a_column || b_column) || (a_literal && b_literal))
+            return false;
+        // The source proof is about MySQL's collation. Override any DuckDB
+        // column or connection collation on both operands.
+        x += " COLLATE \"binary\"";
+        y += " COLLATE \"binary\"";
+        return true;
     }
     bool having_pred(const N *node, std::string &out) {
         if (!node || node->flags)
@@ -1401,7 +1407,10 @@ struct Translator {
                 if (sep)
                     out += ", ";
                 sep = true;
-                out += column_sql(ref) + " " + d + (d == "ASC" ? " NULLS FIRST" : " NULLS LAST");
+                out += column_sql(ref);
+                if (!numeric)
+                    out += " COLLATE \"binary\"";
+                out += " " + d + (d == "ASC" ? " NULLS FIRST" : " NULLS LAST");
                 ordered.insert({ref.relation, ref.column->canonical_name});
             }
             if (!sep)

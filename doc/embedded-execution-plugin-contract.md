@@ -24,6 +24,13 @@ The engine capability mask has only READ_ONLY (bit 0) and PARAMETER_POSITIONS (b
 
 READ_ONLY is required for both frontends. MySQL request flags must be exactly READ_ONLY, and `mysql_status` is required. PostgreSQL flags must be exactly READ_ONLY | PG_IMPLICIT_CYCLES and the engine must advertise PARAMETER_POSITIONS. PostgreSQL requires `pgsql_status` and ignores `mysql_status`, which remains optional for PostgreSQL throughout V1. MySQL ignores `pgsql_status`. Reject unknown or otherwise invalid request flags before callbacks. The provider must never write, even if a statement appears safe. READ_ONLY is a provider capability promise, not proof of authorization; policy always runs first. V1 does not claim native DML support, and PostgreSQL read-only implicit cycles are not full transaction support.
 
+The optional MySQL request tail `mysql_select_database` uses `status_context`.
+It runs on the session owner thread before core acknowledges an explicit
+handshake database or `COM_INIT_DB`. Its borrowed byte span is valid for the
+call. The callback returns zero on success or a MySQL error number, and preserves
+the previous namespace on failure. A V1 request whose size ends before this
+field has no namespace selector.
+
 
 The core uses a shared process quota pool for native statement counts and retained SQL, metadata, bind, and result bytes, in addition to per-session limits. Frontends account for their retained copies. MySQL reserves its bounded private response budget before execution; PostgreSQL charges retained encoded rows until portal cleanup. These limits cover logical retained payloads, not allocator capacity, temporary engine allocations, engine RSS, or packets already transferred to the normal network output queue. Provider callback views have separate checked count and payload bounds before copying.
 

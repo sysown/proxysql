@@ -123,7 +123,7 @@ static uint16_t mysql_status(void*) noexcept { return 2; }
 static uint8_t state = 'T';
 static uint8_t pgsql_status(void*) noexcept { return state; }
 int main() {
-    plan(40);
+    plan(42);
     test_init_minimal();
     auto* svc = proxysql_embedded_execution_service();
     ok(svc && svc->abi_version == 1 && svc->struct_size == sizeof(*svc),
@@ -151,6 +151,14 @@ int main() {
     bad = req;
     bad.mysql_status = nullptr;
     ok(svc->register_mysql(&mysql, &bad, &err) == 1, "missing status rejected");
+    auto old_request = req;
+    old_request.struct_size = offsetof(ProxySQL_Embedded_RequestV1, mysql_select_database);
+    old_request.mysql_select_database = [](void*, ProxySQL_Embedded_BytesView) noexcept
+        -> uint16_t { return 1049; };
+    ok(svc->register_mysql(&mysql, &old_request, &err) == 0 &&
+           embedded::plugin_mysql_select_database(mysql, "db", 2) == 0,
+       "older V1 request registers without reading the optional selector");
+    ok(svc->unregister_mysql(&mysql, &err) == 0, "older V1 request unregisters");
     ok(svc->register_mysql(&mysql, &req, &err) == 0, "mysql registered");
     ok(svc->register_mysql(&mysql, &req, &err) == 1, "duplicate rejected");
     int other = 0;

@@ -8060,6 +8060,15 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE_
 	client_myds->DSS=STATE_SLEEP;
 }
 
+static void send_plugin_mysql_database_error(MySQL_Data_Stream* client, uint8_t sequence,
+                                             uint16_t code) {
+	client->setDSS_STATE_QUERY_SENT_NET();
+	client->myprot.generate_pkt_ERR(true, nullptr, nullptr, sequence, code,
+		code == 1049 ? "42000" : "HY000",
+		code == 1049 ? "Unknown database" : "Cannot select embedded database");
+	client->DSS = STATE_SLEEP;
+}
+
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
 	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
@@ -8121,6 +8130,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				}
 			}
 		}
+		const char* requested_database = client_myds->myconn->userinfo->schemaname;
 		l_free(pkt->size,pkt->ptr);
 		//if (client_myds->encrypted==false) {
 			if (client_myds->myconn->userinfo->schemaname==NULL) {
@@ -8311,7 +8321,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					// connection, but as a consequence of a 'COM_USER_CHANGE' which
 					// requires an 'Auth Switch'. Thus, we impose a 'pid' of '3' for the
 					// response 'OK' packet. See #3504 for more context.
-					if (change_user_auth_switch) {
+					const bool switching_user = change_user_auth_switch;
+					if (switching_user) {
 						_pid = 3;
 						change_user_auth_switch = 0;
 					}
@@ -8329,6 +8340,18 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						free(_s);
 						__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 					} else {
+						if (session_type == PROXYSQL_SESSION_SQLITE && !switching_user &&
+						    requested_database && *requested_database) {
+							const uint16_t code = embedded::plugin_mysql_select_database(
+								*this, requested_database, strlen(requested_database));
+							if (code) {
+								*wrong_pass = true;
+								send_plugin_mysql_database_error(client_myds, _pid, code);
+								GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL);
+								__sync_add_and_fetch(&MyHGM->status.client_connections_aborted, 1);
+								return;
+							}
+						}
 						// we are good!
 						//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
@@ -8445,10 +8468,17 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_INITDB, this, NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
-		// These sessions are answered locally, but a plugin that tracks a current
-		// database (the DuckDB analytical dialect) reads it from the session's
-		// userinfo at its next statement. Record the requested name so such a
-		// plugin never keeps resolving names in the previous database.
+		constexpr size_t payload_offset = sizeof(mysql_hdr) + 1;
+		if (session_type == PROXYSQL_SESSION_SQLITE && pkt->size >= payload_offset) {
+			const auto* database = static_cast<const char*>(pkt->ptr) + payload_offset;
+			const uint16_t code = embedded::plugin_mysql_select_database(
+				*this, database, pkt->size - payload_offset);
+			if (code) {
+				l_free(pkt->size, pkt->ptr);
+				send_plugin_mysql_database_error(client_myds, 1, code);
+				return;
+			}
+		}
 		if (client_myds && client_myds->myconn && client_myds->myconn->userinfo &&
 		    pkt->size > sizeof(mysql_hdr) + 1) {
 			const char* charset = mysql_variables.client_get_value(this, SQL_CHARACTER_SET_CLIENT);

@@ -14,6 +14,8 @@ using namespace embedded;
 struct Record {
     std::shared_ptr<PluginProvider> provider;
     std::thread::id owner;
+    decltype(ProxySQL_Embedded_RequestV1::mysql_select_database) select_database = nullptr;
+    void* select_database_context = nullptr;
 };
 template<class S> struct Registry {
     std::mutex mutex;
@@ -120,7 +122,14 @@ template<class S> int register_impl(void* opaque, const ProxySQL_Embedded_Reques
         return report(*status, out);
     try {
         std::lock_guard<std::mutex> lock(r.mutex);
-        if (r.entries.emplace(s, Record{p, std::this_thread::get_id()}).second)
+        Record record{p, std::this_thread::get_id()};
+        if constexpr (std::is_same_v<S, MySQL_Session>) {
+            if (req->struct_size >= sizeof(*req)) {
+                record.select_database = req->mysql_select_database;
+                record.select_database_context = req->status_context;
+            }
+        }
+        if (r.entries.emplace(s, std::move(record)).second)
             return 0;
     } catch (...) {
         // Roll back the private registration before releasing the provider.
@@ -153,6 +162,29 @@ const ProxySQL_Embedded_ServiceV1* proxysql_embedded_execution_service() noexcep
     return &service;
 }
 namespace embedded {
+uint16_t plugin_mysql_select_database(MySQL_Session& s, const char* database,
+                                      size_t size) noexcept {
+    if (s.session_type != PROXYSQL_SESSION_SQLITE)
+        return 0;
+    try {
+        auto& r = registry<MySQL_Session>();
+        decltype(Record::select_database) fn = nullptr;
+        void* ctx = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(r.mutex);
+            auto it = r.entries.find(&s);
+            if (it == r.entries.end() || !it->second.select_database)
+                return 0;
+            if (it->second.owner != std::this_thread::get_id())
+                return 1105;
+            fn = it->second.select_database;
+            ctx = it->second.select_database_context;
+        }
+        return fn(ctx, {reinterpret_cast<const uint8_t*>(database), size});
+    } catch (...) {
+        return 1105;
+    }
+}
 void teardown_plugin_mysql(MySQL_Session& s) noexcept {
     // An ordinary proxy session is never plugin-registered; do not lock the registry for it.
     if (s.session_type == PROXYSQL_SESSION_MYSQL) return;

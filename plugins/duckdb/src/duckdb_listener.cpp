@@ -455,9 +455,8 @@ void DuckDBListener::run_session(int client_fd) {
 	if (st.database_name.empty() || st.database_name == ":memory:") {
 		st.database_name = "memory";
 	}
-	// Each accepted connection starts a fresh MySQL namespace; the handshake
-	// database (if any) is read from core's userinfo once authentication has
-	// completed. See duckdb_mysql_namespace_sync().
+	// Each connection starts with no selected database. The registered
+	// selector applies an explicit handshake database before the first query.
 	st.mysql_database.clear();
 	st.mysql_namespace_source.clear();
 	st.mysql_namespace_ready = false;
@@ -575,8 +574,7 @@ void DuckDBListener::run_session(int client_fd) {
 				if (st.mysql_analytical) {
 					// Prepared statements need the session's current database
 					// at prepare time and must keep it at execute time. The
-					// callback also finishes the lazy handshake-database
-					// initialization for a pipelined first prepare.
+					// callback also handles namespace recovery after a reset.
 					provider->set_mysql_namespace([sess]() -> std::string {
 						auto& state = duckdb_session_state();
 						const char* schemaname = nullptr;
@@ -597,6 +595,25 @@ void DuckDBListener::run_session(int client_fd) {
 			request.flags = ProxySQL_Embedded_REQUEST_READ_ONLY;
 			request.mysql_status = mysql_status; request.status_context = &prepared_status;
 			request.pgsql_status = pg_status; request.pgsql_status_context = &prepared_status;
+			if (st.mysql_analytical) {
+				request.mysql_select_database = [](void*, ProxySQL_Embedded_BytesView name)
+				    noexcept -> uint16_t {
+					if (!name.data || !name.size || name.size > 64 ||
+					    std::memchr(name.data, 0, name.size))
+						return 1049;
+					try {
+						auto& state = duckdb_session_state();
+						DuckDBMySQLUseStatement use;
+						use.kind = DuckDBMySQLUseStatement::Kind::database;
+						use.database.assign(reinterpret_cast<const char*>(name.data),
+						                    name.size);
+						const auto result = duckdb_mysql_apply_use(state, state.conn, use);
+						return result.ok ? 0 : result.code;
+					} catch (...) {
+						return 1105;
+					}
+				};
+			}
 			ProxySQL_Embedded_Error error{};
 			int rc;
 			if constexpr (std::is_same_v<Thr, MySQL_Thread>) rc = prepared_service_->register_mysql(sess, &request, &error);

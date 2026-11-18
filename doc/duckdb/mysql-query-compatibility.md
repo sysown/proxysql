@@ -596,10 +596,10 @@ Selection sources, all in the analytical MySQL dialect only:
 
 | Source | Plugin visibility | Effect |
 | --- | --- | --- |
-| Handshake default database | `userinfo->schemaname` after authentication | Selected on the first statement (validated then). |
+| Handshake database | Core calls the registered selector after credential validation | Selected before the handshake success response. An unknown or reserved name refuses the connection with 1049. |
 | `USE db` (COM_QUERY) | Handled by the plugin before translation | Validated and selected; the shared `userinfo` name is updated. |
 | COM_CHANGE_USER | Core updates `userinfo->schemaname` | Re-selected on the next statement. |
-| COM_INIT_DB | Core answers OK for plugin sessions and records the requested name in `userinfo->schemaname` (`MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB`) | Validated and selected at the plugin's next statement; an unknown name leaves no database selected, so that statement fails instead of resolving anywhere else. ProxySQL's ordinary routed path switches a backend database with this command. |
+| COM_INIT_DB | Core calls the registered selector before acknowledging the command | Validated and selected immediately. An unknown or reserved name returns 1049 and keeps the previous database. |
 | COM_RESET_CONNECTION | `reset_client` callback | Database name preserved (see below). |
 
 `USE` is parsed with ParserSQL (`ParseResult::StmtType::USE`) plus a bounded
@@ -614,7 +614,6 @@ syntax error, as in MySQL. Doubled backticks are unescaped. Error mapping:
 | `USE` with no name or `USE ''` | 1064 / `42000` | 1064 / `42000` |
 | `USE \`\`` | 1046 / `3D000`, selection unchanged | 1046 / `3D000` |
 | Name over 64 bytes | 1059 / `42000` | 1059 / `42000` |
-| Name that does not exist but equals core's `mysql-default_schema` | n/a | Treated as no database (see limits) |
 
 Reserved names never become the current schema: `proxysql_replica` (replica
 metadata), `information_schema`, `pg_catalog`, `system` and `temp` (DuckDB
@@ -658,22 +657,16 @@ Known differences, all refusals rather than results, with reproducers:
    different catalog) and for `pg_catalog`/`system`/`temp`/`proxysql_replica`.
    `mysql` and `performance_schema` do not exist in the replica and therefore
    also answer 1049.
-2. `COM_INIT_DB` (and a routed `USE`) is acknowledged before the plugin can
-   validate the name; an unknown or reserved database is refused at the next
-   statement (1046 No database selected) instead of at the command, where
-   MySQL answers 1049. It never falls back to another database.
+2. An ordinary ProxySQL frontend acknowledges its own database switch before
+   requesting a backend connection. A routed statement reports the failure
+   when that backend rejects the subsequent `COM_INIT_DB`.
 3. After `DROP DATABASE` of the current database, `SELECT * FROM t` is refused
    with 1235 / `0A000` here and with 1049 on MySQL; `SHOW TABLES` matches
    (1049) because it validates the database first.
-4. A connection whose handshake database is unknown is refused by MySQL; the
-   plugin cannot intercept the handshake and instead behaves as if no database
-   were selected (relative names fail with 1046, qualified names still work).
-5. A handshake database whose name equals `mysql-default_schema` is
-   indistinguishable from "no database" in core's `userinfo`, so it is treated
-   as no database. This only refuses; it never resolves in another schema.
-6. A dropped prepare-time database answers 1615 instead of 1049.
-7. `SHOW DATABASES` lists DuckDB catalogs, not MySQL databases.
-8. A database whose name contains `.` exists as a native schema and can be
+4. `COM_CHANGE_USER` still revalidates the selected database on the next statement.
+5. A dropped prepare-time database answers 1615 instead of 1049.
+6. `SHOW DATABASES` lists DuckDB catalogs, not MySQL databases.
+7. A database whose name contains `.` exists as a native schema and can be
    reached with a qualified `\`a.b\`.t` name, but `USE \`a.b\`` is refused with
    1105 / `HY000`: DuckDB cannot make such a schema the connection's current
    schema (it parses the name as catalog.schema), and the plugin refuses rather
@@ -956,8 +949,10 @@ data, not a per-row check. NULL input returns NULL.
 Text predicates and text ordering are admitted only when every text column they
 touch has a recorded source collation of exactly `utf8mb4_0900_bin`. That
 collation is NO PAD and compares Unicode code points, which is exactly the
-byte order of valid UTF-8, so it matches DuckDB's default VARCHAR comparison
-and ordering. The admitted forms are:
+byte order of valid UTF-8. Translation emits an explicit DuckDB binary
+collation on both comparison operands and on text ordering keys. The explicit
+collation keeps the result independent of native column and connection defaults.
+The admitted forms are:
 
 - `=`, `<>`, `!=`, `<`, `<=`, `>`, `>=` between one proven text column and one
   plain string literal, with the literal on either side;

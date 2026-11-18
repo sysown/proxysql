@@ -132,9 +132,9 @@ for the exact admitted spellings, error codes and limits. Operationally:
   an exact name match, then selected with a session-scoped `SET schema` bound as
   a value. Unknown or reserved schemas fail with 1049 / `42000` and leave the
   selection unchanged.
-- The handshake default database is selected after authentication. An unknown
-  handshake database leaves no database selected (MySQL would have refused the
-  connection; the plugin cannot intercept the handshake).
+- After validating the credentials, the listener selects an explicitly requested
+  handshake database before sending success. An unknown or reserved database
+  returns 1049 / `42000`.
 - Relative names resolve in the selected database; qualified `database.table`
   names resolve in their own database; three-part names are refused as a MySQL
   syntax error.
@@ -143,16 +143,12 @@ for the exact admitted spellings, error codes and limits. Operationally:
 - `COM_RESET_CONNECTION` keeps the current database name and re-selects it on
   the replacement native connection.
 
-`COM_INIT_DB` is handled by core for plugin sessions
-(`MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB`,
-non-`PROXYSQL_SESSION_MYSQL` branch). That branch answers OK and now also records the
-requested name in `client_myds->myconn->userinfo->schemaname`, exactly like
-`COM_CHANGE_USER`; the plugin compares that name with the one it last applied at
-every statement and validates and selects it. Because core acknowledges the command
-first, an unknown or reserved name is refused at the next statement (1046) rather
-than at the command (MySQL: 1049); no statement is ever resolved in another database.
-ProxySQL's ordinary routed path changes a backend's database with this command (and
-its frontend acknowledges `USE` itself), so routed clients get the same behavior.
+For `COM_INIT_DB`, core calls the registered DuckDB namespace selector before
+updating the session database or sending success. An unknown or reserved name
+returns 1049 / `42000` and preserves the current database. ProxySQL's ordinary
+frontend still acknowledges its own database switch immediately. It sends
+`COM_INIT_DB` to the DuckDB backend when it needs the connection for the next
+statement, so that statement reports any failure to select the database.
 
 The plugin Makefile must define `PROXYSQLED25519` whenever the core does:
 `mysql_connection.h` adds members to `MySQL_Connection` under that macro, and a plugin

@@ -779,7 +779,8 @@ Status make_plugin_provider(const ProxySQL_Embedded_RequestV1 *r, bool pgsql,
                             PluginProviderResult &out, PluginLimits l, QuotaPool *quota) {
     out.reset();
     try {
-        if (!r || r->abi_version != 1 || r->struct_size < sizeof(*r))
+        if (!r || r->abi_version != 1 ||
+            r->struct_size < offsetof(ProxySQL_Embedded_RequestV1, mysql_select_database))
             return internal("invalid request descriptor");
         auto *e = r->engine;
         auto *p = r->policy;

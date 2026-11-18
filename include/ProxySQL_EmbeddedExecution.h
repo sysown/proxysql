@@ -159,6 +159,9 @@ struct ProxySQL_Embedded_RequestV1 {
     // Required for PostgreSQL; returns exactly 'I', 'T' or 'E'.
     std::uint8_t (*pgsql_status)(void*) noexcept;
     void* pgsql_status_context;
+    // Optional MySQL namespace selector. Return zero on success or a MySQL
+    // error code. A failed selection must preserve the previous namespace.
+    std::uint16_t (*mysql_select_database)(void*, ProxySQL_Embedded_BytesView) noexcept;
 };
 
 struct ProxySQL_Embedded_ServiceV1 {

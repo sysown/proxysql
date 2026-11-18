@@ -625,8 +625,9 @@ int main() {
        "a NUL byte in a text literal is refused, never emitted");
     auto text_exact = text_translate("SELECT id FROM text_probe WHERE t = 'it''s' ORDER BY id");
     ok(text_exact.decision == DuckDBMySQLSelectDecision::supported &&
-           text_exact.sql == "SELECT \"id\" FROM \"text_probe\" WHERE (\"t\" = 'it''s') ORDER BY "
-                             "\"id\" ASC NULLS FIRST",
+           text_exact.sql == "SELECT \"id\" FROM \"text_probe\" WHERE "
+                             "(\"t\" COLLATE \"binary\" = 'it''s' COLLATE \"binary\") "
+                             "ORDER BY \"id\" ASC NULLS FIRST",
        "doubled single quote literal is emitted as one DuckDB literal");
     ok(text_admitted("SELECT id FROM text_probe WHERE t = 'it''s' ORDER BY id"),
        "DuckDB prepares the doubled-quote text predicate");
@@ -670,7 +671,7 @@ int main() {
         ok(text_admitted(sql), "admitted text comparison or ordering: %s", sql);
     auto text_order = text_translate("SELECT id FROM text_probe ORDER BY t DESC, id LIMIT 2");
     ok(text_order.decision == DuckDBMySQLSelectDecision::supported &&
-           text_order.sql == "SELECT \"id\" FROM \"text_probe\" ORDER BY \"t\" DESC NULLS LAST, "
+           text_order.sql == "SELECT \"id\" FROM \"text_probe\" ORDER BY \"t\" COLLATE \"binary\" DESC NULLS LAST, "
                              "\"id\" ASC NULLS FIRST LIMIT 2",
        "text ordering keeps explicit MySQL NULL placement and deterministic limit");
     ok(text_reason("SELECT id FROM text_probe WHERE t = 'a'") == "supported",
@@ -1346,7 +1347,8 @@ int main() {
         "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.txt=r.txt ORDER BY l.id, r.id",
         join_context);
     ok(join_text.decision == DuckDBMySQLSelectDecision::supported &&
-           join_text.sql.find("ON (\"r0\".\"txt\" = \"r1\".\"txt\")") != std::string::npos,
+           join_text.sql.find("ON (\"r0\".\"txt\" COLLATE \"binary\" = "
+                              "\"r1\".\"txt\" COLLATE \"binary\")") != std::string::npos,
        "binary-collation text join key is admitted");
     auto join_group = duckdb_translate_mysql_select(
         "SELECT l.k, COUNT(*) AS n, COUNT(r.id) AS m, MIN(r.id) AS lo, SUM(r.id) AS s, "
