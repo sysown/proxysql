@@ -564,29 +564,6 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 	// otherwise the previous check was never true
 	if ((revents & POLLIN) == 0) return 0;
 
-	// Direct TLS (PostgreSQL 17+ sslnegotiation=direct): the client opens with a TLS handshake record
-	// (0x16) instead of a startup packet. Peeked once per connection; EOF and EAGAIN are left to the read below.
-	if (myds_type == MYDS_FRONTEND && !encrypted && !first_byte_checked) {
-		unsigned char b;
-		if (recv(fd, &b, 1, MSG_PEEK) == 1) {
-			first_byte_checked = true;
-			if (b == 0x16) {
-				const char* refusal = !pgsql_thread___have_ssl ? "pgsql-have_ssl is false" :
-					(client_addr && client_addr->sa_family == AF_UNIX) ? "not supported on a Unix socket" : nullptr;
-				if (refusal) {
-					proxy_error("Direct TLS connection from %s:%d refused: %s\n", addr.addr, addr.port, refusal);
-					shut_soft();
-					return -1;
-				}
-				if (!start_client_tls()) { // sets encrypted: the ClientHello is read by the TLS branch below
-					shut_soft();
-					return -1;
-				}
-				direct_tls = true;
-			}
-		}
-	}
-
 	int r = 0;
 	int s = queue_available(queueIN);
 	if (encrypted) {
@@ -601,6 +578,34 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 				// we are reading the very first packet
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 5, 0);
+				// Direct TLS (PostgreSQL 17+ sslnegotiation=direct): the client opens with a TLS handshake record
+				// (0x16) instead of a startup packet. Spotted in this read, so no extra syscall: as PostgreSQL's
+				// raw_buf, the bytes already read are replayed into OpenSSL. EOF and EAGAIN are left to the code below.
+				if (r > 0 && myds_type == MYDS_FRONTEND && !first_byte_checked) {
+					first_byte_checked = true;
+					const unsigned char* first = (const unsigned char*)queue_w_ptr(queueIN);
+					if (first[0] == 0x16) {
+						const char* refusal = !pgsql_thread___have_ssl ? "pgsql-have_ssl is false" :
+							(client_addr && client_addr->sa_family == AF_UNIX) ? "not supported on a Unix socket" : nullptr;
+						if (refusal) {
+							proxy_error("Direct TLS connection from %s:%d refused: %s\n", addr.addr, addr.port, refusal);
+							shut_soft();
+							return -1;
+						}
+						if (!start_client_tls()) {
+							shut_soft();
+							return -1;
+						}
+						direct_tls = true;
+						// TLS bytes, not a packet: never committed to queueIN. The handshake is driven here, as
+						// the TLS branch does, so it cannot complete inside SSL_read() past do_ssl_handshake()'s checks.
+						if (BIO_write(rbio_ssl, first, r) <= 0 || do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
+							shut_soft();
+							return -1;
+						}
+						return 0; // the rest of the ClientHello is read by the TLS branch on the next POLLIN
+					}
+				}
 				if (r == 5) {
 					// let's try to read a whole packet
 					unsigned int read_pos = 0;

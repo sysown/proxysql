@@ -152,7 +152,7 @@ public:
 	// An SSLRequest and a GSSENCRequest are each honoured once per connection (see PgSQL_Protocol).
 	bool startup_ssl_done = false;
 	bool startup_gss_done = false;
-	// The first byte of a client connection is peeked once, to spot a direct TLS ClientHello.
+	// The first byte of a client connection is checked once, to spot a direct TLS ClientHello.
 	bool first_byte_checked = false;
 	// TLS started on a ClientHello with no SSLRequest first; ALPN postgresql is then required.
 	bool direct_tls = false;
