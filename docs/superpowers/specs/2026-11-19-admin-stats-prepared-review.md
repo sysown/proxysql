@@ -105,6 +105,31 @@ named statement and 128 named portal limits as both Admin and STATS. They
 check `54000` on overflow, capacity recovery after Close, and reuse of the
 named statement after Sync releases the portals.
 
+The MySQL suite now passes 42 checks in regular and local ASan builds.
+While a separate legacy Admin session holds a SQLite savepoint, MySQL Admin
+refuses a new prepare and an execute of a statement prepared earlier. STATS
+still reads from its own database. The same Admin statement executes
+successfully once the legacy session releases the savepoint.
+
+## Proposed MySQL prepared-write slice
+
+For separate review, use the original patch's three configuration tables
+as the starting scope. Admit direct parameterized `INSERT`, `UPDATE`
+and `DELETE` on `main.mysql_servers`, `main.mysql_users` and
+`main.mysql_query_rules` for an authenticated MySQL Admin session when
+Admin is read-write. These operations edit the in-memory Admin database.
+Operators still use the existing simple-query commands to load configuration
+to runtime or save it to disk. The read-only candidate keeps its current
+behavior until this scope is approved.
+
+| Review requirement | Validation for the write slice |
+| --- | --- |
+| Role and targets | Verify Admin can edit each approved table and observe affected rows and exact stored values. Exercise rejection through STATS, the PostgreSQL Admin listener, runtime and disk schemas, and targets outside the allowlist. |
+| Read-only transition | Prepare an Admin write, switch a separate session to `PROXYSQL READONLY`, and verify execute fails with zero effects. Switch back and verify a retry can succeed. Check prepare is denied while read-only. |
+| Transaction and serialization | Keep the startup gate and Admin SQL lock across policy, native execution and result collection. Reject prepare and execute while another legacy session owns a native transaction. Check concurrent legacy readers and prepared writes observe consistent configuration. |
+| Native side effects | Authorize the actual SQLite targets again on execution and native recompilation. Test trigger and view dependencies, failed constraints, and lack of side effects after rejection. Verify the operation does not change the shared connection's `query_only` flag. |
+| Runtime and disk | Verify prepared edits affect only memory, then exercise the unchanged LOAD and SAVE commands. In the two-node fixture, verify the existing LOAD operation still determines when a rule update synchronizes. |
+
 ## Published PR checks
 
 GitHub's checks for `9098425b6` cover the original mixed PR. SonarCloud's

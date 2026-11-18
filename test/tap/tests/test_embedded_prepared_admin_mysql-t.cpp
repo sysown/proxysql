@@ -49,6 +49,31 @@ static void check_wire_statement_ids(MYSQL* connection) {
     "COM_STMT_CLOSE for an unknown statement id sends no response before the next query");
 }
 
+static void check_legacy_transaction(MYSQL* legacy, MYSQL* admin, MYSQL* stats) {
+ constexpr char sql[] = "SELECT 17";
+ MYSQL_STMT* admin_read = prepare(admin, sql);
+ MYSQL_STMT* stats_read = prepare(stats, sql);
+ if (!admin_read || !stats_read) BAIL_OUT("cannot prepare the Admin transaction checks");
+ if (!query(legacy, "SAVEPOINT mysql_admin_prepared_test"))
+  BAIL_OUT("cannot open an owned Admin savepoint");
+ MYSQL_STMT* during = prepare(admin, sql);
+ ok(!during, "MySQL Admin refuses to prepare while another Admin client owns a savepoint");
+ if (during) mysql_stmt_close(during);
+ ok(mysql_stmt_execute(admin_read) != 0 &&
+    !strcmp(mysql_stmt_error(admin_read), "Admin connection is in a transaction"),
+    "a previously prepared MySQL Admin read refuses to join the legacy transaction");
+ ok(!mysql_stmt_execute(stats_read) && !mysql_stmt_store_result(stats_read) &&
+    mysql_stmt_num_rows(stats_read) == 1,
+    "prepared STATS execution on the separate SQLite connection stays available");
+ mysql_stmt_close(stats_read);
+ if (!query(legacy, "RELEASE SAVEPOINT mysql_admin_prepared_test"))
+  BAIL_OUT("cannot release the owned Admin savepoint");
+ ok(!mysql_stmt_execute(admin_read) && !mysql_stmt_store_result(admin_read) &&
+    mysql_stmt_num_rows(admin_read) == 1,
+    "the prepared MySQL Admin read succeeds after the legacy savepoint is released");
+ mysql_stmt_close(admin_read);
+}
+
 static void check_statement_limit(MYSQL* c) {
  std::vector<MYSQL_STMT*> handles;
  for (int i=0; i<128; ++i) {
@@ -113,6 +138,7 @@ int main() {
   if (frontend) mysql_close(frontend);
   ok(admin_login_denied(host, port, au, "incorrect_fixture_password"),
      "MySQL Admin authentication rejects an incorrect password");
+  check_legacy_transaction(fixture.admin, a, st);
  }
  check_wire_statement_ids(a);
  check_wire_statement_ids(st);
