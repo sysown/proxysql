@@ -661,6 +661,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	embedded_pgsql_result_unit-t \
 	embedded_pgsql_prepared_unit-t \
 	embedded_pgsql_frontend_unit-t \
+	embedded_mysql_prepared_unit-t \
 	embedded_mysql_result_unit-t \
 	duckdb_prepared_adapter_unit-t \
 	duckdb_prepared_policy_unit-t \

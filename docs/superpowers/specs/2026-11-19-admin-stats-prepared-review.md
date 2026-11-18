@@ -17,6 +17,13 @@ git show 4e73d96dd
 git log --oneline 4e73d96dd..review/6648-admin-stats-prepared
 ```
 
+The DuckDB, Admin/STATS and standalone SQLite3 candidates all apply
+cleanly to the current `v3.0` tip `55edc87a8`. I built a temporary tree
+containing `55edc87a8` and Admin candidate `fd8e7d0a3` without changing
+either branch. All 473 wire assertions passed across the eight DuckDB,
+Admin/STATS and two-node Cluster suites. The prospective tree was
+`88a686245c783417482373b1134a341f1e2c0afd`.
+
 ## Dispatch and policy
 
 The existing Admin dispatcher owns simple SQL and Cluster commands, including `PROXY_SELECT`. PostgreSQL simple Query payloads are never parsed by the prepared integration. A session that has never created a prepared provider does not enter its registry on a simple Query. With an active provider, PostgreSQL may close unnamed statements and portals before passing the original packet to the existing dispatcher. During extended-query error recovery, the controller discards messages through Sync as the protocol requires.
@@ -117,6 +124,14 @@ While a separate legacy Admin session holds a SQLite savepoint, MySQL Admin
 refuses a new prepare and an execute of a statement prepared earlier. STATS
 still reads from its own database. The same Admin statement executes
 successfully once the legacy session releases the savepoint.
+
+The original 89-assertion MySQL controller suite is restored in the
+Admin candidate because its fixtures use the native SQLite adapter.
+It exercises guard failures, provider replacement, reset, long data
+and quota recovery. Its synthetic sessions now use the prepared-capable
+DuckDB session type so destruction releases the statement ID allocator.
+The unchanged fixture failed one quota assertion on the prospective
+combined tree. The fixture update restored all 89 assertions there.
 
 ## Proposed MySQL prepared-write slice
 
