@@ -62,6 +62,13 @@ statements. It passed ten checks on each of five consecutive local runs.
 
 ## Sanitizer comparison
 
+The exact DuckDB-only checkpoint `4e73d96dd` passed 321 wire assertions
+with an ASan-instrumented ProxySQL core, DuckDB plugin and test clients.
+This covers analytical MySQL with ordinary query-rule routing (216),
+native MySQL (47), native PostgreSQL (29), PostgreSQL extended query
+protocol (18), and prepared schema invalidation and cleanup (11).
+It uses prebuilt third-party archives and disables leak detection.
+
 The Admin candidate at `af040de87` passed all 62 PostgreSQL, 31 MySQL, and
 10 two-node Cluster checks with the local ASan-instrumented ProxySQL server
 and test binaries. This run used the local prebuilt dependency libraries
@@ -131,6 +138,14 @@ behavior until this scope is approved.
 | Runtime and disk | Verify prepared edits affect only memory, then exercise the unchanged LOAD and SAVE commands. In the two-node fixture, verify the existing LOAD operation still determines when a rule update synchronizes. |
 
 ## Published PR checks
+
+The published head `9098425b6` failed `CI-legacy-g4` in
+`pgsql-admin_resultset_protocol-t`. Its artifact records the same two
+`PROXY_SELECT … CASE … END` errors reproduced locally. The matching
+v3.0 job passed, and the local split candidate passed both queries with
+DuckDB disabled and enabled.
+[PR CI job](https://github.com/sysown/proxysql/actions/runs/44369848784/job/135034320556)
+[v3.0 CI job](https://github.com/sysown/proxysql/actions/runs/43684682414/job/132722628900)
 
 GitHub's checks for `9098425b6` cover the original mixed PR. SonarCloud's
 security condition is CPP S5443 on the private test fixture's temporary
