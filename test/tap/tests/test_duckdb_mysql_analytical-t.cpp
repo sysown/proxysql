@@ -4,6 +4,7 @@
 #include <climits>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 static bool pg_exec(PGconn *c, const char *sql) {
@@ -16,12 +17,12 @@ static bool pg_exec(PGconn *c, const char *sql) {
         PQclear(r);
     return success;
 }
-static MYSQL_STMT *prepare(MYSQL *c, const char *sql) {
+static MYSQL_STMT *prepare(MYSQL *c, std::string_view sql) {
     MYSQL_STMT *stmt = mysql_stmt_init(c);
     if (!stmt)
         return nullptr;
-    if (mysql_stmt_prepare(stmt, sql, std::strlen(sql))) {
-        diag("prepare %s: %s", sql, mysql_stmt_error(stmt));
+    if (mysql_stmt_prepare(stmt, sql.data(), static_cast<unsigned long>(sql.size()))) {
+        diag("prepare %s: %s", sql.data(), mysql_stmt_error(stmt));
         mysql_stmt_close(stmt);
         return nullptr;
     }
@@ -213,11 +214,12 @@ static void test_decimals(MYSQL *c, const char *label) {
     result[0].length = &length;
     result[0].is_null = &is_null;
     bool good = !mysql_stmt_bind_result(stmt, result) && !mysql_stmt_execute(stmt);
-    for (const char *expected : {"0.50", "-0.25", static_cast<const char *>(nullptr)}) {
+    const std::string_view expected_values[] = {"0.50", "-0.25", std::string_view{}};
+    for (std::string_view expected : expected_values) {
         good = good && !mysql_stmt_fetch(stmt) &&
-               (expected ? !is_null && length == std::strlen(expected) &&
-                               !std::memcmp(text, expected, length)
-                         : is_null);
+               (!expected.empty() ? !is_null && length == expected.size() &&
+                                        !std::memcmp(text, expected.data(), length)
+                                  : is_null);
     }
     good = good && mysql_stmt_fetch(stmt) == MYSQL_NO_DATA;
     mysql_stmt_free_result(stmt);
@@ -246,11 +248,12 @@ static void test_date_format(MYSQL *c, const char *label) {
         result[0].length = &length;
         result[0].is_null = &is_null;
         bool good = !mysql_stmt_bind_result(stmt, result) && !mysql_stmt_execute(stmt);
-        for (const char *expected : {"2024-02", static_cast<const char *>(nullptr), "1000-01"}) {
+        const std::string_view expected_values[] = {"2024-02", std::string_view{}, "1000-01"};
+        for (std::string_view expected : expected_values) {
             good = good && !mysql_stmt_fetch(stmt) &&
-                   (expected ? !is_null && length == std::strlen(expected) &&
-                                   !std::memcmp(text, expected, length)
-                             : is_null);
+                   (!expected.empty() ? !is_null && length == expected.size() &&
+                                            !std::memcmp(text, expected.data(), length)
+                                      : is_null);
         }
         good = good && mysql_stmt_fetch(stmt) == MYSQL_NO_DATA;
         mysql_stmt_free_result(stmt);
@@ -343,6 +346,45 @@ static void test_namespace(MYSQL *c, const char *label, bool routed) {
     ok(!mysql_select_db(c, "main"), "%s switches back with COM_INIT_DB", label);
     ok(text_rows(c, "SELECT id FROM ns_same ORDER BY id", {"id"}, {{"1"}}),
        "%s honors COM_INIT_DB for later statements", label);
+}
+static void test_joins(MYSQL *c, const char *label) {
+    ok(text_rows(c,
+                 "SELECT l.id, r.id AS rid, r.v FROM jn_l AS l JOIN jn_r AS r ON l.k = r.k "
+                 "ORDER BY l.id, r.id",
+                 {"id", "rid", "v"}, {{"1", "1", "100"}, {"1", "2", "101"}}),
+       "%s joins on a nullable key without matching NULLs and fans out duplicates", label);
+    ok(text_rows(c,
+                 "SELECT l.id, r.v FROM jn_l l LEFT JOIN jn_r r ON l.k = r.k ORDER BY l.id, r.id",
+                 {"id", "v"},
+                 {{"1", "100"}, {"1", "101"}, {"2", nullptr}, {"3", nullptr}, {"4", nullptr}}),
+       "%s keeps unmatched left rows with NULL-extended right columns", label);
+    ok(text_rows(c,
+                 "SELECT l.id, r.id FROM jn_l l JOIN jn_r r ON l.k = r.k ORDER BY l.id, r.id "
+                 "LIMIT 1",
+                 {"id", "id"}, {{"1", "1"}}),
+       "%s keeps duplicate output labels and limits when both unique keys order the rows", label);
+    ok(text_rows(c,
+                 "SELECT l.id, COUNT(*) FROM jn_l l LEFT JOIN jn_r r ON l.k = r.k GROUP BY l.id "
+                 "ORDER BY l.id",
+                 {"id", "COUNT(*)"}, {{"1", "2"}, {"2", "1"}, {"3", "1"}, {"4", "1"}}),
+       "%s counts joined rows per group including unmatched left rows", label);
+    MYSQL_STMT *stmt = prepare(c, "SELECT l.id, r.v FROM jn_l l JOIN jn_r r ON l.k = r.k "
+                                  "ORDER BY l.id, r.id");
+    ok(stmt != nullptr, "%s prepares a join", label);
+    if (stmt)
+        mysql_stmt_close(stmt);
+    for (const char *bad :
+         {"SELECT id FROM jn_l l JOIN jn_r r ON l.k = r.k",
+          "SELECT l.id FROM jn_l l JOIN jn_r r USING (k)",
+          "SELECT l.id FROM jn_l l, jn_r r WHERE l.k = r.k",
+          "SELECT l.id FROM jn_l l NATURAL JOIN jn_r r",
+          "SELECT l.id FROM jn_l l JOIN jn_r r ON l.k = r.k ORDER BY l.id LIMIT 1",
+          "SELECT l.id FROM jn_l l JOIN jn_l l ON l.k = l.k"}) {
+        const int status = mysql_query(c, bad);
+        ok(status != 0 && mysql_errno(c) == 1235 && !std::strcmp(mysql_sqlstate(c), "0A000"),
+           "%s refuses %s with 1235/0A000 (got %u/%s)", label, bad, mysql_errno(c),
+           mysql_sqlstate(c));
+    }
 }
 static void test_sum_avg(MYSQL *c, const char *label) {
     ok(text_rows(c,
@@ -493,6 +535,10 @@ int main() {
         !pg_exec(pg, "INSERT INTO ns_same VALUES (1)") || !pg_exec(pg, "CREATE SCHEMA ns_other") ||
         !pg_exec(pg, "CREATE TABLE ns_other.ns_same (id INTEGER PRIMARY KEY)") ||
         !pg_exec(pg, "INSERT INTO ns_other.ns_same VALUES (2)") ||
+        !pg_exec(pg, "CREATE TABLE jn_l (id INTEGER PRIMARY KEY, k INTEGER, name VARCHAR)") ||
+        !pg_exec(pg, "CREATE TABLE jn_r (id INTEGER PRIMARY KEY, k INTEGER, v BIGINT)") ||
+        !pg_exec(pg, "INSERT INTO jn_l VALUES (1,10,'a'),(2,20,'b'),(3,NULL,'c'),(4,40,'d')") ||
+        !pg_exec(pg, "INSERT INTO jn_r VALUES (1,10,100),(2,10,101),(3,30,102),(4,NULL,103)") ||
         !pg_exec(pg, "CREATE SEQUENCE analytical_sequence START 1") ||
         !pg_exec(
             pg,
@@ -576,6 +622,7 @@ int main() {
     test_sum_avg(mysql, "direct listener");
     test_text(mysql, "direct listener");
     test_namespace(mysql, "direct listener", false);
+    test_joins(mysql, "direct listener");
     test_decimal_refresh(mysql, pg);
     stmt = prepare(mysql, "SELECT COUNT(*) FROM analytical_fixture WHERE n > 1");
     ok(stmt != nullptr, "prepare COUNT with referenced integer column");
@@ -665,6 +712,7 @@ int main() {
         test_sum_avg(proxied, "ordinary routed listener");
         test_text(proxied, "ordinary routed listener");
         test_namespace(proxied, "ordinary routed listener", true);
+        test_joins(proxied, "ordinary routed listener");
         mysql_close(proxied);
     }
     mysql_close(mysql);

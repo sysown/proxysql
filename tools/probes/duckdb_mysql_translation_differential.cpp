@@ -403,6 +403,53 @@ int main(int argc, char **argv) {
         }
         mysql_exec(f.mysql, mysql_text_insert);
         duck_exec(f.duck, duck_text_insert);
+        // Join fixtures: three related tables with NULL keys, duplicate keys,
+        // rows unmatched on either side, an empty table, signed/unsigned and
+        // decimal keys, and a proven binary text key.
+        mysql_exec(f.mysql, "CREATE TABLE join_left (id BIGINT PRIMARY KEY, k BIGINT, u BIGINT "
+                            "UNSIGNED, dec_key DECIMAL(10,2), txt VARCHAR(20) CHARACTER SET "
+                            "utf8mb4 COLLATE utf8mb4_0900_bin, nk BIGINT NULL)");
+        duck_exec(f.duck, "CREATE TABLE join_left (id BIGINT PRIMARY KEY, k BIGINT, u UBIGINT, "
+                          "dec_key DECIMAL(10,2), txt VARCHAR, nk BIGINT)");
+        const string join_left_rows =
+            "(1,10,10,1.50,'a',1),(2,10,20,2.50,'b',2),(3,20,30,3.50,'A',NULL),"
+            "(4,NULL,0,NULL,NULL,4),(5,40,18446744073709551615,4.00,'a ',5),"
+            "(6,10,10,1.50,'a',1),(7,-1,1,-1.00,'c',NULL)";
+        mysql_exec(f.mysql, "INSERT INTO join_left VALUES " + join_left_rows);
+        duck_exec(f.duck, "INSERT INTO join_left VALUES " + join_left_rows);
+        mysql_exec(f.mysql,
+                   "CREATE TABLE join_right (id BIGINT PRIMARY KEY, lid BIGINT, k BIGINT, u "
+                   "BIGINT UNSIGNED, dec_key DECIMAL(10,2), txt VARCHAR(20) CHARACTER SET "
+                   "utf8mb4 COLLATE utf8mb4_0900_bin, nk BIGINT NULL)");
+        duck_exec(f.duck, "CREATE TABLE join_right (id BIGINT PRIMARY KEY, lid BIGINT, k BIGINT, u "
+                          "UBIGINT, dec_key DECIMAL(10,2), txt VARCHAR, nk BIGINT)");
+        const string join_right_rows =
+            "(10,1,10,10,1.50,'a',1),(11,1,10,20,2.50,'b',2),(12,2,20,30,3.50,'A',NULL),"
+            "(13,3,99,0,NULL,NULL,4),(14,NULL,40,18446744073709551615,4.00,'a ',5),"
+            "(15,9,10,10,1.50,'a',1)";
+        mysql_exec(f.mysql, "INSERT INTO join_right VALUES " + join_right_rows);
+        duck_exec(f.duck, "INSERT INTO join_right VALUES " + join_right_rows);
+        mysql_exec(f.mysql,
+                   "CREATE TABLE join_third (id BIGINT PRIMARY KEY, rid BIGINT, k BIGINT, u "
+                   "BIGINT UNSIGNED, dec_key DECIMAL(10,2), txt VARCHAR(20) CHARACTER SET "
+                   "utf8mb4 COLLATE utf8mb4_0900_bin)");
+        duck_exec(f.duck, "CREATE TABLE join_third (id BIGINT PRIMARY KEY, rid BIGINT, k BIGINT, u "
+                          "UBIGINT, dec_key DECIMAL(10,2), txt VARCHAR)");
+        const string join_third_rows =
+            "(100,10,10,10,1.50,'a'),(101,10,20,20,2.50,'b'),(102,11,20,30,3.50,'A'),"
+            "(103,12,30,40,4.00,'a '),(104,NULL,40,50,5.00,NULL),(105,99,10,10,1.50,'a')";
+        mysql_exec(f.mysql, "INSERT INTO join_third VALUES " + join_third_rows);
+        duck_exec(f.duck, "INSERT INTO join_third VALUES " + join_third_rows);
+        mysql_exec(f.mysql,
+                   "CREATE TABLE join_empty (id BIGINT PRIMARY KEY, lid BIGINT, k BIGINT)");
+        duck_exec(f.duck, "CREATE TABLE join_empty (id BIGINT PRIMARY KEY, lid BIGINT, k BIGINT)");
+        mysql_exec(f.mysql,
+                   "CREATE TABLE join_unproven (id BIGINT PRIMARY KEY, txt VARCHAR(20) CHARACTER "
+                   "SET utf8mb4 COLLATE utf8mb4_0900_bin)");
+        duck_exec(f.duck, "CREATE TABLE join_unproven (id BIGINT PRIMARY KEY, txt VARCHAR)");
+        const string join_unproven_rows = "(1,'a'),(2,'b')";
+        mysql_exec(f.mysql, "INSERT INTO join_unproven VALUES " + join_unproven_rows);
+        duck_exec(f.duck, "INSERT INTO join_unproven VALUES " + join_unproven_rows);
         DuckDBMySQLSelectContext context;
         size_t calls = 0;
         context.resolve_relation = [&](const vector<string> &names, DuckDBMySQLRelation &r) {
@@ -432,6 +479,66 @@ int main(int argc, char **argv) {
                              {"pad",
                               {DuckDBMySQLTypeKind::text, 0, 0},
                               {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_bin"}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"join_left"}) {
+                r.canonical_name = {"join_left"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"k", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"u", {DuckDBMySQLTypeKind::unsigned_integer, 0, 0}},
+                             {"dec_key", {DuckDBMySQLTypeKind::exact_decimal, 10, 2}},
+                             {"txt",
+                              {DuckDBMySQLTypeKind::text, 0, 0},
+                              {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}},
+                             {"nk", {DuckDBMySQLTypeKind::signed_integer, 0, 0}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"join_right"}) {
+                r.canonical_name = {"join_right"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"lid", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"k", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"u", {DuckDBMySQLTypeKind::unsigned_integer, 0, 0}},
+                             {"dec_key", {DuckDBMySQLTypeKind::exact_decimal, 10, 2}},
+                             {"txt",
+                              {DuckDBMySQLTypeKind::text, 0, 0},
+                              {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}},
+                             {"nk", {DuckDBMySQLTypeKind::signed_integer, 0, 0}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"join_third"}) {
+                r.canonical_name = {"join_third"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"rid", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"k", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"u", {DuckDBMySQLTypeKind::unsigned_integer, 0, 0}},
+                             {"dec_key", {DuckDBMySQLTypeKind::exact_decimal, 10, 2}},
+                             {"txt",
+                              {DuckDBMySQLTypeKind::text, 0, 0},
+                              {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"join_empty"}) {
+                r.canonical_name = {"join_empty"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"lid", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"k", {DuckDBMySQLTypeKind::signed_integer, 0, 0}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"join_unproven"}) {
+                r.canonical_name = {"join_unproven"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"txt", {DuckDBMySQLTypeKind::text, 0, 0}}};
                 r.unique_keys = {{"id"}};
                 return true;
             }
@@ -732,6 +839,131 @@ int main(int argc, char **argv) {
             {"qualified other database", qualified_other.c_str()},
             {"qualified other database predicate", qualified_other_predicate.c_str()},
             {"qualified other database count", qualified_other_count.c_str()},
+            // Two- and three-relation joins.
+            {"inner join projection and filter",
+             "SELECT l.id, r.id, l.k, r.k FROM join_left AS l INNER JOIN join_right AS r ON "
+             "l.id=r.lid WHERE r.k >= 10 ORDER BY l.id, r.id"},
+            {"inner join on literal filter",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid AND r.k=20 "
+             "ORDER BY l.id, r.id"},
+            {"left join null extension",
+             "SELECT l.id, r.id, r.k FROM join_left l LEFT JOIN join_right r ON l.id=r.lid "
+             "ORDER BY l.id, r.id"},
+            {"left join outer keyword",
+             "SELECT l.id, r.id FROM join_left l LEFT OUTER JOIN join_right r ON l.id=r.lid "
+             "ORDER BY l.id, r.id"},
+            {"left join where right null",
+             "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid WHERE "
+             "r.id IS NULL ORDER BY l.id, r.id"},
+            {"left join on right literal",
+             "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid AND r.k=20 "
+             "ORDER BY l.id, r.id"},
+            {"inner duplicate key fan out",
+             "SELECT l.id, r.id, l.k FROM join_left l JOIN join_right r ON l.k=r.k ORDER BY l.id, "
+             "r.id"},
+            {"join less than predicate",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k < r.k ORDER BY l.id, "
+             "r.id"},
+            {"join inequality predicate",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k <> r.k ORDER BY l.id, "
+             "r.id"},
+            {"left duplicate key fan out",
+             "SELECT l.id, r.id, l.k FROM join_left l LEFT JOIN join_right r ON l.k=r.k ORDER BY "
+             "l.id, r.id"},
+            {"three table inner join",
+             "SELECT l.id, r.id, t.id FROM join_left l JOIN join_right r ON l.id=r.lid JOIN "
+             "join_third t ON r.id=t.rid ORDER BY l.id, r.id, t.id"},
+            {"three table left join",
+             "SELECT l.id, r.id, t.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid LEFT "
+             "JOIN join_third t ON r.id=t.rid ORDER BY l.id, r.id, t.id"},
+            {"left then inner join",
+             "SELECT l.id, r.id, t.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid INNER "
+             "JOIN join_third t ON r.id=t.rid ORDER BY l.id, r.id, t.id"},
+            {"inner then left join",
+             "SELECT l.id, r.id, t.id FROM join_left l INNER JOIN join_right r ON l.id=r.lid LEFT "
+             "JOIN join_third t ON r.id=t.rid ORDER BY l.id, r.id, t.id"},
+            {"join with empty relation",
+             "SELECT l.id, e.id FROM join_left l JOIN join_empty e ON l.id=e.lid ORDER BY l.id, "
+             "e.id"},
+            {"left join with empty relation",
+             "SELECT l.id, e.id FROM join_left l LEFT JOIN join_empty e ON l.id=e.lid ORDER BY "
+             "l.id, e.id"},
+            {"self join distinct aliases",
+             "SELECT x.id, y.id, x.k FROM join_left x JOIN join_left y ON x.k=y.k WHERE x.id < "
+             "y.id ORDER BY x.id, y.id"},
+            {"unsigned key join",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.u=r.u ORDER BY l.id, r.id"},
+            {"signed unsigned key join",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k=r.u ORDER BY l.id, r.id"},
+            {"decimal key join",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.dec_key=r.dec_key ORDER "
+             "BY l.id, r.id"},
+            {"text key join",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.txt=r.txt ORDER BY l.id, "
+             "r.id"},
+            {"null key join",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.nk=r.nk ORDER BY l.id, "
+             "r.id"},
+            {"left null key join",
+             "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.nk=r.nk ORDER BY "
+             "l.id, r.id"},
+            {"join deterministic limit",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY l.id, "
+             "r.id LIMIT 3"},
+            {"left join deterministic limit",
+             "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid ORDER BY "
+             "l.id, r.id LIMIT 4, 3"},
+            {"join star",
+             "SELECT * FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id=1 ORDER BY "
+             "r.id"},
+            {"join alias star",
+             "SELECT l.*, r.k FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id=1 "
+             "ORDER BY r.id"},
+            {"join text ordering limit",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY r.txt "
+             "DESC, l.id ASC, r.id ASC LIMIT 4"},
+            {"join decimal ordering",
+             "SELECT l.id, r.id, r.dec_key FROM join_left l JOIN join_right r ON l.id=r.lid "
+             "ORDER BY r.dec_key ASC, l.id, r.id"},
+            {"join unsigned ordering",
+             "SELECT l.id, r.id, r.u FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY "
+             "r.u ASC, l.id, r.id"},
+            {"join on or predicate",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid OR l.k=r.k "
+             "ORDER BY l.id, r.id"},
+            {"join on null predicate",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid AND (r.nk IS "
+             "NULL OR r.k>20) ORDER BY l.id, r.id"},
+            {"join on constant true",
+             "SELECT l.id, r.id FROM join_left l JOIN join_right r ON 1=1 ORDER BY l.id, r.id "
+             "LIMIT 10"},
+            {"join column case labels",
+             "SELECT l.ID, r.ID FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY l.id, "
+             "r.id"},
+            {"single column case label", "SELECT ID FROM join_left ORDER BY id"},
+            // Grouping and aggregates over joined relations.
+            {"left join grouped aggregates",
+             "SELECT l.k, COUNT(*) AS n, COUNT(r.id) AS m, MIN(r.id) AS lo, MAX(r.id) AS hi, "
+             "SUM(r.id) AS s, AVG(r.id) AS a FROM join_left l LEFT JOIN join_right r ON l.k=r.k "
+             "GROUP BY l.k ORDER BY l.k"},
+            {"join grouped multi key",
+             "SELECT l.k, r.k, COUNT(*) AS n FROM join_left l JOIN join_right r ON l.k=r.k "
+             "GROUP BY l.k, r.k ORDER BY l.k, r.k"},
+            {"left join grouped right key",
+             "SELECT r.k, COUNT(*) AS n FROM join_left l LEFT JOIN join_right r ON l.k=r.k "
+             "GROUP BY r.k ORDER BY r.k"},
+            {"join grouped having",
+             "SELECT l.k, COUNT(*) AS n FROM join_left l JOIN join_right r ON l.k=r.k GROUP BY "
+             "l.k HAVING COUNT(*) > 1 ORDER BY l.k"},
+            {"join grouped sum avg decimal",
+             "SELECT l.k, SUM(r.dec_key) AS s, AVG(r.dec_key) AS a FROM join_left l JOIN "
+             "join_right r ON l.k=r.k GROUP BY l.k ORDER BY l.k"},
+            {"join grouped unsigned",
+             "SELECT r.u, SUM(r.id) AS s, AVG(r.id) AS a FROM join_left l JOIN join_right r ON "
+             "l.id=r.lid GROUP BY r.u ORDER BY r.u"},
+            {"join grouped limit",
+             "SELECT l.k, COUNT(*) AS n FROM join_left l JOIN join_right r ON l.k=r.k GROUP BY "
+             "l.k ORDER BY l.k LIMIT 1, 2"},
         };
         int failures = 0, comparisons = 0;
         for (auto &entry : cases) {
@@ -752,6 +984,12 @@ int main(int argc, char **argv) {
                          << "]\n";
             }
             bool types_match = left.types == right.types;
+            if (!types_match) {
+                cerr << " type count " << left.types.size() << "/" << right.types.size() << "\n";
+                for (size_t i = 0; i < left.types.size() && i < right.types.size(); ++i)
+                    cerr << " type " << i << " [" << left.names[i] << "] " << left.types[i] << "/"
+                         << right.types[i] << "\n";
+            }
             bool known = true;
             for (auto kind : left.types)
                 known &= kind != 0;
@@ -832,6 +1070,99 @@ int main(int argc, char **argv) {
                 ++failures;
             } else
                 cout << "REFUSAL " << sql << " " << x.reason << " (no engine call)\n";
+        }
+        // Join shapes and name-resolution failures that stay outside the
+        // admitted subset. Each has a stable refusal reason.
+        const std::pair<const char *, const char *> join_rejected[] = {
+            {"SELECT * FROM join_left l JOIN join_right r USING (id)", "using_join"},
+            {"SELECT * FROM join_left NATURAL JOIN join_right", "natural_join"},
+            {"SELECT * FROM join_left NATURAL LEFT JOIN join_right", "natural_join"},
+            {"SELECT * FROM join_left, join_right", "comma_join"},
+            {"SELECT * FROM join_left CROSS JOIN join_right", "cross_join"},
+            {"SELECT * FROM join_left RIGHT JOIN join_right ON join_left.id=join_right.lid",
+             "right_join"},
+            {"SELECT * FROM join_left FULL OUTER JOIN join_right ON join_left.id=join_right.lid",
+             "full_join"},
+            {"SELECT * FROM (SELECT id FROM join_left) x JOIN join_right r ON x.id=r.lid",
+             "derived_table"},
+            {"SELECT l.id FROM join_left l JOIN join_right r ON l.id=r.lid AND l.id = (SELECT "
+             "MIN(id) FROM join_left)",
+             "unsupported_subquery"},
+            {"SELECT id FROM join_left l JOIN join_right r ON l.id=r.lid", "ambiguous_column"},
+            {"SELECT z.id FROM join_left l JOIN join_right r ON l.id=r.lid",
+             "unknown_relation_alias"},
+            {"SELECT nope FROM join_left l JOIN join_right r ON l.id=r.lid", "unknown_column"},
+            {"SELECT z.* FROM join_left l JOIN join_right r ON l.id=r.lid",
+             "unknown_relation_alias"},
+            {"SELECT join_left.id FROM join_left AS l JOIN join_right r ON l.id=r.lid",
+             "unknown_relation_alias"},
+            {"SELECT * FROM join_left l JOIN join_right l ON l.id=l.lid", "duplicate_relation"},
+            {"SELECT * FROM join_left JOIN join_left ON join_left.id=join_left.id",
+             "duplicate_relation"},
+            {"SELECT * FROM join_left l JOIN join_right r ON l.id=r.lid JOIN join_third t ON "
+             "r.id=t.rid JOIN join_empty e ON t.id=e.lid",
+             "join_relation_limit"},
+            {"SELECT l.id FROM join_left l JOIN join_right r ON l.txt=r.id",
+             "unsupported_join_predicate"},
+            {"SELECT u.id FROM join_unproven u JOIN join_unproven v ON u.txt=v.txt",
+             "collation_unproven"},
+            {"SELECT p.id FROM date_probe p JOIN date_probe q ON p.d=q.d",
+             "unsupported_join_predicate"},
+            {"SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY l.id "
+             "LIMIT 1",
+             "nondeterministic_limit"},
+            {"SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY r.id "
+             "LIMIT 1",
+             "nondeterministic_limit"},
+            {"SELECT * FROM join_left STRAIGHT_JOIN join_right ON join_left.id=join_right.lid",
+             "incomplete_or_non_select"},
+            {"SELECT * FROM (join_left l JOIN join_right r ON l.id=r.lid)",
+             "incomplete_or_non_select"},
+            {"SELECT x.l.id FROM join_left l JOIN join_right r ON l.id=r.lid",
+             "unsupported_column_reference"},
+            {"SELECT * FROM join_left l JOIN join_right r", "join_without_condition"},
+        };
+        for (const auto &entry : join_rejected) {
+            auto x = duckdb_translate_mysql_select(entry.first, context);
+            const bool refused = x.decision != DuckDBMySQLSelectDecision::supported &&
+                                 x.sql.empty() && x.reason == entry.second;
+            cout << (refused ? "PASS" : "FAIL") << " join refusal " << entry.first << " -> "
+                 << x.reason << " (expected " << entry.second << ")\n";
+            if (!refused)
+                ++failures;
+        }
+        {
+            auto join_prepare = context;
+            join_prepare.parameter_mode = DuckDBMySQLParameterMode::prepare;
+            auto x = duckdb_translate_mysql_select(
+                "SELECT l.id FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id = ?",
+                join_prepare);
+            const bool refused = x.decision != DuckDBMySQLSelectDecision::supported &&
+                                 x.sql.empty() && x.reason == "unsupported_parameter_join";
+            cout << (refused ? "PASS" : "FAIL") << " join placeholder refusal -> " << x.reason
+                 << " (expected unsupported_parameter_join)\n";
+            if (!refused)
+                ++failures;
+        }
+        // MySQL compares a text column with a number as DOUBLE; DuckDB refuses
+        // the typed comparison. This is why a text/number join key cannot be
+        // admitted under the numeric exactness proof.
+        {
+            auto mysql_numeric_text =
+                mysql_result(f.mysql, "SELECT id FROM text_probe WHERE t = 1 ORDER BY id");
+            bool duck_refused = false;
+            try {
+                duck_result(f.duck, "SELECT id FROM text_probe WHERE t = 1 ORDER BY id");
+            } catch (const exception &) {
+                duck_refused = true;
+            }
+            const bool differs = duck_refused && !mysql_numeric_text.rows.empty();
+            cout << (differs ? "PASS" : "FAIL")
+                 << " text/number comparison differs from DuckDB (join-key refusal required, "
+                    "MySQL rows="
+                 << mysql_numeric_text.rows.size() << ")\n";
+            if (!differs)
+                ++failures;
         }
         // Database namespace policy. MySQL returns ER_NO_DB_ERROR (1046) for an
         // unqualified relation with no database selected, but still resolves a

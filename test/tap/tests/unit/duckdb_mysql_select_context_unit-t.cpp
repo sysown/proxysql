@@ -68,8 +68,18 @@ int main() {
        "decimal column retains precision and scale");
     ok(r.unique_keys.size() == 1 && r.unique_keys[0].size() == 1 && r.unique_keys[0][0] == "a\"b",
        "only non-null primary key is reported, not nullable unique key");
-    ok(!context.resolve_relation({"Odd Schema", "t`x"}, r) && r.columns.empty(),
+    DuckDBMySQLContextLimits one_call;
+    one_call.max_resolver_calls = 1;
+    auto limited_context = duckdb_mysql_select_context(c, one_call);
+    ok(limited_context.resolve_relation({"Odd Schema", "t`x"}, r),
+       "explicit resolver allowance admits one call");
+    ok(!limited_context.resolve_relation({"Odd Schema", "compound"}, r) && r.columns.empty(),
        "resolver call limit clears output");
+    auto three_calls = duckdb_mysql_select_context(c);
+    ok(three_calls.resolve_relation({"Odd Schema", "t`x"}, r) &&
+           three_calls.resolve_relation({"Odd Schema", "compound"}, r) &&
+           three_calls.resolve_relation({"Odd Schema", "v"}, r),
+       "default resolver allowance covers three joined relations");
     context = duckdb_mysql_select_context(c);
     ok(context.resolve_relation({"Odd Schema", "compound"}, r) && r.unique_keys.size() == 1 &&
            r.unique_keys[0].size() == 2,

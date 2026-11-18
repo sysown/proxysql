@@ -118,15 +118,53 @@ bool integer(const N *n, std::string &out) {
 struct Translator {
     const std::string &input;
     const DuckDBMySQLSelectContext &ctx;
-    DuckDBMySQLRelation relation;
+    // A query has at most three base relations. Every relation is resolved
+    // exactly once, in FROM order, and receives a private emitted alias so
+    // DuckDB never has to resolve a user alias or table name.
+    struct Relation {
+        DuckDBMySQLRelation meta;
+        std::string reference;
+        std::string emit_alias;
+        bool aliased = false;
+        bool left_join = false;
+        std::string on_sql;
+    };
+    struct ColumnRef {
+        const DuckDBMySQLColumn *column = nullptr;
+        size_t relation = 0;
+        // MySQL labels a plain column with the identifier spelling in the
+        // select list, not with the declared column name.
+        std::string label;
+    };
+    std::vector<Relation> relations;
     bool has_relation = false;
     std::string reason = "unsupported_ast";
     std::vector<std::string> required;
     const std::vector<const N *> &parameters;
     size_t parameter_index = 0;
+    size_t metadata_bytes = 0;
+    size_t key_parts = 0;
     Translator(const std::string &in, const DuckDBMySQLSelectContext &c,
                const std::vector<const N *> &p)
         : input(in), ctx(c), parameters(p) {}
+    bool multi_relation() const {
+        return relations.size() > 1;
+    }
+    // MySQL compares column names case-insensitively. Only ASCII folding is
+    // proven here; non-ASCII bytes still have to match exactly rather than
+    // guessing the identifier collation of the source metadata.
+    static std::string fold_identifier(std::string s) {
+        for (char &c : s)
+            if (c >= 'A' && c <= 'Z')
+                c += 'a' - 'A';
+        return s;
+    }
+    std::string column_sql(const ColumnRef &ref) const {
+        if (multi_relation())
+            return quote(relations[ref.relation].emit_alias) + "." +
+                   quote(ref.column->canonical_name);
+        return quote(ref.column->canonical_name);
+    }
     bool valid_name(const std::string &s) const {
         return !s.empty() && s.size() <= std::min(ctx.max_output_bytes, size_t(4096)) &&
                s.find('\0') == std::string::npos;
@@ -143,7 +181,6 @@ struct Translator {
         return true;
     }
     std::set<std::string> aliases;
-    std::string qualifier;
     bool alias_conflicts(const std::string &name) const {
         auto fold = [](std::string s) {
             for (char &c : s) {
@@ -164,33 +201,84 @@ struct Translator {
         }
         return false;
     }
-    const DuckDBMySQLColumn *column(const N *n) {
-        if (!has_relation)
-            return nullptr;
+    bool column_ref(const N *n, ColumnRef &out) {
+        if (relations.empty() || !n)
+            return false;
+        const N *field = n;
+        std::vector<size_t> candidates;
         if (n->type == K::NODE_QUALIFIED_NAME && !n->flags) {
-            auto q = n->first_child;
-            auto field = q ? q->next_sibling : nullptr;
-            if (!q || q->type != K::NODE_IDENTIFIER || q->first_child ||
-                (q->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(q) ||
-                ident(q) != qualifier || !field || field->type != K::NODE_IDENTIFIER ||
-                field->next_sibling || field->first_child ||
-                (field->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(field))
-                return nullptr;
-            n = field;
-        } else if (n->type != K::NODE_COLUMN_REF || n->first_child ||
-                   (n->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(n))
-            return nullptr;
-        std::string name = ident(n);
-        if (name.empty() || name[0] == '@')
-            return nullptr;
-        const DuckDBMySQLColumn *found = nullptr;
-        for (const auto &c : relation.columns)
-            if (c.canonical_name == name) {
-                if (found)
-                    return nullptr;
-                found = &c;
+            const N *qualifier = n->first_child;
+            field = qualifier ? qualifier->next_sibling : nullptr;
+            if (!qualifier || qualifier->type != K::NODE_IDENTIFIER || qualifier->first_child ||
+                (qualifier->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(qualifier) || !field)
+                return false;
+            if (field->next_sibling) {
+                // MySQL's three-part database.table.column form is outside the
+                // resolved-relation contract.
+                reason = "unsupported_column_reference";
+                return false;
             }
-        return found;
+            if (field->type != K::NODE_IDENTIFIER || field->first_child ||
+                (field->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(field))
+                return false;
+            const std::string qualifier_name = ident(qualifier);
+            for (size_t i = 0; i < relations.size(); ++i)
+                if (relations[i].reference == qualifier_name)
+                    candidates.push_back(i);
+            if (candidates.empty()) {
+                // A table alias hides the table name, and an unknown alias is
+                // never allowed to fall back to an unqualified lookup.
+                reason = "unknown_relation_alias";
+                return false;
+            }
+        } else if (n->type != K::NODE_COLUMN_REF || n->first_child ||
+                   (n->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(n)) {
+            return false;
+        }
+        const std::string name = ident(field);
+        if (name.empty() || name[0] == '@')
+            return false;
+        const std::string folded = fold_identifier(name);
+        if (candidates.empty())
+            for (size_t i = 0; i < relations.size(); ++i)
+                candidates.push_back(i);
+        const DuckDBMySQLColumn *found = nullptr;
+        size_t found_relation = 0;
+        for (size_t index : candidates) {
+            const DuckDBMySQLColumn *local = nullptr;
+            for (const auto &c : relations[index].meta.columns) {
+                if (fold_identifier(c.canonical_name) != folded)
+                    continue;
+                if (local) {
+                    reason = "ambiguous_column";
+                    return false;
+                }
+                local = &c;
+            }
+            if (!local)
+                continue;
+            if (found) {
+                reason = "ambiguous_column";
+                return false;
+            }
+            found = local;
+            found_relation = index;
+        }
+        if (!found) {
+            reason = "unknown_column";
+            return false;
+        }
+        out.column = found;
+        out.relation = found_relation;
+        out.label = name;
+        return true;
+    }
+    std::string projected_column(const ColumnRef &ref) {
+        const auto name = column_sql(ref);
+        if (!fraction_only(ref.column->type))
+            return name;
+        return "CAST(" + name + " AS DECIMAL(" + std::to_string(ref.column->type.precision + 1) +
+               "," + std::to_string(ref.column->type.scale) + "))";
     }
     struct ExactNumber {
         std::string sql;
@@ -208,13 +296,6 @@ struct Translator {
     }
     static bool fraction_only(const DuckDBMySQLType &type) {
         return valid_decimal(type) && type.precision == type.scale;
-    }
-    static std::string projected_column(const DuckDBMySQLColumn &column) {
-        const auto name = quote(column.canonical_name);
-        if (!fraction_only(column.type))
-            return name;
-        return "CAST(" + name + " AS DECIMAL(" + std::to_string(column.type.precision + 1) + "," +
-               std::to_string(column.type.scale) + "))";
     }
     // Inspect only ParserSQL's literal token; no SQL scanning or syntax reconstruction.
     bool exact_literal(const N *node, ExactNumber &number) {
@@ -260,20 +341,21 @@ struct Translator {
         return true;
     }
     bool exact_number(const N *node, ExactNumber &number) {
-        if (const auto *c = column(node)) {
-            if (!output_label(c->canonical_name))
+        ColumnRef ref;
+        if (column_ref(node, ref)) {
+            if (!output_label(ref.label))
                 return false;
-            if (c->type.kind == DuckDBMySQLTypeKind::signed_integer)
+            if (ref.column->type.kind == DuckDBMySQLTypeKind::signed_integer)
                 number.integer_digits = 19;
-            else if (c->type.kind == DuckDBMySQLTypeKind::unsigned_integer)
+            else if (ref.column->type.kind == DuckDBMySQLTypeKind::unsigned_integer)
                 number.integer_digits = 20;
-            else if (valid_decimal(c->type)) {
-                number.integer_digits = c->type.precision - c->type.scale;
-                number.scale = c->type.scale;
+            else if (valid_decimal(ref.column->type)) {
+                number.integer_digits = ref.column->type.precision - ref.column->type.scale;
+                number.scale = ref.column->type.scale;
                 number.decimal = true;
             } else
                 return false;
-            number.sql = quote(c->canonical_name);
+            number.sql = column_sql(ref);
             return true;
         }
         return exact_literal(node, number);
@@ -281,13 +363,18 @@ struct Translator {
     bool expr(const N *n, std::string &out, DuckDBMySQLTypeKind &type) {
         if (!n)
             return false;
-        if (auto c = column(n)) {
-            if (!known_type(c->type.kind) || !output_label(c->canonical_name) ||
-                (c->type.kind == DuckDBMySQLTypeKind::exact_decimal &&
-                 !projectable_decimal(c->type)))
+        if (n->type == K::NODE_SUBQUERY) {
+            reason = "unsupported_subquery";
+            return false;
+        }
+        ColumnRef ref;
+        if (column_ref(n, ref)) {
+            if (!known_type(ref.column->type.kind) || !output_label(ref.label) ||
+                (ref.column->type.kind == DuckDBMySQLTypeKind::exact_decimal &&
+                 !projectable_decimal(ref.column->type)))
                 return false;
-            out = projected_column(*c);
-            type = c->type.kind;
+            out = projected_column(ref);
+            type = ref.column->type.kind;
             return true;
         }
         if (integer(n, out)) {
@@ -397,34 +484,34 @@ struct Translator {
                 *kind = selected;
             return true;
         }
-        const auto *c = column(arg);
-        if (!c || !known_type(c->type.kind))
+        ColumnRef ref;
+        if (!column_ref(arg, ref) || !known_type(ref.column->type.kind))
             return false;
         if (name == "COUNT") {
-            out = "COUNT(" + quote(c->canonical_name) + ")";
+            out = "COUNT(" + column_sql(ref) + ")";
             type = DuckDBMySQLTypeKind::signed_integer;
         } else if (name == "MIN" || name == "MAX") {
-            if (c->type.kind != DuckDBMySQLTypeKind::signed_integer &&
-                c->type.kind != DuckDBMySQLTypeKind::unsigned_integer)
+            if (ref.column->type.kind != DuckDBMySQLTypeKind::signed_integer &&
+                ref.column->type.kind != DuckDBMySQLTypeKind::unsigned_integer)
                 return false;
-            out = name + "(" + quote(c->canonical_name) + ")";
-            type = c->type.kind;
+            out = name + "(" + column_sql(ref) + ")";
+            type = ref.column->type.kind;
         } else {
             unsigned precision = 0, scale = 0, integer_digits = 0;
-            if (c->type.kind == DuckDBMySQLTypeKind::signed_integer)
+            if (ref.column->type.kind == DuckDBMySQLTypeKind::signed_integer)
                 precision = integer_digits = 19;
-            else if (c->type.kind == DuckDBMySQLTypeKind::unsigned_integer)
+            else if (ref.column->type.kind == DuckDBMySQLTypeKind::unsigned_integer)
                 precision = integer_digits = 20;
-            else if (summable_decimal(c->type)) {
-                precision = c->type.precision;
-                scale = c->type.scale;
+            else if (summable_decimal(ref.column->type)) {
+                precision = ref.column->type.precision;
+                scale = ref.column->type.scale;
                 integer_digits = precision;
             } else
                 return false;
             if (name == "SUM")
-                out = "SUM(" + quote(c->canonical_name) + ")";
+                out = "SUM(" + column_sql(ref) + ")";
             else
-                out = exact_average(quote(c->canonical_name), precision, scale, integer_digits);
+                out = exact_average(column_sql(ref), precision, scale, integer_digits);
             type = DuckDBMySQLTypeKind::exact_decimal;
             if (out.size() > ctx.max_output_bytes) {
                 reason = "resource_limit";
@@ -465,12 +552,12 @@ struct Translator {
         const N *format = arg ? arg->next_sibling : nullptr;
         if (!arg || !format || format->next_sibling || !year_month_literal(format))
             return false;
-        const auto *c = column(arg);
-        if (c && c->type.kind == DuckDBMySQLTypeKind::datetime &&
-            c->source.type != DuckDBMySQLSourceType::datetime) {
+        ColumnRef ref;
+        if (column_ref(arg, ref) && ref.column->type.kind == DuckDBMySQLTypeKind::datetime &&
+            ref.column->source.type != DuckDBMySQLSourceType::datetime) {
             // A native TIMESTAMP may be a replicated MySQL TIMESTAMP, which MySQL renders in
             // the session time zone. Only a recorded MySQL DATETIME has no time zone.
-            if (c->source.type == DuckDBMySQLSourceType::timestamp) {
+            if (ref.column->source.type == DuckDBMySQLSourceType::timestamp) {
                 reason = "session_time_zone_dependent";
             } else {
                 reason = "session_time_zone_unknown";
@@ -478,12 +565,12 @@ struct Translator {
             }
             return false;
         }
-        if (!c || (c->type.kind != DuckDBMySQLTypeKind::date &&
-                   c->type.kind != DuckDBMySQLTypeKind::datetime))
+        if (!ref.column || (ref.column->type.kind != DuckDBMySQLTypeKind::date &&
+                            ref.column->type.kind != DuckDBMySQLTypeKind::datetime))
             return false;
         // DuckDB's numeric strftime directives are locale-independent and
         // return VARCHAR without converting a timezone-naive value.
-        out = "strftime(" + quote(c->canonical_name) + ", '%Y-%m')";
+        out = "strftime(" + column_sql(ref) + ", '%Y-%m')";
         type = DuckDBMySQLTypeKind::text;
         return true;
     }
@@ -563,10 +650,11 @@ struct Translator {
     }
     bool text_operand(const N *n, std::string &out, bool &is_column, bool &is_literal) {
         is_column = is_literal = false;
-        if (const auto *c = column(n)) {
-            if (c->type.kind != DuckDBMySQLTypeKind::text || !text_collation(*c))
+        ColumnRef ref;
+        if (column_ref(n, ref)) {
+            if (ref.column->type.kind != DuckDBMySQLTypeKind::text || !text_collation(*ref.column))
                 return false;
-            out = quote(c->canonical_name);
+            out = column_sql(ref);
             is_column = true;
             return true;
         }
@@ -641,6 +729,10 @@ struct Translator {
     bool pred(const N *n, std::string &out) {
         if (!n || n->flags)
             return false;
+        if (n->type == K::NODE_SUBQUERY) {
+            reason = "unsupported_subquery";
+            return false;
+        }
         if (n->type == K::NODE_EXPRESSION) {
             auto child = n->first_child;
             if (!child || child->next_sibling || n->value_len)
@@ -679,10 +771,10 @@ struct Translator {
             if (op != "=" && op != "<>" && op != "!=" && op != "<" && op != "<=" && op != ">" &&
                 op != ">=")
                 return false;
-            const auto *ca = column(a);
-            const auto *cb = column(b);
-            const bool a_text = ca && ca->type.kind == DuckDBMySQLTypeKind::text;
-            const bool b_text = cb && cb->type.kind == DuckDBMySQLTypeKind::text;
+            ColumnRef ca, cb;
+            const bool a_column = column_ref(a, ca), b_column = column_ref(b, cb);
+            const bool a_text = a_column && ca.column->type.kind == DuckDBMySQLTypeKind::text;
+            const bool b_text = b_column && cb.column->type.kind == DuckDBMySQLTypeKind::text;
             if (a_text || b_text || a->type == K::NODE_LITERAL_STRING ||
                 b->type == K::NODE_LITERAL_STRING) {
                 if (!text_comparison(a, b, x, y))
@@ -691,13 +783,21 @@ struct Translator {
                 const bool a_param = a->type == K::NODE_PLACEHOLDER;
                 const bool b_param = b->type == K::NODE_PLACEHOLDER;
                 if (a_param || b_param) {
+                    // A joined query keeps placeholder support out of the
+                    // admitted subset rather than extending the position proof
+                    // to several relations.
+                    if (multi_relation()) {
+                        reason = "unsupported_parameter_join";
+                        return false;
+                    }
                     if (a_param == b_param ||
                         ctx.parameter_mode == DuckDBMySQLParameterMode::forbidden)
                         return false;
                     const N *parameter = a_param ? a : b;
                     const N *column_node = a_param ? b : a;
-                    const auto *c = column(column_node);
-                    if (!c || c->type.kind != DuckDBMySQLTypeKind::signed_integer)
+                    ColumnRef ref;
+                    if (!column_ref(column_node, ref) ||
+                        ref.column->type.kind != DuckDBMySQLTypeKind::signed_integer)
                         return false;
                     if (parameter_index >= parameters.size() ||
                         parameters[parameter_index] != parameter) {
@@ -705,18 +805,19 @@ struct Translator {
                         return false;
                     }
                     ++parameter_index;
-                    const auto column_sql = "CAST(" + quote(c->canonical_name) + " AS BIGINT)";
+                    const auto bound_column = "CAST(" + column_sql(ref) + " AS BIGINT)";
                     if (a_param) {
                         x = "CAST(? AS BIGINT)";
-                        y = column_sql;
+                        y = bound_column;
                     } else {
-                        x = column_sql;
+                        x = bound_column;
                         y = "CAST(? AS BIGINT)";
                     }
                 } else {
                     ExactNumber lhs, rhs;
-                    if (exact_number(a, lhs) && exact_number(b, rhs) &&
-                        (lhs.decimal || rhs.decimal)) {
+                    const bool lhs_exact = exact_number(a, lhs);
+                    const bool rhs_exact = exact_number(b, rhs);
+                    if (lhs_exact && rhs_exact && (lhs.decimal || rhs.decimal)) {
                         const unsigned scale = std::max(lhs.scale, rhs.scale);
                         const unsigned precision =
                             std::max(1u, std::max(lhs.integer_digits, rhs.integer_digits) + scale);
@@ -728,9 +829,23 @@ struct Translator {
                         y = "CAST(" + rhs.sql + target;
                     } else {
                         DuckDBMySQLTypeKind ta, tb;
-                        if (!expr(a, x, ta) || !expr(b, y, tb) || ta != tb ||
-                            ta != DuckDBMySQLTypeKind::signed_integer)
+                        if (expr(a, x, ta) && expr(b, y, tb) && ta == tb &&
+                            ta == DuckDBMySQLTypeKind::signed_integer) {
+                            // The established signed-integer comparison.
+                        } else if (lhs_exact && rhs_exact) {
+                            // MySQL compares signed and unsigned integers
+                            // mathematically. A common DECIMAL(20,0) is exact
+                            // over both domains, unlike an unsigned cast that
+                            // would turn a negative signed value around.
+                            const unsigned precision =
+                                std::max(1u, std::max(lhs.integer_digits, rhs.integer_digits));
+                            const std::string target =
+                                " AS DECIMAL(" + std::to_string(precision) + ",0))";
+                            x = "CAST(" + lhs.sql + target;
+                            y = "CAST(" + rhs.sql + target;
+                        } else {
                             return false;
+                        }
                     }
                 }
             }
@@ -738,6 +853,214 @@ struct Translator {
         out = "(" + x + " " + op + " " + y + ")";
         if (out.size() > ctx.max_output_bytes) {
             reason = "resource_limit";
+            return false;
+        }
+        return true;
+    }
+    bool add_relation(const N *ref) {
+        if (!ref || ref->type != K::NODE_TABLE_REF || ref->flags)
+            return false;
+        auto name = ref->first_child;
+        auto alias = name ? name->next_sibling : nullptr;
+        if (!name)
+            return false;
+        if (alias && alias->next_sibling)
+            return false;
+        if (name->type == K::NODE_SUBQUERY || name->type == K::NODE_LATERAL) {
+            reason = "derived_table";
+            return false;
+        }
+        // A single identifier is resolved in the session's selected
+        // database; MySQL's two-part `database.table` names that database
+        // explicitly and works from any selected database. Three-part
+        // names are a MySQL syntax error and ParserSQL already reports the
+        // remainder as unparsed.
+        std::vector<std::string> name_parts;
+        if (name->type == K::NODE_IDENTIFIER && !name->first_child &&
+            !(name->flags & ~FLAG_IDENT_DELIMITED) && safe_identifier(name)) {
+            name_parts.push_back(ident(name));
+            if (ctx.require_selected_database && ctx.default_schema.empty()) {
+                reason = "no_database_selected";
+                return false;
+            }
+        } else if (name->type == K::NODE_QUALIFIED_NAME && !name->flags) {
+            const N *schema = name->first_child;
+            const N *table = schema ? schema->next_sibling : nullptr;
+            if (!schema || !table || table->next_sibling || schema->type != K::NODE_IDENTIFIER ||
+                table->type != K::NODE_IDENTIFIER || schema->first_child || table->first_child ||
+                (schema->flags & ~FLAG_IDENT_DELIMITED) || (table->flags & ~FLAG_IDENT_DELIMITED) ||
+                !safe_identifier(schema) || !safe_identifier(table))
+                return false;
+            name_parts.push_back(ident(schema));
+            name_parts.push_back(ident(table));
+            if (duckdb_mysql_reserved_database(name_parts[0])) {
+                reason = "reserved_database";
+                return false;
+            }
+        } else {
+            return false;
+        }
+        if (alias && (alias->type != K::NODE_ALIAS || alias->next_sibling || alias->first_child ||
+                      (alias->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(alias)))
+            return false;
+        Relation entry;
+        entry.reference = ident(alias                    ? alias
+                                : name_parts.size() == 1 ? name
+                                                         : name->first_child->next_sibling);
+        entry.aliased = alias != nullptr;
+        if (relations.size() >= 3) {
+            reason = "join_relation_limit";
+            return false;
+        }
+        if (!ctx.resolve_relation || !ctx.max_resolver_calls ||
+            relations.size() >= ctx.max_resolver_calls) {
+            reason = "missing_context";
+            required.push_back("relation_resolver");
+            return false;
+        }
+        if (!ctx.resolve_relation(name_parts, entry.meta) || !entry.meta.exact_name_resolution ||
+            entry.meta.canonical_name.empty()) {
+            reason = "unresolved_relation";
+            return false;
+        }
+        if (entry.meta.columns.size() > ctx.max_nodes || entry.meta.canonical_name.size() > 3 ||
+            entry.meta.unique_keys.size() > ctx.max_nodes) {
+            reason = "resource_limit";
+            return false;
+        }
+        auto budget = [&](const std::string &s) {
+            if (s.size() > ctx.max_output_bytes - metadata_bytes)
+                return false;
+            metadata_bytes += s.size();
+            return true;
+        };
+        for (const auto &part : entry.meta.canonical_name)
+            if (!budget(part)) {
+                reason = "resource_limit";
+                return false;
+            }
+        for (const auto &col : entry.meta.columns)
+            if (!budget(col.canonical_name)) {
+                reason = "resource_limit";
+                return false;
+            }
+        for (const auto &key : entry.meta.unique_keys) {
+            if (key.size() > ctx.max_nodes - key_parts) {
+                reason = "resource_limit";
+                return false;
+            }
+            key_parts += key.size();
+            for (const auto &part : key)
+                if (!budget(part)) {
+                    reason = "resource_limit";
+                    return false;
+                }
+        }
+        for (const auto &part : entry.meta.canonical_name)
+            if (!valid_name(part))
+                return false;
+        for (const auto &col : entry.meta.columns)
+            if (!valid_name(col.canonical_name))
+                return false;
+        for (const auto &other : relations) {
+            if (other.reference != entry.reference)
+                continue;
+            // MySQL reports ER_NONUNIQ_TABLE for a duplicate alias, an alias
+            // that shadows another reference, or the same unaliased table
+            // twice. Distinct tables that merely share a last name are not a
+            // FROM error; `t.col` is then ambiguous and is refused there.
+            if (entry.aliased || other.aliased ||
+                other.meta.canonical_name == entry.meta.canonical_name) {
+                reason = "duplicate_relation";
+                return false;
+            }
+        }
+        entry.emit_alias = "r" + std::to_string(relations.size());
+        relations.push_back(std::move(entry));
+        has_relation = true;
+        return true;
+    }
+    bool add_join(const N *join) {
+        if (!join || join->type != K::NODE_JOIN_CLAUSE || join->flags)
+            return false;
+        const std::string kind = val(join);
+        bool left = false;
+        if (kind == "JOIN" || kind == "INNER JOIN") {
+            left = false;
+        } else if (kind == "LEFT JOIN" || kind == "LEFT OUTER JOIN") {
+            left = true;
+        } else {
+            if (kind == "CROSS JOIN")
+                reason = "cross_join";
+            else if (kind.find("NATURAL") != std::string::npos)
+                reason = "natural_join";
+            else if (kind.find("RIGHT") != std::string::npos)
+                reason = "right_join";
+            else if (kind.find("FULL") != std::string::npos)
+                reason = "full_join";
+            else
+                reason = "unsupported_join_type";
+            return false;
+        }
+        auto right = join->first_child;
+        auto condition = right ? right->next_sibling : nullptr;
+        if (!right)
+            return false;
+        if (!condition) {
+            reason = "join_without_condition";
+            return false;
+        }
+        if (condition->next_sibling)
+            return false;
+        if (condition->type == K::NODE_IDENTIFIER && val(condition) == "USING") {
+            reason = "using_join";
+            return false;
+        }
+        if (relations.empty()) {
+            reason = "unsupported_join";
+            return false;
+        }
+        if (!add_relation(right))
+            return false;
+        std::string on;
+        reason = "unsupported_join_predicate";
+        if (!pred(condition, on))
+            return false;
+        relations.back().left_join = left;
+        relations.back().on_sql = std::move(on);
+        reason = "unsupported_ast";
+        return true;
+    }
+    bool star_relation(const N *n, size_t &index) {
+        if (!has_relation || !n)
+            return false;
+        if (n->type == K::NODE_ASTERISK && !n->first_child && !n->flags) {
+            index = std::numeric_limits<size_t>::max();
+            return true;
+        }
+        if (n->type != K::NODE_QUALIFIED_NAME || n->flags)
+            return false;
+        const N *qualifier = n->first_child;
+        const N *field = qualifier ? qualifier->next_sibling : nullptr;
+        if (!qualifier || qualifier->type != K::NODE_IDENTIFIER || qualifier->first_child ||
+            (qualifier->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(qualifier) || !field ||
+            field->next_sibling || field->type != K::NODE_IDENTIFIER || field->first_child ||
+            field->flags || !safe_identifier(field) || ident(field) != "*")
+            return false;
+        const std::string name = ident(qualifier);
+        bool found = false;
+        for (size_t i = 0; i < relations.size(); ++i) {
+            if (relations[i].reference != name)
+                continue;
+            if (found) {
+                reason = "ambiguous_column";
+                return false;
+            }
+            found = true;
+            index = i;
+        }
+        if (!found) {
+            reason = "unknown_relation_alias";
             return false;
         }
         return true;
@@ -782,100 +1105,34 @@ struct Translator {
             return false;
         if (from) {
             auto t = from->first_child;
-            auto name = t ? t->first_child : nullptr;
-            auto alias = name ? name->next_sibling : nullptr;
-            if (!t || t->type != K::NODE_TABLE_REF || t->flags || t->next_sibling || !name)
-                return false;
-            // A single identifier is resolved in the session's selected
-            // database; MySQL's two-part `database.table` names that database
-            // explicitly and works from any selected database. Three-part
-            // names are a MySQL syntax error and ParserSQL already reports the
-            // remainder as unparsed.
-            std::vector<std::string> name_parts;
-            if (name->type == K::NODE_IDENTIFIER && !name->first_child &&
-                !(name->flags & ~FLAG_IDENT_DELIMITED) && safe_identifier(name)) {
-                name_parts.push_back(ident(name));
-                if (ctx.require_selected_database && ctx.default_schema.empty()) {
-                    reason = "no_database_selected";
-                    return false;
-                }
-            } else if (name->type == K::NODE_QUALIFIED_NAME && !name->flags) {
-                const N *schema = name->first_child;
-                const N *table = schema ? schema->next_sibling : nullptr;
-                if (!schema || !table || table->next_sibling ||
-                    schema->type != K::NODE_IDENTIFIER || table->type != K::NODE_IDENTIFIER ||
-                    schema->first_child || table->first_child ||
-                    (schema->flags & ~FLAG_IDENT_DELIMITED) ||
-                    (table->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(schema) ||
-                    !safe_identifier(table))
-                    return false;
-                name_parts.push_back(ident(schema));
-                name_parts.push_back(ident(table));
-                if (duckdb_mysql_reserved_database(name_parts[0])) {
-                    reason = "reserved_database";
-                    return false;
-                }
-            } else {
-                return false;
-            }
-            if (alias &&
-                (alias->type != K::NODE_ALIAS || alias->next_sibling || alias->first_child ||
-                 (alias->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(alias)))
-                return false;
-            qualifier = ident(alias                    ? alias
-                              : name_parts.size() == 1 ? name
-                                                       : name->first_child->next_sibling);
-            if (!ctx.resolve_relation || !ctx.max_resolver_calls) {
-                reason = "missing_context";
-                required.push_back("relation_resolver");
-                return false;
-            }
-            if (!ctx.resolve_relation(name_parts, relation) || !relation.exact_name_resolution ||
-                relation.canonical_name.empty()) {
-                reason = "unresolved_relation";
-                return false;
-            }
-            if (relation.columns.size() > ctx.max_nodes || relation.canonical_name.size() > 3 ||
-                relation.unique_keys.size() > ctx.max_nodes) {
-                reason = "resource_limit";
-                return false;
-            }
-            size_t metadata_bytes = 0, key_parts = 0;
-            auto budget = [&](const std::string &s) {
-                if (s.size() > ctx.max_output_bytes - metadata_bytes)
-                    return false;
-                metadata_bytes += s.size();
-                return true;
-            };
-            for (const auto &part : relation.canonical_name)
-                if (!budget(part)) {
-                    reason = "resource_limit";
-                    return false;
-                }
-            for (const auto &col : relation.columns)
-                if (!budget(col.canonical_name)) {
-                    reason = "resource_limit";
-                    return false;
-                }
-            for (const auto &key : relation.unique_keys) {
-                if (key.size() > ctx.max_nodes - key_parts) {
-                    reason = "resource_limit";
-                    return false;
-                }
-                key_parts += key.size();
-                for (const auto &part : key)
-                    if (!budget(part)) {
-                        reason = "resource_limit";
+            while (t) {
+                if (t->type == K::NODE_TABLE_REF) {
+                    if (!relations.empty()) {
+                        // Comma joins have no explicit ON predicate.
+                        reason = "comma_join";
                         return false;
                     }
+                    if (!add_relation(t))
+                        return false;
+                } else if (t->type == K::NODE_JOIN_CLAUSE) {
+                    if (relations.empty()) {
+                        reason = "unsupported_join";
+                        return false;
+                    }
+                    if (!add_join(t))
+                        return false;
+                } else {
+                    return false;
+                }
+                t = t->next_sibling;
             }
-            for (const auto &part : relation.canonical_name)
-                if (!valid_name(part))
-                    return false;
-            for (const auto &col : relation.columns)
-                if (!valid_name(col.canonical_name))
-                    return false;
-            has_relation = true;
+            if (relations.empty())
+                return false;
+        }
+        if (multi_relation() && !parameters.empty()) {
+            // Placeholder positions are proven for one relation only.
+            reason = "unsupported_parameter_join";
+            return false;
         }
         // MySQL permits output aliases in GROUP BY. Refuse any possible alias
         // collision rather than guessing whether it shadows a source column.
@@ -892,25 +1149,25 @@ struct Translator {
                 aliases.insert(name);
             }
         }
-        std::set<std::string> group_keys;
+        std::set<std::pair<size_t, std::string>> group_keys;
         std::string group_sql;
         if (group) {
             if (!has_relation || group->value_len || !group->first_child)
                 return false;
             for (auto n = group->first_child; n; n = n->next_sibling) {
-                const auto *c = column(n);
-                if (!c || alias_conflicts(c->canonical_name) ||
-                    (c->type.kind != DuckDBMySQLTypeKind::signed_integer &&
-                     c->type.kind != DuckDBMySQLTypeKind::unsigned_integer))
+                ColumnRef ref;
+                if (!column_ref(n, ref) || alias_conflicts(ref.label) ||
+                    (ref.column->type.kind != DuckDBMySQLTypeKind::signed_integer &&
+                     ref.column->type.kind != DuckDBMySQLTypeKind::unsigned_integer))
                     return false;
                 if (!group_sql.empty())
                     group_sql += ", ";
-                group_sql += quote(c->canonical_name);
+                group_sql += column_sql(ref);
                 if (group_sql.size() > ctx.max_output_bytes) {
                     reason = "resource_limit";
                     return false;
                 }
-                group_keys.insert(c->canonical_name);
+                group_keys.insert({ref.relation, ref.column->canonical_name});
             }
         }
         out = "SELECT ";
@@ -931,58 +1188,105 @@ struct Translator {
             if (!first)
                 out += ", ";
             first = false;
-            if (n->type == K::NODE_ASTERISK && !n->first_child && !n->flags && !alias &&
-                has_relation) {
-                bool expand = false;
-                for (const auto &c : relation.columns) {
-                    if (!known_type(c.type.kind) || !output_label(c.canonical_name) ||
-                        (c.type.kind == DuckDBMySQLTypeKind::exact_decimal &&
-                         !projectable_decimal(c.type)))
-                        return false;
-                    expand = expand || fraction_only(c.type);
-                }
-                if (group)
+            size_t star_index = 0;
+            if (n->type == K::NODE_ASTERISK || n->type == K::NODE_QUALIFIED_NAME) {
+                const bool star = star_relation(n, star_index);
+                if (star && alias)
                     return false;
-                plain = true;
-                if (!expand)
-                    out += "*";
-                else {
-                    std::set<std::string> seen;
-                    bool sep = false;
-                    for (const auto &c : relation.columns) {
-                        // DuckDB identifiers are case-insensitive; an ambiguous
-                        // expanded column cannot be resolved safely.
-                        std::string folded = c.canonical_name;
-                        for (char &ch : folded) {
-                            if (ch >= 'A' && ch <= 'Z')
-                                ch += 'a' - 'A';
+                if (!star && n->type == K::NODE_QUALIFIED_NAME) {
+                    const N *qualifier = n->first_child;
+                    const N *field = qualifier ? qualifier->next_sibling : nullptr;
+                    if (qualifier && field && !field->next_sibling &&
+                        field->type == K::NODE_IDENTIFIER && !field->flags && val(field) == "*")
+                        return false;
+                }
+                if (star) {
+                    if (group)
+                        return false;
+                    plain = true;
+                    if (multi_relation()) {
+                        const size_t first_relation =
+                            star_index == std::numeric_limits<size_t>::max() ? 0 : star_index;
+                        const size_t last_relation =
+                            star_index == std::numeric_limits<size_t>::max() ? relations.size()
+                                                                             : star_index + 1;
+                        bool sep = false;
+                        for (size_t relation_index = first_relation; relation_index < last_relation;
+                             ++relation_index) {
+                            const auto &target = relations[relation_index].meta;
+                            if (target.columns.empty())
+                                return false;
+                            std::set<std::string> seen;
+                            for (const auto &c : target.columns) {
+                                if (!known_type(c.type.kind) || !output_label(c.canonical_name) ||
+                                    (c.type.kind == DuckDBMySQLTypeKind::exact_decimal &&
+                                     !projectable_decimal(c.type)))
+                                    return false;
+                                if (!seen.insert(fold_identifier(c.canonical_name)).second) {
+                                    reason = "ambiguous_column";
+                                    return false;
+                                }
+                                if (sep)
+                                    out += ", ";
+                                sep = true;
+                                ColumnRef ref{&c, relation_index, c.canonical_name};
+                                out += projected_column(ref) + " AS " + quote(c.canonical_name);
+                                if (out.size() > ctx.max_output_bytes) {
+                                    reason = "resource_limit";
+                                    return false;
+                                }
+                            }
                         }
-                        if (!seen.insert(folded).second)
-                            return false;
-                        if (sep)
-                            out += ", ";
-                        sep = true;
-                        out += projected_column(c);
-                        if (fraction_only(c.type))
-                            out += " AS " + quote(c.canonical_name);
-                        if (out.size() > ctx.max_output_bytes) {
-                            reason = "resource_limit";
-                            return false;
+                    } else {
+                        bool expand = false;
+                        for (const auto &c : relations[0].meta.columns) {
+                            if (!known_type(c.type.kind) || !output_label(c.canonical_name) ||
+                                (c.type.kind == DuckDBMySQLTypeKind::exact_decimal &&
+                                 !projectable_decimal(c.type)))
+                                return false;
+                            expand = expand || fraction_only(c.type);
+                        }
+                        if (!expand)
+                            out += "*";
+                        else {
+                            std::set<std::string> seen;
+                            bool sep = false;
+                            for (const auto &c : relations[0].meta.columns) {
+                                // DuckDB identifiers are case-insensitive; an ambiguous
+                                // expanded column cannot be resolved safely.
+                                if (!seen.insert(fold_identifier(c.canonical_name)).second)
+                                    return false;
+                                if (sep)
+                                    out += ", ";
+                                sep = true;
+                                ColumnRef ref{&c, 0, c.canonical_name};
+                                out += projected_column(ref);
+                                if (fraction_only(c.type))
+                                    out += " AS " + quote(c.canonical_name);
+                                if (out.size() > ctx.max_output_bytes) {
+                                    reason = "resource_limit";
+                                    return false;
+                                }
+                            }
                         }
                     }
+                    continue;
                 }
-                continue;
             }
             std::string s;
             DuckDBMySQLTypeKind type;
+            bool column_projection = false;
+            ColumnRef projected_ref;
             if (aggregate_expr(n, s, type)) {
                 aggregate = true;
             } else {
                 if (!expr(n, s, type) && !date_format_expr(n, s, type))
                     return false;
+                column_projection = column_ref(n, projected_ref);
                 if (group) {
-                    const auto *c = column(n);
-                    if (!c || !group_keys.count(c->canonical_name))
+                    if (!column_projection ||
+                        !group_keys.count(
+                            {projected_ref.relation, projected_ref.column->canonical_name}))
                         return false;
                 }
                 plain = true;
@@ -996,9 +1300,15 @@ struct Translator {
                     return false;
                 aliases.insert(a);
                 out += " AS " + quote(a);
-            } else if ((n->type == K::NODE_COLUMN_REF || n->type == K::NODE_QUALIFIED_NAME) &&
-                       column(n) && fraction_only(column(n)->type)) {
-                out += " AS " + quote(column(n)->canonical_name);
+            } else if (column_projection) {
+                const bool label_needed =
+                    multi_relation() || fraction_only(projected_ref.column->type) ||
+                    projected_ref.label != projected_ref.column->canonical_name;
+                if (label_needed) {
+                    if (!output_label(projected_ref.label))
+                        return false;
+                    out += " AS " + quote(projected_ref.label);
+                }
             } else if (n->type != K::NODE_COLUMN_REF && n->type != K::NODE_QUALIFIED_NAME) {
                 // ParserSQL records the original expression span; validate it belongs to input.
                 auto p = reinterpret_cast<uintptr_t>(item->source_ptr),
@@ -1018,14 +1328,24 @@ struct Translator {
             return false;
         if (from) {
             out += " FROM ";
-            bool sep = false;
-            for (auto &part : relation.canonical_name) {
-                if (part.empty())
-                    return false;
-                if (sep)
-                    out += '.';
-                out += quote(part);
-                sep = true;
+            for (size_t i = 0; i < relations.size(); ++i) {
+                const auto &entry = relations[i];
+                if (i) {
+                    out += entry.left_join ? " LEFT JOIN " : " INNER JOIN ";
+                }
+                bool sep = false;
+                for (auto &part : entry.meta.canonical_name) {
+                    if (part.empty())
+                        return false;
+                    if (sep)
+                        out += '.';
+                    out += quote(part);
+                    sep = true;
+                }
+                if (multi_relation())
+                    out += " AS " + quote(entry.emit_alias);
+                if (i)
+                    out += " ON " + entry.on_sql;
             }
         }
         if (where) {
@@ -1044,7 +1364,7 @@ struct Translator {
                 return false;
             out += " HAVING " + p;
         }
-        std::set<std::string> ordered;
+        std::set<std::pair<size_t, std::string>> ordered;
         if (order) {
             out += " ORDER BY ";
             bool sep = false;
@@ -1053,14 +1373,17 @@ struct Translator {
                     return false;
                 auto n = item->first_child;
                 auto dir = n ? n->next_sibling : nullptr;
-                auto c = n ? column(n) : nullptr;
-                if (!c || (group && !group_keys.count(c->canonical_name)) ||
-                    alias_conflicts(c->canonical_name))
+                ColumnRef ref;
+                if (!n || !column_ref(n, ref) ||
+                    (group && !group_keys.count({ref.relation, ref.column->canonical_name})) ||
+                    alias_conflicts(ref.label))
                     return false;
-                const bool numeric = c->type.kind == DuckDBMySQLTypeKind::signed_integer ||
-                                     c->type.kind == DuckDBMySQLTypeKind::unsigned_integer ||
-                                     c->type.kind == DuckDBMySQLTypeKind::exact_decimal;
-                if (!numeric && (c->type.kind != DuckDBMySQLTypeKind::text || !text_collation(*c)))
+                const bool numeric =
+                    ref.column->type.kind == DuckDBMySQLTypeKind::signed_integer ||
+                    ref.column->type.kind == DuckDBMySQLTypeKind::unsigned_integer ||
+                    ref.column->type.kind == DuckDBMySQLTypeKind::exact_decimal;
+                if (!numeric && (ref.column->type.kind != DuckDBMySQLTypeKind::text ||
+                                 !text_collation(*ref.column)))
                     return false;
                 std::string d = "ASC";
                 if (dir) {
@@ -1078,25 +1401,42 @@ struct Translator {
                 if (sep)
                     out += ", ";
                 sep = true;
-                out += quote(c->canonical_name) + " " + d +
-                       (d == "ASC" ? " NULLS FIRST" : " NULLS LAST");
-                ordered.insert(c->canonical_name);
+                out += column_sql(ref) + " " + d + (d == "ASC" ? " NULLS FIRST" : " NULLS LAST");
+                ordered.insert({ref.relation, ref.column->canonical_name});
             }
             if (!sep)
                 return false;
         }
         if (limit) {
-            bool unique = group && std::all_of(group_keys.begin(), group_keys.end(),
-                                               [&](const std::string &key) {
-                                                   return ordered.count(key) != 0;
-                                               });
-            for (const auto &key : relation.unique_keys) {
-                if (group)
-                    break;
-                if (!key.empty() && std::all_of(key.begin(), key.end(), [&](const std::string &s) {
-                        return ordered.count(s) != 0;
-                    }))
-                    unique = true;
+            // A LIMIT needs a total order. Every joined relation must
+            // contribute a declared unique key to ORDER BY: in an INNER join
+            // the whole result tuple is then unique; in a LEFT join an
+            // unmatched right side is all NULL, and the still-unique left key
+            // separates those rows.
+            bool unique = false;
+            if (group)
+                unique = std::all_of(group_keys.begin(), group_keys.end(),
+                                     [&](const std::pair<size_t, std::string> &key) {
+                                         return ordered.count(key) != 0;
+                                     });
+            else if (!relations.empty()) {
+                unique = true;
+                for (size_t i = 0; i < relations.size(); ++i) {
+                    bool relation_unique = false;
+                    for (const auto &key : relations[i].meta.unique_keys) {
+                        if (!key.empty() &&
+                            std::all_of(key.begin(), key.end(), [&](const std::string &s) {
+                                return ordered.count({i, s}) != 0;
+                            })) {
+                            relation_unique = true;
+                            break;
+                        }
+                    }
+                    if (!relation_unique) {
+                        unique = false;
+                        break;
+                    }
+                }
             }
             if (!unique) {
                 reason = "nondeterministic_limit";
@@ -1274,7 +1614,7 @@ duckdb_translate_mysql_select(const std::string &input, const DuckDBMySQLSelectC
         ctx.max_output_bytes = std::min(ctx.max_output_bytes, size_t(262144));
         ctx.max_nodes = std::min(ctx.max_nodes, size_t(4096));
         ctx.max_depth = std::min(ctx.max_depth, size_t(128));
-        ctx.max_resolver_calls = std::min(ctx.max_resolver_calls, size_t(1));
+        ctx.max_resolver_calls = std::min(ctx.max_resolver_calls, size_t(3));
         return translate(input, ctx);
     } catch (const std::bad_alloc &) {
         DuckDBMySQLSelectTranslation result;

@@ -226,14 +226,115 @@ coercion on that value unless collation/type rules are established.
 
 | Construct | Parser result | AST/emission evidence | Disposition | Required facts/restrictions |
 |---|---|---|---|---|
-| `INNER JOIN ... ON` | OK, complete | `NODE_JOIN_CLAUSE` | Candidate | Equality join over admitted typed columns; relation metadata. |
-| `LEFT [OUTER] JOIN ... ON` | OK, complete | join clause preserved | Candidate | Nullability/type rules and deterministic ordering. |
-| `CROSS JOIN`, comma join | OK, complete | preserved | Candidate | Cardinality rules; no implicit predicate. |
-| `JOIN ... USING (col)` | OK, complete | preserved | Candidate | Resolved column identity and duplicate-column result rules. |
-| Multiple joins | OK, complete | nested join clauses | Candidate | Every branch must pass admission. |
-| `NATURAL JOIN` | OK, complete | preserved | Deferred | Implicit column sets require metadata and duplicate rules. |
-| `STRAIGHT_JOIN` after FROM | Partial | `remaining` starts at `STRAIGHT_JOIN` | Parser gap | Refused. |
-| `FULL OUTER JOIN` | OK, complete | preserved | Refused | Not MySQL grammar; parser acceptance is not support. |
+| `JOIN` / `INNER JOIN ... ON` | OK, complete | `NODE_JOIN_CLAUSE` value `JOIN` or `INNER JOIN`; right table ref then ON expression | Admitted (bounded) | Up to three base relations; every ON predicate must reuse an exact typed comparison. |
+| `LEFT [OUTER] JOIN ... ON` | OK, complete | join clause value preserved, ON child | Admitted (bounded) | Same predicate rules; NULL-extended right rows are compared against MySQL. |
+| Multiple `INNER`/`LEFT` joins | OK, complete | chained `NODE_JOIN_CLAUSE` siblings | Admitted (bounded) | At most three relations in FROM order; each ON is validated after its right relation. |
+| `CROSS JOIN`, comma join | OK, complete | preserved | Refused (`cross_join`, `comma_join`) | No implicit predicate; multiplicity is not covered by this proof. |
+| `JOIN ... USING (col)` | OK, complete | condition is a `NODE_IDENTIFIER` value `USING` | Refused (`using_join`) | Merged-column identity and duplicate-label rules are not proven. |
+| `NATURAL JOIN` | OK, complete | join value contains `NATURAL` | Refused (`natural_join`) | Implicit column sets require metadata and duplicate rules. |
+| `RIGHT [OUTER] JOIN` | OK, complete | join value contains `RIGHT` | Refused (`right_join`) | Optional mirror was not needed; the same proof covers LEFT only. |
+| `FULL [OUTER] JOIN` | OK, complete | join value contains `FULL` | Refused (`full_join`) | Not MySQL grammar; parser acceptance is not support. |
+| `STRAIGHT_JOIN` after FROM | Partial | `remaining` starts at `STRAIGHT_JOIN` | Refused (`incomplete_or_non_select`) | Parser gap; never reaches execution. |
+| Parenthesized join group | Not framed | `remaining` after the first table | Refused (`incomplete_or_non_select`) | No AST shape to prove. |
+| Derived table / relation subquery | OK, complete | `NODE_TABLE_REF` child is `NODE_SUBQUERY` | Refused (`derived_table`) | Base tables only. |
+| Scalar/`EXISTS` subquery in ON or WHERE | OK, complete | `NODE_SUBQUERY` | Refused (`unsupported_subquery`) | Correlation and NULL semantics are outside the slice. |
+| More than three relations | OK, complete | fourth table ref / join clause | Refused (`join_relation_limit`) | Resolver allowance is at most three calls. |
+| Join hint comment | parser comment flags | `has_comments` / `has_executable_comments` | Refused (`unsupported_provenance`) | Hint text is not part of the AST. |
+
+#### Admitted join subset and emission
+
+A joined query is admitted only when every relation is a plain base table
+(optionally with a single `AS` or implicit alias), the join is `JOIN`,
+`INNER JOIN`, `LEFT JOIN` or `LEFT OUTER JOIN`, and the join has an explicit
+`ON` expression. A single relation keeps the pre-join emission byte for byte.
+For two or three relations the emitted SQL:
+
+- assigns each relation a private alias (`"r0"`, `"r1"`, `"r2"`), so DuckDB
+  never resolves a user alias, table name or case collision;
+- emits the canonical table name exactly as the single-table path does, followed
+  by `AS "rN"` and, for every non-first relation, `INNER JOIN`/`LEFT JOIN ... ON`;
+- qualifies every column reference and projection as `"rN"."column"`;
+- adds an explicit `AS "label"` to every projected plain column. MySQL labels a
+  plain column with the identifier spelling written in the query (for example
+  `l.ID` is labelled `ID`), while `*` uses the declared canonical column names;
+- expands unqualified `*` over all relations in FROM order and `alias.*` over
+  exactly one relation, preserving duplicate labels such as `id, id`.
+
+#### Name resolution
+
+A table alias hides the unaliased table name. An unaliased relation is addressed
+by its last name part (`table` in `database.table`). A duplicate alias, an alias
+that shadows another reference, or the same unaliased table twice is MySQL error
+1066 and is refused with `duplicate_relation`. Distinct tables that merely share
+a last name across databases are not a FROM error; a reference that matches both
+is then ambiguous.
+
+Column names match ASCII-case-insensitively; non-ASCII bytes must match exactly
+rather than guessing the identifier collation. Table aliases and unaliased table
+names match exactly (the server runs with `lower_case_table_names=0`).
+An unqualified column must resolve in exactly one relation; zero matches is
+`unknown_column`, more than one is `ambiguous_column` (MySQL 1052). A qualified
+name must name a visible relation and one column; an unknown or hidden reference
+is `unknown_relation_alias`. Three-part `database.table.column` names are
+refused with `unsupported_column_reference`. Self joins with distinct aliases
+are admitted.
+
+#### Join predicates
+
+ON and WHERE predicates reuse the existing exactness proofs and operators:
+
+- signed/signed integer comparisons keep the established raw comparison;
+- signed/unsigned and unsigned/unsigned integer pairs are cast to a common
+  `DECIMAL(20,0)`, which is exact over both ranges and matches MySQL's
+  mathematical comparison (an unsigned cast would turn `-1` into `2^64-1`);
+- integer/decimal and decimal/decimal comparisons use the common `DECIMAL(p,s)`
+  cast described below;
+- text is admitted only when both text operands have recorded
+  `utf8mb4_0900_bin` provenance; the other collations and unknown provenance stay
+  refused with `unsupported_collation` / `collation_unproven`;
+- literals keep the existing integer and exact-decimal rules.
+
+Text versus number, date/datetime versus anything, a column with unknown
+provenance used as a key, and every other MySQL coercion stay refused. MySQL
+converts text to DOUBLE in a text/number comparison while DuckDB refuses the
+typed comparison, so that key cannot be emitted exactly. NULL keys never match,
+and `LEFT JOIN` NULL extension, a WHERE filter on the nullable side, ON literal
+filters and duplicate-key fan-out are all compared against the oracle.
+
+#### Deterministic LIMIT over a join
+
+A `LIMIT` is admitted only when `ORDER BY` contains a declared unique key of
+every joined relation, after qualifying the ordered columns per relation. This
+makes the result tuple unique, so the sorted order is total. For an INNER join
+each relation's key is unique in the result. For a LEFT join an unmatched right
+row is all NULL, but the left relation's still-unique key separates those rows;
+the same argument extends to a chain of LEFT joins because a NULL key on one
+nullable relation also forces every relation to its right to be NULL-extended.
+Otherwise the query is refused with `nondeterministic_limit`. Without LIMIT an
+ORDER BY is emitted as written; it is only required for deterministic test
+comparison, never invented by the translator.
+
+#### Grouping and placeholders over joins
+
+GROUP BY and COUNT/MIN/MAX/SUM/AVG use the same key and aggregate rules over
+columns of any joined relation. The group-key identity is the (relation, column)
+pair, so equal column names in different relations are distinct keys. A grouped
+LIMIT requires the complete group-key tuple in ORDER BY.
+
+Placeholders are refused for every query with more than one relation
+(`unsupported_parameter_join`); extending the source-position proof to several
+relations was not necessary for the proven subset. Single-relation prepared
+statements keep their existing behavior and are re-translated on every execute.
+
+The differential probe compares 171 candidates: the 129 pre-join cases plus 42
+join cases covering INNER/LEFT, three relations, NULL and duplicate keys,
+unmatched rows on both sides, an empty relation, self join, signed/unsigned and
+decimal keys, a proven binary text key, stars, ordering/LIMIT and grouped
+aggregates. It adds 26 join-shape refusal checks and one multi-relation
+placeholder refusal; all 58 earlier refusals still pass and the negative control
+is still detected. The translation unit runs 371 assertions: the 297 pre-join
+assertions unchanged plus 74 join assertions, including a byte-identical
+single-relation emission check.
 
 ### 3.7 Grouping, ordering, aggregates, and functions
 
@@ -241,7 +342,7 @@ coercion on that value unless collation/type rules are established.
 |---|---|---|---|---|
 | `GROUP BY` | OK, complete | group-by node | Candidate | Grouping keys must be admitted expressions; string grouping needs collation. |
 | `HAVING` | OK, complete | having node | Candidate | Aggregate and type rules. |
-| `ORDER BY col [ASC|DESC]` | OK, complete | order items | Admitted (bounded) | Numeric keys and text keys with proven `utf8mb4_0900_bin`; determinism and null ordering rules apply. |
+| `ORDER BY col [ASC\|DESC]` | OK, complete | order items | Admitted (bounded) | Numeric keys and text keys with proven `utf8mb4_0900_bin`; determinism and null ordering rules apply. |
 | `WITH ROLLUP` | OK, complete | group-by value `WITH ROLLUP` | Deferred | DuckDB rollup/summary semantics and null labeling need rules. |
 | `COUNT(*)` | OK, complete | function call | Candidate | Multiplicity semantics. |
 | `COUNT(expr)`, `SUM`, `MIN`, `MAX` | OK, complete | function calls | Admitted (bounded) | Exact integer/decimal columns only; see the SUM and AVG rules below. |
@@ -272,7 +373,7 @@ semantic admission.
 | Correlated `EXISTS` | OK, complete | subquery node | Deferred | Correlation resolution. |
 | Window function | OK, complete | `NODE_WINDOW_FUNCTION` | Deferred | Partition/order determinism, frame, null ordering, result type. |
 | Named `WINDOW` clause | OK, complete | `NODE_WINDOW_CLAUSE` | Deferred | Name resolution and frame validation. |
-| `UNION [ALL|DISTINCT]` | OK, complete | root `NODE_COMPOUND_QUERY` | Deferred | Root-aware gate, column count/type unification, duplicate semantics. |
+| `UNION [ALL\|DISTINCT]` | OK, complete | root `NODE_COMPOUND_QUERY` | Deferred | Root-aware gate, column count/type unification, duplicate semantics. |
 
 The first analytical subset should not include any of these until the
 corresponding root-aware and nested-admission rules exist.
@@ -381,8 +482,10 @@ anything the audit cannot prove end-to-end. The first subset is:
    input, no remaining text, and no second statement.
 2. Projection of plain columns, `*`, integer/decimal literals, and simple
    parentheses over those values, with aliases preserved from the AST.
-3. One relation or `INNER`/`LEFT`/`CROSS` joins with `ON`/`USING` over admitted
-   same-family typed columns; no implicit string/number coercion.
+3. One to three plain base relations joined by `JOIN`/`INNER JOIN` or
+   `LEFT [OUTER] JOIN` with an explicit `ON`; `CROSS`/comma joins, `USING`,
+   `NATURAL`, `RIGHT`/`FULL`, derived tables, subqueries, parenthesized join
+   groups and more than three relations are refused with stable reasons.
 4. `WHERE`/`HAVING` using `=`, `<>`, `!=`, `<`, `<=`, `>`, `>=`, `AND`, `OR`,
    `NOT`, `IS NULL`, `IS NOT NULL`, `BETWEEN`, `IN (literal list)` only when all
    operand types are admitted and string comparison collation is known.
@@ -670,24 +773,28 @@ schema.
 
 `duckdb_translate_mysql_select` consumes only the locally patched ParserSQL AST.
 It emits owned DuckDB SQL and stable refusal reasons without executing a query;
-its caller supplies bounded relation facts. The implemented slice covers one
-resolved table, aliases and qualified column references, typed projections,
-nonnegative signed-range integer and NULL literals, nonnegative exact decimal
-literals, signed-integer comparisons, exact decimal comparisons, NULL
-predicates, AND/OR, COUNT and integer MIN/MAX, integer-key GROUP BY with
+its caller supplies bounded relation facts. The implemented slice covers one to
+three resolved base relations joined by `JOIN`/`INNER JOIN` or
+`LEFT [OUTER] JOIN` with an explicit `ON`, aliases, qualified column references,
+typed projections, nonnegative signed-range integer and NULL literals,
+nonnegative exact decimal literals, signed-integer comparisons, signed/unsigned
+integer comparisons through an exact common DECIMAL, exact decimal comparisons,
+NULL predicates, AND/OR, COUNT and integer MIN/MAX, integer-key GROUP BY with
 aggregate HAVING predicates, exact integer and DECIMAL SUM/AVG, numeric ordering
 with explicit MySQL NULL placement, integer-literal LIMIT with a proven strictly
 unique ordering key (the full group-key tuple establishes uniqueness for grouped
-rows), the `DATE_FORMAT(column, '%Y-%m')` projection described below, and text
+rows; over a join every relation's declared unique key must appear in ORDER BY),
+the `DATE_FORMAT(column, '%Y-%m')` projection described below, and text
 comparison and ordering over columns recorded as `utf8mb4_0900_bin`. Identifiers
 and duplicate labels are preserved.
 
 Unknown types, ambiguous ORDER BY aliases, comments, session-sensitive quoting,
-text in every other collation, arithmetic, non-integer grouping, joins,
-subqueries, CTEs, windows, variables and unknown functions are currently
-refused. SUM/AVG above the proved decimal precision, SUM/AVG over non-numeric
-columns, aggregate DISTINCT and SUM/AVG in HAVING remain refused. Later roadmap
-slices remain outstanding; these refusals do not complete the goal.
+text in every other collation, arithmetic, non-integer grouping, CROSS/comma
+joins, `USING`, `NATURAL`, `RIGHT`/`FULL` joins, derived tables, subqueries,
+CTEs, windows, variables and unknown functions are currently refused. SUM/AVG
+above the proved decimal precision, SUM/AVG over non-numeric columns, aggregate
+DISTINCT and SUM/AVG in HAVING remain refused. Later roadmap slices remain
+outstanding; these refusals do not complete the goal.
 
 ### Source column facts
 

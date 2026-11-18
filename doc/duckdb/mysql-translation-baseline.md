@@ -5,12 +5,13 @@ ProxySQL routing or the production metadata provider. The probe passes each sour
 query to `duckdb_translate_mysql_select`; it executes only admitted SQL and uses
 the translator's owned result for DuckDB. Its negative control copies the emitted
 comma-LIMIT SQL and deliberately changes its offset, proving the row comparator
-catches that error. Fifty-eight unsupported or invalid queries are checked for
-refusal and never sent to either database.
+catches that error. The original fifty-eight unsupported or invalid queries plus
+twenty-seven join-specific refusal checks are checked for refusal and never sent
+to either database.
 
 On 2026-11-18, MySQL `8.0.46-0ubuntu0.24.04.5` and DuckDB `v2.0.0` matched
-all 129 candidate queries, with zero unexpected mismatches. The negative control
-was detected. Cases cover escaped table and column names, duplicate aliases,
+all 171 candidate queries, with zero unexpected mismatches. The negative control
+was detected. The original 129 cases cover escaped table and column names, duplicate aliases,
 table alias and qualified references, `*` over signed and unsigned integers,
 text, binary and NULL values, `COUNT(*)` and `COUNT(column)`, literal `001`
 and NULL labels, ascending and descending NULL order, comma LIMIT, and a signed
@@ -73,9 +74,34 @@ column: DuckDB's C API text conversion omits trailing fractional zeros
 fractional digits for DATETIME(6). That pre-existing difference is outside the
 translated value under test and is not compared here.
 
-Three of the 129 cases exercise database-qualified names against a second database
-(`other_db.other_probe` projection, predicate and `COUNT(*)`): MySQL resolves a
-qualified name in its own database regardless of the selected one. The probe's
+Forty-two of the 171 cases exercise joins. The `join_left`, `join_right` and
+`join_third` fixtures form a three-table relation with NULL keys, duplicate join
+keys that fan out, rows unmatched on both sides, an empty fourth table,
+signed/unsigned and `DECIMAL(10,2)` keys, a proven `utf8mb4_0900_bin` text key,
+and a self join. Cases cover INNER and LEFT [OUTER] JOIN with projection, WHERE
+on either side, ON literal filters, AND/OR/IS NULL predicates, `ON 1=1`, a
+WHERE filter on the nullable side, three-table chains, self join with distinct
+aliases, `*` and `alias.*`, duplicate labels (`id, id`), column-name case
+(`l.ID` labelled `ID`), ascending/descending text ordering, deterministic LIMIT
+when every relation's key is ordered (other limits are refused), grouping by
+left and right keys, multi-key groups, HAVING, and joined COUNT/MIN/MAX/SUM/AVG including
+decimal and unsigned arguments and an empty LEFT side. MySQL and DuckDB matched
+on labels, NULL positions, value bytes, row multiplicity and deterministic order.
+Twenty-six join refusal checks cover USING, NATURAL (including NATURAL LEFT), comma,
+CROSS, RIGHT, FULL, derived table, scalar subquery, ambiguous column, unknown
+column, unknown/hidden alias, duplicate alias, the same table twice, four
+relations, text/number key, unknown-provenance text key, date key,
+nondeterministic LIMIT (missing the left or right key), STRAIGHT_JOIN, a
+parenthesized join group, a three-part column, an unknown `z.*` alias and a join
+without ON. A multi-relation placeholder is refused
+as well. A separate check proves the text/number refusal is necessary: MySQL
+compares `text_probe.t = 1` as DOUBLE and returns the stored text row, while
+DuckDB rejects the typed comparison.
+
+Three of the original 129 cases exercise database-qualified names against a
+second database (`other_db.other_probe` projection, predicate and `COUNT(*)`):
+MySQL resolves a qualified name in its own database regardless of the selected
+one. The probe's
 refusal checks add an unqualified relation with no database selected
 (`no_database_selected`), a reserved schema (`reserved_database`) and a
 three-part name, all without an engine call. The selected-database behavior itself

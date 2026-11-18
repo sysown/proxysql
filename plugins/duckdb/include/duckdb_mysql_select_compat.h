@@ -108,7 +108,7 @@ struct DuckDBMySQLSelectContext {
     std::vector<DuckDBMySQLParameterKind> parameter_kinds;
     size_t max_input_bytes = 65536, max_output_bytes = 262144;
     // AST limits apply after parsing; ParserSQL must independently bound recursion.
-    size_t max_nodes = 4096, max_depth = 128, max_resolver_calls = 1;
+    size_t max_nodes = 4096, max_depth = 128, max_resolver_calls = 3;
 };
 enum class DuckDBMySQLSelectDecision { supported, unsupported, invalid };
 struct DuckDBMySQLSelectTranslation {

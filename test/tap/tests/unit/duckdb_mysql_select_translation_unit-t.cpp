@@ -1098,5 +1098,397 @@ int main() {
     ok(duckdb_translate_mysql_select("SELECT id FROM `odd``table`", bounded).reason ==
            "missing_context",
        "resolver bound enforced");
+    // Two- and three-relation joins. Single-relation emissions above stay
+    // byte-identical; only a multi-relation query uses the private emitted
+    // aliases and explicit labels.
+    auto join_context = context;
+    std::vector<std::string> resolved_order;
+    join_context.resolve_relation = [&](const std::vector<std::string> &parts,
+                                        DuckDBMySQLRelation &out) {
+        auto text_column = [](const char *name) {
+            return DuckDBMySQLColumn{name,
+                                     {DuckDBMySQLTypeKind::text, 0, 0},
+                                     {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}};
+        };
+        auto decimal_column = [](const char *name) {
+            return DuckDBMySQLColumn{name, {DuckDBMySQLTypeKind::exact_decimal, 10, 2}};
+        };
+        auto signed_column = [](const char *name, DuckDBMySQLTypeKind kind) {
+            return DuckDBMySQLColumn{name, {kind, 0, 0}};
+        };
+        resolved_order.push_back(parts.empty() ? std::string() : parts.back());
+        if (parts == std::vector<std::string>{"join_left"}) {
+            out.canonical_name = {"join_left"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("k", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("u", DuckDBMySQLTypeKind::unsigned_integer),
+                           decimal_column("dec_key"),
+                           text_column("txt"),
+                           signed_column("nk", DuckDBMySQLTypeKind::signed_integer)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"join_right"}) {
+            out.canonical_name = {"join_right"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("lid", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("k", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("u", DuckDBMySQLTypeKind::unsigned_integer),
+                           decimal_column("dec_key"),
+                           text_column("txt"),
+                           signed_column("nk", DuckDBMySQLTypeKind::signed_integer)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"join_third"}) {
+            out.canonical_name = {"join_third"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("rid", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("k", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("u", DuckDBMySQLTypeKind::unsigned_integer),
+                           decimal_column("dec_key"),
+                           text_column("txt")};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"join_empty"}) {
+            out.canonical_name = {"join_empty"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("lid", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("k", DuckDBMySQLTypeKind::signed_integer)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"join_unproven"}) {
+            out.canonical_name = {"join_unproven"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("txt", DuckDBMySQLTypeKind::text)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"date_probe"}) {
+            out.canonical_name = {"date_probe"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("d", DuckDBMySQLTypeKind::date)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        return false;
+    };
+    duckdb_database join_db = nullptr;
+    duckdb_connection join_connection = nullptr;
+    bool join_opened = duckdb_open(nullptr, &join_db) == DuckDBSuccess &&
+                       duckdb_connect(join_db, &join_connection) == DuckDBSuccess;
+    ok(join_opened, "open joined test database");
+    connection = join_connection;
+    db = join_db;
+    duckdb_result join_rows{};
+    bool join_created =
+        created &&
+        duckdb_query(connection,
+                     "CREATE TABLE join_left (id BIGINT PRIMARY KEY, k BIGINT, u UBIGINT, dec_key "
+                     "DECIMAL(10,2), txt VARCHAR, nk BIGINT)",
+                     &join_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&join_rows);
+    join_created = join_created &&
+                   duckdb_query(connection,
+                                "CREATE TABLE join_right (id BIGINT PRIMARY KEY, lid BIGINT, k "
+                                "BIGINT, u UBIGINT, dec_key DECIMAL(10,2), txt VARCHAR, nk BIGINT)",
+                                &join_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&join_rows);
+    join_created =
+        join_created &&
+        duckdb_query(connection,
+                     "CREATE TABLE join_third (id BIGINT PRIMARY KEY, rid BIGINT, k BIGINT, u "
+                     "UBIGINT, dec_key DECIMAL(10,2), txt VARCHAR)",
+                     &join_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&join_rows);
+    join_created = join_created &&
+                   duckdb_query(connection,
+                                "CREATE TABLE join_empty (id BIGINT PRIMARY KEY, lid BIGINT, k "
+                                "BIGINT)",
+                                &join_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&join_rows);
+    ok(join_created, "create joined relations");
+    duckdb_result join_insert{};
+    bool join_inserted =
+        join_created &&
+        duckdb_query(connection,
+                     "INSERT INTO join_left VALUES (1,10,10,1.50,'a',1),(2,10,20,2.50,'b',2),"
+                     "(3,20,30,3.50,'A',NULL),(4,NULL,0,NULL,NULL,4)",
+                     &join_insert) == DuckDBSuccess;
+    duckdb_destroy_result(&join_insert);
+    join_inserted =
+        join_inserted && duckdb_query(connection,
+                                      "INSERT INTO join_right VALUES (10,1,10,10,1.50,'a',1),"
+                                      "(11,1,10,20,2.50,'b',2),(12,2,20,30,3.50,'A',NULL),"
+                                      "(13,3,99,0,NULL,NULL,4)",
+                                      &join_insert) == DuckDBSuccess;
+    duckdb_destroy_result(&join_insert);
+    ok(join_inserted, "insert joined rows");
+    resolved_order.clear();
+    const std::string join_limit =
+        "SELECT l.id, r.id, l.k FROM join_left l INNER JOIN join_right r ON l.id=r.lid WHERE "
+        "r.k>=10 ORDER BY l.id, r.id LIMIT 2";
+    auto join_translated = duckdb_translate_mysql_select(join_limit, join_context);
+    ok(join_translated.decision == DuckDBMySQLSelectDecision::supported &&
+           join_translated.sql ==
+               "SELECT \"r0\".\"id\" AS \"id\", \"r1\".\"id\" AS \"id\", \"r0\".\"k\" AS \"k\" "
+               "FROM \"join_left\" AS \"r0\" INNER JOIN \"join_right\" AS \"r1\" ON "
+               "(\"r0\".\"id\" = \"r1\".\"lid\") WHERE (\"r1\".\"k\" >= 10) ORDER BY "
+               "\"r0\".\"id\" ASC NULLS FIRST, \"r1\".\"id\" ASC NULLS FIRST LIMIT 2",
+       "joined projection, predicate, order and limit are emitted exactly");
+    ok(resolved_order == std::vector<std::string>{"join_left", "join_right"},
+       "each joined relation is resolved once in FROM order");
+    statement = nullptr;
+    ok(join_created && join_translated.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_translated.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares the joined emission");
+    duckdb_result joined_result{};
+    bool joined_executed = join_created && statement &&
+                           duckdb_execute_prepared(statement, &joined_result) == DuckDBSuccess &&
+                           duckdb_row_count(&joined_result) == 2;
+    duckdb_destroy_result(&joined_result);
+    duckdb_destroy_prepare(&statement);
+    ok(joined_executed, "joined emission executes with the expected multiplicity");
+    auto join_left_translated = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid ORDER BY l.id, "
+        "r.id",
+        join_context);
+    ok(join_left_translated.decision == DuckDBMySQLSelectDecision::supported &&
+           join_left_translated.sql ==
+               "SELECT \"r0\".\"id\" AS \"id\", \"r1\".\"id\" AS \"id\" FROM \"join_left\" AS "
+               "\"r0\" LEFT JOIN \"join_right\" AS \"r1\" ON (\"r0\".\"id\" = \"r1\".\"lid\") "
+               "ORDER BY \"r0\".\"id\" ASC NULLS FIRST, \"r1\".\"id\" ASC NULLS FIRST",
+       "LEFT JOIN emission keeps NULL-extended rows and qualified order keys");
+    statement = nullptr;
+    ok(join_created && join_left_translated.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_left_translated.sql.c_str(), &statement) ==
+               DuckDBSuccess,
+       "DuckDB prepares the LEFT JOIN emission");
+    duckdb_result left_result{};
+    bool left_executed = join_created && statement &&
+                         duckdb_execute_prepared(statement, &left_result) == DuckDBSuccess &&
+                         duckdb_row_count(&left_result) == 5;
+    duckdb_destroy_result(&left_result);
+    duckdb_destroy_prepare(&statement);
+    ok(left_executed, "LEFT JOIN keeps the unmatched left row");
+    resolved_order.clear();
+    auto join_three = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id, t.id FROM join_left l JOIN join_right r ON l.id=r.lid JOIN join_third "
+        "t ON r.id=t.rid ORDER BY l.id, r.id, t.id",
+        join_context);
+    ok(join_three.decision == DuckDBMySQLSelectDecision::supported &&
+           join_three.sql.find("FROM \"join_left\" AS \"r0\" INNER JOIN \"join_right\" AS \"r1\" "
+                               "ON (\"r0\".\"id\" = \"r1\".\"lid\") INNER JOIN \"join_third\" AS "
+                               "\"r2\" ON (\"r1\".\"id\" = \"r2\".\"rid\")") != std::string::npos,
+       "three relations are joined left to right with explicit aliases");
+    ok(resolved_order == std::vector<std::string>{"join_left", "join_right", "join_third"},
+       "three relations resolve once each in FROM order");
+    statement = nullptr;
+    ok(join_created && join_three.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_three.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares the three-relation emission");
+    duckdb_destroy_prepare(&statement);
+    auto join_star = duckdb_translate_mysql_select(
+        "SELECT * FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id=1 ORDER BY r.id",
+        join_context);
+    ok(join_star.decision == DuckDBMySQLSelectDecision::supported &&
+           join_star.sql.find("\"r0\".\"id\" AS \"id\"") != std::string::npos &&
+           join_star.sql.find("\"r1\".\"nk\" AS \"nk\"") != std::string::npos &&
+           join_star.sql.find("\"r1\".\"lid\" AS \"lid\"") != std::string::npos,
+       "star expands over every joined relation in FROM order");
+    statement = nullptr;
+    ok(join_created && join_star.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_star.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares the multi-relation star emission");
+    duckdb_destroy_prepare(&statement);
+    auto join_alias_star = duckdb_translate_mysql_select(
+        "SELECT l.*, r.k FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id=1 ORDER BY "
+        "r.id",
+        join_context);
+    ok(join_alias_star.decision == DuckDBMySQLSelectDecision::supported &&
+           join_alias_star.sql.find("\"r0\".\"nk\" AS \"nk\"") != std::string::npos &&
+           join_alias_star.sql.find("\"r1\".\"k\" AS \"k\"") != std::string::npos &&
+           join_alias_star.sql.find("\"r1\".\"lid\" AS") == std::string::npos,
+       "alias star expands exactly one relation");
+    auto join_self = duckdb_translate_mysql_select(
+        "SELECT x.id, y.id, x.k FROM join_left x JOIN join_left y ON x.k=y.k WHERE x.id < y.id "
+        "ORDER BY x.id, y.id",
+        join_context);
+    ok(join_self.decision == DuckDBMySQLSelectDecision::supported &&
+           join_self.sql.find("FROM \"join_left\" AS \"r0\" INNER JOIN \"join_left\" AS \"r1\"") !=
+               std::string::npos,
+       "self join with distinct case-sensitive aliases is admitted");
+    auto join_signed_unsigned = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k=r.u ORDER BY l.id, r.id",
+        join_context);
+    ok(join_signed_unsigned.decision == DuckDBMySQLSelectDecision::supported &&
+           join_signed_unsigned.sql.find("ON (CAST(\"r0\".\"k\" AS DECIMAL(20,0)) = "
+                                         "CAST(\"r1\".\"u\" AS DECIMAL(20,0)))") !=
+               std::string::npos,
+       "signed and unsigned join keys use an exact common DECIMAL");
+    auto join_decimal = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.dec_key=r.dec_key ORDER BY "
+        "l.id, r.id",
+        join_context);
+    ok(join_decimal.decision == DuckDBMySQLSelectDecision::supported &&
+           join_decimal.sql.find("ON (CAST(\"r0\".\"dec_key\" AS DECIMAL(10,2)) = "
+                                 "CAST(\"r1\".\"dec_key\" AS DECIMAL(10,2)))") != std::string::npos,
+       "decimal join keys use the common DECIMAL cast");
+    auto join_text = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.txt=r.txt ORDER BY l.id, r.id",
+        join_context);
+    ok(join_text.decision == DuckDBMySQLSelectDecision::supported &&
+           join_text.sql.find("ON (\"r0\".\"txt\" = \"r1\".\"txt\")") != std::string::npos,
+       "binary-collation text join key is admitted");
+    auto join_group = duckdb_translate_mysql_select(
+        "SELECT l.k, COUNT(*) AS n, COUNT(r.id) AS m, MIN(r.id) AS lo, SUM(r.id) AS s, "
+        "AVG(r.id) AS a FROM join_left l LEFT JOIN join_right r ON l.k=r.k GROUP BY l.k ORDER BY "
+        "l.k",
+        join_context);
+    ok(join_group.decision == DuckDBMySQLSelectDecision::supported &&
+           join_group.sql.find("COUNT(\"r1\".\"id\") AS \"m\"") != std::string::npos &&
+           join_group.sql.find("MIN(\"r1\".\"id\") AS \"lo\"") != std::string::npos &&
+           join_group.sql.find("GROUP BY \"r0\".\"k\" ORDER BY \"r0\".\"k\"") != std::string::npos,
+       "aggregates and grouping qualify joined columns");
+    statement = nullptr;
+    ok(join_created && join_group.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_group.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares grouped aggregates over a join");
+    duckdb_destroy_prepare(&statement);
+    const char *join_admitted[] = {
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY l.id, r.id "
+        "LIMIT 3",
+        "SELECT l.id, r.id FROM join_left l LEFT OUTER JOIN join_right r ON l.id=r.lid ORDER BY "
+        "l.id, r.id LIMIT 4, 3",
+        "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid WHERE r.id IS "
+        "NULL ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid AND r.k=20 "
+        "ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid AND r.k=20 ORDER BY "
+        "l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.nk=r.nk ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k < r.k ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k <> r.k ORDER BY l.id, r.id",
+        "SELECT l.k, r.k, COUNT(*) AS n FROM join_left l JOIN join_right r ON l.k=r.k GROUP BY "
+        "l.k, r.k ORDER BY l.k, r.k",
+        "SELECT l.k, COUNT(*) AS n FROM join_left l JOIN join_right r ON l.k=r.k GROUP BY l.k "
+        "HAVING COUNT(*) > 1 ORDER BY l.k",
+        "SELECT l.k, COUNT(*) AS n FROM join_left l JOIN join_right r ON l.k=r.k GROUP BY l.k "
+        "ORDER BY l.k LIMIT 1, 2",
+        "SELECT l.id, e.id FROM join_left l LEFT JOIN join_empty e ON l.id=e.lid ORDER BY l.id, "
+        "e.id",
+        "SELECT l.id, r.id, t.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid INNER JOIN "
+        "join_third t ON r.id=t.rid ORDER BY l.id, r.id, t.id",
+        "SELECT l.id, r.id, t.id FROM join_left l INNER JOIN join_right r ON l.id=r.lid LEFT JOIN "
+        "join_third t ON r.id=t.rid ORDER BY l.id, r.id, t.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY r.txt DESC, "
+        "l.id ASC, r.id ASC LIMIT 4",
+        "SELECT l.id, r.id, r.dec_key FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY "
+        "r.dec_key ASC, l.id, r.id",
+        "SELECT l.id, r.id, r.u FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY r.u "
+        "ASC, l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.txt=r.txt ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.dec_key=r.dec_key ORDER BY "
+        "l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k=r.u ORDER BY l.id, r.id",
+        "SELECT x.id, y.id FROM join_left x JOIN join_left y ON x.k=y.k WHERE x.id<y.id ORDER BY "
+        "x.id, y.id",
+        "SELECT l.*, r.k FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id=1 ORDER BY "
+        "r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid AND (r.nk IS NULL OR "
+        "r.k>20) ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON 1=1 ORDER BY l.id, r.id LIMIT 10",
+        "SELECT l.ID, r.ID FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY l.id, r.id"};
+    for (const char *sql : join_admitted) {
+        auto translated = duckdb_translate_mysql_select(sql, join_context);
+        statement = nullptr;
+        bool prepared =
+            join_created && translated.decision == DuckDBMySQLSelectDecision::supported &&
+            duckdb_prepare(connection, translated.sql.c_str(), &statement) == DuckDBSuccess;
+        duckdb_destroy_prepare(&statement);
+        ok(prepared, "DuckDB prepares admitted join query: %s", sql);
+    }
+    auto join_reason = [&](const std::string &sql) {
+        return duckdb_translate_mysql_select(sql, join_context).reason;
+    };
+    const std::pair<std::string, std::string> join_refused[] = {
+        {"SELECT * FROM join_left l JOIN join_right r USING (id)", "using_join"},
+        {"SELECT * FROM join_left NATURAL JOIN join_right", "natural_join"},
+        {"SELECT * FROM join_left, join_right", "comma_join"},
+        {"SELECT * FROM join_left CROSS JOIN join_right", "cross_join"},
+        {"SELECT * FROM join_left RIGHT JOIN join_right ON join_left.id=join_right.lid",
+         "right_join"},
+        {"SELECT * FROM join_left FULL OUTER JOIN join_right ON join_left.id=join_right.lid",
+         "full_join"},
+        {"SELECT * FROM (SELECT id FROM join_left) x JOIN join_right r ON x.id=r.lid",
+         "derived_table"},
+        {"SELECT l.id FROM join_left l JOIN join_right r ON l.id=r.lid AND l.id = (SELECT MIN(id) "
+         "FROM join_left)",
+         "unsupported_subquery"},
+        {"SELECT id FROM join_left l JOIN join_right r ON l.id=r.lid", "ambiguous_column"},
+        {"SELECT z.id FROM join_left l JOIN join_right r ON l.id=r.lid", "unknown_relation_alias"},
+        {"SELECT nope FROM join_left l JOIN join_right r ON l.id=r.lid", "unknown_column"},
+        {"SELECT z.* FROM join_left l JOIN join_right r ON l.id=r.lid", "unknown_relation_alias"},
+        {"SELECT join_left.id FROM join_left AS l JOIN join_right r ON l.id=r.lid",
+         "unknown_relation_alias"},
+        {"SELECT * FROM join_left l JOIN join_right l ON l.id=l.lid", "duplicate_relation"},
+        {"SELECT * FROM join_left JOIN join_left ON join_left.id=join_left.id",
+         "duplicate_relation"},
+        {"SELECT * FROM join_left l JOIN join_right r ON l.id=r.lid JOIN join_third t ON "
+         "r.id=t.rid JOIN join_empty e ON t.id=e.lid",
+         "join_relation_limit"},
+        {"SELECT l.id FROM join_left l JOIN join_right r ON l.txt=r.id",
+         "unsupported_join_predicate"},
+        {"SELECT u.id FROM join_unproven u JOIN join_unproven v ON u.txt=v.txt",
+         "collation_unproven"},
+        {"SELECT p.id FROM date_probe p JOIN date_probe q ON p.d=q.d",
+         "unsupported_join_predicate"},
+        {"SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY l.id LIMIT "
+         "1",
+         "nondeterministic_limit"},
+        {"SELECT * FROM join_left STRAIGHT_JOIN join_right ON join_left.id=join_right.lid",
+         "incomplete_or_non_select"},
+        {"SELECT * FROM (join_left l JOIN join_right r ON l.id=r.lid)", "incomplete_or_non_select"},
+        {"SELECT x.l.id FROM join_left l JOIN join_right r ON l.id=r.lid",
+         "unsupported_column_reference"},
+        {"SELECT * FROM join_left l JOIN join_right r", "join_without_condition"}};
+    for (const auto &entry : join_refused)
+        ok(join_reason(entry.first) == entry.second, "join refusal %s -> %s", entry.first.c_str(),
+           entry.second.c_str());
+    auto join_prepare_context = join_context;
+    join_prepare_context.parameter_mode = DuckDBMySQLParameterMode::prepare;
+    ok(duckdb_translate_mysql_select(
+           "SELECT l.id FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id = ?",
+           join_prepare_context)
+               .reason == "unsupported_parameter_join",
+       "placeholders are refused for a joined query");
+    auto join_bounded = join_context;
+    join_bounded.max_resolver_calls = 2;
+    ok(duckdb_translate_mysql_select(
+           "SELECT l.id FROM join_left l JOIN join_right r ON l.id=r.lid JOIN join_third t ON "
+           "r.id=t.rid",
+           join_bounded)
+               .reason == "missing_context",
+       "the resolver-call allowance still bounds joined queries");
+    // A single-relation query keeps the exact SQL shape it had before joins.
+    auto single_unchanged = duckdb_translate_mysql_select(
+        "SELECT `a``b`, id AS x FROM `odd``table` WHERE id = 1 ORDER BY id LIMIT 2", context);
+    ok(single_unchanged.decision == DuckDBMySQLSelectDecision::supported &&
+           single_unchanged.sql ==
+               "SELECT \"a`b\", \"id\" AS \"x\" FROM \"odd`table\" WHERE (\"id\" = 1) ORDER BY "
+               "\"id\" ASC NULLS FIRST LIMIT 2",
+       "single-relation emission is byte-identical to the pre-join translator");
+    if (connection)
+        duckdb_disconnect(&connection);
+    if (db)
+        duckdb_close(&db);
     return exit_status();
 }

@@ -7,7 +7,7 @@ struct DuckDBMySQLContextLimits {
     size_t max_metadata_bytes = 1024 * 1024;
     size_t max_columns = 1024;
     size_t max_key_columns = 256;
-    size_t max_resolver_calls = 1;
+    size_t max_resolver_calls = 3;
 };
 // Maps MySQL-dialect queries to exact identities in the native DuckDB catalog.
 // Native type facts do not establish original MySQL schema provenance or text
