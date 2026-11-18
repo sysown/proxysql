@@ -72,6 +72,11 @@ private:
 	int array2buffer();
 	int buffer2array();
 	enum pgsql_sslstatus do_ssl_handshake();
+	/**
+	 * @brief Best-effort send of any pending TLS output (e.g. a failure alert) to the client.
+	 * Call only right before shutting the stream down: its TLS output state is dead afterwards.
+	 */
+	void flush_tls_output_on_failure();
 	void queue_encrypted_bytes(const char* buf, size_t len);
 public:
 	void* operator new(size_t);

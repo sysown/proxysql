@@ -352,8 +352,19 @@ int main(int argc, char** argv) {
 	ok(tls_ok && sel == "postgresql" && type == 'R', "SSLRequest, ALPN postgresql: selected (got '%s','%c')", sel.c_str(), type);
 	tls_ok = alpn_case(ALPN_FOO_PG, sel, false);
 	ok(tls_ok && sel == "postgresql", "SSLRequest, ALPN foo,postgresql: postgresql selected (got '%s')", sel.c_str());
-	tls_ok = alpn_case(ALPN_FOO, sel, false);
-	ok(!tls_ok, "SSLRequest, ALPN foo: handshake refused");
+	{
+		// The server must send alert 120 (no_application_protocol) before closing.
+		SSL_CTX* ctx = nullptr;
+		SSL* tls = nullptr;
+		int reason = 0;
+		char reply = '?';
+		int sock = create_raw_connection(host, port);
+		const bool got_s = sock >= 0 && send_request(sock, PG_SSL_REQUEST_CODE) && read_reply_byte(sock, reply) && reply == 'S';
+		if (got_s) tls = tls_handshake(sock, ALPN_FOO, &ctx, 0, &reason);
+		ok(got_s && tls == nullptr && reason == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL,
+			"SSLRequest, ALPN foo: refused with alert 120 (got_s %d, reason %d)", (int)got_s, reason);
+		close_all(sock, tls, ctx);
+	}
 	ok(admin_run(admin, "PROXYSQL RELOAD TLS"), "PROXYSQL RELOAD TLS succeeds");
 	tls_ok = alpn_case(ALPN_PG, sel, false);
 	ok(tls_ok && sel == "postgresql", "after RELOAD TLS: postgresql still selected (got '%s')", sel.c_str());

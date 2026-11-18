@@ -140,6 +140,21 @@ void PgSQL_Data_Stream::queue_encrypted_bytes(const char* buf, size_t len) {
 	//proxy_info("New ssl_write_len size: %u\n", ssl_write_len);
 }
 
+// Best effort: the stream is about to be shut down, so push any pending alert
+// to the client now instead of leaving it in the queue.
+void PgSQL_Data_Stream::flush_tls_output_on_failure() {
+	char buf[MY_SSL_BUFFER];
+	if (ssl_write_len > 0) {
+		ssize_t w = send(fd, ssl_write_buf, ssl_write_len, MSG_NOSIGNAL | MSG_DONTWAIT);
+		if (w < 0 || (size_t)w < ssl_write_len) return; // ssl_write_len stays stale: TLS output state is dead, callers always shut_soft()
+		ssl_write_len = 0;
+	}
+	int n;
+	while ((n = BIO_read(wbio_ssl, buf, sizeof(buf))) > 0) {
+		if (send(fd, buf, n, MSG_NOSIGNAL | MSG_DONTWAIT) != n) return;
+	}
+}
+
 enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 	char buf[MY_SSL_BUFFER];
 	enum pgsql_sslstatus status;
@@ -212,6 +227,9 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 				return PGSQL_SSLSTATUS_FAIL;
 			}
 		} while (n > 0);
+	}
+	else if (status == PGSQL_SSLSTATUS_FAIL && myds_type == MYDS_FRONTEND) {
+		flush_tls_output_on_failure();
 	}
 	return status;
 }
