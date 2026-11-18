@@ -46,10 +46,13 @@ the original 1.1.1 release.
 
 Upstream correspondence: the 1.1.1 archive equals upstream `c7adfcb`. Applying
 `utf8-identifiers.patch` and then `mysql-analytical-ast.patch` yields a tree
-that is byte-identical, for every tracked file, to branch
-`fix/mysql-analytical-ast-admission` of [PR #72](https://github.com/ProxySQL/ParserSQL/pull/72)
-at `7018f12fab540bb3e3489ebc4dd5c31756904a2f` (commits `24bae10`, `71dca32`,
-`42612d4` recursion bound, `7018f12` UTF-8). When that PR is released, bump the
+that is byte-identical to branch `fix/mysql-analytical-ast-admission` of
+[PR #72](https://github.com/ProxySQL/ParserSQL/pull/72) at
+`7018f12fab540bb3e3489ebc4dd5c31756904a2f` (commits `24bae10`, `71dca32`,
+`42612d4` recursion bound, `7018f12` UTF-8) for every tracked file. The branch
+head `edb64ee` adds only regenerated upstream PostgreSQL-compatibility baselines
+(`tests/pg_compat/*.jsonl`, `docs/compatibility/postgresql-18.md`) that this
+vendored build does not carry. When that PR is released, bump the
 archive and delete both patches and their `deps/Makefile` entries. Any new
 parser change must be made in that PR first and then regenerated here, then
 re-verified with the same byte comparison.
