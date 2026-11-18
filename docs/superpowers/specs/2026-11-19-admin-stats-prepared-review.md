@@ -60,6 +60,18 @@ both `663e84aa6` and `af040de87`. The control passed the other eight
 checks on both heads. Sanitizer integration CI remains pending for the split branch.
 Prepared MySQL writes require their own review.
 
+## Authorization and packet regressions
+
+The expanded MySQL and PostgreSQL suites pass 38 and 79 checks respectively
+with regular and local ASan builds. Both protocols test ordinary credentials
+against their normal frontend and the Admin listener, a wrong Admin
+password, and prepared access to a configuration table restricted to Admin.
+MySQL checks the exact `1243` response to an unknown statement reset and
+verifies that an unknown statement close emits no packet before the next
+query. PostgreSQL runs the packet sequence under both Admin and STATS
+credentials and checks that simple queries and an existing named statement
+work after a rejected Parse and Sync.
+
 ## Published PR checks
 
 GitHub's checks for `9098425b6` cover the original mixed PR. SonarCloud's

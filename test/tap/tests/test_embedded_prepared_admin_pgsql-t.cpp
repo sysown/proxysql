@@ -22,11 +22,33 @@ static bool rows(PGresult* r, const char* a, const char* b) {
         PQnfields(r) == 2 && !PQgetisnull(r, 0, 0) && !PQgetisnull(r, 0, 1) &&
         !strcmp(PQgetvalue(r, 0, 0), a) && !strcmp(PQgetvalue(r, 0, 1), b);
 }
-static void libpq_checks(const char* host, const char* port, const char* user, const char* pass, bool stats) {
+
+static PGconn* connect_user(const char* host, const char* port, const char* user, const char* pass) {
     const char* keys[] = {"host", "port", "user", "password", "dbname", "sslmode", "connect_timeout", nullptr};
-    const char* vals[] = {host, port, user, pass, "main", "disable", "3", nullptr};
-    PGconn* c = PQconnectdbParams(keys, vals, 0);
+    const char* values[] = {host, port, user, pass, "main", "disable", "3", nullptr};
+    return PQconnectdbParams(keys, values, 0);
+}
+
+static bool admin_login_denied(const char* host, const char* port, const char* user, const char* pass) {
+    PGconn* connection = connect_user(host, port, user, pass);
+    const char* error = connection ? PQerrorMessage(connection) : "";
+    const bool denied = connection && PQstatus(connection) == CONNECTION_BAD &&
+        (std::strstr(error, "password authentication failed") || std::strstr(error, "Access denied for user"));
+    if (!denied) diag("expected a PostgreSQL authentication rejection: %s", error);
+    PQfinish(connection);
+    return denied;
+}
+
+static void libpq_checks(const char* host, const char* port, const char* user, const char* pass, bool stats) {
+    PGconn* c = connect_user(host, port, user, pass);
     if (PQstatus(c) != CONNECTION_OK) BAIL_OUT("libpq connection failed: %s", PQerrorMessage(c));
+    PGresult* role_result = PQprepare(c, "configuration",
+        "SELECT hostgroup_id FROM mysql_servers LIMIT 0", 0, nullptr);
+    ok(PQresultStatus(role_result) == (stats ? PGRES_FATAL_ERROR : PGRES_COMMAND_OK) &&
+       PQstatus(c) == CONNECTION_OK,
+       "%s prepared access to the Admin configuration schema: %s",
+       stats ? "STATS is denied" : "Admin has", PQresultErrorMessage(role_result));
+    PQclear(role_result);
     Oid types[] = {20, 25};
     PGresult* r = PQprepare(c, "ordered", "SELECT $2 AS text_value, $1 AS int_value", 2, types);
     bool prepared = PQresultStatus(r) == PGRES_COMMAND_OK;
@@ -135,7 +157,7 @@ static void libpq_checks(const char* host, const char* port, const char* user, c
            PQresultErrorMessage(r));
         PQclear(r);
 
-        PGconn *legacy = PQconnectdbParams(keys, vals, 0);
+        PGconn *legacy = connect_user(host, port, user, pass);
         if (!legacy || PQstatus(legacy) != CONNECTION_OK)
             BAIL_OUT("cannot connect second Admin client for transaction test");
         r = PQprepare(c, "before_txn", "SELECT 1", 0, nullptr);
@@ -209,6 +231,11 @@ static void wire_checks(const char* host, const char* port, const char* user, co
         ok(seq == "E", "unsupported Parse and Flush sends one error without ready: %s", seq.c_str());
         c.bindStatement("s", "discard", {}, {}, false); c.sendQuery("SELECT 1"); c.sendSync(); seq = messages(c);
         ok(seq == "Z", "messages including simple Query discarded until Sync: %s", seq.c_str());
+        c.sendQuery("SELECT 1"); seq = messages(c);
+        ok(seq == "TDCZ", "legacy simple Query recovers after Sync: %s", seq.c_str());
+        c.bindStatement("s", "recovered", {}, {}, false);
+        c.executePortal("recovered", 0, false); c.sendSync(); seq = messages(c);
+        ok(seq == "2DDCZ", "named statement remains usable after rejected Parse and Sync: %s", seq.c_str());
     } catch (const std::exception& e) {
         diag("wire protocol test failed: %s", e.what());
         BAIL_OUT("wire protocol connection failed");
@@ -222,8 +249,22 @@ int main() {
     const char* su = env("TAP_PGSQL_STATSUSERNAME"), *sp = env("TAP_PGSQL_STATSPASSWORD");
     if (!!su != !!sp) { diag("Set both optional stats credentials"); return EXIT_FAILURE; }
     alarm(60); // Bound connect, DNS and libpq operations as well as socket reads.
-    plan(40 + (su ? 22 : 0));
+    constexpr int wire_count = 11;
+    plan(32 + wire_count + (su ? 23 + wire_count : 0) + (fixture.admin ? 2 : 0));
+    if (fixture.admin) {
+        const std::string frontend_port = std::to_string(fixture.p);
+        PGconn* frontend = connect_user(host, frontend_port.c_str(), "fixture_client", "fixture_client");
+        ok(frontend && PQstatus(frontend) == CONNECTION_OK &&
+           admin_login_denied(host, port, "fixture_client", "fixture_client"),
+           "ordinary PostgreSQL credentials work on the frontend and are denied on the Admin listener");
+        PQfinish(frontend);
+        ok(admin_login_denied(host, port, user, "incorrect_fixture_password"),
+           "PostgreSQL Admin authentication rejects an incorrect password");
+    }
     libpq_checks(host, port, user, pass, false); wire_checks(host, port, user, pass);
-    if (su) libpq_checks(host, port, su, sp, true);
+    if (su) {
+        libpq_checks(host, port, su, sp, true);
+        wire_checks(host, port, su, sp);
+    }
     return exit_status();
 }

@@ -1,5 +1,6 @@
 #include "prepared_owned_fixture.h"
 #include <mysql.h>
+#include <mysqld_error.h>
 #include "tap.h"
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +25,30 @@ static MYSQL_STMT* prepare(MYSQL* c, const std::string& sql) {
  if (mysql_stmt_prepare(s, sql.data(), sql.size())) { diag("prepare failed: %s: %s", sql.c_str(), mysql_stmt_error(s)); mysql_stmt_close(s); return nullptr; }
  return s;
 }
+
+static bool admin_login_denied(const char* host, int port, const char* user, const char* password) {
+ MYSQL* connection = mysql_init(nullptr);
+ if (!connection) BAIL_OUT("cannot allocate a MySQL authentication test connection");
+ unsigned int timeout = 3;
+ mysql_options(connection, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+ const bool connected = mysql_real_connect(connection, host, user, password, nullptr, port, nullptr, 0);
+ const bool denied = !connected && mysql_errno(connection) == ER_ACCESS_DENIED_ERROR;
+ mysql_close(connection);
+ return denied;
+}
+
+static void check_wire_statement_ids(MYSQL* connection) {
+ const char unknown_id[4]{};
+ const bool reset_failed =
+     ma_simple_command(connection, COM_STMT_RESET, unknown_id, sizeof(unknown_id), 0, nullptr);
+ ok(reset_failed && mysql_errno(connection) == ER_UNKNOWN_STMT_HANDLER,
+    "COM_STMT_RESET returns 1243 for an unknown statement id");
+ const bool close_sent =
+     !ma_simple_command(connection, COM_STMT_CLOSE, unknown_id, sizeof(unknown_id), 1, nullptr);
+ ok(close_sent && duckdb_replica_test::cell(connection, "SELECT 17") == "17",
+    "COM_STMT_CLOSE for an unknown statement id sends no response before the next query");
+}
+
 static void check_statement_limit(MYSQL* c) {
  std::vector<MYSQL_STMT*> handles;
  for (int i=0; i<128; ++i) {
@@ -81,6 +106,22 @@ int main() {
  MYSQL* a = mysql_init(nullptr); MYSQL* st = mysql_init(nullptr);
  if (!a || !st || !mysql_real_connect(a, host, au, ap, nullptr, port, nullptr, 0) ||
      !mysql_real_connect(st, host, su, sp, nullptr, port, nullptr, 0)) BAIL_OUT("Admin/STATS connection failed");
+ if (fixture.admin) {
+  MYSQL* frontend = duckdb_replica_test::connect(host, fixture.m, "fixture_client", "fixture_client");
+  ok(frontend && admin_login_denied(host, port, "fixture_client", "fixture_client"),
+     "ordinary MySQL credentials work on the frontend and are denied on the Admin listener");
+  if (frontend) mysql_close(frontend);
+  ok(admin_login_denied(host, port, au, "incorrect_fixture_password"),
+     "MySQL Admin authentication rejects an incorrect password");
+ }
+ check_wire_statement_ids(a);
+ check_wire_statement_ids(st);
+ const char role_query[] = "SELECT hostgroup_id FROM mysql_servers LIMIT 0";
+ MYSQL_STMT* admin_read = prepare(a, role_query);
+ MYSQL_STMT* stats_read = prepare(st, role_query);
+ ok(admin_read && !stats_read, "Admin can prepare a configuration read that STATS cannot");
+ if (admin_read) mysql_stmt_close(admin_read);
+ if (stats_read) mysql_stmt_close(stats_read);
  // The fixture requires read-only initially disabled. Check the live Admin
  // setting before creating the cleanup guard or changing runtime state.
  if (mysql_query(a, "SHOW GLOBAL VARIABLES LIKE 'read_only'")) BAIL_OUT("cannot inspect admin read-only: %s", mysql_error(a));
