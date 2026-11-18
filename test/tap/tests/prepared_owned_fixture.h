@@ -20,7 +20,7 @@ struct Fixture {
     MYSQL *admin = nullptr;
     std::vector<int> leases;
     std::map<std::string, std::pair<bool, std::string>> saved;
-    int a, ap, m, p, s, d, dp;
+    int a, ap, m, p, d, dp;
     int port() {
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in addr{};
@@ -45,7 +45,6 @@ struct Fixture {
           << a << "\";pgsql_ifaces=\"127.0.0.1:" << ap << "\";}\n"
           << "mysql_variables={threads=2;interfaces=\"127.0.0.1:" << m << "\";}\n"
           << "pgsql_variables={threads=2;interfaces=\"127.0.0.1:" << p << "\";}\n"
-          << "sqliteserver_variables={mysql_ifaces=\"127.0.0.1:" << s << "\";}\n"
           << "mysql_users=({username=\"fixture_client\";password=\"fixture_client\";active=1;"
              "default_hostgroup=0;})\n"
           << "pgsql_users=({username=\"fixture_client\";password=\"fixture_client\";active=1;"
@@ -58,7 +57,7 @@ struct Fixture {
         if (!config(load))
             return false;
         for (size_t i = 0; i < leases.size(); ++i) {
-            if (load || i < 5) {
+            if (load || i < 4) {
                 close(leases[i]);
                 leases[i] = -1;
             }
@@ -81,7 +80,7 @@ struct Fixture {
             dup2(log, 1);
             dup2(log, 2);
             close(log);
-            execl(binary.c_str(), binary.c_str(), "-f", "-M", "--sqlite3-server", "-c",
+            execl(binary.c_str(), binary.c_str(), "-f", "-M", "-c",
                   (dir + "/proxysql.cnf").c_str(), "-D", dir.c_str(), (char *)nullptr);
             _exit(127);
         }
@@ -96,11 +95,6 @@ struct Fixture {
                 if (!load)
                     return true;
                 MYSQL *c = connect("127.0.0.1", d, "fixture_client", "fixture_client");
-                if (c)
-                    mysql_close(c);
-                if (!c)
-                    return false;
-                c = connect("127.0.0.1", s, "fixture_client", "fixture_client");
                 if (c)
                     mysql_close(c);
                 return c != nullptr;
@@ -160,7 +154,6 @@ struct Fixture {
         ap = port();
         m = port();
         p = port();
-        s = port();
         d = port();
         dp = port();
         if (access(binary.c_str(), X_OK) || access(plugin.c_str(), R_OK) || !start(false)) {
@@ -181,7 +174,6 @@ struct Fixture {
         set("TAP_HOST", "127.0.0.1");
         set("TAP_USERNAME", "fixture_client");
         set("TAP_PASSWORD", "fixture_client");
-        set("TAP_SQLITE_PORT", std::to_string(s));
         set("TAP_DUCKDB_MYSQL_PORT", std::to_string(d));
         set("TAP_DUCKDB_PGSQL_PORT", std::to_string(dp));
         set("TAP_ADMINPORT", std::to_string(a));

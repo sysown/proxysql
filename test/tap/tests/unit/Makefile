@@ -651,18 +651,11 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	embedded_quota_unit-t \
 	embedded_plugin_adapter_unit-t \
 	embedded_plugin_service_unit-t \
-	embedded_sqlite_adapter_unit-t \
-	embedded_sqlite_pg_profile_unit-t \
-	embedded_parameter_positions_unit-t \
 	embedded_pgsql_value_unit-t \
 	embedded_pgsql_result_unit-t \
 	embedded_pgsql_prepared_unit-t \
 	embedded_pgsql_frontend_unit-t \
-	embedded_sqlite_policy_unit-t \
-	embedded_admin_sqlite_policy_unit-t \
-	embedded_admin_statistics_unit-t \
 	embedded_mysql_result_unit-t \
-	embedded_mysql_prepared_unit-t \
 	duckdb_prepared_adapter_unit-t \
 	duckdb_prepared_policy_unit-t \
 	duckdb_mysql_set_unit-t \
@@ -1111,20 +1104,6 @@ embedded_prepared_unit-t: embedded_prepared_unit-t.cpp $(PROXYSQL_PATH)/lib/Embe
 		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
 # Engine proof without a running endpoint or the shared core class layouts.
-embedded_sqlite_adapter_unit-t: embedded_sqlite_adapter_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp $(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp $(PROXYSQL_PATH)/include/Embedded_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/Embedded_SQLite_Adapter.h $(PROXYSQL_PATH)/include/sqlite3db.h $(SQLITE3_LDIR)/sqlite3.o $(SSL_LDIR)/libcrypto.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp \
-		$(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp \
-		$(SQLITE3_LDIR)/sqlite3.o $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) \
-		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@
-
-embedded_sqlite_pg_profile_unit-t: embedded_sqlite_pg_profile_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp $(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp $(PROXYSQL_PATH)/include/Embedded_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/Embedded_SQLite_Adapter.h $(PROXYSQL_PATH)/include/sqlite3db.h $(SQLITE3_LDIR)/sqlite3.o $(SSL_LDIR)/libcrypto.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp \
-		$(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp \
-		$(SQLITE3_LDIR)/sqlite3.o $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) \
-		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@
-
 embedded_pgsql_value_unit-t: embedded_pgsql_value_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Value.cpp $(PROXYSQL_PATH)/include/Embedded_PgSQL_Value.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Value.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
@@ -1139,32 +1118,6 @@ embedded_pgsql_prepared_unit-t: embedded_pgsql_prepared_unit-t.cpp $(PROXYSQL_PA
 	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Value.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Result.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
 		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
-
-embedded_parameter_positions_unit-t: embedded_parameter_positions_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp $(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp $(PROXYSQL_PATH)/include/Embedded_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/Embedded_SQLite_Adapter.h $(PROXYSQL_PATH)/include/sqlite3db.h $(SQLITE3_LDIR)/sqlite3.o $(SSL_LDIR)/libcrypto.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp \
-		$(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp \
-		$(SQLITE3_LDIR)/sqlite3.o $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) \
-		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@
-
-embedded_sqlite_policy_unit-t: embedded_sqlite_policy_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Policy.cpp $(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp $(PROXYSQL_PATH)/include/Embedded_SQLite_Policy.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/sqlite3db.h $(PARSERSQL_LDIR)/libsqlparser.a $(SQLITE3_LDIR)/sqlite3.o $(SSL_LDIR)/libcrypto.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_SQLite_Policy.cpp \
-		$(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp \
-		$(SQLITE3_LDIR)/sqlite3.o $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) -I$(PARSERSQL_IDIR) \
-		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@
-
-embedded_admin_sqlite_policy_unit-t: embedded_admin_sqlite_policy_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Admin_Statistics.cpp $(PROXYSQL_PATH)/include/Embedded_Admin_Statistics.h $(PROXYSQL_PATH)/lib/Embedded_Admin_SQLite_Policy.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Policy.cpp $(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp $(PROXYSQL_PATH)/include/Embedded_Admin_SQLite_Policy.h $(PROXYSQL_PATH)/include/Embedded_SQLite_Policy.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/sqlite3db.h $(PARSERSQL_LDIR)/libsqlparser.a $(SQLITE3_LDIR)/sqlite3.o $(SSL_LDIR)/libcrypto.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Admin_Statistics.cpp $(PROXYSQL_PATH)/lib/Embedded_Admin_SQLite_Policy.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Policy.cpp \
-		$(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp \
-		$(SQLITE3_LDIR)/sqlite3.o $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) -I$(PARSERSQL_IDIR) \
-		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@
-
-embedded_admin_statistics_unit-t: embedded_admin_statistics_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Admin_Statistics.cpp $(PROXYSQL_PATH)/include/Embedded_Admin_Statistics.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Admin_Statistics.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(PARSERSQL_IDIR) $(STDCPP) -O0 -ggdb \
-		$(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a -lpthread -o $@
 
 # Characterize the vendored parser independently of engine and core runtime.
 duckdb_mysql_select_compat_unit-t: duckdb_mysql_select_compat_unit-t.cpp $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o

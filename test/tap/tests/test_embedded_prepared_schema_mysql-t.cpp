@@ -11,7 +11,6 @@
 struct Endpoint {
     const char *label, *host, *user, *password;
     unsigned port;
-    bool admin;
 };
 static const char *required(const char *name) {
     const char *v = std::getenv(name);
@@ -63,11 +62,10 @@ static unsigned fields(MYSQL_STMT *s) {
 struct Fixture {
     MYSQL *conn;
     std::string name;
-    bool view;
     bool created = false;
     ~Fixture() {
         if (created)
-            query(conn, std::string("DROP ") + (view ? "VIEW " : "TABLE ") + name);
+            query(conn, "DROP TABLE " + name);
     }
 };
 static void run(const Endpoint &e, const std::string &suffix) {
@@ -76,82 +74,62 @@ static void run(const Endpoint &e, const std::string &suffix) {
     if (!c)
         return;
     {
-        Fixture f{c, "proxysql_schema_lifecycle_" + suffix, e.admin};
-        std::string create =
-            e.admin ? "CREATE VIEW " + f.name + " AS SELECT hostgroup_id FROM mysql_servers"
-                    : "CREATE TABLE " + f.name + " (a INTEGER)";
-        f.created = query(c, create);
+        Fixture f{c, "proxysql_schema_lifecycle_" + suffix};
+        f.created = query(c, "CREATE TABLE " + f.name + " (a INTEGER)");
         ok(f.created, "%s create owned fixture", e.label);
-        if (e.admin && !f.created) {
-            diag("Admin schema-change fixture N/A: owned CREATE VIEW was refused; no managed "
-                 "schema was changed");
-        } else {
-            if (f.created) {
-                if (!e.admin)
-                    ok(query(c, "INSERT INTO " + f.name + " VALUES (42)"), "%s insert fixture",
-                       e.label);
-                const std::string select = "SELECT * FROM " + f.name + " WHERE ? = ?";
-                MYSQL_STMT *s = prepare(c, select);
-                ok(s && fields(s) == 1, "%s original one-column metadata", e.label);
-                int val = 42;
-                MYSQL_BIND b[2]{};
-                for (auto &x : b) {
-                    x.buffer_type = MYSQL_TYPE_LONG;
-                    x.buffer = &val;
-                }
-                bool bound = s && !mysql_stmt_bind_param(s, b);
-                ok(bound, "%s bind old statement", e.label);
-                bool changed;
-                if (e.admin) {
-                    changed = query(c, "DROP VIEW " + f.name);
-                    if (changed) {
-                        f.created = false;
-                        changed = query(c, "CREATE VIEW " + f.name +
-                                               " AS SELECT hostgroup_id, port FROM mysql_servers");
-                        f.created = changed;
-                    }
-                } else
-                    changed = query(c, "ALTER TABLE " + f.name + " ADD COLUMN b INTEGER");
-                ok(changed, "%s change owned schema", e.label);
-                if (s && bound && changed) {
-                    int rc = mysql_stmt_execute(s);
-                    unsigned code = mysql_stmt_errno(s);
-                    diag("%s old statement execute rc=%d errno=%u state=%s message=%s", e.label, rc,
-                         code, mysql_stmt_sqlstate(s), mysql_stmt_error(s));
-                    ok(rc != 0 && code == 1615, "%s schema change fails before rows with 1615",
-                       e.label);
-                } else
-                    ok(false, "%s schema change fails before rows with 1615", e.label);
-                if (s)
-                    mysql_stmt_close(s);
-                s = changed ? prepare(c, select) : nullptr;
-                ok(s && fields(s) == 2, "%s reprepare reports fresh two-column metadata", e.label);
-                if (s) {
-                    bool twice = !mysql_stmt_bind_param(s, b) && !mysql_stmt_execute(s) &&
-                                 !mysql_stmt_store_result(s);
-                    if (twice) {
-                        mysql_stmt_free_result(s);
-                        val = 7;
-                        twice = !mysql_stmt_bind_param(s, b) && !mysql_stmt_execute(s) &&
-                                !mysql_stmt_store_result(s);
-                    }
-                    ok(twice, "%s reprepare executes repeated binds", e.label);
-                    mysql_stmt_close(s);
-                } else
-                    ok(false, "%s reprepare executes repeated binds", e.label);
-                MYSQL *live = connect(e);
-                MYSQL_STMT *leaked = live ? prepare(live, select) : nullptr;
-                ok(leaked != nullptr, "%s prepare live statement before disconnect", e.label);
-                if (live) {
-                    shutdown(mysql_get_socket(live), SHUT_RDWR);
-                    mysql_close(live);
-                } // Abrupt transport loss leaves the server handle live until teardown.
-                MYSQL *next = connect(e);
-                bool readable = next && query(next, "SELECT * FROM " + f.name);
-                ok(readable, "%s reconnect reads fixture after live-statement disconnect", e.label);
-                if (next)
-                    mysql_close(next);
+        if (f.created) {
+            ok(query(c, "INSERT INTO " + f.name + " VALUES (42)"), "%s insert fixture", e.label);
+            const std::string select = "SELECT * FROM " + f.name + " WHERE ? = ?";
+            MYSQL_STMT *s = prepare(c, select);
+            ok(s && fields(s) == 1, "%s original one-column metadata", e.label);
+            int val = 42;
+            MYSQL_BIND b[2]{};
+            for (auto &x : b) {
+                x.buffer_type = MYSQL_TYPE_LONG;
+                x.buffer = &val;
             }
+            bool bound = s && !mysql_stmt_bind_param(s, b);
+            ok(bound, "%s bind old statement", e.label);
+            bool changed = query(c, "ALTER TABLE " + f.name + " ADD COLUMN b INTEGER");
+            ok(changed, "%s change owned schema", e.label);
+            if (s && bound && changed) {
+                int rc = mysql_stmt_execute(s);
+                unsigned code = mysql_stmt_errno(s);
+                diag("%s old statement execute rc=%d errno=%u state=%s message=%s", e.label, rc,
+                     code, mysql_stmt_sqlstate(s), mysql_stmt_error(s));
+                ok(rc != 0 && code == 1615, "%s schema change fails before rows with 1615",
+                   e.label);
+            } else
+                ok(false, "%s schema change fails before rows with 1615", e.label);
+            if (s)
+                mysql_stmt_close(s);
+            s = changed ? prepare(c, select) : nullptr;
+            ok(s && fields(s) == 2, "%s reprepare reports fresh two-column metadata", e.label);
+            if (s) {
+                bool twice = !mysql_stmt_bind_param(s, b) && !mysql_stmt_execute(s) &&
+                             !mysql_stmt_store_result(s);
+                if (twice) {
+                    mysql_stmt_free_result(s);
+                    val = 7;
+                    twice = !mysql_stmt_bind_param(s, b) && !mysql_stmt_execute(s) &&
+                            !mysql_stmt_store_result(s);
+                }
+                ok(twice, "%s reprepare executes repeated binds", e.label);
+                mysql_stmt_close(s);
+            } else
+                ok(false, "%s reprepare executes repeated binds", e.label);
+            MYSQL *live = connect(e);
+            MYSQL_STMT *leaked = live ? prepare(live, select) : nullptr;
+            ok(leaked != nullptr, "%s prepare live statement before disconnect", e.label);
+            if (live) {
+                shutdown(mysql_get_socket(live), SHUT_RDWR);
+                mysql_close(live);
+            } // Abrupt transport loss leaves the server handle live until teardown.
+            MYSQL *next = connect(e);
+            bool readable = next && query(next, "SELECT * FROM " + f.name);
+            ok(readable, "%s reconnect reads fixture after live-statement disconnect", e.label);
+            if (next)
+                mysql_close(next);
         }
     }
     mysql_close(c);
@@ -160,18 +138,13 @@ int main() {
     prepared_owned_fixture::Fixture fixture;
     plan(NO_PLAN);
     const char *host = required("TAP_HOST");
-    Endpoint endpoints[] = {
-        {"SQLite", host, required("TAP_USERNAME"), required("TAP_PASSWORD"),
-         unsigned(std::strtoul(required("TAP_SQLITE_PORT"), nullptr, 10)), false},
-        {"DuckDB", host, required("TAP_USERNAME"), required("TAP_PASSWORD"),
-         unsigned(std::strtoul(required("TAP_DUCKDB_MYSQL_PORT"), nullptr, 10)), false},
-        {"Admin", host, required("TAP_ADMINUSERNAME"), required("TAP_ADMINPASSWORD"),
-         unsigned(std::strtoul(required("TAP_ADMINPORT"), nullptr, 10)), true}};
+    const Endpoint endpoint{
+        "DuckDB", host, required("TAP_USERNAME"), required("TAP_PASSWORD"),
+        unsigned(std::strtoul(required("TAP_DUCKDB_MYSQL_PORT"), nullptr, 10))};
     timespec now{};
     clock_gettime(CLOCK_REALTIME, &now);
     std::string suffix = std::to_string(getpid()) + "_" + std::to_string(now.tv_sec) + "_" +
                          std::to_string(now.tv_nsec);
-    for (const auto &e : endpoints)
-        run(e, suffix);
+    run(endpoint, suffix);
     return exit_status();
 }

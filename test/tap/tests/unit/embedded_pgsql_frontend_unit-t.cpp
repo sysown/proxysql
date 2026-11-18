@@ -4,7 +4,6 @@
 #include "PgSQL_Session.h"
 #include "PgSQL_Data_Stream.h"
 #include "Embedded_PgSQL_Frontend.h"
-#include "Embedded_Admin_PgSQL_Prepared.h"
 #include <cstring>
 #include <thread>
 using namespace embedded;
@@ -110,7 +109,7 @@ int main() {
     test_init_minimal();
     auto *s = new PgSQL_Session;
     auto *st = new PgSQL_Data_Stream;
-    s->session_type = PROXYSQL_SESSION_ADMIN;
+    s->session_type = PROXYSQL_SESSION_SQLITE;
     s->connections_handler = true;
     s->client_myds = st;
     st->sess = s;
@@ -119,7 +118,7 @@ int main() {
     Policy policy;
     ok(!register_pgsql_prepared(*s, adapter, policy), "register embedded session");
     auto *nested = new PgSQL_Session;
-    nested->session_type = PROXYSQL_SESSION_ADMIN;
+    nested->session_type = PROXYSQL_SESSION_SQLITE;
     nested->connections_handler = true;
     bool nested_ok = false;
     GuardFactory reentrant = [&](const OperationContext &,
@@ -235,22 +234,6 @@ int main() {
     unregister_pgsql_prepared(*s);
     s->session_type = PROXYSQL_SESSION_PGSQL;
     ok(bool(register_pgsql_prepared(*s, adapter, policy)), "ordinary proxy registration rejected");
-    s->session_type = PROXYSQL_SESSION_ADMIN;
-    st->myprot.init(&st, nullptr, s);
-    st->DSS = STATE_SLEEP;
-    bool discard = false;
-    auto begin = packet('Q', {'B', 'E', 'G', 'I', 'N', 0});
-    ok(handle_admin_pgsql_prepared(*s, begin, discard) && !begin.ptr && !discard,
-       "Admin simple transaction rejection consumes the query without poisoning extended state");
-    ok(outputs(*st) == std::vector<char>({'E', 'Z'}) && st->DSS == STATE_SLEEP,
-       "Admin error from idle stream emits Error/Ready without asserting");
-    clear(*st);
-    auto malformed_query = packet('Q');
-    ok(handle_admin_pgsql_prepared(*s, malformed_query, discard) && !malformed_query.ptr,
-       "malformed Admin simple query is consumed");
-    ok(outputs(*st) == std::vector<char>({'E', 'Z'}) && st->DSS == STATE_SLEEP,
-       "malformed Admin query recovers the idle stream");
-    clear(*st);
     delete s;
     return exit_status();
 }

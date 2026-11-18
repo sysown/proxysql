@@ -35,8 +35,6 @@ using json = nlohmann::json;
 #include "PgSQL_ExplicitTxnStateMgr.h"
 #include "PgSQLTxnEndClassifier.h"
 #include "PgSQL_Extended_Query_Message.h"
-#include "Embedded_Admin_PgSQL_Prepared.h"
-#include "Embedded_PgSQL_Frontend.h"
 #include "libinjection.h"
 #include "libinjection_sqli.h"
 
@@ -474,9 +472,10 @@ PgSQL_Session::PgSQL_Session() {
 }
 
 void PgSQL_Session::reset() {
-	embedded::teardown_plugin_pgsql(*this);
-	embedded::unregister_admin_pgsql_prepared(*this);
-	embedded::unregister_pgsql_prepared(*this);
+	if (session_type == PROXYSQL_SESSION_SQLITE) {
+		embedded::teardown_plugin_pgsql(*this);
+		embedded::unregister_pgsql_prepared(*this);
+	}
 	autocommit = true;
 	autocommit_handled = false;
 	sending_set_autocommit = false;
@@ -491,7 +490,7 @@ void PgSQL_Session::reset() {
 	}
 	mybe = NULL;
 
-	if (session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_SQLITE && thread) {
 		SQLite3_Session* sqlite_sess = (SQLite3_Session*)thread->gen_args;
 		if (sqlite_sess && sqlite_sess->sessdb) {
 			sqlite3* db = sqlite_sess->sessdb->get_db();
@@ -2272,10 +2271,6 @@ __implicit_flush:
 						c = *((unsigned char*)pkt.ptr);
 						if (session_type == PROXYSQL_SESSION_SQLITE &&
 						    embedded::handle_pgsql_prepared(*this, pkt)) continue;
-						if (!admin_extq_rejected && session_type != PROXYSQL_SESSION_SQLITE &&
-						    embedded::handle_admin_pgsql_prepared(*this, pkt, admin_extq_rejected)) {
-							continue;
-						}
 						// Recovery discards every message, including simple Query,
 						// until Sync. Terminate must still close the connection.
 						if (admin_extq_rejected && c != 'S' && c != 'X') {

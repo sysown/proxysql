@@ -242,140 +242,6 @@ static void test_sized_row_rejects_int_overflow() {
 }
 
 // ============================================================
-// Native prepared statement proxy APIs
-// ============================================================
-
-static void test_native_prepared_proxy_apis() {
-    sqlite3 *raw = db->get_db();
-    sqlite3_stmt *stmt = nullptr;
-    int rc = 0;
-
-    // Parameter counts on real prepared statements.
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "SELECT ?1, ?2, ?3", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: SELECT with 3 parameters succeeds");
-    ok((*proxy_sqlite3_bind_parameter_count)(stmt) == 3,
-       "bind_parameter_count: reports 3 for three bound parameters");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "SELECT 1", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: parameterless SELECT succeeds");
-    ok((*proxy_sqlite3_bind_parameter_count)(stmt) == 0,
-       "bind_parameter_count: reports 0 for parameterless statement");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    // Declared column metadata.
-    db->execute("DROP TABLE IF EXISTS native_meta");
-    db->execute("CREATE TABLE native_meta (a INTEGER, b TEXT, c BLOB)");
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "SELECT a, b, c FROM native_meta", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: SELECT from typed table succeeds");
-    ok((*proxy_sqlite3_column_count)(stmt) == 3,
-       "column_count: typed SELECT has 3 columns");
-    ok((*proxy_sqlite3_column_decltype)(stmt, 0) != nullptr &&
-       strcmp((*proxy_sqlite3_column_decltype)(stmt, 0), "INTEGER") == 0,
-       "column_decltype: first column declared INTEGER");
-    ok((*proxy_sqlite3_column_decltype)(stmt, 1) != nullptr &&
-       strcmp((*proxy_sqlite3_column_decltype)(stmt, 1), "TEXT") == 0,
-       "column_decltype: second column declared TEXT");
-    ok((*proxy_sqlite3_column_decltype)(stmt, 2) != nullptr &&
-       strcmp((*proxy_sqlite3_column_decltype)(stmt, 2), "BLOB") == 0,
-       "column_decltype: third column declared BLOB");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    // Binary data, including embedded NUL bytes.
-    db->execute("DROP TABLE IF EXISTS native_binary");
-    db->execute("CREATE TABLE native_binary (payload BLOB)");
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "INSERT INTO native_binary (payload) VALUES (?1)", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: INSERT BLOB statement succeeds");
-    char binary_data[] = {'A', '\0', 'B', '\0', 'C'};
-    rc = (*proxy_sqlite3_bind_blob)(stmt, 1, binary_data, 5, SQLITE_TRANSIENT);
-    ok(rc == SQLITE_OK, "bind_blob: binds 5 bytes including embedded NULs");
-    rc = (*proxy_sqlite3_step)(stmt);
-    ok(rc == SQLITE_DONE, "step: INSERT BLOB completes");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "SELECT payload FROM native_binary", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: SELECT BLOB succeeds");
-    rc = (*proxy_sqlite3_step)(stmt);
-    ok(rc == SQLITE_ROW, "step: SELECT BLOB returns a row");
-    ok((*proxy_sqlite3_column_type)(stmt, 0) == SQLITE_BLOB,
-       "column_type: stored value is SQLITE_BLOB");
-    ok((*proxy_sqlite3_column_bytes)(stmt, 0) == 5,
-       "column_bytes: BLOB length is 5");
-    const void *blob = (*proxy_sqlite3_column_blob)(stmt, 0);
-    ok(blob != nullptr && memcmp(blob, binary_data, 5) == 0,
-       "column_blob: bytes match, including embedded NULs");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    // Empty BLOB versus SQL NULL.
-    db->execute("DROP TABLE IF EXISTS native_empty_blob");
-    db->execute("CREATE TABLE native_empty_blob (payload BLOB)");
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "INSERT INTO native_empty_blob (payload) VALUES (?1)", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: INSERT empty BLOB statement succeeds");
-    char non_null_dummy = 0;
-    rc = (*proxy_sqlite3_bind_blob)(stmt, 1, &non_null_dummy, 0, SQLITE_TRANSIENT);
-    ok(rc == SQLITE_OK, "bind_blob: empty BLOB uses non-null pointer with length 0");
-    rc = (*proxy_sqlite3_step)(stmt);
-    ok(rc == SQLITE_DONE, "step: INSERT empty BLOB completes");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "SELECT payload FROM native_empty_blob", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: SELECT empty BLOB succeeds");
-    rc = (*proxy_sqlite3_step)(stmt);
-    ok(rc == SQLITE_ROW, "step: SELECT empty BLOB returns a row");
-    ok((*proxy_sqlite3_column_type)(stmt, 0) == SQLITE_BLOB,
-       "column_type: empty value is SQLITE_BLOB, not NULL");
-    ok((*proxy_sqlite3_column_bytes)(stmt, 0) == 0,
-       "column_bytes: empty BLOB length is 0");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    db->execute("DROP TABLE IF EXISTS native_sql_null");
-    db->execute("CREATE TABLE native_sql_null (payload BLOB)");
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "INSERT INTO native_sql_null (payload) VALUES (?1)", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: INSERT NULL statement succeeds");
-    rc = (*proxy_sqlite3_bind_null)(stmt, 1);
-    ok(rc == SQLITE_OK, "bind_null: binds SQL NULL");
-    rc = (*proxy_sqlite3_step)(stmt);
-    ok(rc == SQLITE_DONE, "step: INSERT NULL completes");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "SELECT payload FROM native_sql_null", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: SELECT NULL succeeds");
-    rc = (*proxy_sqlite3_step)(stmt);
-    ok(rc == SQLITE_ROW, "step: SELECT NULL returns a row");
-    ok((*proxy_sqlite3_column_type)(stmt, 0) == SQLITE_NULL,
-       "column_type: SQL NULL reports SQLITE_NULL");
-    ok((*proxy_sqlite3_column_bytes)(stmt, 0) == 0,
-       "column_bytes: SQL NULL length is 0");
-    ok((*proxy_sqlite3_column_blob)(stmt, 0) == nullptr,
-       "column_blob: SQL NULL returns null pointer");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    // Statement read-only classification without executing DML.
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "SELECT 1", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: readonly SELECT succeeds");
-    ok((*proxy_sqlite3_stmt_readonly)(stmt) == 1,
-       "stmt_readonly: SELECT statement is readonly");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-
-    rc = (*proxy_sqlite3_prepare_v2)(raw, "INSERT INTO native_meta (a, b, c) VALUES (1, 'x', NULL)", -1, &stmt, nullptr);
-    ok(rc == SQLITE_OK, "native prepare: non-readonly INSERT succeeds");
-    ok((*proxy_sqlite3_stmt_readonly)(stmt) == 0,
-       "stmt_readonly: INSERT statement is not readonly");
-    (*proxy_sqlite3_finalize)(stmt);
-    stmt = nullptr;
-}
-
-// ============================================================
 // Locking operations (basic sanity)
 // ============================================================
 
@@ -393,7 +259,7 @@ static void test_wrlock_unlock() {
 }
 
 int main() {
-    plan(87);
+    plan(51);
     test_init_minimal();
 
     setup_db();
@@ -414,7 +280,6 @@ int main() {
     test_create_table_prefix_variants_preserve_rows();
     test_sqlite3_row_get_size();            // 2
     test_sized_row_rejects_int_overflow();  // 2
-    test_native_prepared_proxy_apis();      // 36
     test_rdlock_unlock();                   // 1
     test_wrlock_unlock();                   // 1
 

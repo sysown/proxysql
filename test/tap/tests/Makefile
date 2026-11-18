@@ -295,15 +295,8 @@ kill_connection2_fixture-t: kill_connection2_fixture-t.cpp kill_connection2-t.cp
 unit/obj/tap.o unit/obj/tap_noise_stubs.o:
 	$(MAKE) -C unit $(patsubst unit/%,%,$@)
 
-test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t test_embedded_prepared_schema_mysql-t: %: %.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+test_embedded_prepared_schema_mysql-t: %: %.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(MARIADB_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) \
-		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
-
-# Standalone libpq/pg_lite prepared acceptance client; owns no external fixture.
-test_embedded_prepared_admin_pgsql-t: test_embedded_prepared_admin_pgsql-t.cpp pg_lite_client.cpp pg_lite_client.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
-	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< pg_lite_client.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) -I$(LIBSCRAM_IDIR) -I$(LIBUSUAL_IDIR) -I$(SSL_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) \
-		$(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a \
 		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
 
 # Standalone native DuckDB prepared-statement protocol clients.
@@ -719,14 +712,14 @@ test_duckdb_mysql_analytical-t: test_duckdb_mysql_analytical-t.cpp prepared_owne
 		$(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
 
 # Prepared acceptance clients use the same owned child and tier-4 plugin.
-test_duckdb_prepared_mysql-t test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t test_embedded_prepared_admin_pgsql-t test_embedded_prepared_schema_mysql-t: prepared_owned_fixture.h duckdb_replica_test_utils.h
+test_duckdb_prepared_mysql-t test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_schema_mysql-t: prepared_owned_fixture.h duckdb_replica_test_utils.h
 
 # CI tier 4 acceptance tests launch their own plugin-enabled ProxySQL.
 ifeq ($(PROXYSQL40),1)
 .PHONY: prepared-duckdb-plugin
 prepared-duckdb-plugin:
 	$(MAKE) -C unit duckdb_plugin_build
-test_duckdb_mysql_analytical-t test_duckdb_prepared_mysql-t test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_mysql-t test_embedded_prepared_admin_mysql-t test_embedded_prepared_admin_pgsql-t test_embedded_prepared_schema_mysql-t: | prepared-duckdb-plugin
+test_duckdb_mysql_analytical-t test_duckdb_prepared_mysql-t test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_schema_mysql-t: | prepared-duckdb-plugin
 endif
 
-test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_admin_pgsql-t: $(MARIADB_LDIR)/libmariadbclient.a
+test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t: $(MARIADB_LDIR)/libmariadbclient.a

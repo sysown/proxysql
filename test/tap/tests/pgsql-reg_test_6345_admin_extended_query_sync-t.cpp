@@ -2,8 +2,9 @@
  * @file pgsql-reg_test_6345_admin_extended_query_sync-t.cpp
  * @brief Regression test for issue #6345.
  *
- * The PostgreSQL-protocol Admin interface rejects unsupported extended queries
- * the way PostgreSQL reports an error inside an extended-query batch:
+ * The PostgreSQL-protocol Admin interface does not implement the extended
+ * query protocol (Parse/Bind/Describe/Execute/Close). It must reject it the
+ * way a PostgreSQL server reports an error inside an extended-query batch:
  *  - exactly one ErrorResponse, sent when the first unsupported message
  *    arrives (so a client waiting after Flush is not left hanging);
  *  - every following message up to Sync is discarded;
@@ -31,6 +32,7 @@
 #include "command_line.h"
 #include "pg_lite_client.h"
 #include "tap.h"
+#include "utils.h"
 
 CommandLine cl;
 
@@ -127,7 +129,7 @@ int main(int, char**) {
 		if (!c) {
 			BAIL_OUT("Cannot connect to the PgSQL admin interface");
 		}
-		send_parse(*c, "LOAD MYSQL SERVERS TO RUNTIME");
+		send_parse(*c, "SELECT 1");
 		send_bind(*c);
 		send_describe_portal(*c);
 		send_execute(*c);
@@ -149,7 +151,7 @@ int main(int, char**) {
 		if (!c) {
 			BAIL_OUT("Cannot connect to the PgSQL admin interface");
 		}
-		send_parse(*c, "LOAD MYSQL SERVERS TO RUNTIME");
+		send_parse(*c, "SELECT 1");
 		c->sendMessage('H', std::vector<uint8_t>());
 		const MsgCounts before_sync = drain(*c);
 		diag("P/H -> '%s'", before_sync.sequence.c_str());
@@ -176,7 +178,7 @@ int main(int, char**) {
 		c->sendQuery("DROP TABLE IF EXISTS reg_test_6345_discarded");
 		const MsgCounts reset = drain(*c);
 		if (reset.errors || reset.ready != 1) BAIL_OUT("Cannot reset the discarded-query fixture");
-		send_parse(*c, "LOAD MYSQL SERVERS TO RUNTIME");
+		send_parse(*c, "SELECT 1");
 		c->sendQuery("CREATE TABLE reg_test_6345_discarded (id INTEGER)");
 		c->sendSync();
 		const MsgCounts counts = drain(*c);
@@ -221,13 +223,13 @@ int main(int, char**) {
 			BAIL_OUT("Cannot connect to the PgSQL admin interface with libpq");
 		}
 
-		PGresult* r = PQexecParams(conn, "LOAD MYSQL SERVERS TO RUNTIME", 0, NULL, NULL, NULL, NULL, 0);
+		PGresult* r = PQexecParams(conn, "SELECT 1", 0, NULL, NULL, NULL, NULL, 0);
 		const ExecStatusType st = PQresultStatus(r);
 		const char* sqlstate = PQresultErrorField(r, PG_DIAG_SQLSTATE);
 		diag("PQexecParams -> %s, SQLSTATE=%s, error='%s'", PQresStatus(st), sqlstate ? sqlstate : "(null)",
 			PQresultErrorMessage(r));
-		ok(st == PGRES_FATAL_ERROR && sqlstate && strcmp(sqlstate, "42000") == 0,
-			"libpq PQexecParams of unsupported SQL is refused by source admission with SQLSTATE 42000");
+		ok(st == PGRES_FATAL_ERROR && sqlstate && strcmp(sqlstate, "0A000") == 0,
+			"libpq PQexecParams on admin fails with SQLSTATE 0A000 (feature not supported)");
 		PQclear(r);
 
 		bool all_good = true;
@@ -243,8 +245,8 @@ int main(int, char**) {
 		}
 		ok(all_good, "libpq simple queries after the extended-query attempt return correct results");
 
-		r = PQprepare(conn, "s1", "LOAD MYSQL SERVERS TO RUNTIME", 0, NULL);
-		ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "libpq PQprepare of unsupported SQL fails cleanly: %s", PQresultErrorMessage(r));
+		r = PQprepare(conn, "s1", "SELECT 1", 0, NULL);
+		ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "libpq PQprepare on admin fails cleanly: %s", PQresultErrorMessage(r));
 		PQclear(r);
 
 		r = PQexec(conn, "SELECT 1");

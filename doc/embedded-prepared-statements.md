@@ -1,6 +1,6 @@
 # Embedded prepared execution
 
-The core C++17 framework is integrated with the SQLite3, Admin and STATS MySQL listeners and read-only Admin/STATS PostgreSQL execution. Trusted plugins can register through the [V1 public execution contract](embedded-execution-plugin-contract.md), exposed by PluginServices ABI 17. The complete #6298 acceptance scope remains unfinished. One adapter instance is bound to one engine connection and must outlive its session. The session is neither copyable nor thread-safe. Destroy it before the adapter or connection. It owns statement IDs and finalizes each acquired handle on close or destruction, including a handle supplied with a failed prepare or metadata description. Failed prepare does not consume statement capacity. IDs are never reused during a session. Metadata and values are owned copies; bind must not retain references. Rows returned by fetch are owned by the caller.
+The core C++17 framework serves the native DuckDB MySQL and PostgreSQL listeners. Trusted plugins can register through the [V1 public execution contract](embedded-execution-plugin-contract.md), exposed by PluginServices ABI 17. The complete #6298 acceptance scope remains unfinished. One adapter instance is bound to one engine connection and must outlive its session. The session is neither copyable nor thread-safe. Destroy it before the adapter or connection. It owns statement IDs and finalizes each acquired handle on close or destruction, including a handle supplied with a failed prepare or metadata description. Failed prepare does not consume statement capacity. IDs are never reused during a session. Metadata and values are owned copies; bind must not retain references. Rows returned by fetch are owned by the caller.
 
 The endpoint policy is mandatory and must use the actual endpoint's authorization rules. It is called before native prepare and before every execute and fetch. The caller must arrange any required lock or guard across native operations and the complete lifetime of a live result; these callbacks do not supply one. The adapter and policy must enforce single-statement admission and reject unsupported SQL. Embedded NUL is rejected by the registry. Describing metadata must never execute SQL. Unknown and dynamic metadata are explicit; no wire type mapping is implied.
 
@@ -12,13 +12,6 @@ Each explicit execute validates arity and obtains policy authorization, then res
 
 The public callback tables use versioned C-shaped POD layouts and are copied during registration; opaque contexts remain borrowed until successful owner-thread unregister. Core session teardown unregisters before releasing the provider. PluginServices ABI 17 appends the service getter without changing older supported prefixes; Phase B returns no descriptor. The core library and unit targets are wired into the standard Makefiles. Dedicated real-client tests cover the integrated listeners.
 
-The SQLite proxy seam now also exposes native parameter counts, declared column
-metadata, binary column access and `stmt_readonly`. The wrapper regression target
-covers embedded NUL bytes, empty BLOB versus NULL, and read-only classification
-without executing the prepared INSERT. This is groundwork for the SQLite adapter,
-not a prepared-protocol endpoint. Independent integrated validation passed 86
-lifecycle checks and 87 SQLite wrapper checks on 2026-11-16.
-
 The MySQL bind decoder is now shared through
 `MySQL_Protocol::decode_stmt_execute`, taking explicit parameter count, long-data
 storage and cached types. The proxy path calls the same implementation. A cache
@@ -29,61 +22,12 @@ before native execution. This extraction supplies no endpoint dispatch or new
 protocol parser. Independent validation passed 13 direct decoder checks and the
 existing 9 short-packet and 8 long-data type checks.
 
-The internal `SQLiteAdapter` now implements native preparation, dynamic metadata,
-binding, single-row fetch, reset and finalization on a borrowed connection. It
-supports NULL, signed integers, lossless unsigned integers through INT64_MAX,
-non-NaN doubles, text and binary bytes. It explicitly refuses Decimal binding and
-write statements returning columns. Result metadata remains dynamic; this does
-not establish a MySQL/PostgreSQL wire type policy. `last_insert_id` is currently 0.
-
-Native preparation consumes one statement. Only whitespace may follow its native
-prepare tail: comments after a terminating semicolon are explicitly unsupported
-in this initial slice. No second statement is compiled to inspect its shape and
-no private SQL/comment lexer is used. Endpoint policy must still authorize the
-whole input before native preparation, since SQLite PRAGMAs can act at prepare
-time. The adapter has no endpoint authorization or transaction-control policy.
-
-Independent standard-Makefile validation passed all 359 adapter checks, including
-constraint-error recovery, schema changes, metadata without execution, rollback
-ownership, empty/BLOB/NULL differences, payload limits and cleanup. A separate
-ASan/UBSan build passed the same 359 checks with leak detection enabled. The
-project sources were instrumented; the supplied SQLite and crypto objects were
-not rebuilt with sanitizers.
-
 The prepare-response encoder also accepts explicit metadata through a shared
 `generate_STMT_PREPARE_RESPONSE` overload. It uses the existing field and EOF
 encoders and checks descriptor pointers before queuing any output. Callers supply
 transaction status and keep all NUL-terminated field strings alive through the
 synchronous call. The proxy wrapper still holds its metadata lock and uses the
 same existing status calculation. All 18 direct metadata-packet checks pass.
-Prepared commands are enabled on the SQLite3 MySQL listener. Admin and STATS MySQL listeners are also integrated within the restrictions below. Admin/STATS PostgreSQL listeners now support the read-only subset described below. The native DuckDB MySQL and PostgreSQL listeners also register the shared ABI 17 service for the read-only subset described below.
-
-
-The SQLite3 listener now registers one shared MySQL prepared controller per
-connection. It supports PREPARE, EXECUTE, CLOSE, RESET and bounded SEND_LONG_DATA.
-Statements bind native values without SQL interpolation. Cursor execution and
-FETCH are rejected with error 1235 before execution. STMT_RESET clears results,
-long data and errors while retaining client parameter types. Session reset closes
-all statements; wire IDs are not reused. Disconnect finalizes handles before
-closing the borrowed SQLite connection. Existing SQLite text-protocol transaction
-and disconnect behavior is preserved.
-
-`SQLitePolicy` admits a conservative fully parsed ParserSQL SELECT/DML subset
-and a documented function allowlist. It refuses utility statements, transaction
-commands, PRAGMAs, ATTACH, user variables, unrecognized functions and unsupported
-AST constructs before native preparation. The connection provider must preserve
-standard built-ins and ensure that views/triggers cannot reach unsafe native
-functions. This endpoint disables extension loading on its own connection. This
-policy is not the Admin authorization policy; Admin shared connections and their
-extensions require a separate policy and operation-wide locking.
-
-SQLite result columns advertise binary VAR_STRING because SQLite types are
-dynamic. Numeric values use exact round-trippable text; text and blobs preserve
-lengths, NUL bytes, and empty-versus-NULL values. Typed engines use the same row
-codec with fixed numeric types. SQLite Decimal parameters, temporal values,
-DML RETURNING and automatic reprepare with changed output names/counts are
-explicitly unsupported. SQLite last_insert_id remains zero in this slice.
-
 Default per-session controller limits are 128 statements; 1 MiB SQL per statement
 and 16 MiB SQL total; 16 MiB long data per statement and session; 1,024 long-data
 parameter entries per statement; 4,096 parameters and result columns per
@@ -92,16 +36,6 @@ Metadata/row response errors discard privately buffered packets before sending
 ERR. A conservative maximum OK-packet size is reserved before executing DML.
 These are transport payload limits, not bounds on engine RSS. Error packets are
 sent even when the configured success-response budget cannot fit them. The public versioned registration ABI and shared frontend accounting are integrated; core global quotas are described below.
-
-Validation on 2026-11-16: the real MariaDB C API acceptance client passed 39
-checks against the rebuilt isolated SQLite3 listener, including repeated types,
-exact binary values, duplicate-key recovery, unsigned overflow without effects,
-long data, reset, unsupported SQL/cursors and transaction rollback/status.
-For an existing dedicated SQLite3 test listener, run
-`test/tap/tests/test_embedded_prepared_mysql-t` with
-`TAP_EMBEDDED_PREPARED_EXTERNAL=1`, TAP_HOST, TAP_SQLITE_PORT, TAP_USERNAME and
-TAP_PASSWORD. It creates and drops a uniquely named test table. These live clients are registered in duckdb-e2e-g1 for tier 4; their unit
-components are registered in unit-tests-g1.
 
 A native DuckDB SELECT-only adapter is implemented and registered on both native listeners.
 It borrows one connection, describes native types without execution, binds exact
@@ -121,66 +55,15 @@ pointer. It runs outside the registry mutex. Factory failures or exceptions beco
 operation errors; failed executes consume their pending long data while retaining
 client type bindings. Disconnect cleanup must acquire its guard successfully;
 violating that provider contract terminates rather than leaving callback/native
-handles attached to a destroyed borrowed connection. Existing SQLite listener
-registration uses no guard. The Admin provider must still supply its actual lock,
-startup policy and authorization lease; this hook alone enables no Admin queries.
+handles attached to a destroyed borrowed connection.
 Independent controller validation now passes 63 checks, including guard lifetime,
 throwing factories, rejected-execute stale-data cleanup and malformed execution.
-
-
-Admin/STATS prepared execution now borrows the correct role's shared database
-and holds the existing startup gate and re-entrant Admin SQL lock through each
-native operation and all response materialization. It rechecks runtime read-only
-state on execution. SELECT is supported on the role's `main` database; prepared
-DML is limited to `mysql_servers`, `mysql_users` and `mysql_query_rules`. Utility
-commands, transaction control, cross-schema references, CTEs and statistics reset
-projections are explicitly unsupported. Text Admin command handling is unchanged.
-
-The scoped native authorizer enforces function, relation, schema and write rules
-through views/triggers and automatic reprepare. A direct trusted `PRAGMA
-function_list` inspection rejects overrides of allowlisted built-ins. The provider
-owns the authorizer slot; native cleanup occurs before releasing the Admin lock.
-The optional `sqlite3_set_authorizer` capability is required for Admin prepared
-execution, without becoming a new mandatory custom SQLite-plugin startup symbol.
-Custom SQLite plugin loading remains disabled by the existing production guard.
-
-Statistics refresh requests come exclusively from ParserSQL relation nodes and
-an exact standard-table allowlist, never from original SQL text. String literals,
-comments and column aliases cannot request a destructive reset. Uppercase table
-references receive the same refresh. Hidden dynamic view dependencies without an
-established refresh are refused; the standard PostgreSQL activity view dependency
-is handled explicitly. Statistics reset tables are denied through native view
-expansion as well as source admission. Unknown dynamic plugin views remain a
-future capability rather than a freshness guarantee.
-
-Session-lifetime wire-ID allocation survives provider replacement and connection
-reset; retired IDs cannot execute newly prepared statements. The final Session
-destructor releases the allocator. Valid transport types survive operation-guard
-rejection. Failed replacement metadata invalidates the previous type cache, so a
-retry cannot silently use stale signedness; clients must resend types after such
-protocol errors. Statement reset still retains valid parameter bindings.
-
-Admin/STATS real-client validation passes 23 checks, including native binary/NULL
-values, prepare metadata, repeated execution/reset, runtime `PROXYSQL READONLY`
-changes and uppercase statistics-query freshness across a backend configuration
-load. The existing SQLite client remains at 39 passing checks. The Admin test
-uses TAP_HOST, TAP_ADMINPORT, TAP_ADMINUSERNAME, TAP_ADMINPASSWORD,
-TAP_STATSUSERNAME and TAP_STATSPASSWORD against a dedicated fixture initially in
-read-write mode. It creates a unique temporary server configuration and restores
-it without SAVE commands. Pure statistics-admission tests pass 12 checks; native
-Admin policy tests pass 43. The complete controller suite passes 79 checks after final integration validation.
-
-A separate MySQL 8.0.46 oracle probe confirmed long-data/NULL precedence, empty
-chunks, reset and cached-type error recovery against the SQLite listener. SQLite
-continues to advertise its documented binary VAR_STRING dynamic metadata; engine
-error codes and the client call at which a buffered-result error appears need not
-match MySQL's streaming behavior.
 
 
 ## PostgreSQL codec prerequisites
 
 The internal PostgreSQL datum and result codecs are implemented separately from
-packet framing. The extended-query controller and Admin/STATS registration use these helpers;
+packet framing. The extended-query controller uses these helpers;
 codec support does not imply that an endpoint admits every corresponding SQL type.
 
 Parameters support BOOL, INT2/INT4/INT8, FLOAT4/FLOAT8, UTF-8 TEXT/VARCHAR/BPCHAR and BYTEA
@@ -199,13 +82,11 @@ produce payloads only; the frontend must enforce signed 32-bit framing lengths
 and aggregate response limits.
 
 Native parameter-position metadata maps each engine bind slot to an original
-positive `$n` position without rewriting SQL. SQLite uses native slot encounter
-order; DuckDB reports its native numeric identities. Unknown identities remain
-zero and must be refused by the PostgreSQL frontend. The optional SQLite symbol
-is not required for existing MySQL prepared execution.
+positive `$n` position without rewriting SQL. DuckDB reports its native numeric
+identities. The PostgreSQL frontend refuses unknown identities.
 
 Independent validation on 2026-11-16 passed 308 parameter-codec assertions, 47
-result-codec assertions, 31 SQLite position assertions and 65 native DuckDB
+result-codec assertions and 65 native DuckDB
 adapter assertions. Both PostgreSQL codecs also passed ASan/UBSan. These are
 component checks; the endpoint acceptance results are recorded below.
 
@@ -219,7 +100,6 @@ a subsequent Execute observes exhaustion. CommandComplete counts rows from that
 Execute, following PostgreSQL's PortalRunSelect behavior. Unknown Close names
 succeed. Sync clears failed-cycle state and closes implicit-cycle portals;
 a simple query also drops the unnamed statement while retaining named ones.
-Admin/STATS registration has passed the real-client acceptance below.
 
 This controller requires a policy that admits only read-only SQL. It supports
 implicit cycles; explicit transaction ownership is pending. One operation guard
@@ -235,47 +115,6 @@ native/adapter/Session allocations before metadata reaches the controller and
 engine internal memory. Callers release each transferred response before asking
 for another to retain the stated response bound. Frontend bind/result buffers also participate in shared global accounting.
 
-SQLite now has an opt-in `strict_declared` result profile. Exact native declared
-names BLOB/TEXT/INTEGER/INT/BIGINT/REAL/DOUBLE/FLOAT provide fixed descriptors;
-other declarations and expressions stay dynamic. Runtime storage classes must
-match, with no coercion. This enables BYTEA for declared BLOB columns and rejects
-mixed storage before exposing a row under an incompatible descriptor. The default
-MySQL profile remains dynamic. Source policies and statistics relation discovery
-can select ParserSQL's PostgreSQL dialect; MySQL remains their default.
-
-Independent component validation passed 66 controller assertions, 157 strict
-profile assertions, 46 SQLite policy assertions, 46 Admin policy assertions and
-16 statistics assertions on 2026-11-16. These component checks alone do not complete the prepared-statement framework.
-
-
-## Admin/STATS PostgreSQL listener support
-
-Admin and STATS now use the shared frontend for Parse, Bind, Describe, Execute,
-Close, Flush and Sync. The initial capability is read-only SELECT with the same
-native authorizer and AST-derived statistics refresh protections as the MySQL
-provider. It selects ParserSQL's PostgreSQL dialect and the strict SQLite result
-profile. Named statements survive Sync; implicit-cycle portals do not. All rows
-are read during the portal's first Execute, then paged from its owned buffer.
-This does not provide a transaction-wide snapshot across independent portals.
-
-Explicit transaction commands are refused on the Admin/STATS simple-query path,
-as well as in prepared SQL. The earlier simple-query acknowledgement did not
-start a native transaction. Transaction ownership and writable PostgreSQL prepared
-execution remain separate unfinished work. PostgreSQL prepared execution requires
-UTF8 client encoding; other startup encodings are refused before native access.
-The existing MySQL prepared endpoints retain their current write/transaction
-policy. Native DuckDB PostgreSQL sessions now register the shared service explicitly.
-
-Independent live libpq and packet-client validation on 2026-11-16 passed 53 checks
-across Admin and STATS, including NULL/empty/binary/Unicode values, exact-limit
-portal suspension, Flush without premature ReadyForQuery, multiple portals,
-Sync recovery, explicit transaction refusal and non-UTF8 rejection. The existing
-#6345 error/Sync regression also passes 15 real-client assertions. Packet-level
-checks pass 39 assertions and ASan/UBSan (new sources instrumented, existing core
-uninstrumented; global leak checking disabled). Preserved MySQL live clients pass
-39 SQLite and 23 Admin/STATS checks. These results do not complete K5's writable
-or explicit-transaction acceptance.
-
 MySQL exception hardening now owns decoded bind metadata and temporary prepared
 handles, resets active native results before an exception releases its guard, and
 publishes prepare success only after statement registration. Its focused tests
@@ -290,8 +129,7 @@ binding to fractional-only DECIMAL and native temporary-handle cleanup.
 Boolean values now have an explicit shared tag. MySQL fixed descriptors use TINY
 and one-byte 0/1 binary values; PostgreSQL uses BOOL with `t`/`f` text or a binary
 byte. PostgreSQL input follows its documented prefixes and treats any nonzero
-binary byte as true. SQLite binds Boolean parameters as INTEGER 0/1 without
-inventing fixed Boolean metadata for dynamic expressions. The DuckDB adapter uses
+binary byte as true. The DuckDB adapter uses
 native Boolean bindings and result vectors. Temporal values remain unsupported.
 
 Core Sessions share limits of 4,096 native prepared handles, 64 MiB retained SQL
@@ -305,9 +143,8 @@ adapter allocations; they do not bound process RSS or output network queues.
 
 Independent checks pass 13 quota assertions, 95 lifecycle assertions, 308
 PostgreSQL parameter assertions, 47 PostgreSQL field assertions, 65 MySQL field
-assertions, 364 native SQLite assertions, 66 portal controller assertions and 65
-native DuckDB assertions. The quota helper also passes ASan/UBSan. All three real
-client suites retain their 53/39/23 passing checks after enabling Boolean binds.
+assertions, 66 portal controller assertions and 65 native DuckDB assertions.
+The quota helper also passes ASan/UBSan.
 
 
 ## Native DuckDB listeners
@@ -350,8 +187,8 @@ HUGEINT and UHUGEINT bind and fetch as exact decimal integers with precision 39,
 scale 0. This covers the full signed and unsigned 128-bit ranges and integer SUM
 results. Fractional or out-of-range Decimal binds fail without truncation; a valid
 rebind recovers. The adapter passes 81 checks, including ASan/UBSan. Additional
-real-driver suites pass 32 schema/disconnect checks across MySQL SQLite, Admin and
-DuckDB, and 18 native PostgreSQL extended checks for binary formats, portals,
+real-driver suites cover schema changes and disconnect on the DuckDB MySQL
+listener, and 18 native PostgreSQL extended checks for binary formats, portals,
 suspension, Sync recovery and schema changes. Ordinary proxy routes pass 9 MySQL
 and 14 PostgreSQL prepared regression checks against local MySQL 8.0.46 and
 PostgreSQL 16.15 backends, independently rerun against their direct endpoints.
@@ -360,9 +197,9 @@ remove uniquely named test objects. Set `TAP_EMBEDDED_PREPARED_EXTERNAL=1` with
 the documented listener credentials to test existing dedicated endpoints.
 
 
-All seven prepared acceptance clients are registered in `duckdb-e2e-g1` for tier
-4. Their shared fixture reserves loopback ports, creates a private data directory,
-starts its own ProxySQL with SQLite and DuckDB listeners, and configures test-only
+The DuckDB acceptance clients are registered in `duckdb-e2e-g1` for tier 4.
+Their shared fixture reserves loopback ports, creates a private data directory,
+starts its own ProxySQL with DuckDB listeners, and configures test-only
 users. It cleans up the child and directory on normal return and TAP bailout.
 `TAP_PROXYSQL_BINARY` and `TAP_DUCKDB_PLUGIN` override the compiled artifact paths;
 no listener credentials are required in the default owned-fixture mode. External

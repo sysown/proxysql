@@ -255,9 +255,7 @@ int main() {
     pg.session_type = PROXYSQL_SESSION_ADMIN;
     mysql.session_type = PROXYSQL_SESSION_ADMIN;
 
-    // Both contexts remain alive until after session destruction. The SQLite role is
-    // restored to ADMIN only after registration and preparation: that avoids the legacy
-    // SQLite reset path's unrelated dependency on a populated thread/gen_args fixture.
+    // Both contexts remain alive until after session destruction.
     {
         LiveContext context;
         auto callbacks = engine;
@@ -288,7 +286,6 @@ int main() {
         for (unsigned i = 0; i < ds->PSarrayOUT->len; ++i)
             free(ds->PSarrayOUT->index(i)->ptr);
         ds->PSarrayOUT->len = 0;
-        session->session_type = PROXYSQL_SESSION_ADMIN;
         auto reset_status = embedded::reset_mysql_prepared(*session);
         ok(!reset_status && context.finalized == 1 && context.unguarded_finalizes == 0,
            "MySQL prepared reset finalizes the first handle under guard");
@@ -301,7 +298,6 @@ int main() {
            "MySQL prepared reset preserves public registration");
         auto second_id = static_cast<unsigned char*>(ds->PSarrayOUT->index(0)->ptr)[5];
         ok(first_id != second_id, "MySQL prepared reset does not reuse statement IDs");
-        session->session_type = PROXYSQL_SESSION_ADMIN;
         delete ds->myconn;
         ds->myconn = nullptr;
         delete session;
@@ -336,7 +332,6 @@ int main() {
         ok(embedded::handle_pgsql_prepared(*session, packet) && !packet.ptr &&
                context.prepared == 1 && context.finalized == 0,
            "PostgreSQL prepares a live native handle");
-        session->session_type = PROXYSQL_SESSION_ADMIN;
         delete session;
         ok(context.finalized == 1 && context.unguarded_finalizes == 0 &&
                context.finalizes_outside_disconnect == 0,
