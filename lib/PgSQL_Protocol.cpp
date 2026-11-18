@@ -589,9 +589,11 @@ bool PgSQL_Protocol::get_header(unsigned char* pkt, unsigned int pkt_len, pgsql_
 		}
 		else if (code == PG_PKT_SSLREQ) {
 			type = PG_PKT_SSLREQ;
+			version = code;
 		}
 		else if (code == PG_PKT_GSSENCREQ) {
 			type = PG_PKT_GSSENCREQ;
+			version = code;
 		}
 		else if ((code >> 16) == (PG_PROTOCOL_LATEST >> 16)) {
 			// Every minor version of the major we speak is accepted here, including ones we do
@@ -707,19 +709,26 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		return false;
 	}
 
-	if (hdr.type == PG_PKT_SSLREQ) {
-		const bool have_ssl = pgsql_thread___have_ssl;
+	// One SSLRequest and one GSSENCRequest per connection, as in PostgreSQL's
+	// ProcessStartupPacket() ssl_done / gss_done. A repeat falls through to the refusal below.
+	if (hdr.type == PG_PKT_SSLREQ && !(*myds)->startup_ssl_done) {
+		// Never offer TLS on a connection that is already encrypted.
+		const bool accept_ssl = pgsql_thread___have_ssl && !(*myds)->encrypted;
 		char* ssl_supported = (char*)malloc(1);
-		*ssl_supported = have_ssl ? 'S' : 'N';
+		*ssl_supported = accept_ssl ? 'S' : 'N';
 		(*myds)->PSarrayOUT->add((void*)ssl_supported, 1);
 		(*myds)->sess->writeout();
-		(*myds)->encrypted = have_ssl;
+		if (accept_ssl) {
+			(*myds)->encrypted = true;
+			(*myds)->startup_gss_done = true;
+		}
+		(*myds)->startup_ssl_done = true;
 		ssl_request = true;
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. SSL_REQUEST:'%c'\n", (*myds)->sess, (*myds), have_ssl ? 'S' : 'N');
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. SSL_REQUEST:'%c'\n", (*myds)->sess, (*myds), accept_ssl ? 'S' : 'N');
 		return true;
 	}
 
-	if (hdr.type == PG_PKT_GSSENCREQ) {
+	if (hdr.type == PG_PKT_GSSENCREQ && !(*myds)->startup_gss_done) {
 		// We do not speak GSSAPI encryption. PostgreSQL answers 'N' and lets the client fall back
 		// to SSL or plaintext on the same connection; closing instead strands a client that only
 		// offered it. Reusing ssl_request here means "reply sent, wait for the real startup packet".
@@ -727,6 +736,7 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		*gss_supported = 'N';
 		(*myds)->PSarrayOUT->add((void*)gss_supported, 1);
 		(*myds)->sess->writeout();
+		(*myds)->startup_gss_done = true;
 		ssl_request = true;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. GSSENC_REQUEST:'N'\n", (*myds)->sess, (*myds));
 		return true;

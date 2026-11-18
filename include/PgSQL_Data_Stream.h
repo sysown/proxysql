@@ -144,6 +144,9 @@ public:
 	AUTHENTICATION_METHOD auth_method = AUTHENTICATION_METHOD::NO_PASSWORD;
 	uint32_t auth_next_pkt_type = 0;
 	bool auth_received_startup = false;
+	// An SSLRequest and a GSSENCRequest are each honoured once per connection (see PgSQL_Protocol).
+	bool startup_ssl_done = false;
+	bool startup_gss_done = false;
 	unsigned char tmp_login_salt[4];
 	ScramState* scram_state;
 	// The stored secret of a login still in progress. SCRAM takes two packets and the credential is
