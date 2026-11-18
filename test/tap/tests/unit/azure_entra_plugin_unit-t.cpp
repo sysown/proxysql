@@ -133,6 +133,13 @@ void test_exchange() {
 		r.failure.request_id.find("hdr.pay") == std::string::npos,
 		"exchange_parses_error without leaking the assertion");
 
+	rec.reply = { 400, R"({"error":")" + std::string(5000, 'e') +
+		R"(","correlation_id":")" + std::string(5000, 'c') + R"("})" };
+	r = exchange_workload_identity(cfg, assertion_is("a"), rec.fn());
+	ok(!r.ok && r.failure.aws_error_code == std::string(128, 'e') &&
+		r.failure.request_id == std::string(128, 'c'),
+		"exchange_caps_error_fields: error and correlation_id are cut to 128 characters");
+
 	rec.reply = { 200, "not json" };
 	r = exchange_workload_identity(cfg, assertion_is("a"), rec.fn());
 	ok(!r.ok && r.failure.category == "provider_error", "a malformed 200 response is a provider error");
