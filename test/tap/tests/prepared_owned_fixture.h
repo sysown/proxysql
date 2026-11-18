@@ -126,7 +126,7 @@ struct Fixture {
             pid = -1;
         }
     }
-    Fixture(const char *mysql_dialect = "native") {
+    Fixture(const char *mysql_dialect = "native", bool with_duckdb = true) {
         const char *external = getenv("TAP_EMBEDDED_PREPARED_EXTERNAL");
         if (external && std::string(external) == "1") {
             if (std::string(mysql_dialect) != "native")
@@ -156,20 +156,22 @@ struct Fixture {
         p = port();
         d = port();
         dp = port();
-        if (access(binary.c_str(), X_OK) || access(plugin.c_str(), R_OK) || !start(false)) {
+        if (access(binary.c_str(), X_OK) || (with_duckdb && access(plugin.c_str(), R_OK)) || !start(false)) {
             cleanup();
             BAIL_OUT("cannot start owned prepared fixture");
         }
-        bool configured = query(
-            admin, "INSERT OR REPLACE INTO disk.global_variables VALUES('duckdb-database_path'," +
-                       quote(dir + "/prepared.duckdb") + "),('duckdb-mysql_ifaces'," +
-                       quote("127.0.0.1:" + std::to_string(d)) + "),('duckdb-pgsql_ifaces'," +
-                       quote("127.0.0.1:" + std::to_string(dp)) + "),('duckdb-threads','2')," +
-                       "('duckdb-mysql_dialect'," + quote(mysql_dialect) + ")");
-        stop();
-        if (!configured || !start(true)) {
-            cleanup();
-            BAIL_OUT("cannot initialize owned prepared fixture");
+        if (with_duckdb) {
+            bool configured = query(
+                admin, "INSERT OR REPLACE INTO disk.global_variables VALUES('duckdb-database_path'," +
+                           quote(dir + "/prepared.duckdb") + "),('duckdb-mysql_ifaces'," +
+                           quote("127.0.0.1:" + std::to_string(d)) + "),('duckdb-pgsql_ifaces'," +
+                           quote("127.0.0.1:" + std::to_string(dp)) + "),('duckdb-threads','2')," +
+                           "('duckdb-mysql_dialect'," + quote(mysql_dialect) + ")");
+            stop();
+            if (!configured || !start(true)) {
+                cleanup();
+                BAIL_OUT("cannot initialize owned prepared fixture");
+            }
         }
         set("TAP_HOST", "127.0.0.1");
         set("TAP_USERNAME", "fixture_client");

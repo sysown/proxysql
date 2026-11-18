@@ -345,7 +345,7 @@ class MakefileDependencyTest(unittest.TestCase):
         """ParserSQL ABI changes must invalidate each object which includes its headers."""
         cases = (
             (ROOT / "lib", ".oo", (
-                "Query_Processor_ParserSQL",)),
+                "Query_Processor_ParserSQL", "Embedded_Admin_Statistics", "Embedded_SQLite_Policy")),
             (ROOT / "plugins/duckdb", ".o", (
                 "duckdb_prepared_policy", "duckdb_mysql_set", "duckdb_mysql_select_compat")),
         )
@@ -394,6 +394,7 @@ class MakefileDependencyTest(unittest.TestCase):
         targets = (
             "test_duckdb_mysql_analytical-t",
             "test_embedded_prepared_schema_mysql-t",
+            "test_embedded_prepared_admin_pgsql-t",
             "test_duckdb_prepared_mysql-t",
             "test_duckdb_prepared_pgsql-t",
             "test_duckdb_prepared_pgsql_extended-t",
