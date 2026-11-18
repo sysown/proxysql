@@ -8,6 +8,8 @@
 
 namespace {
 
+constexpr size_t kMaxFailureFieldBytes = 128;
+
 void cleanse(std::string& secret) {
 	if (!secret.empty()) aws_iam_default_cleanse(&secret[0], secret.size());
 }
@@ -33,8 +35,9 @@ EntraTokenResponse failure(const char *category, const std::string& code = "",
 	const std::string& correlation_id = "") {
 	EntraTokenResponse r;
 	r.failure.category = category;
-	r.failure.aws_error_code = code;
-	r.failure.request_id = correlation_id;
+	// The provider controls these strings; every failed request and log line copies them.
+	r.failure.aws_error_code = code.substr(0, kMaxFailureFieldBytes);
+	r.failure.request_id = correlation_id.substr(0, kMaxFailureFieldBytes);
 	return r;
 }
 
