@@ -29,6 +29,12 @@ the 128-statement limit. The legacy result protocol and error/Sync tests pass
 build, the DuckDB analytical and native MySQL and PostgreSQL drivers pass 216,
 47 and 29 checks respectively.
 
-Concurrency, the two-node Cluster fixture, and combined integration and
-sanitizer CI evidence remain required for the separate draft PR. Prepared
-MySQL writes remain outside the read-only candidate.
+The two-node Cluster test starts private ProxySQL processes without DuckDB.
+It checks that an exact runtime query rule synchronizes in both directions,
+that four prepared clients make progress across both protocols and both roles
+during the updates, and that both peers exit cleanly with live prepared
+statements. It passed ten checks on each of five consecutive local runs.
+
+Combined integration and sanitizer CI evidence remain required for the
+separate draft PR. Prepared MySQL writes remain outside the read-only
+candidate.

@@ -685,6 +685,7 @@
   "test_duckdb_replica_bench-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],
   "test_duckdb_replica_recovery-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],
   "test_ed25519_auth-t" : [ "mariadb10-galera-g4","@proxysql_min_version:3.1" ],
+  "test_embedded_prepared_admin_cluster-t" : [ "legacy-g4","@proxysql_min_version:4.0" ],
   "test_embedded_prepared_admin_mysql-t" : [ "legacy-g4","@proxysql_min_version:4.0" ],
   "test_embedded_prepared_admin_pgsql-t" : [ "legacy-g4","@proxysql_min_version:4.0" ],
   "test_embedded_prepared_schema_mysql-t" : [ "duckdb-e2e-g1","@proxysql_min_version:4.0" ],

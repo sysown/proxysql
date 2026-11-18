@@ -3,16 +3,18 @@
 // Each acceptance client owns its ProxySQL process, listeners and private data.
 #include "duckdb_replica_test_utils.h"
 #undef PROTOCOL_VERSION
+#include <algorithm>
 #include <filesystem>
 #include <map>
 namespace prepared_owned_fixture {
 using namespace duckdb_replica_test;
 struct Fixture {
-    inline static Fixture *active = nullptr;
+    inline static std::vector<Fixture *> active;
     static void exit_cleanup() {
-        if (active) {
-            active->cleanup();
-            active = nullptr;
+        while (!active.empty()) {
+            Fixture *fixture = active.back();
+            active.pop_back();
+            fixture->cleanup();
         }
     }
     std::string dir, binary, plugin;
@@ -104,17 +106,19 @@ struct Fixture {
             diag("owned fixture failed to start; log: %s/proxysql.log", dir.c_str());
         return ready;
     }
-    void stop() {
+    bool stop() {
         if (admin) {
             mysql_close(admin);
             admin = nullptr;
         }
         if (pid > 0) {
             kill(pid, SIGTERM);
-            int status;
+            int status = 0;
+            bool clean = false;
             bool reaped = wait_for(
                 [&] {
                     pid_t r = waitpid(pid, &status, WNOHANG);
+                    clean = r == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
                     return r == pid || (r < 0 && errno == ECHILD);
                 },
                 5);
@@ -124,7 +128,9 @@ struct Fixture {
                 }
             }
             pid = -1;
+            return reaped && clean;
         }
+        return true;
     }
     Fixture(const char *mysql_dialect = "native", bool with_duckdb = true) {
         const char *external = getenv("TAP_EMBEDDED_PREPARED_EXTERNAL");
@@ -133,8 +139,10 @@ struct Fixture {
                 BAIL_OUT("analytical tests require an owned fixture");
             return;
         }
-        active = this;
-        std::atexit(exit_cleanup);
+        static const int cleanup_registered = std::atexit(exit_cleanup);
+        if (cleanup_registered)
+            BAIL_OUT("cannot register fixture cleanup");
+        active.push_back(this);
         // mkdtemp creates the directory with mode 0700 inside the platform temporary directory
         // (TMPDIR when set), so other users cannot read or replace the fixture's files.
         std::string pattern =
@@ -218,8 +226,7 @@ struct Fixture {
             cleanup();
         } catch (...) {
         }
-        if (active == this)
-            active = nullptr;
+        active.erase(std::remove(active.begin(), active.end(), this), active.end());
     }
 };
 } // namespace prepared_owned_fixture

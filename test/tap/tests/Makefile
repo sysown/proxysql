@@ -733,3 +733,9 @@ test_embedded_prepared_admin_pgsql-t: test_embedded_prepared_admin_pgsql-t.cpp p
 test_embedded_prepared_admin_mysql-t: %: %.cpp prepared_owned_fixture.h duckdb_replica_test_utils.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(MARIADB_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) \
 		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
+
+test_embedded_prepared_admin_cluster-t: test_embedded_prepared_admin_cluster-t.cpp prepared_owned_fixture.h duckdb_replica_test_utils.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) -I$(LIBSCRAM_IDIR) -I$(LIBUSUAL_IDIR) -I$(SSL_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) \
+		$(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a \
+		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
