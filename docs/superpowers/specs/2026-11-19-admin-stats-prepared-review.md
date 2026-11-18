@@ -147,18 +147,27 @@ All 11 Makefile dependency checks pass with the restored suite registered.
 
 ## Proposed MySQL prepared-write slice
 
-For separate review, use the original patch's three configuration tables
-as the starting scope. Admit direct parameterized `INSERT`, `UPDATE`
-and `DELETE` on `main.mysql_servers`, `main.mysql_users` and
-`main.mysql_query_rules` for an authenticated MySQL Admin session when
-Admin is read-write. These operations edit the in-memory Admin database.
-Operators still use the existing simple-query commands to load configuration
-to runtime or save it to disk. The read-only candidate keeps its current
-behavior until this scope is approved.
+The proposed first write change covers parameterized SQLite-native
+`INSERT`, `UPDATE`, and `DELETE` on the MySQL Admin listener. For
+supported SQL, preparation and execution follow the same access rules
+as ordinary Admin SQL. The executing session's role and the current
+Admin read-only setting govern execution. `mysql_servers`, `mysql_users`,
+and `mysql_query_rules` are representative test targets.
+
+An ordinary-query baseline on v3.0 and the current Admin draft passed
+11 checks on each build. In both runs, Admin could create a private test
+table and use ordinary DML on it. Read-only mode rejected its update
+and preserved the original row. The STATS listener rejected an ordinary
+write against an existing statistics table.
+
+Review SQL syntax support separately from authorization parity.
+ProxySQL-specific commands such as `LOAD` and `SAVE` use the Admin
+dispatcher. They have their own execution and result semantics.
+The write change requires explicit approval.
 
 | Review requirement | Validation for the write slice |
 | --- | --- |
-| Role and targets | Verify Admin can edit each approved table and observe affected rows and exact stored values. Exercise rejection through STATS, the PostgreSQL Admin listener, runtime and disk schemas, and targets outside the allowlist. |
+| Role and targets | Compare ordinary and prepared DML on an isolated test table and representative built-in configuration tables. Verify affected rows and stored values. Use the ordinary dispatcher as the reference for role restrictions and for memory, runtime, and disk schema access. |
 | Read-only transition | Prepare an Admin write, switch a separate session to `PROXYSQL READONLY`, and verify execute fails with zero effects. Switch back and verify a retry can succeed. Check prepare is denied while read-only. |
 | Transaction and serialization | Keep the startup gate and Admin SQL lock across policy, native execution and result collection. Reject prepare and execute while another legacy session owns a native transaction. Check concurrent legacy readers and prepared writes observe consistent configuration. |
 | Native side effects | Authorize the actual SQLite targets again on execution and native recompilation. Test trigger and view dependencies, failed constraints, and lack of side effects after rejection. Verify the operation does not change the shared connection's `query_only` flag. |
