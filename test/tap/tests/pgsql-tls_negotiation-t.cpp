@@ -404,13 +404,15 @@ int main(int argc, char** argv) {
 	{
 		// Cleartext, so the password check runs inside the direct TLS session. Restored right after.
 		bool logged_in = false, queried = false;
-		if (set_pgsql_var(admin, "authentication_method", "1")) {
+		std::string auth_method;
+		const bool auth_read = get_variable_value(admin, "pgsql-authentication_method", auth_method, true) == EXIT_SUCCESS;
+		if (auth_read && set_pgsql_var(admin, "authentication_method", "1")) {
 			DirectTls d = direct_tls_connect(host, port, ALPN_PG);
 			logged_in = d.tls && login_cleartext(d.sock, d.tls, cl.pgsql_username, cl.pgsql_password);
 			queried = logged_in && simple_query_ok(d.sock, d.tls, "SELECT 1");
 			close_all(d.sock, d.tls, d.ctx);
 		}
-		auth_restored = set_pgsql_var(admin, "authentication_method", "3");
+		auth_restored = auth_read && set_pgsql_var(admin, "authentication_method", auth_method);
 		ok(logged_in && queried, "direct TLS: cleartext login and SELECT 1 succeed");
 	}
 	{

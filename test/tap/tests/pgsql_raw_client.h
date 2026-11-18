@@ -86,10 +86,12 @@ static inline bool recv_exact(int sock, void* buf, size_t len, SSL* tls = nullpt
 
 /** Reads one message. Returns false when the peer closed instead of answering. */
 static inline bool read_message(int sock, char& type, std::vector<uint8_t>& body, SSL* tls = nullptr) {
-	// '?' means nothing came back, so a failed read cannot leave the previous message's type
-	// behind and report a reply that never arrived.
+	// '?' and an empty body unless a whole message arrived, so a failed read cannot leave the
+	// previous message behind, or report a type whose body never came.
 	type = '?';
-	if (!recv_exact(sock, &type, 1, tls)) return false;
+	body.clear();
+	char t;
+	if (!recv_exact(sock, &t, 1, tls)) return false;
 
 	uint8_t len_buf[4];
 	if (!recv_exact(sock, len_buf, 4, tls)) return false;
@@ -98,7 +100,12 @@ static inline bool read_message(int sock, char& type, std::vector<uint8_t>& body
 	if (len < 4) return false;
 
 	body.resize(len - 4);
-	return body.empty() || recv_exact(sock, body.data(), body.size(), tls);
+	if (!body.empty() && !recv_exact(sock, body.data(), body.size(), tls)) {
+		body.clear();
+		return false;
+	}
+	type = t;
+	return true;
 }
 
 /** The startup packet bytes for a given version and user. */
