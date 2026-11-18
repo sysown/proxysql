@@ -1,27 +1,10 @@
 # MySQL / DuckDB analytical semantic baseline
 
-This is a differential experiment, not a test of production translation or ProxySQL routing. Every source and candidate SQL statement is explicitly authored in `tools/probes/duckdb_mysql_semantics.cpp`. There is no parser, renderer, or production translator here. A match supports only the tested input, types, session and versions; it does not establish general compatibility. An expected difference is an example requiring refusal or a separately proven translation, not an approved rewrite.
+This is a differential experiment, not a test of production translation or ProxySQL routing. Every source and candidate SQL statement is explicitly authored in the `duckdb_mysql_semantics` probe. There is no parser, renderer, or production translator here. A match supports only the tested input, types, session and versions; it does not establish general compatibility. An expected difference is an example requiring refusal or a separately proven translation, not an approved rewrite.
 
 The probe connects as root over the explicitly supplied local test socket, creates a PID-named database and drops it on normal exit or caught errors. It creates no global settings, connects to no other database, and runs DuckDB in memory. The MySQL session sets `STRICT_ALL_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE,ERROR_FOR_DIVISION_BY_ZERO,ONLY_FULL_GROUP_BY`, `utf8mb4`/`utf8mb4_bin`, and UTC. It prints the actual server version, SQL mode, connection charset and collation, time zone, `div_precision_increment`, and `lower_case_table_names`. A killed process or cleanup failure can leave the printed PID-derived database behind; do not run this against a shared or production server.
 
-Build and run in a local test environment from the repository root. ROOT is the built repository checkout, SSL its built bundled OpenSSL version, PROBE_SOCKET the unix socket of a private MySQL server you own (never a shared or production one), and OUT a scratch directory:
-
-```sh
-ROOT="$(git rev-parse --show-toplevel)"
-OUT="${TMPDIR:-/tmp}"
-PROBE_SOCKET=/path/to/private-mysql.sock
-MDB="$ROOT/deps/mariadb-client-library/mariadb-connector-c-3.3.8-src"
-SSL="$ROOT/deps/libssl/openssl-3.5.9"
-g++ -std=c++17 -Wall -Wextra -Werror -I"$MDB/include" \
-  -I"$ROOT/deps/duckdb/duckdb/src/include" \
-  tools/probes/duckdb_mysql_semantics.cpp \
-  -L"$ROOT/deps/duckdb/duckdb/build/release/src" \
-  -Wl,-rpath,"$ROOT/deps/duckdb/duckdb/build/release/src" \
-  -lduckdb "$MDB/libmariadb/libmariadbclient.a" \
-  "$SSL/libssl.a" "$SSL/libcrypto.a" -lz -ldl -lpthread \
-  -o "$OUT/semantics-probe"
-"$OUT/semantics-probe" "$PROBE_SOCKET"
-```
+The probe sources are not part of the tree: they need a private MySQL server and a built DuckDB, and are not run by CI. They were last present at commit `a319d7dd5` of the pull request that introduced this document (`git show a319d7dd5:tools/probes/duckdb_mysql_semantics.cpp`); the results below are the recorded evidence from that run, not something the repository re-verifies.
 
 The fixture includes signed BIGINT extremes, unsigned BIGINT maximum, DECIMAL(18,4), duplicates, negative values, NULLs, UTF-8, DATE and DATETIME, raw VARBINARY/BLOB bytes `00 ff`, plus an unmatched join group. Order-sensitive cases use explicit ordering and a unique tie-breaker. The comparison checks output labels including duplicate labels, column count, NULL positions, row order and multiplicity, exact string values, and coarse logical metadata categories (integer, decimal, date, datetime, text, binary). It does not compare widths, signedness, precision/scale, collation, flags, or the MySQL protocol metadata exposed by a proxy. It strips trailing fractional zeroes only for results that both APIs identify as exact decimal; integers, text, binary and approximate values are not normalized or rounded. Unsupported metadata types cause failure. All expected-difference examples require differing actual values with matching labels and categories; their casts to text are for displaying values, and do not test native result metadata.
 

@@ -143,11 +143,10 @@ UHUGEINT count as decimal, matching the plugin's `DECIMAL(39,0)` mapping.
 Unknown categories fail. It does not compare integer width or signedness,
 decimal precision/scale, MySQL flags/collations, or proxy wire metadata.
 
-The separate `tools/probes/duckdb_mysql_parameter_differential.cpp` probe
+The separate `duckdb_mysql_parameter_differential` probe (same commit, `tools/probes/`)
 compares natively bound signed-integer predicate parameters (NULL, INT64
 extremes, narrow-column comparisons and distinct positions) against MySQL
-server-side prepared statements. It was built with the same command, using that
-source file instead, and passed all seven cases on 2026-11-18. Text is compared
+server-side prepared statements. It was built the same way and passed all seven cases on 2026-11-18. Text is compared
 as bytes for these fixtures; the parameter probe does not cover embedded NUL
 text. The match says nothing about untested inputs or the broader
 analytical subset. The SQL mode, connection collation and time zone are fixed by
@@ -167,25 +166,4 @@ and drops that database on normal exit and caught errors. A killed process or
 cleanup failure can leave the printed database behind. DuckDB runs in memory.
 Do not use a shared or production server.
 
-From the repository root with its locally patched vendored ParserSQL built,
-the build and run are:
-
-```sh
-ROOT="$(git rev-parse --show-toplevel)"
-OUT="${TMPDIR:-/tmp}"
-PROBE_SOCKET=/path/to/private-mysql.sock   # a server you own; never shared or production
-MDB="$ROOT/deps/mariadb-client-library/mariadb-connector-c-3.3.8-src"
-SSL="$ROOT/deps/libssl/openssl-3.5.9"
-g++ -std=c++17 -Wall -Wextra -Werror \
-  -Iplugins/duckdb/include -I"$ROOT/deps/parsersql/parsersql/include" \
-  -I"$MDB/include" -I"$ROOT/deps/duckdb/duckdb/src/include" \
-  tools/probes/duckdb_mysql_translation_differential.cpp \
-  plugins/duckdb/src/duckdb_mysql_select_compat.cpp \
-  "$ROOT/deps/parsersql/parsersql/libsqlparser.a" \
-  -L"$ROOT/deps/duckdb/duckdb/build/release/src" \
-  -Wl,-rpath,"$ROOT/deps/duckdb/duckdb/build/release/src" \
-  -lduckdb "$MDB/libmariadb/libmariadbclient.a" \
-  "$SSL/libssl.a" "$SSL/libcrypto.a" -lz -ldl -lpthread \
-  -o "$OUT/translation-probe"
-"$OUT/translation-probe" "$PROBE_SOCKET"
-```
+The probe sources are not part of the tree: they need a private MySQL server and a built DuckDB, and are not run by CI. They were last present at commit `a319d7dd5` of the pull request that introduced this document (`git show a319d7dd5:tools/probes/duckdb_mysql_translation_differential.cpp`); the results below are the recorded evidence from that run, not something the repository re-verifies. The build links the probe with `plugins/duckdb/src/duckdb_mysql_select_compat.cpp` and the locally patched vendored ParserSQL.
