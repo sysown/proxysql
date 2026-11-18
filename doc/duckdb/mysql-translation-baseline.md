@@ -5,18 +5,19 @@ ProxySQL routing or the production metadata provider. The probe passes each sour
 query to `duckdb_translate_mysql_select`; it executes only admitted SQL and uses
 the translator's owned result for DuckDB. Its negative control copies the emitted
 comma-LIMIT SQL and deliberately changes its offset, proving the row comparator
-catches that error. Forty-four unsupported or invalid queries are checked for
+catches that error. Fifty-eight unsupported or invalid queries are checked for
 refusal and never sent to either database.
 
 On 2026-11-18, MySQL `8.0.46-0ubuntu0.24.04.5` and DuckDB `v2.0.0` matched
-all 86 candidate queries, with zero unexpected mismatches. The negative control
+all 126 candidate queries, with zero unexpected mismatches. The negative control
 was detected. Cases cover escaped table and column names, duplicate aliases,
 table alias and qualified references, `*` over signed and unsigned integers,
 text, binary and NULL values, `COUNT(*)` and `COUNT(column)`, literal `001`
 and NULL labels, ascending and descending NULL order, comma LIMIT, and a signed
 integer predicate. Additional cases cover integer-key GROUP BY, COUNT/MIN/MAX, HAVING, nullable
 and multi-key groups, grouped LIMIT, unsigned extrema and empty grouped/aggregate
-results, metadata label boundaries, and exact decimals. The decimal cases cover
+results, metadata label boundaries, exact decimals, and binary text comparison
+and ordering. The decimal cases cover
 literal labels such as `001.2300`, `.50` and `1.`, scale 30 and 38-digit
 boundaries, decimal comparisons with signed and unsigned integer extremes,
 mixed scales, NULL filtering, fraction-only projection through a column,
@@ -24,7 +25,7 @@ aliases, duplicates and `*`, and native HUGEINT/UHUGEINT projection. The
 fixture contains signed BIGINT extremes, the unsigned BIGINT maximum, UTF-8
 and binary bytes `00 ff`.
 
-Fourteen of the 86 cases exercise `DATE_FORMAT(column, '%Y-%m')` over a DATE
+Fourteen of the 126 cases exercise `DATE_FORMAT(column, '%Y-%m')` over a DATE
 column and a DATETIME(6) column the resolver declares as a recorded DATETIME: plain and aliased projections, mixed-case and spaced
 spellings, qualified and backtick references, a backtick source label, mixed
 and duplicate-alias projections, comma LIMIT, NULL positions, an empty result
@@ -43,13 +44,36 @@ expression and passes, so years below 1000 have no known difference; they are
 still outside the admitted column domain because MySQL DATE cannot store them
 in strict mode. Zero dates cannot be stored in DuckDB at all.
 
+Forty of the 126 cases exercise text comparison and ordering. The `text_probe`
+fixture stores `t` and `u` as `VARCHAR` with `utf8mb4_0900_bin`, `ai` with
+`utf8mb4_0900_ai_ci` and `pad` with `utf8mb4_bin`. Rows cover the empty string,
+one space, `a` and `a ` (NO PAD must keep them distinct), leading space,
+embedded tab and a raw `0x01`, `é`, `e` plus U+0301 combining acute, emoji
+U+1F600, U+10000, `ab`/`abc` prefixes, `A` versus `a`, `Z`, `_`, `1`, `it's`,
+`a"b`, `ß`, `ss`, NULL, and a stored `a` NUL `b`. Byte values are inserted by
+hex so the fixture does not depend on the client encoding. Cases cover every
+admitted comparison operator with the literal on either side, column-to-column
+comparisons, AND/OR/IS NULL combinations, projection, and ascending/descending
+ordering with NULL placement, `LIMIT`, comma LIMIT and text predicates. The
+embedded-NUL row participates in predicates and ordering but is not projected
+as text, because the probe's C-API text conversion would escape it.
+Every text query matched MySQL's rows, order, labels and coarse type category.
+
+Three separate checks use direct MySQL and DuckDB queries on the same rows and
+pass only when the results differ: `ai = 'A'` returns two MySQL rows and one
+DuckDB row; `ORDER BY ai, id` over the non-NULL `ai` rows differs; and
+`pad = 'a '` returns two MySQL rows (`a` and `a `) and one DuckDB row. These
+prove why `utf8mb4_0900_ai_ci` and PAD SPACE `utf8mb4_bin` must stay refused.
+`utf8mb4_0900_as_cs` is also non-binary UCA ordering and has no proven
+equivalent, so it stays refused without a separate engine check.
+
 The date cases project DATE_FORMAT's VARCHAR result, not a raw DATETIME(6)
 column: DuckDB's C API text conversion omits trailing fractional zeros
 (`2024-02-29 00:00:00`) while MySQL's text protocol always returns six
 fractional digits for DATETIME(6). That pre-existing difference is outside the
 translated value under test and is not compared here.
 
-Twenty-five of the 86 cases exercise SUM and AVG. The `sumavg_probe` fixture has
+Twenty-five of the 126 cases exercise SUM and AVG. The `sumavg_probe` fixture has
 signed BIGINT and unsigned BIGINT extremes, `DECIMAL(19,2)`, `DECIMAL(18,4)`,
 `DECIMAL(20,2)` and `DECIMAL(19,0)` columns, fraction-only `DECIMAL(2,2)` in
 `sumavg_probe`, and fraction-only `DECIMAL(19,19)` in `scale_probe`, nullable
@@ -88,8 +112,9 @@ The separate `tools/probes/duckdb_mysql_parameter_differential.cpp` probe
 compares natively bound signed-integer predicate parameters (NULL, INT64
 extremes, narrow-column comparisons and distinct positions) against MySQL
 server-side prepared statements. It was built with the same command, using that
-source file instead, and passed all seven cases on 2026-11-18. Text is compared as bytes for these fixtures; embedded NUL text
-is not covered. The match says nothing about untested inputs or the broader
+source file instead, and passed all seven cases on 2026-11-18. Text is compared
+as bytes for these fixtures; the parameter probe does not cover embedded NUL
+text. The match says nothing about untested inputs or the broader
 analytical subset. The SQL mode, connection collation and time zone are fixed by
 the probe; MySQL/engine version changes require a fresh run.
 

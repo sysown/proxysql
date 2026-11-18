@@ -25,7 +25,9 @@ struct DuckDBMySQLType {
 enum class DuckDBMySQLSourceType { unknown, date, datetime, timestamp, other };
 // Original MySQL column facts recorded by the replica when it created the
 // table. They are filled only when the record is proven to describe the live
-// native column; otherwise type is unknown and the strings are empty.
+// native column; otherwise type is unknown and the strings are empty. Text
+// comparison and ordering are admitted only when the recorded collation is
+// exactly utf8mb4_0900_bin; every other or missing collation is refused.
 struct DuckDBMySQLColumnSource {
     DuckDBMySQLSourceType type = DuckDBMySQLSourceType::unknown;
     std::string charset;

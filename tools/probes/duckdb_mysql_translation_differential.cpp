@@ -309,6 +309,82 @@ int main(int argc, char **argv) {
                                   "(3,0.0000000000000000001),(4,NULL),(5,0)";
         mysql_exec(f.mysql, "INSERT INTO scale_probe VALUES " + scale_rows);
         duck_exec(f.duck, "INSERT INTO scale_probe VALUES " + scale_rows);
+        mysql_exec(f.mysql, "CREATE TABLE text_probe (id BIGINT PRIMARY KEY, "
+                            "t VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin, "
+                            "u VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin, "
+                            "ai VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci, "
+                            "pad VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin)");
+        duck_exec(f.duck, "CREATE TABLE text_probe (id BIGINT PRIMARY KEY, t VARCHAR, u VARCHAR, "
+                          "ai VARCHAR, pad VARCHAR)");
+        struct TextRow {
+            const char *id;
+            const char *t;
+            const char *u;
+            const char *ai;
+            const char *pad;
+        };
+        // Bytes are written as UTF-8 hex so the fixture is independent of the
+        // client encoding. Row 16 stores an embedded NUL in both engines.
+        const TextRow text_rows[] = {{"1", "", "61", "61", nullptr},
+                                     {"2", "20", "6120", "41", nullptr},
+                                     {"3", "61", "6120", "65", "61"},
+                                     {"4", "6120", "61", nullptr, "6120"},
+                                     {"5", "2061", "2061", nullptr, nullptr},
+                                     {"6", "610961", "610962", nullptr, nullptr},
+                                     {"7", "610962", "610961", nullptr, nullptr},
+                                     {"8", "C3A9", "C3A9", "C3A9", nullptr},
+                                     {"9", "65", "65", "7373", nullptr},
+                                     {"10", "65CC81", "65CC81", "C39F", nullptr},
+                                     {"11", "F09F9880", "F09F9880", nullptr, nullptr},
+                                     {"12", "F0908080", "F0908080", nullptr, nullptr},
+                                     {"13", "6162", "616263", nullptr, nullptr},
+                                     {"14", "616263", "6162", nullptr, nullptr},
+                                     {"15", "616220", "6162", nullptr, nullptr},
+                                     {"16", "610062", "610062", nullptr, nullptr},
+                                     {"17", "41", "61", nullptr, nullptr},
+                                     {"18", nullptr, nullptr, nullptr, nullptr},
+                                     {"19", "5A", "61", nullptr, nullptr},
+                                     {"20", "5F", "5F", "5F", nullptr},
+                                     {"21", "31", "31", "31", nullptr},
+                                     {"22", "69742773", "69742773", nullptr, nullptr},
+                                     {"23", "612262", "612262", nullptr, nullptr},
+                                     {"24", "C39F", "7373", nullptr, nullptr},
+                                     {"25", "7373", "C39F", nullptr, nullptr}};
+        auto mysql_text = [](const char *hex) -> std::string {
+            return hex && *hex ? "CONVERT(0x" + std::string(hex) + " USING utf8mb4)" : "''";
+        };
+        auto duck_text = [](const char *hex) -> std::string {
+            return hex && *hex ? "decode(from_hex('" + std::string(hex) + "'))" : "''";
+        };
+        std::string mysql_text_insert = "INSERT INTO text_probe VALUES ";
+        std::string duck_text_insert = "INSERT INTO text_probe VALUES ";
+        for (size_t i = 0; i < sizeof(text_rows) / sizeof(text_rows[0]); ++i) {
+            const auto &row = text_rows[i];
+            if (i)
+                mysql_text_insert += ",";
+            mysql_text_insert += "(" + std::string(row.id) + ",";
+            mysql_text_insert += row.t ? mysql_text(row.t) : "NULL";
+            mysql_text_insert += ",";
+            mysql_text_insert += row.u ? mysql_text(row.u) : "NULL";
+            mysql_text_insert += ",";
+            mysql_text_insert += row.ai ? mysql_text(row.ai) : "NULL";
+            mysql_text_insert += ",";
+            mysql_text_insert += row.pad ? mysql_text(row.pad) : "NULL";
+            mysql_text_insert += ")";
+            if (i)
+                duck_text_insert += ",";
+            duck_text_insert += "(" + std::string(row.id) + ",";
+            duck_text_insert += row.t ? duck_text(row.t) : "NULL";
+            duck_text_insert += ",";
+            duck_text_insert += row.u ? duck_text(row.u) : "NULL";
+            duck_text_insert += ",";
+            duck_text_insert += row.ai ? duck_text(row.ai) : "NULL";
+            duck_text_insert += ",";
+            duck_text_insert += row.pad ? duck_text(row.pad) : "NULL";
+            duck_text_insert += ")";
+        }
+        mysql_exec(f.mysql, mysql_text_insert);
+        duck_exec(f.duck, duck_text_insert);
         DuckDBMySQLSelectContext context;
         size_t calls = 0;
         context.resolve_relation = [&](const vector<string> &names, DuckDBMySQLRelation &r) {
@@ -319,6 +395,25 @@ int main(int argc, char **argv) {
                 r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
                              {"h", {DuckDBMySQLTypeKind::exact_decimal, 39, 0}},
                              {"u", {DuckDBMySQLTypeKind::exact_decimal, 39, 0}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"text_probe"}) {
+                r.canonical_name = {"text_probe"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"t",
+                              {DuckDBMySQLTypeKind::text, 0, 0},
+                              {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}},
+                             {"u",
+                              {DuckDBMySQLTypeKind::text, 0, 0},
+                              {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}},
+                             {"ai",
+                              {DuckDBMySQLTypeKind::text, 0, 0},
+                              {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_ai_ci"}},
+                             {"pad",
+                              {DuckDBMySQLTypeKind::text, 0, 0},
+                              {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_bin"}}};
                 r.unique_keys = {{"id"}};
                 return true;
             }
@@ -547,6 +642,59 @@ int main(int argc, char **argv) {
              "grp LIMIT 1, 2"},
             {"duplicate sum and avg labels",
              "SELECT grp,SUM(i) AS x,AVG(i) AS x FROM sumavg_probe GROUP BY grp ORDER BY grp"},
+            {"text empty literal", "SELECT id FROM text_probe WHERE t = '' ORDER BY id"},
+            {"text space literal", "SELECT id FROM text_probe WHERE t = ' ' ORDER BY id"},
+            {"text trailing space literal", "SELECT id FROM text_probe WHERE t = 'a ' ORDER BY id"},
+            {"text leading space literal", "SELECT id FROM text_probe WHERE t = ' a' ORDER BY id"},
+            {"text equality", "SELECT id FROM text_probe WHERE t = 'a' ORDER BY id"},
+            {"text inequality", "SELECT id FROM text_probe WHERE t <> 'a' ORDER BY id"},
+            {"text bang inequality", "SELECT id FROM text_probe WHERE t != 'a' ORDER BY id"},
+            {"text less", "SELECT id FROM text_probe WHERE t < 'a' ORDER BY id"},
+            {"text less equal", "SELECT id FROM text_probe WHERE t <= 'a' ORDER BY id"},
+            {"text greater", "SELECT id FROM text_probe WHERE t > 'a' ORDER BY id"},
+            {"text greater equal", "SELECT id FROM text_probe WHERE t >= 'a' ORDER BY id"},
+            {"text literal on left", "SELECT id FROM text_probe WHERE 'a' = t ORDER BY id"},
+            {"text literal on left less", "SELECT id FROM text_probe WHERE 'a' < t ORDER BY id"},
+            {"text bmp literal", "SELECT id FROM text_probe WHERE t = 'é' ORDER BY id"},
+            {"text emoji literal", "SELECT id FROM text_probe WHERE t = '😀' ORDER BY id"},
+            {"text supplementary literal",
+             "SELECT id FROM text_probe WHERE t = '\xF0\x90\x80\x80' ORDER BY id"},
+            {"text combining mark literal",
+             "SELECT id FROM text_probe WHERE t = 'e\xCC\x81' ORDER BY id"},
+            {"text doubled quote literal",
+             "SELECT id FROM text_probe WHERE t = 'it''s' ORDER BY id"},
+            {"text embedded tab literal", "SELECT id FROM text_probe WHERE t = 'a\ta' ORDER BY id"},
+            {"text embedded control literal",
+             "SELECT id FROM text_probe WHERE t = 'a\001b' ORDER BY id"},
+            {"text embedded double quote literal",
+             "SELECT id FROM text_probe WHERE t = 'a\"b' ORDER BY id"},
+            {"text prefix literal", "SELECT id FROM text_probe WHERE t = 'ab' ORDER BY id"},
+            {"text case sensitive literal", "SELECT id FROM text_probe WHERE t = 'A' ORDER BY id"},
+            {"text column equality", "SELECT id FROM text_probe WHERE t = u ORDER BY id"},
+            {"text column inequality", "SELECT id FROM text_probe WHERE t <> u ORDER BY id"},
+            {"text column less", "SELECT id FROM text_probe WHERE t < u ORDER BY id"},
+            {"text column less equal", "SELECT id FROM text_probe WHERE t <= u ORDER BY id"},
+            {"text column greater", "SELECT id FROM text_probe WHERE t > u ORDER BY id"},
+            {"text column greater equal", "SELECT id FROM text_probe WHERE t >= u ORDER BY id"},
+            {"text and or null logic",
+             "SELECT id FROM text_probe WHERE (t = 'a' OR t IS NULL) AND u <> 'b' ORDER BY id"},
+            {"text not null logic",
+             "SELECT id FROM text_probe WHERE t IS NOT NULL AND t >= 'a' ORDER BY id"},
+            {"text parenthesized logic",
+             "SELECT id FROM text_probe WHERE ((t = 'a') OR (t = ' ')) AND u IS NOT NULL "
+             "ORDER BY id"},
+            {"text projected predicate", "SELECT t FROM text_probe WHERE t = 'a' ORDER BY id"},
+            {"text ordered projection", "SELECT id,t FROM text_probe WHERE id <> 16 ORDER BY id"},
+            {"text order ascending", "SELECT id FROM text_probe ORDER BY t ASC, id ASC"},
+            {"text order descending", "SELECT id FROM text_probe ORDER BY t DESC, id ASC"},
+            {"text order ascending limit",
+             "SELECT id FROM text_probe ORDER BY t ASC, id ASC LIMIT 6"},
+            {"text order descending limit",
+             "SELECT id FROM text_probe ORDER BY t DESC, id ASC LIMIT 6"},
+            {"text order comma limit",
+             "SELECT id FROM text_probe ORDER BY t ASC, id ASC LIMIT 2, 3"},
+            {"text order nonnull", "SELECT id FROM text_probe WHERE t IS NOT NULL ORDER BY t ASC, "
+                                   "id ASC"},
         };
         int failures = 0, comparisons = 0;
         for (auto &entry : cases) {
@@ -625,7 +773,21 @@ int main(int argc, char **argv) {
             "SELECT MIN(SUM(i)) FROM sumavg_probe",
             "SELECT SUM(i),i FROM sumavg_probe",
             "SELECT SUM(i) FROM sumavg_probe WHERE SUM(i) > 0",
-            "SELECT SUM(i) FROM sumavg_probe ORDER BY SUM(i)"};
+            "SELECT SUM(i) FROM sumavg_probe ORDER BY SUM(i)",
+            "SELECT id FROM text_probe WHERE ai = 'A' ORDER BY id",
+            "SELECT id FROM text_probe WHERE pad = 'a ' ORDER BY id",
+            "SELECT id FROM text_probe ORDER BY ai",
+            "SELECT id FROM `odd``table` WHERE txt = 'x'",
+            "SELECT id FROM text_probe WHERE t = 1",
+            "SELECT id FROM text_probe WHERE t LIKE 'a%'",
+            "SELECT id FROM text_probe WHERE t COLLATE utf8mb4_0900_bin = 'a'",
+            "SELECT id FROM text_probe WHERE t = _utf8mb4'a'",
+            "SELECT id FROM text_probe WHERE t = N'a'",
+            "SELECT id FROM text_probe WHERE t = 'a\\b'",
+            "SELECT id FROM text_probe WHERE t = \"a\"",
+            "SELECT id FROM text_probe WHERE t = 'a' 'b'",
+            "SELECT id FROM text_probe WHERE t = ?",
+            "SELECT id FROM text_probe WHERE 'a' = 'b'"};
         for (const auto &sql : rejected) {
             auto x = duckdb_translate_mysql_select(sql, context);
             if (x.decision == DuckDBMySQLSelectDecision::supported || !x.sql.empty()) {
@@ -678,6 +840,43 @@ int main(int argc, char **argv) {
         cout << (zone_differs ? "PASS" : "FAIL")
              << " TIMESTAMP DATE_FORMAT depends on the session time zone (refusal required)\n";
         if (!zone_differs)
+            ++failures;
+        // utf8mb4_0900_ai_ci is case- and accent-insensitive and has its own
+        // ordering; DuckDB VARCHAR is bytewise. Both checks must differ on the
+        // stated inputs, proving that admitting ai_ci would be wrong.
+        auto ai_equal_left =
+            mysql_result(f.mysql, "SELECT id FROM text_probe WHERE ai = 'A' ORDER BY id");
+        auto ai_equal_right =
+            duck_result(f.duck, "SELECT id FROM text_probe WHERE ai = 'A' ORDER BY id");
+        bool ai_equal_differs = ai_equal_left.rows != ai_equal_right.rows;
+        cout << (ai_equal_differs ? "PASS" : "FAIL")
+             << " ai_ci equality differs from DuckDB on ai='A' (refusal required, MySQL rows="
+             << ai_equal_left.rows.size() << ", DuckDB rows=" << ai_equal_right.rows.size()
+             << ")\n";
+        if (!ai_equal_differs)
+            ++failures;
+        auto ai_order_left =
+            mysql_result(f.mysql, "SELECT id FROM text_probe WHERE ai IS NOT NULL ORDER BY ai, id");
+        auto ai_order_right =
+            duck_result(f.duck, "SELECT id FROM text_probe WHERE ai IS NOT NULL ORDER BY ai, id");
+        bool ai_order_differs = ai_order_left.rows != ai_order_right.rows;
+        cout << (ai_order_differs ? "PASS" : "FAIL")
+             << " ai_ci ordering differs from DuckDB on the ai probe rows (refusal required)\n";
+        if (!ai_order_differs)
+            ++failures;
+        // utf8mb4_bin is PAD SPACE: MySQL treats 'a' and 'a ' as equal, while
+        // DuckDB compares the stored bytes and keeps them distinct.
+        auto pad_left =
+            mysql_result(f.mysql, "SELECT id FROM text_probe WHERE pad = 'a ' ORDER BY id");
+        auto pad_right =
+            duck_result(f.duck, "SELECT id FROM text_probe WHERE pad = 'a ' ORDER BY id");
+        bool pad_differs = pad_left.rows != pad_right.rows;
+        cout
+            << (pad_differs ? "PASS" : "FAIL")
+            << " utf8mb4_bin PAD SPACE equality differs from DuckDB on pad='a ' (refusal required, "
+               "MySQL rows="
+            << pad_left.rows.size() << ", DuckDB rows=" << pad_right.rows.size() << ")\n";
+        if (!pad_differs)
             ++failures;
         cout << "compared=" << comparisons << " resolver_calls=" << calls
              << " failures=" << failures << "\n";

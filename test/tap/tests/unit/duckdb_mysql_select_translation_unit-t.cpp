@@ -557,6 +557,222 @@ int main() {
     auto bounded_avg = duckdb_translate_mysql_select("SELECT AVG(i) FROM sum_table", bounded_sum);
     ok(bounded_avg.reason == "resource_limit" && bounded_avg.sql.empty(),
        "exact AVG emission observes the output bound");
+    auto text_context = context;
+    text_context.resolve_relation = [](const std::vector<std::string> &, DuckDBMySQLRelation &out) {
+        out.canonical_name = {"text_probe"};
+        out.exact_name_resolution = true;
+        out.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"t",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}},
+                       {"u",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}},
+                       {"ai",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_ai_ci"}},
+                       {"acs",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_as_cs"}},
+                       {"pad",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_bin"}},
+                       {"abin",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "ascii", "ascii_bin"}},
+                       {"u3",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb3", "utf8mb3_bin"}},
+                       {"unproven", {DuckDBMySQLTypeKind::text, 0, 0}},
+                       {"blank",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", ""}},
+                       {"n", {DuckDBMySQLTypeKind::signed_integer, 0, 0}}};
+        out.unique_keys = {{"id"}};
+        return true;
+    };
+    duckdb_result text_rows{};
+    bool text_created =
+        created && duckdb_query(connection,
+                                "CREATE TABLE \"text_probe\" (id BIGINT PRIMARY KEY, "
+                                "t VARCHAR, u VARCHAR, ai VARCHAR, acs VARCHAR, "
+                                "pad VARCHAR, abin VARCHAR, u3 VARCHAR, unproven VARCHAR, "
+                                "blank VARCHAR, n BIGINT)",
+                                &text_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&text_rows);
+    ok(text_created, "create text comparison relation");
+    auto text_translate = [&](const std::string &sql) {
+        return duckdb_translate_mysql_select(sql, text_context);
+    };
+    auto text_admitted = [&](const std::string &sql) {
+        auto translated = text_translate(sql);
+        if (translated.decision != DuckDBMySQLSelectDecision::supported || translated.sql.empty())
+            return false;
+        duckdb_prepared_statement prepared = nullptr;
+        bool prepared_ok = text_created && duckdb_prepare(connection, translated.sql.c_str(),
+                                                          &prepared) == DuckDBSuccess;
+        duckdb_destroy_prepare(&prepared);
+        return prepared_ok;
+    };
+    auto text_reason = [&](const std::string &sql) { return text_translate(sql).reason; };
+    // A NUL byte inside a literal would be cut off if the emitted SQL were handed to the engine
+    // as a C string, so it must never be admitted or emitted.
+    const std::string nul_literal = std::string("SELECT id FROM text_probe WHERE t = 'a") +
+                                    std::string(1, '\0') + "b' OR id > 0";
+    auto nul_result = text_translate(nul_literal);
+    ok(nul_result.decision != DuckDBMySQLSelectDecision::supported &&
+           nul_result.sql.find('\0') == std::string::npos,
+       "a NUL byte in a text literal is refused, never emitted");
+    auto text_exact = text_translate("SELECT id FROM text_probe WHERE t = 'it''s' ORDER BY id");
+    ok(text_exact.decision == DuckDBMySQLSelectDecision::supported &&
+           text_exact.sql == "SELECT \"id\" FROM \"text_probe\" WHERE (\"t\" = 'it''s') ORDER BY "
+                             "\"id\" ASC NULLS FIRST",
+       "doubled single quote literal is emitted as one DuckDB literal");
+    ok(text_admitted("SELECT id FROM text_probe WHERE t = 'it''s' ORDER BY id"),
+       "DuckDB prepares the doubled-quote text predicate");
+    const char *text_positive[] = {
+        "SELECT id FROM text_probe WHERE t = '' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = ' ' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a ' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = ' a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t <> 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t != 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t < 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t <= 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t > 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t >= 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE 'a' = t ORDER BY id",
+        "SELECT id FROM text_probe WHERE 'a' < t ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t <> u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t < u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t <= u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t > u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t >= u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'é' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = '😀' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'e\xCC\x81' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a\ta' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a\001b' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a\"b' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'ab' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'A' ORDER BY id",
+        "SELECT id FROM text_probe WHERE (t = 'a' OR t IS NULL) AND u <> 'b' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t IS NOT NULL AND t >= 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE ((t = 'a') OR (t = ' ')) AND u IS NOT NULL ORDER BY id",
+        "SELECT t FROM text_probe WHERE t = 'a' ORDER BY id",
+        "SELECT id FROM text_probe ORDER BY t ASC, id ASC",
+        "SELECT id FROM text_probe ORDER BY t DESC, id ASC",
+        "SELECT id FROM text_probe ORDER BY t ASC, id ASC LIMIT 2",
+        "SELECT id FROM text_probe ORDER BY t DESC, id ASC LIMIT 2, 3"};
+    for (const char *sql : text_positive)
+        ok(text_admitted(sql), "admitted text comparison or ordering: %s", sql);
+    auto text_order = text_translate("SELECT id FROM text_probe ORDER BY t DESC, id LIMIT 2");
+    ok(text_order.decision == DuckDBMySQLSelectDecision::supported &&
+           text_order.sql == "SELECT \"id\" FROM \"text_probe\" ORDER BY \"t\" DESC NULLS LAST, "
+                             "\"id\" ASC NULLS FIRST LIMIT 2",
+       "text ordering keeps explicit MySQL NULL placement and deterministic limit");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 'a'") == "supported",
+       "text comparison against a proven binary column succeeds");
+    ok(text_reason("SELECT id FROM text_probe WHERE ai = 'a'") == "unsupported_collation",
+       "ai_ci text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE acs = 'a'") == "unsupported_collation",
+       "as_cs text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE pad = 'a'") == "unsupported_collation",
+       "PAD SPACE utf8mb4_bin text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE abin = 'a'") == "unsupported_collation",
+       "ascii_bin text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE u3 = 'a'") == "unsupported_collation",
+       "PAD SPACE utf8mb3_bin text comparison refused");
+    auto text_unproven = text_translate("SELECT id FROM text_probe WHERE unproven = 'a'");
+    ok(text_unproven.decision == DuckDBMySQLSelectDecision::unsupported &&
+           text_unproven.reason == "collation_unproven" && text_unproven.sql.empty() &&
+           text_unproven.required_context ==
+               std::vector<std::string>{"source_column_collation_provenance"},
+       "column without recorded collation refuses with the required-context hint");
+    ok(text_reason("SELECT id FROM text_probe WHERE blank = 'a'") == "collation_unproven",
+       "known source without a collation string is still unproven");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = ai") == "unsupported_collation",
+       "column-to-column comparison checks both collations");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = unproven") == "collation_unproven",
+       "column-to-column comparison refuses an unproven operand");
+    ok(text_reason("SELECT id FROM text_probe ORDER BY ai") == "unsupported_collation",
+       "ai_ci text ordering refused");
+    ok(text_reason("SELECT id FROM text_probe ORDER BY unproven") == "collation_unproven",
+       "text ordering without recorded collation refused");
+    ok(text_reason("SELECT id FROM text_probe ORDER BY t LIMIT 1") == "nondeterministic_limit",
+       "text ordering alone does not establish a deterministic limit");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 1") == "unsupported_ast",
+       "text versus number comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE 1 = t") == "unsupported_ast",
+       "number versus text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 'a\\b'") == "unsupported_ast",
+       "backslash literal refused because SQL mode is unknown");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = \"x\"") == "unsupported_ast",
+       "double-quoted literal refused under unknown ANSI_QUOTES");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = _utf8mb4'x'") == "unsupported_ast",
+       "charset-introduced literal refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = X'41'") == "unsupported_ast",
+       "hex literal refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = b'1'") == "unsupported_ast",
+       "bit literal refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t COLLATE utf8mb4_0900_bin = 'x'") ==
+           "unsupported_ast",
+       "explicit COLLATE refused even for the admitted collation");
+    ok(text_reason("SELECT id FROM text_probe WHERE t LIKE 'x%'") == "unsupported_ast",
+       "LIKE refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t REGEXP 'a'") == "unsupported_ast",
+       "REGEXP refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = BINARY 'a'") == "incomplete_or_non_select",
+       "BINARY operator is not a complete admitted statement");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 'a' COLLATE utf8mb4_0900_bin") ==
+           "unsupported_ast",
+       "COLLATE on the literal side is refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t IN ('a','b')") == "unsupported_ast",
+       "IN remains outside this slice");
+    ok(text_reason("SELECT id FROM text_probe WHERE t NOT IN ('a')") == "unsupported_ast",
+       "NOT IN remains outside this slice");
+    ok(text_reason("SELECT id FROM text_probe WHERE NOT (t = 'a')") == "unsupported_ast",
+       "unary NOT predicate remains outside this slice");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = NULL") == "unsupported_ast",
+       "text versus NULL literal refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE 'a' = 'b'") == "unsupported_ast",
+       "literal-to-literal comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = N'x'") == "incomplete_or_non_select",
+       "national literal is not a complete admitted statement");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 'a' 'b'") == "incomplete_or_non_select",
+       "adjacent literal concatenation never reaches the literal check");
+    auto text_prepare = text_context;
+    text_prepare.parameter_mode = DuckDBMySQLParameterMode::prepare;
+    ok(duckdb_translate_mysql_select("SELECT id FROM text_probe WHERE t = ?", text_prepare)
+               .reason == "unsupported_ast",
+       "text parameters remain refused");
+    const std::string text_literal_4096(4096, 'a');
+    const std::string text_literal_4097(4097, 'a');
+    ok(text_admitted("SELECT id FROM text_probe WHERE t = '" + text_literal_4096 + "' ORDER BY id"),
+       "4096-byte string literal is admitted");
+    ok(text_translate("SELECT id FROM text_probe WHERE t = '" + text_literal_4097 + "' ORDER BY id")
+               .reason == "resource_limit",
+       "4097-byte string literal hits the literal resource bound");
+    statement = nullptr;
+    bool text_prepared =
+        text_created && text_exact.decision == DuckDBMySQLSelectDecision::supported &&
+        duckdb_prepare(connection, text_exact.sql.c_str(), &statement) == DuckDBSuccess;
+    duckdb_result text_insert{};
+    bool text_inserted =
+        text_prepared && duckdb_query(connection,
+                                      "INSERT INTO \"text_probe\" (id,t,u) VALUES (1,'a','a'),"
+                                      "(2,'it''s','it''s'),(3,NULL,NULL)",
+                                      &text_insert) == DuckDBSuccess;
+    duckdb_destroy_result(&text_insert);
+    duckdb_result text_result{};
+    bool text_executed =
+        text_inserted && duckdb_execute_prepared(statement, &text_result) == DuckDBSuccess &&
+        duckdb_row_count(&text_result) == 1 && duckdb_value_int64(&text_result, 0, 0) == 2;
+    duckdb_destroy_result(&text_result);
+    ok(text_executed, "prepared doubled-quote predicate selects the apostrophe row");
+    duckdb_destroy_prepare(&statement);
     if (connection)
         duckdb_disconnect(&connection);
     if (db)

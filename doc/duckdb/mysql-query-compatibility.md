@@ -203,7 +203,7 @@ coercion on that value unless collation/type rules are established.
 
 | Construct | Parser result | AST/emission evidence | Disposition | Required facts/restrictions |
 |---|---|---|---|---|
-| `=`, `<>`, `!=`, `<`, `<=`, `>`, `>=` | OK, complete | operator preserved | Candidate | Same-type or explicitly defined comparison; no implicit string/number coercion. |
+| `=`, `<>`, `!=`, `<`, `<=`, `>`, `>=` | OK, complete | operator preserved | Admitted (bounded) | Same-type or explicitly defined comparison; no implicit string/number coercion. Text is admitted only with proven `utf8mb4_0900_bin` columns (see below). |
 | `IS NULL`, `IS NOT NULL` | OK, complete | predicate nodes | Candidate | Nullability metadata. |
 | `BETWEEN`, `IN (list)`, `NOT IN` | OK, complete | list nodes | Candidate | Type/collation rules for each comparison. |
 | `LIKE` | OK, complete | preserved | Deferred | Escape/collation/padding rules; `ESCAPE` is a parser gap. |
@@ -241,7 +241,7 @@ coercion on that value unless collation/type rules are established.
 |---|---|---|---|---|
 | `GROUP BY` | OK, complete | group-by node | Candidate | Grouping keys must be admitted expressions; string grouping needs collation. |
 | `HAVING` | OK, complete | having node | Candidate | Aggregate and type rules. |
-| `ORDER BY col [ASC|DESC]` | OK, complete | order items | Candidate | Determinism, null ordering, collation/type rules. |
+| `ORDER BY col [ASC|DESC]` | OK, complete | order items | Admitted (bounded) | Numeric keys and text keys with proven `utf8mb4_0900_bin`; determinism and null ordering rules apply. |
 | `WITH ROLLUP` | OK, complete | group-by value `WITH ROLLUP` | Deferred | DuckDB rollup/summary semantics and null labeling need rules. |
 | `COUNT(*)` | OK, complete | function call | Candidate | Multiplicity semantics. |
 | `COUNT(expr)`, `SUM`, `MIN`, `MAX` | OK, complete | function calls | Admitted (bounded) | Exact integer/decimal columns only; see the SUM and AVG rules below. |
@@ -401,8 +401,9 @@ The identifier and LIMIT slices require the silent-corruption/provenance fixes
 now carried in the reproducible local ParserSQL analytical patch. The user
 authorized this local development workflow on 2026-11-16; upstream publication
 is tracked for the final ParserSQL PR and is not an implementation gate. String
-projection may be permitted while string comparison/grouping/ordering remains
-refused until collation/padding rules exist.
+projection is permitted; the current slice admits comparison and ordering only
+for text columns with proven `utf8mb4_0900_bin`, and still refuses every other
+collation and text `GROUP BY` until collation/padding rules exist.
 
 ## 7. Verification commands and results
 
@@ -521,11 +522,12 @@ predicates, AND/OR, COUNT and integer MIN/MAX, integer-key GROUP BY with
 aggregate HAVING predicates, exact integer and DECIMAL SUM/AVG, numeric ordering
 with explicit MySQL NULL placement, integer-literal LIMIT with a proven strictly
 unique ordering key (the full group-key tuple establishes uniqueness for grouped
-rows), and the `DATE_FORMAT(column, '%Y-%m')` projection described below.
-Identifiers and duplicate labels are preserved.
+rows), the `DATE_FORMAT(column, '%Y-%m')` projection described below, and text
+comparison and ordering over columns recorded as `utf8mb4_0900_bin`. Identifiers
+and duplicate labels are preserved.
 
 Unknown types, ambiguous ORDER BY aliases, comments, session-sensitive quoting,
-string literals/comparison/ordering, arithmetic, non-integer grouping, joins,
+text in every other collation, arithmetic, non-integer grouping, joins,
 subqueries, CTEs, windows, variables and unknown functions are currently
 refused. SUM/AVG above the proved decimal precision, SUM/AVG over non-numeric
 columns, aggregate DISTINCT and SUM/AVG in HAVING remain refused. Later roadmap
@@ -538,7 +540,8 @@ datetime, timestamp or other; charset; collation). It is filled only from the
 replica's `proxysql_replica.columns` record and only when that record is proven
 to describe the live native column (see the Admin reference), and is otherwise
 unknown. Operations that need it are admitted only for proven columns: today
-DATE_FORMAT of a DATETIME column (below); unknown facts change no other behavior. It is what lets later slices tell a
+DATE_FORMAT of a DATETIME column and text comparison/ordering (both below);
+unknown facts change no other behavior. It is what lets the translator tell a
 DATETIME (no time zone) from a TIMESTAMP (rendered in the session time zone),
 and know whether a text comparison is byte-exact.
 
@@ -716,6 +719,59 @@ column values in strict mode; negative years, years above 9999 and any value
 outside MySQL's range are outside the admitted domain. The translator is pure
 and cannot inspect stored values, so this range is a precondition on the mapped
 data, not a per-row check. NULL input returns NULL.
+
+### Binary text comparison and ordering
+
+Text predicates and text ordering are admitted only when every text column they
+touch has a recorded source collation of exactly `utf8mb4_0900_bin`. That
+collation is NO PAD and compares Unicode code points, which is exactly the
+byte order of valid UTF-8, so it matches DuckDB's default VARCHAR comparison
+and ordering. The admitted forms are:
+
+- `=`, `<>`, `!=`, `<`, `<=`, `>`, `>=` between one proven text column and one
+  plain string literal, with the literal on either side;
+- the same operators between two resolved text columns that both have proven
+  `utf8mb4_0900_bin`;
+- those predicates combined with the existing `AND`, `OR`, parentheses and
+  `IS NULL` / `IS NOT NULL` logic;
+- `ORDER BY text_column [ASC|DESC]` with the existing explicit MySQL NULL
+  placement, alone or with other admitted ordering keys (a LIMIT still needs
+  the existing proven-unique ordering tuple).
+
+The column must be a resolved plain column (optionally qualified by the
+admitted table alias), and its mapped kind must be `text`. A literal has to be
+one ParserSQL `NODE_LITERAL_STRING` whose source span starts and ends with a
+single quote, whose value bytes are the raw text between those quotes, and
+whose source contains no backslash and no non-doubled single quote. Doubled
+single quotes are decoded to one apostrophe and re-emitted doubled. Charset
+introducers, `N'...'`, `X'...'`, `B'...'`, `COLLATE`, the `BINARY` operator,
+double-quoted tokens, adjacent-literal concatenation and non-UTF-8 bytes are
+refused. Literals are limited to 4096 decoded bytes; longer literals are
+refused with `resource_limit`. A raw NUL cannot occur in the query text because
+the translator rejects NUL input, but stored column values may contain one and
+still compare and order bytewise.
+
+A column without recorded source facts, or with an empty recorded collation, is
+refused with `collation_unproven` and the required-context hint
+`source_column_collation_provenance`. Any other recorded collation, including
+`utf8mb4_0900_ai_ci`, `utf8mb4_0900_as_cs`, `utf8mb4_bin`, `utf8mb3_bin` and
+`ascii_bin`, is refused with `unsupported_collation`. DuckDB has no collation
+implementation that reproduces the non-binary UCA ordering, case/accent
+folding, or PAD SPACE equality of those collations; a column with unknown
+provenance is refused even when its current values would happen to compare the
+same. Text versus number, text versus NULL, text parameters, `LIKE`, `REGEXP`,
+`IN` / `NOT IN`, `GROUP BY`, MIN/MAX/COUNT(DISTINCT) and functions over text
+remain outside the slice and are refused before execution. Predicates do not
+change projection labels or types, and text columns remain projectable exactly
+as before.
+
+The differential baseline proves the admitted cases and the refusals: 40 text
+queries cover empty strings, leading/trailing/embedded spaces, tabs and a raw
+control byte, apostrophes, BMP and supplementary-plane characters, combining
+marks, prefixes, an embedded NUL in stored values, column-to-column
+comparisons, AND/OR/NULL logic, and ascending/descending ordering with LIMIT.
+The same probe shows that `utf8mb4_0900_ai_ci` equality and ordering and
+`utf8mb4_bin` PAD SPACE equality genuinely differ from DuckDB on stated rows.
 
 ### Exact decimals
 

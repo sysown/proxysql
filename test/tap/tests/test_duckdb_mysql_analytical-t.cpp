@@ -273,6 +273,35 @@ static void test_date_format(MYSQL *c, const char *label) {
     if (stmt)
         mysql_stmt_close(stmt);
 }
+static void test_text(MYSQL *c, const char *label) {
+    auto ids = [&](const char *sql, const std::vector<std::vector<const char *>> &expected) {
+        return text_rows(c, sql, {"id"}, expected);
+    };
+    ok(ids("SELECT id FROM text_fixture WHERE t = 'a' ORDER BY id", {{"1"}}),
+       "%s compares a utf8mb4_0900_bin column with a literal byte for byte", label);
+    ok(ids("SELECT id FROM text_fixture WHERE t > 'a' ORDER BY id", {{"3"}, {"4"}, {"6"}}),
+       "%s orders code points and treats a trailing space as significant", label);
+    ok(ids("SELECT id FROM text_fixture WHERE t <> 'a' ORDER BY id",
+           {{"2"}, {"3"}, {"4"}, {"6"}, {"7"}}),
+       "%s excludes NULL from <> like MySQL", label);
+    ok(ids("SELECT id FROM text_fixture WHERE 'é' = t ORDER BY id", {{"6"}}),
+       "%s accepts the literal on the left with a multibyte character", label);
+    ok(ids("SELECT id FROM text_fixture ORDER BY t, id",
+           {{"5"}, {"7"}, {"2"}, {"1"}, {"3"}, {"4"}, {"6"}}),
+       "%s sorts a proven binary text column with NULLs first", label);
+    ok(ids("SELECT id FROM text_fixture ORDER BY t DESC, id",
+           {{"6"}, {"4"}, {"3"}, {"1"}, {"2"}, {"7"}, {"5"}}),
+       "%s sorts descending with NULLs last", label);
+    for (const char *bad :
+         {"SELECT id FROM text_fixture WHERE ai = 'a'", "SELECT id FROM text_fixture ORDER BY ai",
+          "SELECT id FROM text_fixture WHERE t LIKE 'a%'",
+          "SELECT id FROM text_fixture WHERE t = 'a\\b'"}) {
+        const int status = mysql_query(c, bad);
+        ok(status != 0 && mysql_errno(c) == 1235 && !std::strcmp(mysql_sqlstate(c), "0A000"),
+           "%s refuses %s with 1235/0A000 (got %u/%s)", label, bad, mysql_errno(c),
+           mysql_sqlstate(c));
+    }
+}
 static void test_sum_avg(MYSQL *c, const char *label) {
     ok(text_rows(c,
                  "SELECT g, SUM(n), SUM(d), AVG(n), AVG(d) FROM agg_fixture GROUP BY g ORDER BY g",
@@ -407,6 +436,17 @@ int main() {
                      "d DECIMAL(10,2))") ||
         !pg_exec(pg, "INSERT INTO agg_fixture VALUES (1,1,10,1.25),(2,1,20,2.50),(3,2,NULL,NULL),"
                      "(4,2,5,0.01),(5,3,-7,-0.03),(6,3,-8,-0.04)") ||
+        !pg_exec(pg, "CREATE TABLE text_fixture (id INTEGER PRIMARY KEY, t VARCHAR, ai VARCHAR)") ||
+        !pg_exec(pg, "INSERT INTO text_fixture VALUES (1,'a','a'),(2,'A','A'),(3,'a ','a '),"
+                     "(4,'b','b'),(5,NULL,NULL),(6,'é','é'),(7,'','')") ||
+        !pg_exec(pg, "INSERT INTO proxysql_replica.tables VALUES "
+                     "('fixture','main','text_fixture','id')") ||
+        !pg_exec(pg, "INSERT INTO proxysql_replica.columns VALUES "
+                     "('fixture','main','text_fixture','id',1,'int','int','','','INTEGER'),"
+                     "('fixture','main','text_fixture','t',2,'varchar','varchar(10)','utf8mb4',"
+                     "'utf8mb4_0900_bin','VARCHAR'),"
+                     "('fixture','main','text_fixture','ai',3,'varchar','varchar(10)','utf8mb4',"
+                     "'utf8mb4_0900_ai_ci','VARCHAR')") ||
         !pg_exec(pg, "CREATE SEQUENCE analytical_sequence START 1") ||
         !pg_exec(
             pg,
@@ -450,8 +490,8 @@ int main() {
     if (r)
         mysql_free_result(r);
     for (const char *bad :
-         {"INSERT INTO analytical_fixture VALUES (4,40)", "SELECT STDDEV(n) FROM analytical_fixture",
-          "SELECT ABS(id) FROM analytical_fixture",
+         {"INSERT INTO analytical_fixture VALUES (4,40)",
+          "SELECT STDDEV(n) FROM analytical_fixture", "SELECT ABS(id) FROM analytical_fixture",
           "SELECT id FROM analytical_fixture /* comment */", "SELECT ? FROM analytical_fixture"}) {
         const int query_status = mysql_query(mysql, bad);
         ok(query_status != 0 && mysql_errno(mysql) == 1235 &&
@@ -487,6 +527,7 @@ int main() {
     test_decimals(mysql, "direct listener");
     test_date_format(mysql, "direct listener");
     test_sum_avg(mysql, "direct listener");
+    test_text(mysql, "direct listener");
     test_decimal_refresh(mysql, pg);
     stmt = prepare(mysql, "SELECT COUNT(*) FROM analytical_fixture WHERE n > 1");
     ok(stmt != nullptr, "prepare COUNT with referenced integer column");
@@ -573,6 +614,7 @@ int main() {
         test_decimals(proxied, "ordinary routed listener");
         test_date_format(proxied, "ordinary routed listener");
         test_sum_avg(proxied, "ordinary routed listener");
+        test_text(proxied, "ordinary routed listener");
         mysql_close(proxied);
     }
     mysql_close(mysql);
