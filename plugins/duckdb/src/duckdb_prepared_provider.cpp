@@ -55,6 +55,12 @@ struct NativeStatement {
     std::vector<ProxySQL_Embedded_Column> columns;
     Row native_row;
     std::vector<V> row;
+    // Analytical MySQL identity: the database selected when the statement was
+    // prepared, and the canonical catalog/schema/table the translation bound.
+    // Both must stay identical at every execute; see authorize_execute/bind.
+    std::string database;
+    std::string sql;
+    std::vector<std::vector<std::string>> identity;
 };
 } // namespace
 struct DuckDBPreparedProvider::Impl {
@@ -70,11 +76,31 @@ struct DuckDBPreparedProvider::Impl {
     std::string message;
     bool active = false, failed = false, poisoned = false;
     bool mysql_analytical = false;
+    std::function<std::string()> namespace_database;
+    std::vector<NativeStatement *> live;
+    // The provider keeps each analytical statement's client SQL to find its
+    // prepare-time namespace at execute. The shared quota does not see this
+    // copy, so it is bounded per connection here.
+    static constexpr size_t retained_sql_limit = 8u * 1024u * 1024u;
+    size_t retained_sql_bytes = 0;
     std::string fresh_sql;
+    std::vector<std::vector<std::string>> fresh_identity;
+    NativeStatement *fresh_statement = nullptr;
     NativeStatement *fresh_bound = nullptr;
     uint32_t guard_op = 0;
+    std::string current_database() const {
+        if (!namespace_database)
+            return {};
+        try {
+            return namespace_database();
+        } catch (...) {
+            return {};
+        }
+    }
     void clear_fresh_sql() noexcept {
         std::string{}.swap(fresh_sql);
+        fresh_identity.clear();
+        fresh_statement = nullptr;
     }
     char passive_guard = 0;
     char session_reset_guard = 0;
@@ -169,8 +195,14 @@ struct DuckDBPreparedProvider::Impl {
         }
         return r;
     }
+    // Translates one analytical MySQL statement for `database` (the selected
+    // database, empty when none). `identity` receives the canonical relations
+    // the translation bound, in resolver order, so the caller can require the
+    // same objects at every execute.
     int translate(ProxySQL_Embedded_BytesView sql, std::string &emitted, E *e, bool schema_recheck,
-                  const V *values = nullptr, size_t value_count = 0) {
+                  const V *values = nullptr, size_t value_count = 0,
+                  const std::string *database = nullptr,
+                  std::vector<std::vector<std::string>> *identity = nullptr) {
         if (!active)
             return error(e, ErrorKind::transaction,
                          "analytical operation requires a read-only guard");
@@ -181,7 +213,20 @@ struct DuckDBPreparedProvider::Impl {
         std::string text(reinterpret_cast<const char *>(
                              sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
                          sql.size);
-        auto context = duckdb_mysql_select_context(conn);
+        const bool namespace_bound = mysql_analytical && database != nullptr;
+        auto context = duckdb_mysql_select_context(
+            conn, {}, namespace_bound ? *database : std::string(), namespace_bound);
+        if (identity) {
+            identity->clear();
+            auto resolved = context.resolve_relation;
+            context.resolve_relation = [resolved, identity](const std::vector<std::string> &parts,
+                                                            DuckDBMySQLRelation &out) {
+                if (!resolved(parts, out))
+                    return false;
+                identity->push_back(out.canonical_name);
+                return true;
+            };
+        }
         context.parameter_mode =
             schema_recheck ? DuckDBMySQLParameterMode::execute : DuckDBMySQLParameterMode::prepare;
         if (schema_recheck) {
@@ -202,6 +247,8 @@ struct DuckDBPreparedProvider::Impl {
         }
         auto translated = duckdb_translate_mysql_select(text, context);
         if (translated.decision != DuckDBMySQLSelectDecision::supported) {
+            if (identity)
+                identity->clear();
             if (translated.reason == "parameter_count_mismatch")
                 return error(e, ErrorKind::invalid_parameter,
                              "analytical parameter count mismatch");
@@ -209,6 +256,16 @@ struct DuckDBPreparedProvider::Impl {
                 return error(e, ErrorKind::unsupported, "unsupported analytical parameter type");
             if (translated.reason == "resource_limit")
                 return error(e, ErrorKind::resource, "analytical SQL resource limit exceeded");
+            // MySQL returns ER_NO_DB_ERROR for an unqualified relation without
+            // a selected database. The embedded ABI maps error kinds to codes
+            // itself, so this stays a stable refusal with a MySQL-compatible
+            // feature SQLSTATE instead of inventing a code here.
+            if (translated.reason == "no_database_selected")
+                return error(e, ErrorKind::unsupported,
+                             "analytical SELECT requires a selected database");
+            if (translated.reason == "reserved_database")
+                return error(e, ErrorKind::unsupported,
+                             "analytical SELECT cannot reference a reserved schema");
             if (schema_recheck)
                 return error(e, ErrorKind::schema_changed,
                              "analytical statement no longer admitted");
@@ -240,8 +297,25 @@ struct DuckDBPreparedProvider::Impl {
             auto s = std::make_unique<NativeStatement>();
             std::string prepared_sql;
             if (p.mysql_analytical) {
-                if (p.translate(sql, prepared_sql, e, false))
+                // Capture the database this statement is bound to. MySQL keeps
+                // a prepared statement in the database it was prepared in, so
+                // every later execute re-translates with this name instead of
+                // whatever database the client selected since.
+                const std::string database =
+                    p.namespace_database ? p.current_database() : std::string();
+                if (p.translate(sql, prepared_sql, e, false, nullptr, 0,
+                                p.namespace_database ? &database : nullptr, &s->identity))
                     return 1;
+                if (sql.size > retained_sql_limit - p.retained_sql_bytes)
+                    return p.error(e, ErrorKind::resource,
+                                   "analytical prepared statement SQL limit exceeded");
+                s->database = database;
+                // Retained so execute can find this statement's prepare-time
+                // database from the SQL text the shared prepared layer passes.
+                // Bounded by translate()'s 64 KiB input limit.
+                s->sql.assign(reinterpret_cast<const char *>(
+                                  sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
+                              sql.size);
             } else {
                 prepared_sql.assign(
                     reinterpret_cast<const char *>(
@@ -251,6 +325,10 @@ struct DuckDBPreparedProvider::Impl {
             auto r = p.adapter.prepare(prepared_sql, s->stmt);
             if (r)
                 return p.result(e, r);
+            if (p.mysql_analytical) {
+                p.live.push_back(s.get());
+                p.retained_sql_bytes += s->sql.size();
+            }
             *out = s.release();
             return 0;
         }
@@ -308,12 +386,20 @@ struct DuckDBPreparedProvider::Impl {
             if (p.mysql_analytical) {
                 p.fresh_bound = nullptr;
                 if (!p.active || p.guard_op != ProxySQL_Embedded_OPERATION_EXECUTE ||
-                    p.fresh_sql.empty())
+                    p.fresh_sql.empty() || p.fresh_statement != &native)
                     return p.error(e, ErrorKind::transaction,
                                    "analytical execute requires revalidation");
-                std::unique_ptr<Statement> fresh;
-                auto r = p.adapter.prepare(p.fresh_sql, fresh);
+                std::string fresh_sql = std::move(p.fresh_sql);
+                std::vector<std::vector<std::string>> fresh_identity = std::move(p.fresh_identity);
                 p.clear_fresh_sql();
+                // The re-translation bound these canonical relations under the
+                // prepare-time database. A different object at the same name
+                // must not run this handle: the client sees ER_NEED_REPREPARE.
+                if (fresh_identity != native.identity)
+                    return p.error(e, ErrorKind::schema_changed,
+                                   "analytical statement namespace changed");
+                std::unique_ptr<Statement> fresh;
+                auto r = p.adapter.prepare(fresh_sql, fresh);
                 if (r)
                     return p.result(e, r);
                 std::vector<Type> old_params, new_params;
@@ -480,7 +566,17 @@ struct DuckDBPreparedProvider::Impl {
             auto &p = self(c);
             if (p.fresh_bound == st)
                 p.fresh_bound = nullptr;
-            delete static_cast<NativeStatement *>(st);
+            if (p.fresh_statement == st)
+                p.clear_fresh_sql();
+            auto *native = static_cast<NativeStatement *>(st);
+            for (auto it = p.live.begin(); it != p.live.end(); ++it) {
+                if (*it == native) {
+                    p.live.erase(it);
+                    p.retained_sql_bytes -= native->sql.size();
+                    break;
+                }
+            }
+            delete native;
         } catch (...) {
         }
     }
@@ -576,6 +672,23 @@ struct DuckDBPreparedProvider::Impl {
                 p.failure(p.status_arg);
         }
     }
+    // Finds the live analytical statement whose client SQL is `sql`. Two live
+    // statements with the same text but different prepare-time identities make
+    // the namespace ambiguous; the caller refuses instead of guessing.
+    NativeStatement *find_statement(const std::string &sql, size_t &matches) const {
+        NativeStatement *found = nullptr;
+        matches = 0;
+        for (auto *candidate : live) {
+            if (candidate->sql != sql)
+                continue;
+            ++matches;
+            if (found &&
+                (found->database != candidate->database || found->identity != candidate->identity))
+                return nullptr;
+            found = candidate;
+        }
+        return found;
+    }
     static int authorize_prepare(void *c, ProxySQL_Embedded_BytesView sql, E *e) noexcept {
         try {
             auto &p = self(c);
@@ -583,7 +696,10 @@ struct DuckDBPreparedProvider::Impl {
                 return p.error(e, ErrorKind::invalid_parameter, "invalid SQL");
             if (p.mysql_analytical) {
                 std::string emitted;
-                return p.translate(sql, emitted, e, false);
+                const std::string database =
+                    p.namespace_database ? p.current_database() : std::string();
+                return p.translate(sql, emitted, e, false, nullptr, 0,
+                                   p.namespace_database ? &database : nullptr);
             }
             std::string text(reinterpret_cast<const char *>(
                                  sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
@@ -603,7 +719,32 @@ struct DuckDBPreparedProvider::Impl {
                 return 0;
             p.clear_fresh_sql();
             p.fresh_bound = nullptr;
-            return p.translate(sql, p.fresh_sql, e, true, values, count);
+            std::string text(reinterpret_cast<const char *>(
+                                 sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
+                             sql.size);
+            size_t matches = 0;
+            NativeStatement *target = p.find_statement(text, matches);
+            if (!target && matches > 1)
+                return p.error(e, ErrorKind::schema_changed,
+                               "analytical statement identity is ambiguous");
+            // Re-translate under the database the statement was prepared in,
+            // not the client's current database: MySQL keeps the original.
+            const std::string current = p.namespace_database ? p.current_database() : std::string();
+            const std::string &database = target ? target->database : current;
+            // Without a namespace callback the provider keeps its legacy
+            // DuckDB-current-schema behavior (PostgreSQL and native mode too).
+            const std::string *database_arg = p.namespace_database ? &database : nullptr;
+            int rc = p.translate(sql, p.fresh_sql, e, true, values, count, database_arg,
+                                 &p.fresh_identity);
+            if (rc)
+                return rc;
+            if (target && p.fresh_identity != target->identity) {
+                p.clear_fresh_sql();
+                return p.error(e, ErrorKind::schema_changed,
+                               "analytical statement namespace changed");
+            }
+            p.fresh_statement = target;
+            return 0;
         }
         CATCH(c, e)
     }
@@ -618,6 +759,9 @@ DuckDBPreparedProvider::DuckDBPreparedProvider(duckdb_connection c, Status s, Fa
 DuckDBPreparedProvider::~DuckDBPreparedProvider() = default;
 void DuckDBPreparedProvider::set_mysql_analytical(bool enabled) noexcept {
     impl_->mysql_analytical = enabled && impl_->dialect == embedded::DuckDBSourceDialect::mysql;
+}
+void DuckDBPreparedProvider::set_mysql_namespace(std::function<std::string()> current_database) {
+    impl_->namespace_database = std::move(current_database);
 }
 const ProxySQL_Embedded_EngineV1 *DuckDBPreparedProvider::engine() const noexcept {
     return &impl_->api;

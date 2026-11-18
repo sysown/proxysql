@@ -784,21 +784,53 @@ struct Translator {
             auto t = from->first_child;
             auto name = t ? t->first_child : nullptr;
             auto alias = name ? name->next_sibling : nullptr;
-            if (!t || t->type != K::NODE_TABLE_REF || t->flags || t->next_sibling || !name ||
-                name->type != K::NODE_IDENTIFIER || name->first_child ||
-                (name->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(name))
+            if (!t || t->type != K::NODE_TABLE_REF || t->flags || t->next_sibling || !name)
                 return false;
+            // A single identifier is resolved in the session's selected
+            // database; MySQL's two-part `database.table` names that database
+            // explicitly and works from any selected database. Three-part
+            // names are a MySQL syntax error and ParserSQL already reports the
+            // remainder as unparsed.
+            std::vector<std::string> name_parts;
+            if (name->type == K::NODE_IDENTIFIER && !name->first_child &&
+                !(name->flags & ~FLAG_IDENT_DELIMITED) && safe_identifier(name)) {
+                name_parts.push_back(ident(name));
+                if (ctx.require_selected_database && ctx.default_schema.empty()) {
+                    reason = "no_database_selected";
+                    return false;
+                }
+            } else if (name->type == K::NODE_QUALIFIED_NAME && !name->flags) {
+                const N *schema = name->first_child;
+                const N *table = schema ? schema->next_sibling : nullptr;
+                if (!schema || !table || table->next_sibling ||
+                    schema->type != K::NODE_IDENTIFIER || table->type != K::NODE_IDENTIFIER ||
+                    schema->first_child || table->first_child ||
+                    (schema->flags & ~FLAG_IDENT_DELIMITED) ||
+                    (table->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(schema) ||
+                    !safe_identifier(table))
+                    return false;
+                name_parts.push_back(ident(schema));
+                name_parts.push_back(ident(table));
+                if (duckdb_mysql_reserved_database(name_parts[0])) {
+                    reason = "reserved_database";
+                    return false;
+                }
+            } else {
+                return false;
+            }
             if (alias &&
                 (alias->type != K::NODE_ALIAS || alias->next_sibling || alias->first_child ||
                  (alias->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(alias)))
                 return false;
-            qualifier = ident(alias ? alias : name);
+            qualifier = ident(alias                    ? alias
+                              : name_parts.size() == 1 ? name
+                                                       : name->first_child->next_sibling);
             if (!ctx.resolve_relation || !ctx.max_resolver_calls) {
                 reason = "missing_context";
                 required.push_back("relation_resolver");
                 return false;
             }
-            if (!ctx.resolve_relation({ident(name)}, relation) || !relation.exact_name_resolution ||
+            if (!ctx.resolve_relation(name_parts, relation) || !relation.exact_name_resolution ||
                 relation.canonical_name.empty()) {
                 reason = "unresolved_relation";
                 return false;

@@ -2,7 +2,9 @@
 #include "ProxySQL_EmbeddedExecution.h"
 #include "duckdb_prepared_policy.h"
 #include <duckdb.h>
+#include <functional>
 #include <memory>
+#include <string>
 
 // Per-connection native callback owner. Must outlive every registered session.
 class DuckDBPreparedProvider {
@@ -17,6 +19,11 @@ class DuckDBPreparedProvider {
     DuckDBPreparedProvider &operator=(const DuckDBPreparedProvider &) = delete;
     // Set before registration; PostgreSQL providers always remain native.
     void set_mysql_analytical(bool enabled) noexcept;
+    // Analytical MySQL only: returns the database selected for this session
+    // (empty when none is selected). The callback must be safe to call on the
+    // session thread and must reflect the namespace validated by USE.
+    // Without it, relative names keep resolving in DuckDB's current schema.
+    void set_mysql_namespace(std::function<std::string()> current_database);
     const ProxySQL_Embedded_EngineV1 *engine() const noexcept;
     const ProxySQL_Embedded_PolicyV1 *policy() const noexcept;
 

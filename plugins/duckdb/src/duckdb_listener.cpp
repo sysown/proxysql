@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <functional>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -454,6 +455,13 @@ void DuckDBListener::run_session(int client_fd) {
 	if (st.database_name.empty() || st.database_name == ":memory:") {
 		st.database_name = "memory";
 	}
+	// Each accepted connection starts a fresh MySQL namespace; the handshake
+	// database (if any) is read from core's userinfo once authentication has
+	// completed. See duckdb_mysql_namespace_sync().
+	st.mysql_database.clear();
+	st.mysql_namespace_source.clear();
+	st.mysql_namespace_ready = false;
+	st.mysql_schema_applied = false;
 
 	Thr* thr = new Thr();
 	thr->curtime = monotonic_time();
@@ -552,11 +560,37 @@ void DuckDBListener::run_session(int client_fd) {
 				} catch (...) { return false; }
 				state.pgsql_txn_status = 'I';
 				state.pgsql_extended_error = false;
+				// The replacement connection starts on DuckDB's default schema.
+				// MySQL keeps the current database across COM_RESET_CONNECTION,
+				// so the next namespace sync must re-select it; a vanished
+				// schema keeps the name but leaves the native schema unset, and
+				// the resolver then refuses instead of using another schema.
+				state.mysql_schema_applied = false;
 				*out = state.conn;
 				return true;
 			};
 			provider = std::make_unique<DuckDBPreparedProvider>(st.conn, idle, failure, reset_client, &prepared_status, dialect);
 			provider->set_mysql_analytical(st.mysql_analytical);
+			if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+				if (st.mysql_analytical) {
+					// Prepared statements need the session's current database
+					// at prepare time and must keep it at execute time. The
+					// callback also finishes the lazy handshake-database
+					// initialization for a pipelined first prepare.
+					provider->set_mysql_namespace([sess]() -> std::string {
+						auto& state = duckdb_session_state();
+						const char* schemaname = nullptr;
+						if (sess->client_myds && sess->client_myds->myconn &&
+						    sess->client_myds->myconn->userinfo)
+							schemaname = sess->client_myds->myconn->userinfo->schemaname;
+						std::string error;
+						if (!duckdb_mysql_namespace_sync(state, state.conn, schemaname,
+						                                 sess->default_schema, error))
+							return std::string();
+						return state.mysql_database;
+					});
+				}
+			}
 			ProxySQL_Embedded_RequestV1 request{};
 			request.abi_version = ProxySQL_Embedded_ABI_V1; request.struct_size = sizeof(request);
 			request.engine = provider->engine(); request.policy = provider->policy();

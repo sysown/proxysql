@@ -179,6 +179,48 @@ int main() {
                    "('s2','shop','sales','id',1,'bigint','bigint(20)','','','BIGINT')");
     ok(!source_of("sales", "id").known() && source_of("sales", "created").known(),
        "two records for one column are ambiguous and degrade to unknown");
+
+    // --- MySQL database namespace ----------------------------------------
+    // A MySQL database maps to a schema of the current catalog. The selected
+    // database overrides DuckDB's current_schema() for relative names, and a
+    // qualified database.table name still names its own schema.
+    setup_query(c, "CREATE SCHEMA ns_alpha");
+    setup_query(c, "CREATE SCHEMA ns_beta");
+    setup_query(c, "CREATE TABLE ns_alpha.same_name (a INTEGER)");
+    setup_query(c, "CREATE TABLE ns_beta.same_name (b INTEGER)");
+    setup_query(c, "SET schema = 'main'");
+    context = duckdb_mysql_select_context(c, {}, "ns_beta", true);
+    ok(context.default_schema == "ns_beta" && context.require_selected_database,
+       "selected database is carried on the context");
+    ok(context.resolve_relation({"same_name"}, r) && r.canonical_name.size() == 3 &&
+           r.canonical_name[1] == "ns_beta" && r.columns.size() == 1 &&
+           r.columns[0].canonical_name == "b",
+       "relative name resolves in the selected database, not DuckDB's current schema");
+    context = duckdb_mysql_select_context(c, {}, "ns_beta", true);
+    ok(context.resolve_relation({"ns_alpha", "same_name"}, r) && r.canonical_name.size() == 3 &&
+           r.canonical_name[1] == "ns_alpha",
+       "qualified database.table resolves in its own schema");
+    context = duckdb_mysql_select_context(c, {}, "ns_alpha", true);
+    ok(!context.resolve_relation({"NS_BETA", "same_name"}, r) && r.columns.empty(),
+       "a differently-cased database is not redirected to another schema");
+    context = duckdb_mysql_select_context(c, {}, "", true);
+    ok(!context.resolve_relation({"same_name"}, r) && r.columns.empty(),
+       "relative name is refused when no database is selected");
+    context = duckdb_mysql_select_context(c, {}, "", true);
+    ok(context.resolve_relation({catalog, "ns_alpha", "same_name"}, r),
+       "explicit catalog.schema.table still resolves without a selected database");
+    context = duckdb_mysql_select_context(c, {}, "main", true);
+    ok(!context.resolve_relation({"information_schema", "tables"}, r) && r.columns.empty(),
+       "system schema is refused by the resolver");
+    context = duckdb_mysql_select_context(c, {}, "", true);
+    ok(!context.resolve_relation({"pg_catalog", "pg_class"}, r) && r.columns.empty(),
+       "engine catalog schema is refused by the resolver");
+    setup_query(c, "CREATE SCHEMA \"ns.dot\"");
+    setup_query(c, "CREATE TABLE \"ns.dot\".dotted (a INTEGER)");
+    context = duckdb_mysql_select_context(c, {}, "", true);
+    ok(context.resolve_relation({"ns.dot", "dotted"}, r) && r.canonical_name.size() == 3 &&
+           r.canonical_name[1] == "ns.dot",
+       "a qualified name containing a dot resolves as one schema name");
     duckdb_disconnect(&c);
     duckdb_close(&db);
     return exit_status();

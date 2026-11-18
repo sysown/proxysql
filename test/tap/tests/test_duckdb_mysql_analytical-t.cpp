@@ -302,6 +302,48 @@ static void test_text(MYSQL *c, const char *label) {
            mysql_sqlstate(c));
     }
 }
+static void test_namespace(MYSQL *c, const char *label, bool routed) {
+    ok(text_rows(c, "SELECT DATABASE()", {"DATABASE()"}, {{"main"}}),
+       "%s reports the selected database", label);
+    ok(text_rows(c, "SELECT id FROM ns_same ORDER BY id", {"id"}, {{"1"}}),
+       "%s resolves an unqualified name in the selected database", label);
+    MYSQL_STMT *stmt = prepare(c, "SELECT id FROM ns_same ORDER BY id");
+    ok(stmt != nullptr, "%s prepares in the selected database", label);
+    ok(!mysql_query(c, "USE ns_other") && mysql_affected_rows(c) == 0,
+       "%s switches database with USE", label);
+    ok(text_rows(c, "SELECT DATABASE()", {"DATABASE()"}, {{"ns_other"}}),
+       "%s reports the new database after USE", label);
+    ok(text_rows(c, "SELECT id FROM ns_same ORDER BY id", {"id"}, {{"2"}}),
+       "%s resolves the same name in the other database", label);
+    ok(stmt && fetch_ids(stmt, {1}),
+       "%s keeps a prepared statement in the database it was prepared in", label);
+    ok(text_rows(c, "SELECT id FROM main.ns_same ORDER BY id", {"id"}, {{"1"}}),
+       "%s resolves a database-qualified name from another database", label);
+    if (stmt)
+        mysql_stmt_close(stmt);
+    if (!routed) {
+        const int unknown = mysql_query(c, "USE no_such_database");
+        ok(unknown != 0 && mysql_errno(c) == 1049 && !std::strcmp(mysql_sqlstate(c), "42000"),
+           "%s refuses an unknown database with 1049/42000 (got %u/%s)", label, mysql_errno(c),
+           mysql_sqlstate(c));
+        ok(text_rows(c, "SELECT DATABASE()", {"DATABASE()"}, {{"ns_other"}}),
+           "%s keeps the previous database after a failed USE", label);
+        const int reserved = mysql_query(c, "USE proxysql_replica");
+        ok(reserved != 0 && mysql_errno(c) == 1049,
+           "%s refuses the replica metadata schema (got %u)", label, mysql_errno(c));
+    } else {
+        // The ordinary frontend acknowledges USE itself and only tells the backend with the next
+        // statement, so the refusal cannot be immediate. It must still never fall back to
+        // another database: the next statement has to fail.
+        ok(!mysql_query(c, "USE no_such_database") && mysql_query(c, "SELECT id FROM ns_same") != 0,
+           "%s fails the statement after selecting an unknown database", label);
+        ok(!mysql_query(c, "USE proxysql_replica") && mysql_query(c, "SELECT id FROM ns_same") != 0,
+           "%s fails the statement after selecting the replica metadata schema", label);
+    }
+    ok(!mysql_select_db(c, "main"), "%s switches back with COM_INIT_DB", label);
+    ok(text_rows(c, "SELECT id FROM ns_same ORDER BY id", {"id"}, {{"1"}}),
+       "%s honors COM_INIT_DB for later statements", label);
+}
 static void test_sum_avg(MYSQL *c, const char *label) {
     ok(text_rows(c,
                  "SELECT g, SUM(n), SUM(d), AVG(n), AVG(d) FROM agg_fixture GROUP BY g ORDER BY g",
@@ -447,6 +489,10 @@ int main() {
                      "'utf8mb4_0900_bin','VARCHAR'),"
                      "('fixture','main','text_fixture','ai',3,'varchar','varchar(10)','utf8mb4',"
                      "'utf8mb4_0900_ai_ci','VARCHAR')") ||
+        !pg_exec(pg, "CREATE TABLE ns_same (id INTEGER PRIMARY KEY)") ||
+        !pg_exec(pg, "INSERT INTO ns_same VALUES (1)") || !pg_exec(pg, "CREATE SCHEMA ns_other") ||
+        !pg_exec(pg, "CREATE TABLE ns_other.ns_same (id INTEGER PRIMARY KEY)") ||
+        !pg_exec(pg, "INSERT INTO ns_other.ns_same VALUES (2)") ||
         !pg_exec(pg, "CREATE SEQUENCE analytical_sequence START 1") ||
         !pg_exec(
             pg,
@@ -458,6 +504,7 @@ int main() {
     if (!mysql)
         BAIL_OUT("MySQL DuckDB fixture connect failed");
     ok(!mysql_set_character_set(mysql, "utf8mb4", 45), "select UTF-8 MySQL connection");
+    ok(!mysql_select_db(mysql, "main"), "select the native main schema through COM_INIT_DB");
     const char *sql = "SELECT `id` FROM `analytical_fixture` ORDER BY `n`, `id` LIMIT 1,2";
     ok(query_rows(mysql, sql), "COM_QUERY translates backticks, NULL ordering and comma LIMIT");
     const char *grouped =
@@ -528,6 +575,7 @@ int main() {
     test_date_format(mysql, "direct listener");
     test_sum_avg(mysql, "direct listener");
     test_text(mysql, "direct listener");
+    test_namespace(mysql, "direct listener", false);
     test_decimal_refresh(mysql, pg);
     stmt = prepare(mysql, "SELECT COUNT(*) FROM analytical_fixture WHERE n > 1");
     ok(stmt != nullptr, "prepare COUNT with referenced integer column");
@@ -602,6 +650,7 @@ int main() {
     if (proxied) {
         ok(!mysql_set_character_set(proxied, "utf8mb4", 45),
            "select UTF-8 through ordinary listener");
+        ok(!mysql_select_db(proxied, "main"), "select the native main schema through routing");
         ok(query_rows(proxied, sql), "ordinary listener routes analytical COM_QUERY to DuckDB");
         ok(query_rows(proxied, grouped), "ordinary routing preserves grouped analytical results");
         stmt = prepare(proxied, sql);
@@ -615,6 +664,7 @@ int main() {
         test_date_format(proxied, "ordinary routed listener");
         test_sum_avg(proxied, "ordinary routed listener");
         test_text(proxied, "ordinary routed listener");
+        test_namespace(proxied, "ordinary routed listener", true);
         mysql_close(proxied);
     }
     mysql_close(mysql);

@@ -27,10 +27,14 @@ in the [compatibility contract](mysql-query-compatibility.md), requires UTF-8,
 and executes accepted SQL in private read-only transactions. Unsupported input
 returns an error before execution. PostgreSQL uses the native dialect.
 
-The namespace is the actual native DuckDB catalog/schema; authentication database
-and COM_INIT_DB acknowledgements do not select that namespace. String collation
-and original replication-source type provenance are not inferred from native
-metadata. See the contract for the exact current restrictions.
+In `mysql_analytical`, a MySQL database name selects a schema of the replica's
+single DuckDB catalog: `USE db`, the handshake database and COM_CHANGE_USER
+and `COM_INIT_DB` select it, `SELECT DATABASE()` reports it, and relative names resolve in it.
+Reserved engine/replica schemas are refused. The native dialect keeps DuckDB's
+own catalog/schema behavior and the historical `DATABASE()` value. No separate
+setting controls this; it is part of the dialect. String
+collation and original replication-source type provenance are not inferred from
+native metadata. See the contract for the exact current restrictions.
 
 ## Listener variables
 

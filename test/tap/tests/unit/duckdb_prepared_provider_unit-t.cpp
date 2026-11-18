@@ -667,6 +667,150 @@ int main() {
             stmt = nullptr;
         }
     }
+    {
+        // Analytical MySQL database namespace: a prepared statement keeps the
+        // database it was prepared in, exactly as MySQL does across USE.
+        State state;
+        state.conn = &conn;
+        state.db = db;
+        std::string current = "ns_a";
+        DuckDBPreparedProvider provider(conn, status, failure, reset_client, &state,
+                                        embedded::DuckDBSourceDialect::mysql);
+        provider.set_mysql_analytical(true);
+        provider.set_mysql_namespace([&current] { return current; });
+        const auto *engine = provider.engine();
+        const auto *policy = provider.policy();
+        ProxySQL_Embedded_Error err{};
+        ProxySQL_Embedded_ExecInfo info{};
+        void *guard = nullptr;
+        query(conn, "CREATE SCHEMA ns_a");
+        query(conn, "CREATE SCHEMA ns_b");
+        query(conn, "CREATE TABLE ns_a.t (id BIGINT PRIMARY KEY)");
+        query(conn, "CREATE TABLE ns_b.t (id BIGINT PRIMARY KEY)");
+        query(conn, "INSERT INTO ns_a.t VALUES (1)");
+        query(conn, "INSERT INTO ns_b.t VALUES (2)");
+        auto enter = [&](uint32_t op) {
+            if (engine->guard_enter(engine->context, op, {}, &guard, &err) != 0 || !guard)
+                BAIL_OUT("cannot enter guard %u", op);
+        };
+        auto leave = [&] {
+            engine->guard_leave(engine->context, guard);
+            guard = nullptr;
+        };
+        auto prepare = [&](const char *sql, void **out) -> bool {
+            enter(ProxySQL_Embedded_OPERATION_PREPARE);
+            const bool ok = policy->authorize_prepare(policy->context, bytes(sql), &err) == 0 &&
+                            engine->prepare(engine->context, bytes(sql), out, &err) == 0 && *out;
+            leave();
+            return ok;
+        };
+        auto execute = [&](void *stmt, const char *sql) -> bool {
+            enter(ProxySQL_Embedded_OPERATION_EXECUTE);
+            const bool ok =
+                policy->authorize_execute(policy->context, bytes(sql), nullptr, 0, &err) == 0 &&
+                engine->reset(engine->context, stmt, &err) == 0 &&
+                engine->bind(engine->context, stmt, nullptr, 0, &err) == 0 &&
+                engine->execute(engine->context, stmt, &info, &err) == 0;
+            leave();
+            return ok;
+        };
+        auto fetch_id = [&](void *stmt) -> int64_t {
+            enter(ProxySQL_Embedded_OPERATION_FETCH);
+            const ProxySQL_Embedded_Value *row = nullptr;
+            size_t count = 0;
+            uint8_t done = 0;
+            const bool ok =
+                engine->fetch(engine->context, stmt, &row, &count, &done, 128, &err) == 0 &&
+                !done && count == 1 && row[0].kind == ProxySQL_Embedded_VALUE_INT64;
+            const int64_t value = ok ? row[0].payload.int64_value : -1;
+            leave();
+            return value;
+        };
+
+        const char *relative = "SELECT id FROM t";
+        void *stmt = nullptr;
+        REQUIRE(prepare(relative, &stmt), "prepare relative name in the first database");
+        current = "ns_b";
+        ok(execute(stmt, relative) && fetch_id(stmt) == 1,
+           "execute after switching database still reads the prepare-time table");
+        current = "ns_a";
+        ok(execute(stmt, relative) && fetch_id(stmt) == 1,
+           "switching back to the prepare-time database keeps the same table");
+        current = "ns_b";
+        ok(execute(stmt, relative) && fetch_id(stmt) == 1,
+           "repeated switching never redirects the prepared handle");
+        const char *qualified = "SELECT id FROM ns_b.t";
+        void *qualified_stmt = nullptr;
+        current = "ns_a";
+        REQUIRE(prepare(qualified, &qualified_stmt),
+                "prepare qualified name from another database");
+        current = "ns_b";
+        ok(execute(qualified_stmt, qualified) && fetch_id(qualified_stmt) == 2,
+           "qualified name keeps its own database across USE");
+        current = "ns_a";
+        ok(execute(qualified_stmt, qualified) && fetch_id(qualified_stmt) == 2,
+           "qualified name is independent of the selected database");
+        current = "";
+        // A relative name without a database is refused before prepare.
+        {
+            enter(ProxySQL_Embedded_OPERATION_PREPARE);
+            void *refused = nullptr;
+            ok(policy->authorize_prepare(policy->context, bytes(relative), &err) != 0 &&
+                   err.kind == ProxySQL_Embedded_ERROR_UNSUPPORTED &&
+                   std::string(reinterpret_cast<const char *>(err.message.data), err.message.size)
+                           .find("selected database") != std::string::npos,
+               "relative name without a selected database is refused");
+            leave();
+            ok(refused == nullptr, "no native statement was created for the refusal");
+        }
+        ok(execute(qualified_stmt, qualified) && fetch_id(qualified_stmt) == 2,
+           "qualified name still executes without a selected database");
+        engine->finalize(engine->context, stmt);
+        stmt = nullptr;
+        current = "ns_b";
+        const char *from_b = "SELECT id FROM t";
+        void *b_stmt = nullptr;
+        REQUIRE(prepare(from_b, &b_stmt), "prepare relative name in the second database");
+        ok(execute(b_stmt, from_b) && fetch_id(b_stmt) == 2,
+           "the second database's relative name resolves there");
+        // Two live statements with identical text but different prepare-time
+        // identities cannot be told apart by the shared execute callback. The
+        // provider refuses instead of guessing which database was meant.
+        current = "ns_a";
+        void *a_stmt = nullptr;
+        REQUIRE(prepare(from_b, &a_stmt), "prepare the same text in the first database");
+        enter(ProxySQL_Embedded_OPERATION_EXECUTE);
+        ok(policy->authorize_execute(policy->context, bytes(from_b), nullptr, 0, &err) != 0 &&
+               err.kind == ProxySQL_Embedded_ERROR_SCHEMA_CHANGED,
+           "ambiguous prepare-time database is refused as a reprepare");
+        leave();
+        engine->finalize(engine->context, a_stmt);
+        engine->finalize(engine->context, b_stmt);
+        b_stmt = nullptr;
+        // Dropping the prepare-time schema must not fall back to another one.
+        current = "ns_a";
+        void *dropped_stmt = nullptr;
+        REQUIRE(prepare(relative, &dropped_stmt), "prepare before dropping its database");
+        query(conn, "DROP SCHEMA ns_a CASCADE");
+        current = "ns_b";
+        enter(ProxySQL_Embedded_OPERATION_EXECUTE);
+        ok(policy->authorize_execute(policy->context, bytes(relative), nullptr, 0, &err) != 0 &&
+               err.kind == ProxySQL_Embedded_ERROR_SCHEMA_CHANGED,
+           "dropping the prepare-time database refuses execution instead of redirecting");
+        leave();
+        engine->finalize(engine->context, dropped_stmt);
+        dropped_stmt = nullptr;
+        engine->finalize(engine->context, qualified_stmt);
+        qualified_stmt = nullptr;
+        // A statement that references no relation is unaffected by USE.
+        const char *constant = "SELECT 42 AS n";
+        void *constant_stmt = nullptr;
+        REQUIRE(prepare(constant, &constant_stmt), "prepare a relation-free statement");
+        current = "ns_b";
+        ok(execute(constant_stmt, constant), "a relation-free statement still executes");
+        engine->finalize(engine->context, constant_stmt);
+        constant_stmt = nullptr;
+    }
     duckdb_disconnect(&conn);
     duckdb_close(&db);
     return exit_status();

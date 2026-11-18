@@ -356,7 +356,7 @@ prerequisite below records their actual availability.
 
 | Fact | Needed by | Source without running the query |
 |---|---|---|
-| Selected schema/database | identifier resolution | Explicitly tracked native namespace; the current plugin COM_INIT_DB acknowledgement does not establish this fact. |
+| Selected schema/database | identifier resolution | Explicitly tracked native namespace: `USE` (COM_QUERY), the handshake database, COM_INIT_DB and COM_CHANGE_USER update it (see [protocol compatibility](protocol-compatibility.md#database-namespace-analytical-mysql)). |
 | Relation existence and column names | projections, joins, aliases | catalog/relation metadata resolver |
 | Column type, signedness, precision/scale | arithmetic, casts, aggregates, metadata | Native catalog facts; original MySQL type provenance remains unknown unless independently established. |
 | Nullability | joins, predicates, ORDER BY, aggregates | catalog metadata |
@@ -495,7 +495,7 @@ protection remain separate responsibilities.
 | Catalog/schema/table identity | Requested identifiers; explicit versus default-connection catalog provenance | Request spelling is not a canonical resolved name. |
 | Nullability and MySQL provenance | Explicitly unknown | Do not infer nullability, source type or collation from DuckDB storage types. |
 | Client encoding | MySQL handshake and supported `SET NAMES`/`SET CHARACTER SET` tracking | A client encoding is not a column's source collation. |
-| Effective MySQL modes and namespace | No general MySQL semantics established by plugin compatibility acknowledgements | Generic defaults, `SELECT DATABASE()` and `COM_INIT_DB` acknowledgements are insufficient provenance. |
+| Effective MySQL modes and namespace | No general MySQL semantics established by plugin compatibility acknowledgements | Namespace is tracked (see [database namespace](protocol-compatibility.md#database-namespace-analytical-mysql)); SQL modes, collation and time zone remain unknown. |
 
 Each lookup returns owned data with at most 4,096 columns and an 8 MiB logical
 payload cap, further constrained by the caller's remaining budget. Native error
@@ -509,6 +509,162 @@ unknown provenance, request spelling versus native column spelling, missing
 relations, malformed names, budget/column limits, fresh metadata after DDL and
 preservation of an existing client transaction. The canonical static build and
 ASan/UBSan run pass with the DuckDB library itself uninstrumented.
+
+## Database namespace (`mysql_analytical`)
+
+A MySQL database name maps to a **schema of the replica's current DuckDB
+catalog**. The mapping is exact: a name is selected only when a schema with that
+spelling exists (`information_schema.schemata` filtered by
+`current_database()`). DuckDB folds identifier case, so a differently-cased name
+is never redirected to an existing schema — MySQL 8.0.46 here runs with
+`lower_case_table_names=0`, where `USE NS_B` and `SELECT * FROM NS_B.t` are
+distinct from `ns_b` and fail with 1049/1146. No catalog is ever attached,
+switched, or created, and external access keeps its disabled default.
+
+Selection sources, all in the analytical MySQL dialect only:
+
+| Source | Plugin visibility | Effect |
+| --- | --- | --- |
+| Handshake default database | `userinfo->schemaname` after authentication | Selected on the first statement (validated then). |
+| `USE db` (COM_QUERY) | Handled by the plugin before translation | Validated and selected; the shared `userinfo` name is updated. |
+| COM_CHANGE_USER | Core updates `userinfo->schemaname` | Re-selected on the next statement. |
+| COM_INIT_DB | Core answers OK for plugin sessions and records the requested name in `userinfo->schemaname` (`MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB`) | Validated and selected at the plugin's next statement; an unknown name leaves no database selected, so that statement fails instead of resolving anywhere else. ProxySQL's ordinary routed path switches a backend database with this command. |
+| COM_RESET_CONNECTION | `reset_client` callback | Database name preserved (see below). |
+
+`USE` is parsed with ParserSQL (`ParseResult::StmtType::USE`) plus a bounded
+tokenizer check over that statement's source span; a string literal, an
+unquoted reserved word, a qualified name, a second name or extra tokens are a
+syntax error, as in MySQL. Doubled backticks are unescaped. Error mapping:
+
+| Input | MySQL 8.0.46 oracle | Plugin |
+| --- | --- | --- |
+| Unknown database | 1049 / `42000` | 1049 / `42000`, selection unchanged |
+| Reserved schema (see below) | n/a (MySQL allows `information_schema`) | 1049 / `42000` |
+| `USE` with no name or `USE ''` | 1064 / `42000` | 1064 / `42000` |
+| `USE \`\`` | 1046 / `3D000`, selection unchanged | 1046 / `3D000` |
+| Name over 64 bytes | 1059 / `42000` | 1059 / `42000` |
+| Name that does not exist but equals core's `mysql-default_schema` | n/a | Treated as no database (see limits) |
+
+Reserved names never become the current schema: `proxysql_replica` (replica
+metadata), `information_schema`, `pg_catalog`, `system` and `temp` (DuckDB
+engine schemas). They are compared case-insensitively because DuckDB would fold
+the case. `main` is **not** reserved: it is a legal DuckDB schema and may be a
+replicated database named `main`. Two consequences of validating by schema
+existence, both documented rather than guessed around: `USE main` succeeds even
+when the source has no `main` database (DuckDB always has that schema), and a
+schema left behind by a dropped source database stays selectable until it is
+dropped. The replica publishes per-table configuration, not a database
+manifest, so the plugin has no independent list of MySQL databases to check
+against.
+
+### Oracle evidence
+
+Measured on the owned MySQL 8.0.46 oracle with `lower_case_table_names=0`,
+`sql_mode` including `STRICT_TRANS_TABLES` and `ONLY_FULL_GROUP_BY`:
+
+| Experiment | Oracle result |
+| --- | --- |
+| No database selected | `SELECT DATABASE()` → `NULL`; `SELECT * FROM t` and `SHOW TABLES` → 1046 / `3D000` |
+| `USE known_db` | OK; `DATABASE()` → that name; failed `USE` keeps the previous selection |
+| `USE unknown_db` | 1049 / `42000` |
+| `USE \`\`` | 1046 / `3D000`, selection unchanged |
+| `USE` / `USE;` / `USE ''` / `USE 'a'` / `USE 123` / `USE a.b` / `USE a b` | 1064 / `42000` |
+| `USE <65 bytes>` | 1059 / `42000` (`Identifier name ... is too long`) |
+| Quoted name with a doubled backtick | 1049; the delimiter is unescaped before lookup |
+| Database-qualified `db.t` from another database | Resolves in `db`; unknown `db` → 1049; wrong-case table → 1146 / `42S02` |
+| Three-part `a.b.c` in `FROM` | 1064 / `42000` |
+| `USE INFORMATION_SCHEMA` (upper case) | 1049 / `42000` — exact-case names only |
+| Prepared in A, `USE B`, execute `SELECT * FROM t` | Returns A's rows; a table that exists only in A still executes |
+| Prepare in A, drop database A, execute | 1049 / `42000` (plugin: 1615) |
+| COM_RESET_CONNECTION | `DATABASE()` unchanged; an old prepared handle answers 2056 on execute |
+| Handshake database that does not exist | The connection is refused with 1049 |
+| Drop the current database, then query | `DATABASE()` keeps the name; `SELECT * FROM t` and `SHOW TABLES` → 1049; `SELECT 1` still works |
+
+Known differences, all refusals rather than results, with reproducers:
+
+1. `USE information_schema` / `USE mysql` / `USE performance_schema` succeed on
+   MySQL; the plugin answers 1049 for `information_schema` (DuckDB's is a
+   different catalog) and for `pg_catalog`/`system`/`temp`/`proxysql_replica`.
+   `mysql` and `performance_schema` do not exist in the replica and therefore
+   also answer 1049.
+2. `COM_INIT_DB` (and a routed `USE`) is acknowledged before the plugin can
+   validate the name; an unknown or reserved database is refused at the next
+   statement (1046 No database selected) instead of at the command, where
+   MySQL answers 1049. It never falls back to another database.
+3. After `DROP DATABASE` of the current database, `SELECT * FROM t` is refused
+   with 1235 / `0A000` here and with 1049 on MySQL; `SHOW TABLES` matches
+   (1049) because it validates the database first.
+4. A connection whose handshake database is unknown is refused by MySQL; the
+   plugin cannot intercept the handshake and instead behaves as if no database
+   were selected (relative names fail with 1046, qualified names still work).
+5. A handshake database whose name equals `mysql-default_schema` is
+   indistinguishable from "no database" in core's `userinfo`, so it is treated
+   as no database. This only refuses; it never resolves in another schema.
+6. A dropped prepare-time database answers 1615 instead of 1049.
+7. `SHOW DATABASES` lists DuckDB catalogs, not MySQL databases.
+8. A database whose name contains `.` exists as a native schema and can be
+   reached with a qualified `\`a.b\`.t` name, but `USE \`a.b\`` is refused with
+   1105 / `HY000`: DuckDB cannot make such a schema the connection's current
+   schema (it parses the name as catalog.schema), and the plugin refuses rather
+   than reporting a selection the session does not have.
+
+
+`SELECT DATABASE()` (and the `CURRENT_DATABASE()` spelling the intercept
+accepts) returns the selected database name, or SQL `NULL` before any database
+is selected — matching MySQL, including that `DATABASE()` keeps reporting the
+name after the schema is dropped. Native-dialect connections keep the old
+behavior: the engine path, or `memory`.
+
+Relative relation names resolve in the selected database; a qualified
+`database.table` name resolves in its own database from any selection, and a
+three-part name is a syntax error, as in MySQL. An unqualified relation with no
+database selected is refused before execution:
+
+- COM_QUERY: 1046 / `3D000` ("No database selected"), matching MySQL.
+- Prepared statements: 1235 / `0A000` with "analytical SELECT requires a
+  selected database". The shared prepared ABI maps error kinds to MySQL codes
+  and has no 1046 mapping, so the code differs while the refusal is explicit.
+
+`SHOW TABLES` lists the selected database's tables and views (`1046` with no
+database, `1049` once the selected schema is dropped). `SHOW DATABASES` still
+lists DuckDB catalogs; changing it is out of scope for this slice.
+
+### Prepared statements and namespace identity
+
+MySQL keeps a client prepared statement in the database it was prepared in:
+preparing `SELECT * FROM t` in database A, then `USE B`, then executing returns
+A's rows, and a table that exists only in A still executes (verified against the
+oracle). The plugin reproduces this:
+
+- The prepare-time database is recorded with the statement (empty when no
+  database was selected).
+- Every execute re-translates the original SQL **with that recorded database**
+  and compares the resolved canonical `catalog.schema.table` identity, parameter
+  positions/types and result column names/types with the prepare-time ones.
+- Emitted SQL is always fully qualified, so the connection's current DuckDB
+  schema cannot redirect an execute.
+- Any difference — a renamed/retargeted relation, a changed column set, or an
+  unresolvable prepare-time database — fails with 1615 (reprepare) before a row
+  is produced.
+
+Known limits, all refusals (never a silent redirect):
+
+- Dropping the prepare-time database yields 1615 here; the oracle yields 1049 at
+  execute.
+- Two live statements with the same SQL text prepared in different databases
+  cannot be attributed by the shared execute callback, which passes only the
+  SQL text; the plugin refuses with 1615 instead of guessing. Use distinct SQL
+  or close one handle.
+- Each analytical statement retains a copy of its client SQL (at most 64 KiB)
+  so execute can find its prepare-time database. That copy is not charged to
+  the shared prepared quota, which the plugin cannot reach.
+
+`COM_RESET_CONNECTION` deallocates prepared handles in the shared layer (the
+oracle answers 2056 for a later execute) and keeps the current database
+(`DATABASE()` unchanged). The replacement DuckDB connection is re-selected to
+the session's database on the next statement; a schema dropped in the meantime
+keeps the name and leaves relative names refused rather than using another
+schema.
 
 ## Current pure translator slice
 

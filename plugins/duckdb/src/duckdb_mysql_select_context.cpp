@@ -200,8 +200,11 @@ void attach_source_facts(duckdb_connection conn, DuckDBMySQLRelation &relation, 
     }
 }
 bool resolve(duckdb_connection conn, const DuckDBMySQLContextLimits &limits,
-             const std::vector<std::string> &parts, DuckDBMySQLRelation &out) {
+             const std::vector<std::string> &parts, const std::string &default_schema,
+             bool require_selected_database, DuckDBMySQLRelation &out) {
     if (!conn || parts.empty() || parts.size() > 3)
+        return false;
+    if (parts.size() == 1 && require_selected_database && default_schema.empty())
         return false;
     size_t remaining = std::min(limits.max_metadata_bytes, hard_bytes);
     for (const auto &p : parts) {
@@ -221,7 +224,13 @@ bool resolve(duckdb_connection conn, const DuckDBMySQLContextLimits &limits,
         catalog = parts[0];
     if (parts.size() >= 2)
         schema = parts[parts.size() - 2];
+    else if (!default_schema.empty())
+        schema = default_schema;
     const std::string &table = parts.back();
+    // System/replica schemas are not MySQL databases of this replica. Refuse
+    // here as well as in USE so no resolver path can bind an engine schema.
+    if (duckdb_mysql_reserved_database(schema))
+        return false;
     // DuckDB searches temporary objects before the current catalog for
     // unqualified names. Refuse potential shadowing rather than redirecting.
     if (parts.size() == 1 && catalog != "temp") {
@@ -355,23 +364,28 @@ bool resolve(duckdb_connection conn, const DuckDBMySQLContextLimits &limits,
 }
 } // namespace
 DuckDBMySQLSelectContext duckdb_mysql_select_context(duckdb_connection conn,
-                                                     const DuckDBMySQLContextLimits &limits) {
+                                                     const DuckDBMySQLContextLimits &limits,
+                                                     const std::string &default_schema,
+                                                     bool require_selected_database) {
     DuckDBMySQLSelectContext context;
+    context.default_schema = default_schema;
+    context.require_selected_database = require_selected_database;
     context.max_resolver_calls = std::min<size_t>(limits.max_resolver_calls, 64);
     auto calls = std::make_shared<size_t>(0);
-    context.resolve_relation = [conn, limits, calls, max_calls = context.max_resolver_calls](
-                                   const std::vector<std::string> &parts,
-                                   DuckDBMySQLRelation &out) {
-        out = {};
-        if (*calls >= max_calls)
-            return false;
-        ++*calls;
-        try {
-            return resolve(conn, limits, parts, out);
-        } catch (...) {
+    context.resolve_relation =
+        [conn, limits, calls, default_schema, require_selected_database,
+         max_calls = context.max_resolver_calls](const std::vector<std::string> &parts,
+                                                 DuckDBMySQLRelation &out) {
             out = {};
-            return false;
-        }
-    };
+            if (*calls >= max_calls)
+                return false;
+            ++*calls;
+            try {
+                return resolve(conn, limits, parts, default_schema, require_selected_database, out);
+            } catch (...) {
+                out = {};
+                return false;
+            }
+        };
     return context;
 }

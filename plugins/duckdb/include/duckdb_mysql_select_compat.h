@@ -60,6 +60,34 @@ struct DuckDBMySQLRelation {
 };
 enum class DuckDBMySQLParameterMode { forbidden, prepare, execute };
 enum class DuckDBMySQLParameterKind { null_value, signed_integer, unsupported };
+// Native schemas the replica owns or that hold engine/system objects. A MySQL
+// database name must never select one of these: their contents are not the
+// MySQL objects of the same name, and the replica metadata schema is internal.
+// Inline so the pure translator, the resolver and the session share one list
+// without adding a link dependency to any single unit test target.
+inline bool duckdb_mysql_reserved_database(const std::string &name) {
+    // Compared case-insensitively: DuckDB folds identifier case, so admitting
+    // "Information_Schema" here would resolve to the engine's own schema even
+    // though MySQL (lower_case_table_names=0) has no such database.
+    static const char *const reserved[] = {"proxysql_replica", "information_schema", "pg_catalog",
+                                           "system", "temp"};
+    for (const char *candidate : reserved) {
+        const size_t n = std::char_traits<char>::length(candidate);
+        if (name.size() != n)
+            continue;
+        size_t i = 0;
+        for (; i < n; ++i) {
+            char c = name[i];
+            if (c >= 'A' && c <= 'Z')
+                c = static_cast<char>(c + ('a' - 'A'));
+            if (c != candidate[i])
+                break;
+        }
+        if (i == n)
+            return true;
+    }
+    return false;
+}
 // No session settings are required by the current subset: constructs whose
 // meaning depends on unknown SQL modes, collation or time zone are refused.
 // AVG assumes MySQL's default div_precision_increment of 4; the analytical
@@ -69,6 +97,12 @@ struct DuckDBMySQLSelectContext {
     // returns canonical names without executing user SQL. This does not prove
     // the name-resolution policy of an external MySQL source database.
     std::function<bool(const std::vector<std::string> &, DuckDBMySQLRelation &)> resolve_relation;
+    // MySQL database selected for this statement, as validated by the session.
+    // Empty means no database was selected. `require_selected_database` then
+    // refuses an unqualified relation with `no_database_selected` instead of
+    // letting DuckDB's default schema answer for a database MySQL never chose.
+    std::string default_schema;
+    bool require_selected_database = false;
     // Execute facts contain kinds only, never parameter values. Maximum 256.
     DuckDBMySQLParameterMode parameter_mode = DuckDBMySQLParameterMode::forbidden;
     std::vector<DuckDBMySQLParameterKind> parameter_kinds;

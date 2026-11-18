@@ -13,9 +13,12 @@ struct DuckDBMySQLContextLimits {
 // Native type facts do not establish original MySQL schema provenance or text
 // collation. The translator must not infer text comparison semantics from them.
 // The caller owns conn and must hold its connection ownership guard whenever
-// the resolver runs. Relative names use DuckDB's current catalog/schema;
-// authentication database and COM_INIT_DB do not establish that namespace.
+// the resolver runs. Relative names resolve in `default_schema` when it is
+// non-empty and in DuckDB's current schema otherwise. A MySQL session passes
+// the database it validated, never an unvalidated client spelling.
 // View metadata does not establish view purity: the host must enforce its own
 // read-only transaction and side-effect policy before executing translated SQL.
 DuckDBMySQLSelectContext duckdb_mysql_select_context(duckdb_connection conn,
-                                                     const DuckDBMySQLContextLimits &limits = {});
+                                                     const DuckDBMySQLContextLimits &limits = {},
+                                                     const std::string &default_schema = {},
+                                                     bool require_selected_database = false);

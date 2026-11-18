@@ -8,6 +8,8 @@
 #include <strings.h>
 #include "proxysql_find_charset.h"
 #include "sqlite3db.h"
+#include "sql_parser/parser.h"
+#include "sql_parser/tokenizer.h"
 
 #include "proxysql.h"
 #include "MySQL_Session.h"
@@ -229,6 +231,331 @@ SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind, const char* 
 	default:
 		return nullptr;
 	}
+}
+
+SQLite3_result* duckdb_build_mysql_database_result(const std::string& database) {
+	SQLite3_result* r = new SQLite3_result(1);
+	r->add_column_definition(SQLITE_TEXT, "DATABASE()");
+	const char* row[1] = { database.empty() ? nullptr : database.c_str() };
+	r->add_row(row);
+	return r;
+}
+
+// --- MySQL database namespace ------------------------------------------
+//
+// MySQL databases map to schemas of the replica's single DuckDB catalog.
+// Only the analytical MySQL dialect uses this mapping; the native dialect and
+// the PostgreSQL listener keep DuckDB's own catalog/schema behavior.
+namespace {
+
+// Reads the connection's current schema into `out`. Returns false on a native
+// error.
+bool current_schema_value(duckdb_connection conn, std::string& out) {
+	out.clear();
+	duckdb_result result {};
+	if (duckdb_query(conn, "SELECT current_schema()", &result) != DuckDBSuccess) {
+		duckdb_destroy_result(&result);
+		return false;
+	}
+	bool ok = false;
+	if (duckdb_row_count(&result) == 1 && !duckdb_value_is_null(&result, 0, 0)) {
+		char* value = duckdb_value_varchar(&result, 0, 0);
+		if (value != nullptr) {
+			out.assign(value);
+			ok = true;
+		}
+		duckdb_free(value);
+	}
+	duckdb_destroy_result(&result);
+	return ok;
+}
+
+// Runs `sql` with one optional VARCHAR binding and reports whether at least one
+// row came back. Returns false on a native error so callers can distinguish
+// "no such schema" from "engine failed".
+bool bound_query_returns_row(duckdb_connection conn, const char* sql, const std::string& value,
+                             bool& row, std::string& error) {
+	row = false;
+	duckdb_prepared_statement stmt = nullptr;
+	if (duckdb_prepare(conn, sql, &stmt) != DuckDBSuccess) {
+		const char* message = duckdb_prepare_error(stmt);
+		error = message != nullptr ? message : "DuckDB prepare failed";
+		duckdb_destroy_prepare(&stmt);
+		return false;
+	}
+	duckdb_result result {};
+	const bool bound =
+		duckdb_bind_varchar_length(stmt, 1, value.data(), value.size()) == DuckDBSuccess;
+	if (!bound) {
+		error = "DuckDB bind failed";
+		duckdb_destroy_prepare(&stmt);
+		return false;
+	}
+	const bool executed = duckdb_execute_prepared(stmt, &result) == DuckDBSuccess;
+	if (!executed) {
+		const char* message = duckdb_result_error(&result);
+		error = message != nullptr ? message : "DuckDB execution failed";
+	}
+	row = executed && duckdb_row_count(&result) > 0;
+	duckdb_destroy_result(&result);
+	duckdb_destroy_prepare(&stmt);
+	return executed;
+}
+
+} // namespace
+
+DuckDBMySQLUseStatement duckdb_parse_mysql_use(const std::string& sql) {
+	using namespace sql_parser;
+	DuckDBMySQLUseStatement out;
+	if (sql.size() > 1024 * 1024 || sql.find('\0') != std::string::npos)
+		return out;
+	Parser<Dialect::MySQL> parser;
+	auto batch = parser.parse_all(sql.data(), sql.size());
+	if (batch.statements.size() != 1)
+		return out;
+	const ParsedStatement& statement = batch.statements[0];
+	if (statement.result.stmt_type != StmtType::USE)
+		return out;
+	if (!statement.result.ok() || !statement.result.full_input) {
+		out.kind = DuckDBMySQLUseStatement::Kind::invalid;
+		return out;
+	}
+	// Bounded tokenizer check over this one statement's source span. ParserSQL's
+	// USE extraction accepts any next token; MySQL accepts only an identifier
+	// here (a string literal or an unquoted reserved word is a syntax error).
+	Tokenizer<Dialect::MySQL> tokenizer;
+	tokenizer.reset(statement.source.ptr, statement.source.len);
+	if (tokenizer.next_token().type != TokenType::TK_USE) {
+		out.kind = DuckDBMySQLUseStatement::Kind::invalid;
+		return out;
+	}
+	const Token name = tokenizer.next_token();
+	if (name.type == TokenType::TK_STRING) {
+		out.kind = DuckDBMySQLUseStatement::Kind::invalid;
+		return out;
+	}
+	if (name.type != TokenType::TK_IDENTIFIER) {
+		out.kind = DuckDBMySQLUseStatement::Kind::invalid;
+		return out;
+	}
+	Token tail = tokenizer.next_token();
+	if (tail.type == TokenType::TK_SEMICOLON)
+		tail = tokenizer.next_token();
+	if (tail.type != TokenType::TK_EOF || name.text.ptr == nullptr) {
+		out.kind = DuckDBMySQLUseStatement::Kind::invalid;
+		return out;
+	}
+	std::string database(name.text.ptr, name.text.len);
+	if (database.empty()) {
+		out.kind = DuckDBMySQLUseStatement::Kind::empty;
+		return out;
+	}
+	// ParserSQL returns a delimited identifier's contents without unescaping a
+	// doubled delimiter; MySQL does unescape it.
+	if (name.source.len >= 2 && name.source.ptr != nullptr && name.source.ptr[0] == '`') {
+		std::string unescaped;
+		unescaped.reserve(database.size());
+		for (size_t i = 0; i < database.size(); ++i) {
+			unescaped.push_back(database[i]);
+			if (database[i] == '`' && i + 1 < database.size() && database[i + 1] == '`')
+				++i;
+		}
+		database.swap(unescaped);
+	}
+	if (database.size() > 64) {
+		out.kind = DuckDBMySQLUseStatement::Kind::too_long;
+		out.database = std::move(database);
+		return out;
+	}
+	out.kind = DuckDBMySQLUseStatement::Kind::database;
+	out.database = std::move(database);
+	return out;
+}
+
+std::string duckdb_mysql_handshake_database(const char* schemaname, const char* default_schema) {
+	if (schemaname == nullptr || schemaname[0] == '\0')
+		return {};
+	// Core stores mysql-default_schema when the handshake carried no database,
+	// so an exact match is indistinguishable from "no database selected". The
+	// conservative reading (no database) can only cause a refusal, never a
+	// resolution in a schema the client did not ask for.
+	if (default_schema != nullptr && std::strcmp(schemaname, default_schema) == 0)
+		return {};
+	return schemaname;
+}
+
+bool duckdb_mysql_database_exists(duckdb_connection conn, const std::string& database) {
+	if (!conn || database.empty())
+		return false;
+	bool row = false;
+	std::string error;
+	const char* sql =
+		"SELECT 1 FROM information_schema.schemata "
+		"WHERE catalog_name=current_database() AND schema_name=? LIMIT 1";
+	if (!bound_query_returns_row(conn, sql, database, row, error))
+		return false;
+	return row;
+}
+
+bool duckdb_mysql_use_database(duckdb_connection conn, const std::string& database,
+                               std::string& reason) {
+	reason.clear();
+	if (!conn) {
+		reason = "engine_error";
+		return false;
+	}
+	if (database.empty() || database.size() > 64) {
+		reason = "unknown_database";
+		return false;
+	}
+	if (duckdb_mysql_reserved_database(database)) {
+		reason = "reserved_database";
+		return false;
+	}
+	if (!duckdb_mysql_database_exists(conn, database)) {
+		reason = "unknown_database";
+		return false;
+	}
+	// `SET schema` is a session setting, binds the name as a value (no SQL
+	// interpolation) and is legal inside a read-only transaction. The exact
+	// existence check above already prevented DuckDB's case folding from
+	// redirecting a differently-cased name.
+	std::string previous;
+	if (!current_schema_value(conn, previous)) {
+		reason = "engine_error";
+		return false;
+	}
+	auto set_schema = [&](const std::string& name) {
+		duckdb_prepared_statement stmt = nullptr;
+		if (duckdb_prepare(conn, "SET schema = ?", &stmt) != DuckDBSuccess) {
+			duckdb_destroy_prepare(&stmt);
+			return false;
+		}
+		duckdb_result result {};
+		const bool bound =
+			duckdb_bind_varchar_length(stmt, 1, name.data(), name.size()) == DuckDBSuccess;
+		const bool executed = bound && duckdb_execute_prepared(stmt, &result) == DuckDBSuccess;
+		duckdb_destroy_result(&result);
+		duckdb_destroy_prepare(&stmt);
+		return executed;
+	};
+	if (!set_schema(database)) {
+		reason = "engine_error";
+		return false;
+	}
+	// DuckDB parses an unquoted/bound "a.b" as catalog+schema; a successful but
+	// different current schema would silently move the connection to another
+	// catalog. Verify the exact result and restore the previous schema instead.
+	std::string applied;
+	if (!current_schema_value(conn, applied) || applied != database) {
+		if (!previous.empty())
+			(void)set_schema(previous);
+		reason = "engine_error";
+		return false;
+	}
+	return true;
+}
+
+DuckDBMySQLUseResult duckdb_mysql_apply_use(DuckDBSessionState& state, duckdb_connection conn,
+                                            const DuckDBMySQLUseStatement& use) {
+	DuckDBMySQLUseResult result;
+	switch (use.kind) {
+	case DuckDBMySQLUseStatement::Kind::database: {
+		std::string reason;
+		if (!duckdb_mysql_use_database(conn, use.database, reason)) {
+			if (reason == "unknown_database" || reason == "reserved_database") {
+				result.code = 1049;
+				result.message = "Unknown database '" + use.database + "'";
+			} else {
+				result.code = 1105;
+				result.sqlstate = "HY000";
+				result.message = "Cannot switch DuckDB schema for USE";
+			}
+			return result;
+		}
+		state.mysql_database = use.database;
+		state.mysql_namespace_source = use.database;
+		state.mysql_schema_applied = true;
+		result.ok = true;
+		return result;
+	}
+	case DuckDBMySQLUseStatement::Kind::empty:
+		result.code = 1046;
+		result.sqlstate = "3D000";
+		result.message = "No database selected";
+		return result;
+	case DuckDBMySQLUseStatement::Kind::too_long:
+		result.code = 1059;
+		result.message = "Identifier name '" + use.database + "' is too long";
+		return result;
+	case DuckDBMySQLUseStatement::Kind::invalid:
+		result.code = 1064;
+		result.message = "You have an error in your SQL syntax near 'USE'";
+		return result;
+	case DuckDBMySQLUseStatement::Kind::none:
+		break;
+	}
+	result.code = 1105;
+	result.sqlstate = "HY000";
+	result.message = "Not a USE statement";
+	return result;
+}
+
+bool duckdb_mysql_namespace_sync(DuckDBSessionState& state, duckdb_connection conn,
+                                 const char* schemaname, const char* default_schema,
+                                 std::string& error) {
+	error.clear();
+	if (!conn) {
+		error = "No DuckDB connection for this session";
+		return false;
+	}
+	// Selects `database` and records it. `clear_on_missing` distinguishes the
+	// handshake/CHANGE_USER paths (an unresolvable name leaves no database,
+	// like MySQL's refused connection) from re-applying a name the session
+	// already owns after a connection replacement (the name stays visible as
+	// DATABASE(), exactly as MySQL keeps it after DROP DATABASE).
+	auto select = [&](const std::string& database, bool clear_on_missing) {
+		state.mysql_schema_applied = false;
+		if (database.empty()) {
+			state.mysql_database.clear();
+			return true;
+		}
+		std::string reason;
+		if (duckdb_mysql_use_database(conn, database, reason)) {
+			state.mysql_database = database;
+			state.mysql_schema_applied = true;
+			return true;
+		}
+		if (reason == "engine_error") {
+			// Never leave the connection pointing at a schema the client did
+			// not select: a failed switch is a hard error, not a fallback.
+			error = "Cannot select MySQL database '" + database + "'";
+			return false;
+		}
+		if (clear_on_missing)
+			state.mysql_database.clear();
+		return true;
+	};
+	if (!state.mysql_namespace_ready) {
+		state.mysql_namespace_ready = true;
+		state.mysql_namespace_source = duckdb_mysql_handshake_database(schemaname, default_schema);
+		return select(state.mysql_namespace_source, true);
+	}
+	const std::string current = schemaname != nullptr ? schemaname : "";
+	// Only a core-driven change (COM_CHANGE_USER) moves this spelling; a USE
+	// handled here writes both sides, and COM_INIT_DB is acknowledged by core
+	// without reaching the plugin (see doc/duckdb/protocol-compatibility.md).
+	if (current != state.mysql_namespace_source) {
+		state.mysql_namespace_source = current;
+		return select(current, true);
+	}
+	if (!state.mysql_database.empty() && !state.mysql_schema_applied) {
+		// COM_RESET_CONNECTION replaced the native connection; MySQL keeps its
+		// current database, so re-select it. A schema dropped meanwhile leaves
+		// the name selected so DATABASE() still reports it.
+		return select(state.mysql_database, false);
+	}
+	return true;
 }
 
 DuckDBSessionState& duckdb_session_state() {
@@ -1221,7 +1548,11 @@ DuckDBAnalyticalOutcome duckdb_execute_mysql_analytical(duckdb_connection conn,
 		}
 	};
 	try {
-		auto context = duckdb_mysql_select_context(conn);
+		DuckDBSessionState& namespace_state = duckdb_session_state();
+		const bool mysql_namespace = namespace_state.mysql_analytical;
+		auto context = duckdb_mysql_select_context(
+			conn, {}, mysql_namespace ? namespace_state.mysql_database : std::string(),
+			mysql_namespace);
 		auto translated = duckdb_translate_mysql_select(sql, context);
 		if (translated.decision != DuckDBMySQLSelectDecision::supported) {
 			result.decision = translated.decision == DuckDBMySQLSelectDecision::invalid
@@ -1382,10 +1713,76 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 			duckdb_send_result(sess, nullptr, nullptr, 0, sql.c_str()); return;
 		}
 	}
+	DuckDBSessionState& st = duckdb_session_state();
+	if constexpr (std::is_same_v<S, MySQL_Session>) {
+		if (st.mysql_analytical) {
+			const char* schemaname = nullptr;
+			if (sess->client_myds && sess->client_myds->myconn &&
+			    sess->client_myds->myconn->userinfo)
+				schemaname = sess->client_myds->myconn->userinfo->schemaname;
+			std::string namespace_error;
+			if (st.conn == nullptr) {
+				duckdb_send_mysql_error(sess, 1105, "HY000", "No DuckDB connection for this session");
+				return;
+			}
+			if (!duckdb_mysql_namespace_sync(st, st.conn, schemaname, sess->default_schema,
+			                                 namespace_error)) {
+				duckdb_send_mysql_error(sess, 1105, "HY000", namespace_error.c_str());
+				return;
+			}
+			DuckDBMySQLUseStatement use;
+			try { use = duckdb_parse_mysql_use(sql); }
+			catch (...) {
+				duckdb_send_mysql_error(sess, 1064, "42000", "Cannot parse USE statement");
+				return;
+			}
+			if (use.kind != DuckDBMySQLUseStatement::Kind::none) {
+				const DuckDBMySQLUseResult applied = duckdb_mysql_apply_use(st, st.conn, use);
+				if (!applied.ok) {
+					duckdb_send_mysql_error(sess, applied.code, applied.sqlstate,
+					                        applied.message.c_str());
+					return;
+				}
+				// Keep core's view of the current database truthful so audit
+				// records and later CHANGE_USER handling see the same name.
+				if (sess->client_myds && sess->client_myds->myconn &&
+				    sess->client_myds->myconn->userinfo) {
+					const char* charset = mysql_variables.client_get_value(
+						sess, SQL_CHARACTER_SET_CLIENT);
+					sess->client_myds->myconn->userinfo->set_schemaname(
+						const_cast<char*>(st.mysql_database.data()),
+						static_cast<int>(st.mysql_database.size()),
+						charset && *charset ? strtoul(charset, nullptr, 10) : 45);
+				}
+				duckdb_send_result(sess, nullptr, nullptr, 0, sql.c_str());
+				return;
+			}
+		}
+	}
 	const DuckDBIntercept kind = duckdb_classify_query(sql.c_str(), sql.size());
 	std::string effective = sql;
 	switch (kind) {
 	case DuckDBIntercept::show_tables:
+		if constexpr (std::is_same_v<S, MySQL_Session>) {
+			if (st.mysql_analytical) {
+				if (st.mysql_database.empty()) {
+					duckdb_send_mysql_error(sess, 1046, "3D000", "No database selected");
+					return;
+				}
+				// MySQL reports ER_BAD_DB_ERROR once the selected database is
+				// gone; an empty listing would misrepresent that.
+				if (!duckdb_mysql_database_exists(st.conn, st.mysql_database)) {
+					const std::string message =
+						"Unknown database '" + st.mysql_database + "'";
+					duckdb_send_mysql_error(sess, 1049, "42000", message.c_str());
+					return;
+				}
+				effective = "SELECT table_name FROM information_schema.tables "
+				            "WHERE table_schema=current_schema() "
+				            "AND table_catalog=current_database()";
+				break;
+			}
+		}
 		effective = "SELECT table_name FROM information_schema.tables "
 		            "WHERE table_schema='main'";
 		break;
@@ -1401,8 +1798,14 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		break;
 	case DuckDBIntercept::version:
 	case DuckDBIntercept::database: {
+		if (kind == DuckDBIntercept::database && st.mysql_analytical) {
+			SQLite3_result* r = duckdb_build_mysql_database_result(st.mysql_database);
+			duckdb_send_result(sess, r, nullptr, 0, sql.c_str());
+			delete r;
+			return;
+		}
 		const char* dbname = (kind == DuckDBIntercept::database)
-			? duckdb_session_state().database_name.c_str()
+			? st.database_name.c_str()
 			: nullptr;
 		SQLite3_result* r = duckdb_build_intercept_result(kind, dbname);
 		duckdb_send_result(sess, r, nullptr, 0, sql.c_str());
@@ -1411,7 +1814,7 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 	}
 	case DuckDBIntercept::ok_noop:
 		if constexpr (std::is_same_v<S, MySQL_Session>) {
-			if (duckdb_session_state().mysql_analytical) break;
+			if (st.mysql_analytical) break;
 			duckdb_send_mysql_error(sess, 1064, "42000", "Invalid or unsupported session setting");
 			return;
 		}
@@ -1422,7 +1825,6 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 		break;
 	}
 
-	DuckDBSessionState& st = duckdb_session_state();
 	if (st.conn == nullptr) {
 		if constexpr (std::is_same_v<S, MySQL_Session>)
 			duckdb_send_mysql_error(sess, 1105, "HY000", "No DuckDB connection for this session");
@@ -1446,7 +1848,22 @@ void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
 			auto analytical = duckdb_execute_mysql_analytical(st.conn, sql, !sess->autocommit);
 			if (!analytical.healthy) { sess->healthy = false; return; }
 			if (!analytical.outcome.ok) {
-				if (analytical.decision == DuckDBAnalyticalDecision::unsupported)
+				// Namespace refusals keep MySQL's error identity: ER_NO_DB_ERROR
+				// when no database is selected, ER_BAD_DB_ERROR for a reserved
+				// schema that is not a MySQL database of this replica. The
+				// translator's reason is the exact suffix of this message.
+				const std::string prefix = "MySQL analytical SELECT: ";
+				auto refused_for = [&](const char* reason) {
+					return analytical.outcome.error.compare(0, prefix.size(), prefix) == 0 &&
+					       analytical.outcome.error.compare(prefix.size(), std::string::npos,
+					                                       reason) == 0;
+				};
+				if (refused_for("no_database_selected")) {
+					duckdb_send_mysql_error(sess, 1046, "3D000", "No database selected");
+				} else if (refused_for("reserved_database")) {
+					duckdb_send_mysql_error(sess, 1049, "42000",
+					                        "Analytical SELECT cannot reference a reserved schema");
+				} else if (analytical.decision == DuckDBAnalyticalDecision::unsupported)
 					duckdb_send_mysql_error(sess, 1235, "0A000", analytical.outcome.error.c_str());
 				else if (analytical.decision == DuckDBAnalyticalDecision::invalid)
 					duckdb_send_mysql_error(sess, 1064, "42000", analytical.outcome.error.c_str());

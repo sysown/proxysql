@@ -9,7 +9,7 @@ catches that error. Fifty-eight unsupported or invalid queries are checked for
 refusal and never sent to either database.
 
 On 2026-11-18, MySQL `8.0.46-0ubuntu0.24.04.5` and DuckDB `v2.0.0` matched
-all 126 candidate queries, with zero unexpected mismatches. The negative control
+all 129 candidate queries, with zero unexpected mismatches. The negative control
 was detected. Cases cover escaped table and column names, duplicate aliases,
 table alias and qualified references, `*` over signed and unsigned integers,
 text, binary and NULL values, `COUNT(*)` and `COUNT(column)`, literal `001`
@@ -25,7 +25,7 @@ aliases, duplicates and `*`, and native HUGEINT/UHUGEINT projection. The
 fixture contains signed BIGINT extremes, the unsigned BIGINT maximum, UTF-8
 and binary bytes `00 ff`.
 
-Fourteen of the 126 cases exercise `DATE_FORMAT(column, '%Y-%m')` over a DATE
+Fourteen of the 129 cases exercise `DATE_FORMAT(column, '%Y-%m')` over a DATE
 column and a DATETIME(6) column the resolver declares as a recorded DATETIME: plain and aliased projections, mixed-case and spaced
 spellings, qualified and backtick references, a backtick source label, mixed
 and duplicate-alias projections, comma LIMIT, NULL positions, an empty result
@@ -44,7 +44,7 @@ expression and passes, so years below 1000 have no known difference; they are
 still outside the admitted column domain because MySQL DATE cannot store them
 in strict mode. Zero dates cannot be stored in DuckDB at all.
 
-Forty of the 126 cases exercise text comparison and ordering. The `text_probe`
+Forty of the 129 cases exercise text comparison and ordering. The `text_probe`
 fixture stores `t` and `u` as `VARCHAR` with `utf8mb4_0900_bin`, `ai` with
 `utf8mb4_0900_ai_ci` and `pad` with `utf8mb4_bin`. Rows cover the empty string,
 one space, `a` and `a ` (NO PAD must keep them distinct), leading space,
@@ -73,7 +73,16 @@ column: DuckDB's C API text conversion omits trailing fractional zeros
 fractional digits for DATETIME(6). That pre-existing difference is outside the
 translated value under test and is not compared here.
 
-Twenty-five of the 126 cases exercise SUM and AVG. The `sumavg_probe` fixture has
+Three of the 129 cases exercise database-qualified names against a second database
+(`other_db.other_probe` projection, predicate and `COUNT(*)`): MySQL resolves a
+qualified name in its own database regardless of the selected one. The probe's
+refusal checks add an unqualified relation with no database selected
+(`no_database_selected`), a reserved schema (`reserved_database`) and a
+three-part name, all without an engine call. The selected-database behavior itself
+(`USE`, `COM_INIT_DB`, prepared statements, reset) was checked against the oracle
+and is covered by the live client rather than by this translator probe.
+
+Twenty-five of the 129 cases exercise SUM and AVG. The `sumavg_probe` fixture has
 signed BIGINT and unsigned BIGINT extremes, `DECIMAL(19,2)`, `DECIMAL(18,4)`,
 `DECIMAL(20,2)` and `DECIMAL(19,0)` columns, fraction-only `DECIMAL(2,2)` in
 `sumavg_probe`, and fraction-only `DECIMAL(19,19)` in `scale_probe`, nullable

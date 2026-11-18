@@ -170,7 +170,9 @@ struct Fixture {
     duckdb_database database = nullptr;
     duckdb_connection duck = nullptr;
     string schema = "translation_oracle_" + to_string(getpid());
+    string other_schema = "translation_other_" + to_string(getpid());
     bool schema_owned = false;
+    bool other_owned = false;
     ~Fixture() {
         if (duck)
             duckdb_disconnect(&duck);
@@ -179,6 +181,8 @@ struct Fixture {
         if (mysql) {
             if (schema_owned && mysql_query(mysql, ("DROP DATABASE `" + schema + "`").c_str()))
                 cerr << "cleanup failed for " << schema << ": " << mysql_error(mysql) << "\n";
+            if (other_owned && mysql_query(mysql, ("DROP DATABASE `" + other_schema + "`").c_str()))
+                cerr << "cleanup failed for " << other_schema << ": " << mysql_error(mysql) << "\n";
             mysql_close(mysql);
         }
     }
@@ -221,6 +225,20 @@ int main(int argc, char **argv) {
             "2,'abc',NULL),(3,0,1,1,NULL,NULL),(4,0,1,NULL,'z',NULL)";
         mysql_exec(f.mysql, "INSERT INTO `odd``table` VALUES " + values);
         duck_exec(f.duck, "INSERT INTO \"odd`table\" VALUES " + values);
+        // A second database proves that a qualified `database.table` name is
+        // resolved by its own database, from any selected database.
+        mysql_exec(f.mysql, "CREATE DATABASE `" + f.other_schema + "`");
+        f.other_owned = true;
+        mysql_exec(f.mysql, "CREATE TABLE `" + f.other_schema +
+                                "`.`other_probe` (id BIGINT PRIMARY KEY, v VARCHAR(10))");
+        duck_exec(f.duck, "CREATE SCHEMA \"" + f.other_schema + "\"");
+        duck_exec(f.duck, "CREATE TABLE \"" + f.other_schema +
+                              "\".other_probe (id BIGINT PRIMARY KEY, v VARCHAR)");
+        const string other_rows = "(1,'left'),(2,'right'),(3,NULL)";
+        mysql_exec(f.mysql,
+                   "INSERT INTO `" + f.other_schema + "`.other_probe VALUES " + other_rows);
+        duck_exec(f.duck,
+                  "INSERT INTO \"" + f.other_schema + "\".other_probe VALUES " + other_rows);
         mysql_exec(f.mysql, "UPDATE `odd``table` SET bin=X'00FF' WHERE id=1");
         duck_exec(f.duck, "UPDATE \"odd`table\" SET bin=from_hex('00FF') WHERE id=1");
         mysql_exec(
@@ -478,6 +496,14 @@ int main(int argc, char **argv) {
                 r.unique_keys = {{"id"}};
                 return true;
             }
+            if (names == vector<string>{f.other_schema, "other_probe"}) {
+                r.canonical_name = {f.other_schema, "other_probe"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"v", {DuckDBMySQLTypeKind::text, 0, 0}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
             if (names != vector<string>{"odd`table"})
                 return false;
             r.canonical_name = {"odd`table"};
@@ -500,6 +526,12 @@ int main(int argc, char **argv) {
         const std::string aggregate255 = "SELECT COUNT(" + std::string(247, ' ') + "*)";
         const std::string date_format255 = "SELECT DATE_FORMAT(" + std::string(233, ' ') +
                                            "d,'%Y-%m') FROM date_probe ORDER BY id";
+        const std::string qualified_other =
+            "SELECT * FROM `" + f.other_schema + "`.other_probe ORDER BY id";
+        const std::string qualified_other_predicate =
+            "SELECT id FROM `" + f.other_schema + "`.other_probe WHERE id > 1 ORDER BY id";
+        const std::string qualified_other_count =
+            "SELECT COUNT(*) AS n FROM `" + f.other_schema + "`.other_probe";
         const Case cases[] = {
             {"huge extrema projection", "SELECT h,u FROM wide_probe ORDER BY id"},
             {"huge star", "SELECT * FROM wide_probe ORDER BY id"},
@@ -695,6 +727,11 @@ int main(int argc, char **argv) {
              "SELECT id FROM text_probe ORDER BY t ASC, id ASC LIMIT 2, 3"},
             {"text order nonnull", "SELECT id FROM text_probe WHERE t IS NOT NULL ORDER BY t ASC, "
                                    "id ASC"},
+            // Cross-database qualified names: MySQL resolves them in their own
+            // database regardless of the selected one.
+            {"qualified other database", qualified_other.c_str()},
+            {"qualified other database predicate", qualified_other_predicate.c_str()},
+            {"qualified other database count", qualified_other_count.c_str()},
         };
         int failures = 0, comparisons = 0;
         for (auto &entry : cases) {
@@ -795,6 +832,36 @@ int main(int argc, char **argv) {
                 ++failures;
             } else
                 cout << "REFUSAL " << sql << " " << x.reason << " (no engine call)\n";
+        }
+        // Database namespace policy. MySQL returns ER_NO_DB_ERROR (1046) for an
+        // unqualified relation with no database selected, but still resolves a
+        // qualified `database.table` name; system schemas are never replica
+        // databases. These are translator decisions, checked without an engine.
+        {
+            auto no_database = context;
+            no_database.default_schema.clear();
+            no_database.require_selected_database = true;
+            auto unqualified =
+                duckdb_translate_mysql_select("SELECT * FROM `odd``table`", no_database);
+            auto qualified = duckdb_translate_mysql_select(qualified_other, no_database);
+            auto reserved = duckdb_translate_mysql_select("SELECT * FROM information_schema.tables",
+                                                          no_database);
+            auto three_part = duckdb_translate_mysql_select(
+                "SELECT * FROM `" + f.other_schema + "`.other_probe.id", no_database);
+            const bool namespace_ok =
+                unqualified.decision != DuckDBMySQLSelectDecision::supported &&
+                unqualified.reason == "no_database_selected" && unqualified.sql.empty() &&
+                qualified.decision == DuckDBMySQLSelectDecision::supported &&
+                reserved.decision != DuckDBMySQLSelectDecision::supported &&
+                reserved.reason == "reserved_database" && reserved.sql.empty() &&
+                three_part.decision != DuckDBMySQLSelectDecision::supported &&
+                three_part.sql.empty();
+            cout << (namespace_ok ? "PASS" : "FAIL")
+                 << " database namespace refusals (no-db=" << unqualified.reason
+                 << ", qualified=" << qualified.reason << ", reserved=" << reserved.reason
+                 << ", three-part=" << three_part.reason << ")\n";
+            if (!namespace_ok)
+                ++failures;
         }
         // The negative control changes only the copied translator candidate offset.
         auto control = duckdb_translate_mysql_select(
