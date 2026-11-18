@@ -748,6 +748,13 @@ int main(int argc, char** argv) {
 		// backend's own default is not the client's, so ProxySQL refuses it. One backend at a time makes the
 		// next client get the one the first client started, so no other session may hold it.
 		setup.reset();
+		// Each thread's idle cleanup (every pgsql-ping_interval_server_msec) keeps free_connections_pct of
+		// max_connections free backends: 10% of 1 keeps none, so it could close the stale backend before the
+		// probe gets it, and the probe's fresh backend makes the RESET legitimate. 100% keeps it. Runtime only.
+		const std::string free_pct = current_value(admin.get(),
+			"SELECT variable_value FROM runtime_global_variables WHERE variable_name='pgsql-free_connections_pct'");
+		exec_ok(admin.get(), "SET pgsql-free_connections_pct=100");
+		exec_ok(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 		std::string pool, stale_datestyle;
 		// Empties the pool, then has a client started with DateStyle 'SQL, DMY' leave its backend there, the
 		// only one. Each RESET case needs a fresh one: in libpq mode the refusal drops the backend it was
@@ -794,6 +801,8 @@ int main(int argc, char** argv) {
 		if (servers.empty() == false) {
 			reload_servers(admin.get(), hg, servers);
 		}
+		exec_ok(admin.get(), "SET pgsql-free_connections_pct=" + free_pct);
+		exec_ok(admin.get(), "LOAD PGSQL VARIABLES TO RUNTIME");
 	}
 
 	setup = createNewConnection(BACKEND);
