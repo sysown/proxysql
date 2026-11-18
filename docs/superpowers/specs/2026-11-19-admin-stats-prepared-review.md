@@ -29,6 +29,11 @@ the 128-statement limit. The legacy result protocol and error/Sync tests pass
 build, the DuckDB analytical and native MySQL and PostgreSQL drivers pass 216,
 47 and 29 checks respectively.
 
+Both unchanged legacy TAP tests passed against a separate build of the
+exact v3.0 base `663e84aa6` with DuckDB disabled. Their 38 assertion
+messages match the DuckDB-only candidate `4e73d96dd` with DuckDB disabled
+and enabled after removing timestamps.
+
 The two-node Cluster test starts private ProxySQL processes without DuckDB.
 It checks that an exact runtime query rule synchronizes in both directions,
 that four prepared clients make progress across both protocols and both roles
@@ -97,9 +102,16 @@ quality-gate results are pending for the split branch.
 The MySQL 5.7 `CI-legacy-g7` run for `9098425b6` passed 22 of 23 tests.
 `reg_test_stmt_resultset_err_no_rows_php-t` returned `ETIME` from its
 two-second PHP subprocess wrapper without reporting the expected result.
-The same diagnostic on a matching v3.0 run has yet to be verified, so the
-cause and any relationship to the PR are open.
-[CI producer job](https://github.com/sysown/proxysql/actions/runs/44369849149/job/135034066140)
+The matching v3.0 CI job for `663e84aa6` ran the same test and passed all 23.
+[PR CI job](https://github.com/sysown/proxysql/actions/runs/44369849149/job/135034066140)
+[v3.0 CI job](https://github.com/sysown/proxysql/actions/runs/43684682670/job/132723121011)
+
+Locally, an unchanged TAP wrapper and PHP script passed 12 runs per
+head against normal builds of exact commits `663e84aa6` and `9098425b6`.
+The comparison used one private MySQL 5.7.44 backend, PHP 8.3.6 with
+mysqli, and three fresh ProxySQL instances per head. It kept the
+wrapper's original timeout. The timeout was not reproduced locally.
+Its cause and any relationship to the PR remain open.
 
 ## Standalone SQLite3 Server follow-up
 
