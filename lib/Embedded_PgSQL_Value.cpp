@@ -10,6 +10,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -87,9 +88,8 @@ bool is_ascii_digit(unsigned char value) {
 }
 
 bool ascii_ieq(const unsigned char* data, size_t length,
-               const char* lowercase_literal) {
-    const size_t literal_length = std::strlen(lowercase_literal);
-    if (length != literal_length) {
+               std::string_view lowercase_literal) {
+    if (length != lowercase_literal.size()) {
         return false;
     }
     for (size_t index = 0; index < length; ++index) {
@@ -852,9 +852,10 @@ Status decode_value(uint32_t oid, int16_t format, const unsigned char* data,
             while (start < end && is_ascii_space(data[start])) ++start;
             while (end > start && is_ascii_space(data[end - 1])) --end;
             const size_t n = end - start;
-            const char* words[] = {"true", "false", "yes", "no", "on", "off", "1", "0"};
+            constexpr std::string_view words[] = {"true", "false", "yes", "no",
+                                                  "on",   "off",   "1",   "0"};
             for (size_t i = 0; i < 8; ++i) {
-                const size_t m = std::strlen(words[i]);
+                const size_t m = words[i].size();
                 if (!n || n > m || (i >= 4 && i <= 5 && n < 2) || (i >= 6 && n != 1)) continue;
                 bool match = true;
                 for (size_t j = 0; j < n; ++j) {

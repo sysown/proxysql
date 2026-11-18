@@ -34,7 +34,7 @@ freshness. Admin/STATS PostgreSQL now supports shared read-only prepared executi
 its real libpq/packet client passes 53 checks. Explicit transactions and prepared
 writes are refused in this initial PostgreSQL slice. Both native DuckDB listeners now register the shared ABI 17 service for a
 read-only prepared SELECT subset. Native adapter/provider/policy checks pass
-81/41/47 assertions; real clients pass 47 MySQL and 29 PostgreSQL assertions.
+81/126/47 assertions; real clients pass 47 MySQL and 29 PostgreSQL assertions.
 MySQL connection reset finalizes handles before replacing the native connection,
 rolling back pending writes and discarding temporary tables. Statement reset
 retains the client transaction. These are incremental milestones with the explicit capability boundaries

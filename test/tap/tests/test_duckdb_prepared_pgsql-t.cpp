@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <unistd.h>
 
 static bool state(PGresult *r, const char *code) {
@@ -49,7 +50,8 @@ int main() {
     const char *v[] = {"21", "x'); DROP TABLE t; --"};
     r = PQexecPrepared(c, "bound", 2, v, nullptr, nullptr, 0);
     ok(prepared && good(r, PGRES_TUPLES_OK) && PQntuples(r) == 1 &&
-           !strcmp(PQgetvalue(r, 0, 0), "42") && atoi(PQgetvalue(r, 0, 1)) == (int)strlen(v[1]),
+           !strcmp(PQgetvalue(r, 0, 0), "42") &&
+           atoi(PQgetvalue(r, 0, 1)) == static_cast<int>(std::string_view(v[1]).size()),
        "execute repeated number and literal SQL-shaped text");
     PQclear(r);
     v[0] = "-3";

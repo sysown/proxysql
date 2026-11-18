@@ -6,6 +6,7 @@
 #include <limits>
 #include <new>
 #include <stdexcept>
+#include <string_view>
 namespace embedded {
 // Provided by Embedded_PgSQL_Value.cpp.
 bool pgsql_utf8_text_valid(const unsigned char*, size_t) noexcept;
@@ -232,13 +233,16 @@ Status pgsql_encode_field(const PgSQLColumn& c, int16_t f, const Value& v,
                 for (int i = 7; i >= 0; --i)
                     tmp.push_back(static_cast<unsigned char>(u >> (i * 8)));
             } else {
-                const char* special = std::isnan(*x) ? "NaN"
-                                      : std::isinf(*x)
-                                          ? (std::signbit(*x) ? "-Infinity" : "Infinity")
-                                          : nullptr;
-                if (special)
-                    s = append(reinterpret_cast<const unsigned char*>(special),
-                               std::strlen(special));
+                constexpr std::string_view nan = "NaN";
+                constexpr std::string_view infinity = "Infinity";
+                constexpr std::string_view negative_infinity = "-Infinity";
+                const std::string_view special =
+                    std::isnan(*x) ? nan
+                    : std::isinf(*x) ? (std::signbit(*x) ? negative_infinity : infinity)
+                                     : std::string_view{};
+                if (!special.empty())
+                    s = append(reinterpret_cast<const unsigned char*>(special.data()),
+                               special.size());
                 else {
                     auto r = std::to_chars(buf, buf + sizeof(buf), *x);
                     if (r.ec != std::errc())

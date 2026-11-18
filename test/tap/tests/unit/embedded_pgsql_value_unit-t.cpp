@@ -8,6 +8,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -21,7 +22,8 @@ using Wire = std::vector<unsigned char>;
 constexpr size_t kDefaultBudget = 16u * 1024u * 1024u;
 
 Wire text(const char* value) {
-    return Wire(value, value + std::strlen(value));
+    const std::string_view view(value);
+    return Wire(view.begin(), view.end());
 }
 
 Wire text(const std::string& value) {

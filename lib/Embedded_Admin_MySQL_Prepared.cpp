@@ -6,6 +6,7 @@
 #include "proxysql_admin_global_sql_lock.h"
 #include "sqlite3db.h"
 #include <cstdio>
+#include <new>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -91,7 +92,12 @@ Guard::~Guard() {
  }
  if (locked) proxysql_admin_global_sql_unlock(provider.admin->sql_query_global_mutex);
 }
-std::mutex& providers_mutex() { static auto* mutex = new std::mutex; return *mutex; }
+std::mutex& providers_mutex() {
+ // Static storage, never destroyed: unregistration can run during static teardown.
+ alignas(std::mutex) static unsigned char storage[sizeof(std::mutex)];
+ static std::mutex* mutex = new (storage) std::mutex;
+ return *mutex;
+}
 using Providers = std::unordered_map<MySQL_Session*, std::shared_ptr<Provider>>;
 Providers& providers() { static auto* map = new Providers; return *map; }
 }

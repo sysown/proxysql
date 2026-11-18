@@ -4,6 +4,7 @@
 #include <memory>
 #include <new>
 #include <stdexcept>
+#include <string_view>
 
 namespace duckdb_mysql_select_metadata {
 namespace {
@@ -112,13 +113,14 @@ Result describe(duckdb_connection conn, const std::optional<std::string> &catalo
                 result.status = Status::native_error;
                 return result;
             }
-            const size_t len = std::strlen(name.get());
-            if (!charge(len)) {
+            // DuckDB returns a NUL-terminated name that the unique_ptr frees.
+            const std::string_view name_view(name.get());
+            if (!charge(name_view.size())) {
                 result.status = Status::resource_limit;
                 return result;
             }
             Column col;
-            col.name.assign(name.get(), len);
+            col.name.assign(name_view.data(), name_view.size());
             col.logical_type = duckdb_get_type_id(type.value);
             col.known_scalar_type = scalar(col.logical_type);
             if (col.logical_type == DUCKDB_TYPE_DECIMAL) {

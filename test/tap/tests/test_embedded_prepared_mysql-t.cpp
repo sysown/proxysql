@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <unistd.h>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -491,13 +492,15 @@ int main() {
         for (const char* s : bad_sqls) {
             StmtPtr st(mysql_stmt_init(conn.get()));
             if (!st) BAIL_OUT("mysql_stmt_init failed");
-            int rc = mysql_stmt_prepare(st.get(), s, static_cast<unsigned long>(std::strlen(s)));
+            int rc = mysql_stmt_prepare(st.get(), s,
+                                        static_cast<unsigned long>(std::string_view(s).size()));
             ok(rc != 0, "unsupported prepare rejected: %s", s);
         }
         StmtPtr safe(mysql_stmt_init(conn.get()));
         if (!safe) BAIL_OUT("mysql_stmt_init failed");
-        const char* safe_sql = "SELECT 1";
-        if (mysql_stmt_prepare(safe.get(), safe_sql, static_cast<unsigned long>(std::strlen(safe_sql))) != 0) {
+        constexpr std::string_view safe_sql = "SELECT 1";
+        if (mysql_stmt_prepare(safe.get(), safe_sql.data(),
+                               static_cast<unsigned long>(safe_sql.size())) != 0) {
             BAIL_OUT("safe prepare failed after unsupported: %s", mysql_stmt_error(safe.get()));
         }
         mysql_stmt_close(safe.release());

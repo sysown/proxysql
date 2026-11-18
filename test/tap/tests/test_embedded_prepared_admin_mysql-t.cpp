@@ -77,7 +77,7 @@ int main() {
  s = prepare(a, "INSERT INTO mysql_servers(hostgroup_id,hostname,port) VALUES(?,?,?)");
  ok(s != nullptr, "prepare permitted server insert");
  if (!s) throw std::runtime_error("insert prepare failed");
- int p=1; char addr[]="127.0.0.1"; unsigned long alen=strlen(addr); MYSQL_BIND args[3]{};
+ int p=1; char addr[]="127.0.0.1"; unsigned long alen=sizeof(addr)-1; MYSQL_BIND args[3]{};
  args[0].buffer_type=MYSQL_TYPE_LONG; args[0].buffer=const_cast<int*>(&hg);
  args[1].buffer_type=MYSQL_TYPE_STRING; args[1].buffer=addr; args[1].buffer_length=alen; args[1].length=&alen;
  args[2].buffer_type=MYSQL_TYPE_LONG; args[2].buffer=&p;

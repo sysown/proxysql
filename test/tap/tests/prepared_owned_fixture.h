@@ -3,6 +3,7 @@
 // Each acceptance client owns its ProxySQL process, listeners and private data.
 #include "duckdb_replica_test_utils.h"
 #undef PROTOCOL_VERSION
+#include <filesystem>
 #include <map>
 namespace prepared_owned_fixture {
 using namespace duckdb_replica_test;
@@ -140,8 +141,11 @@ struct Fixture {
         }
         active = this;
         std::atexit(exit_cleanup);
-        char path[] = "/tmp/proxysql-prepared-XXXXXX";
-        char *made = mkdtemp(path);
+        // mkdtemp creates the directory with mode 0700 inside the platform temporary directory
+        // (TMPDIR when set), so other users cannot read or replace the fixture's files.
+        std::string pattern =
+            (std::filesystem::temp_directory_path() / "proxysql-prepared-XXXXXX").string();
+        char *made = mkdtemp(pattern.data());
         if (!made)
             BAIL_OUT("cannot create fixture directory");
         dir = made;
@@ -215,7 +219,11 @@ struct Fixture {
     Fixture(const Fixture &) = delete;
     Fixture &operator=(const Fixture &) = delete;
     ~Fixture() {
-        cleanup();
+        // Destructors must not throw; a failed cleanup here is reported by cleanup() itself.
+        try {
+            cleanup();
+        } catch (...) {
+        }
         if (active == this)
             active = nullptr;
     }

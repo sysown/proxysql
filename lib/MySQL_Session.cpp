@@ -11540,7 +11540,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	uint16_t stmt_param_id=0;
 	memcpy(&stmt_param_id,(char *)pkt.ptr+9,sizeof(uint16_t));
-	SLDH->add(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11);
+	bool long_data_appended = false;
+	if (!SLDH->add_checked(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11,&long_data_appended)) {
+		// COM_STMT_SEND_LONG_DATA has no response packet, so an allocation failure cannot be
+		// reported to the client. Keeping the earlier chunks would execute the statement with a
+		// truncated parameter; close the session instead of continuing with partial data.
+		proxy_error("Cannot buffer COM_STMT_SEND_LONG_DATA for statement %u parameter %u; closing session\n",
+			stmt_global_id, static_cast<unsigned>(stmt_param_id));
+		healthy = 0;
+	}
 	client_myds->DSS=STATE_SLEEP;
 	status=WAITING_CLIENT_DATA;
 	l_free(pkt.size,pkt.ptr);

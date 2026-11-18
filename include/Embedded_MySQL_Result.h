@@ -1,4 +1,6 @@
-#pragma once
+#ifndef __CLASS_EMBEDDED_MYSQL_RESULT_H
+#define __CLASS_EMBEDDED_MYSQL_RESULT_H
+
 // Internal C++17 MySQL binary-result metadata and row-payload codec for the
 // embedded prepared-statement slice. This is not a plugin ABI.
 //
@@ -74,3 +76,4 @@ Status mysql_encode_binary_row(const std::vector<MySQLColumn>& columns,
                                size_t max_payload = 64u * 1024u * 1024u);
 
 }  // namespace embedded
+#endif

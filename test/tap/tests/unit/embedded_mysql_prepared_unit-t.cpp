@@ -14,6 +14,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 static MySQL_Session* make_session(MySQL_Data_Stream*& stream_out, MySQL_Protocol*& proto_out) {
@@ -246,9 +247,9 @@ int main() {
         MySQL_Session* w = make_session(ws, wp);
         embedded::SQLiteAdapter replacement(db);
         proxy_sqlite3_exec(db, "CREATE TABLE wire_lifetime (v INTEGER)", nullptr, nullptr, nullptr);
-        auto prepare = [&](const char* sql) {
+        auto prepare = [&](std::string_view sql) {
             std::vector<unsigned char> body{0x16};
-            body.insert(body.end(), sql, sql + strlen(sql));
+            body.insert(body.end(), sql.data(), sql.data() + sql.size());
             auto p = make_packet(body); embedded::handle_mysql_prepared(*w, p);
             uint32_t id = 0;
             if (ws->PSarrayOUT->len && static_cast<unsigned char*>(ws->PSarrayOUT->index(0)->ptr)[4] == 0)

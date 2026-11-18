@@ -2,6 +2,7 @@
 #include "tap.h"
 #include <cstring>
 #include <string>
+#include <string_view>
 
 struct State {
     unsigned char client = 'I';
@@ -30,8 +31,8 @@ static bool reset_client(void *p, duckdb_connection *out) noexcept {
     state->client = 'I';
     return true;
 }
-static ProxySQL_Embedded_BytesView bytes(const char *s) {
-    return {reinterpret_cast<const uint8_t *>(s), strlen(s)};
+static ProxySQL_Embedded_BytesView bytes(std::string_view s) {
+    return {reinterpret_cast<const uint8_t *>(s.data()), s.size()};
 }
 static void query(duckdb_connection conn, const char *sql) {
     duckdb_result result{};

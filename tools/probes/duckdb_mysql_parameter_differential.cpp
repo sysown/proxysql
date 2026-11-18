@@ -7,6 +7,7 @@
 #include <mysql.h>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unistd.h>
 #include <vector>
 
@@ -27,11 +28,12 @@ static void duck_exec(duckdb_connection c, const char *sql) {
     }
     duckdb_destroy_result(&r);
 }
-static std::vector<long long> mysql_rows(MYSQL *m, const char *sql, const std::vector<Value> &v) {
+static std::vector<long long> mysql_rows(MYSQL *m, std::string_view sql,
+                                         const std::vector<Value> &v) {
     MYSQL_STMT *s = mysql_stmt_init(m);
     if (!s)
         throw std::runtime_error("mysql_stmt_init");
-    if (mysql_stmt_prepare(s, sql, std::strlen(sql))) {
+    if (mysql_stmt_prepare(s, sql.data(), static_cast<unsigned long>(sql.size()))) {
         std::string e = mysql_stmt_error(s);
         mysql_stmt_close(s);
         throw std::runtime_error(e);

@@ -346,8 +346,8 @@ bool handle_pgsql_prepared(PgSQL_Session &s, PtrSize_t &pkt) {
                 status = protocol("invalid Parse message");
             else {
                 auto &d = msg.data();
-                if (strlen(d.stmt_name) > entry->limits.name_per ||
-                    strlen(d.query_string) > entry->limits.sql_per ||
+                if (strnlen(d.stmt_name, entry->limits.name_per + 1) > entry->limits.name_per ||
+                    strnlen(d.query_string, entry->limits.sql_per + 1) > entry->limits.sql_per ||
                     d.num_param_types > entry->limits.parameters)
                     status = error(ErrorKind::resource, "Parse limits exceeded");
                 else {
@@ -368,8 +368,8 @@ bool handle_pgsql_prepared(PgSQL_Session &s, PtrSize_t &pkt) {
                 status = protocol("invalid Bind message");
             else {
                 auto &d = msg.data();
-                if (strlen(d.portal_name) > entry->limits.name_per ||
-                    strlen(d.stmt_name) > entry->limits.name_per ||
+                if (strnlen(d.portal_name, entry->limits.name_per + 1) > entry->limits.name_per ||
+                    strnlen(d.stmt_name, entry->limits.name_per + 1) > entry->limits.name_per ||
                     d.num_param_values > entry->limits.parameters ||
                     d.num_result_formats > entry->limits.columns)
                     status = error(ErrorKind::resource, "Bind limits exceeded");
@@ -418,7 +418,8 @@ bool handle_pgsql_prepared(PgSQL_Session &s, PtrSize_t &pkt) {
             PgSQL_Describe_Message msg;
             if (!msg.parse(pkt))
                 status = protocol("invalid Describe message");
-            else if (strlen(msg.data().stmt_name) > entry->limits.name_per)
+            else if (strnlen(msg.data().stmt_name, entry->limits.name_per + 1) >
+                     entry->limits.name_per)
                 status = error(ErrorKind::resource, "name exceeds limit");
             else {
                 PgSQLDescription d;
@@ -432,7 +433,8 @@ bool handle_pgsql_prepared(PgSQL_Session &s, PtrSize_t &pkt) {
             PgSQL_Execute_Message msg;
             if (!msg.parse(pkt))
                 status = protocol("invalid Execute message");
-            else if (strlen(msg.data().portal_name) > entry->limits.name_per)
+            else if (strnlen(msg.data().portal_name, entry->limits.name_per + 1) >
+                     entry->limits.name_per)
                 status = error(ErrorKind::resource, "name exceeds limit");
             else if (msg.data().max_rows > INT32_MAX)
                 status = protocol("invalid Execute row limit");
@@ -446,7 +448,8 @@ bool handle_pgsql_prepared(PgSQL_Session &s, PtrSize_t &pkt) {
             PgSQL_Close_Message msg;
             if (!msg.parse(pkt))
                 status = protocol("invalid Close message");
-            else if (strlen(msg.data().stmt_name) > entry->limits.name_per)
+            else if (strnlen(msg.data().stmt_name, entry->limits.name_per + 1) >
+                     entry->limits.name_per)
                 status = error(ErrorKind::resource, "name exceeds limit");
             else {
                 status = msg.data().stmt_type == 'S' ? ctl.close_statement(msg.data().stmt_name)

@@ -1,4 +1,6 @@
-#pragma once
+#ifndef __CLASS_EMBEDDED_MYSQL_PREPARED_H
+#define __CLASS_EMBEDDED_MYSQL_PREPARED_H
+
 #include <cstdint>
 #include <cstddef>
 #include <functional>
@@ -49,3 +51,4 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& packet);
 void consume_mysql_prepared_error(MySQL_Session&, PtrSize_t&, const Error&);
 
 }  // namespace embedded
+#endif

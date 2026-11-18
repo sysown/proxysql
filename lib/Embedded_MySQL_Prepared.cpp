@@ -1,4 +1,5 @@
 #include <exception>
+#include <new>
 #include "Embedded_MySQL_Prepared.h"
 #include "Embedded_MySQL_Result.h"
 
@@ -67,7 +68,13 @@ struct SharedState {
 };
 
 // Intentionally process-lifetime objects: sessions may be destroyed during static teardown.
-std::mutex& registry_mutex() { static auto* mutex = new std::mutex; return *mutex; }
+std::mutex& registry_mutex() {
+    // Constructed in static storage and never destroyed: sessions may be destroyed during
+    // static teardown, after an ordinary static mutex would already be gone.
+    alignas(std::mutex) static unsigned char storage[sizeof(std::mutex)];
+    static std::mutex* mutex = new (storage) std::mutex;
+    return *mutex;
+}
 std::map<MySQL_Session*, std::shared_ptr<SharedState>>& registry() {
     static auto* states = new std::map<MySQL_Session*, std::shared_ptr<SharedState>>;
     return *states;
@@ -224,7 +231,7 @@ size_t max_ok_packet_size(const MySQL_Session& session) {
     if (session.client_myds && session.client_myds->myconn &&
         (session.client_myds->myconn->options.client_flag & CLIENT_SESSION_TRACKING) &&
         mysql_thread___client_session_track_gtid && session.gtid_hid >= 0) {
-        size += 5 + 9 + strlen(session.gtid_buf);
+        size += 5 + 9 + strnlen(session.gtid_buf, sizeof(session.gtid_buf));
     }
     return size;
 }
@@ -910,14 +917,20 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         StmtState& st = *it->second;
         struct ExecuteCleanup {
             SharedState& state; StmtState& stmt; uint32_t id;
+            // A destructor must not let an exception escape. Cleanup that cannot complete would
+            // leave accounted long-data bytes behind, so it already terminates; say so explicitly.
             ~ExecuteCleanup() {
-                state.longdata.reset(id);
-                state.longdata_total_used -= stmt.longdata_bytes;
-                stmt.longdata_bytes = 0;
-                if (!stmt.charge(Resource::bind_bytes, 0)) std::terminate();
-                stmt.longdata_entries.clear();
-                stmt.has_deferred_error = false;
-                stmt.deferred_sqlstate = "HY000";
+                try {
+                    state.longdata.reset(id);
+                    state.longdata_total_used -= stmt.longdata_bytes;
+                    stmt.longdata_bytes = 0;
+                    if (!stmt.charge(Resource::bind_bytes, 0)) std::terminate();
+                    stmt.longdata_entries.clear();
+                    stmt.has_deferred_error = false;
+                    stmt.deferred_sqlstate = "HY000";
+                } catch (...) {
+                    std::terminate();
+                }
             }
         } cleanup{*state, st, wid};
         uint32_t iteration = static_cast<uint32_t>(read_uint_le(base + 10, 4));

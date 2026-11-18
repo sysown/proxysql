@@ -22,6 +22,7 @@
 
 #include <cstring>
 #include <string>
+#include <string_view>
 
 using namespace sql_parser;
 
@@ -102,7 +103,7 @@ enum class Disposition {
 
 struct ParseFixture {
 	const char* name;
-	const char* sql;
+	std::string_view sql;
 	ParseResult::Status status;
 	StmtType stmt_type;
 	bool full_input;
@@ -116,7 +117,7 @@ struct ParseFixture {
 
 void run_fixture(const ParseFixture& fixture) {
 	Parser<Dialect::MySQL> parser;
-	ParseResult result = parser.parse(fixture.sql, std::strlen(fixture.sql));
+	ParseResult result = parser.parse(fixture.sql.data(), fixture.sql.size());
 	const std::string emitted = emit_sql(parser, result.ast);
 
 	ok(result.status == fixture.status, "%s: parse status", fixture.name);
@@ -145,7 +146,7 @@ void run_fixture(const ParseFixture& fixture) {
 
 struct NodeFixture {
 	const char* name;
-	const char* sql;
+	std::string_view sql;
 	NodeType type;
 	size_t min_count;
 	const char* first_value;  // nullptr disables the value check
@@ -153,7 +154,7 @@ struct NodeFixture {
 
 void run_node_fixture(const NodeFixture& fixture) {
 	Parser<Dialect::MySQL> parser;
-	ParseResult result = parser.parse(fixture.sql, std::strlen(fixture.sql));
+	ParseResult result = parser.parse(fixture.sql.data(), fixture.sql.size());
 	size_t count = 0;
 	const AstNode* node = find_node(result.ast, fixture.type, count);
 	ok(node != nullptr && count >= fixture.min_count,
@@ -799,8 +800,8 @@ const NodeFixture kNodeFixtures[] = {
 void test_limit_shapes() {
 	{
 		Parser<Dialect::MySQL> parser;
-		const char* sql = "SELECT * FROM t LIMIT 20, 10";
-		ParseResult result = parser.parse(sql, std::strlen(sql));
+		const std::string_view sql = "SELECT * FROM t LIMIT 20, 10";
+		ParseResult result = parser.parse(sql.data(), sql.size());
 		const AstNode* limit = direct_child(result.ast, NodeType::NODE_LIMIT_CLAUSE);
 		ok(limit != nullptr, "limit comma: LIMIT clause exists");
 		ok(limit != nullptr && (limit->flags & FLAG_LIMIT_COMMA) != 0,
@@ -816,8 +817,8 @@ void test_limit_shapes() {
 	}
 	{
 		Parser<Dialect::MySQL> parser;
-		const char* sql = "SELECT * FROM t LIMIT 10 OFFSET 20";
-		ParseResult result = parser.parse(sql, std::strlen(sql));
+		const std::string_view sql = "SELECT * FROM t LIMIT 10 OFFSET 20";
+		ParseResult result = parser.parse(sql.data(), sql.size());
 		const AstNode* limit = direct_child(result.ast, NodeType::NODE_LIMIT_CLAUSE);
 		ok(limit != nullptr && (limit->flags & FLAG_LIMIT_COMMA) == 0,
 		   "limit offset: comma flag is clear");
@@ -834,8 +835,8 @@ void test_limit_shapes() {
 
 void test_identifier_flags() {
 	Parser<Dialect::MySQL> parser;
-	const char* sql = "SELECT `a``b`, `Order` FROM `t`";
-	ParseResult result = parser.parse(sql, std::strlen(sql));
+	const std::string_view sql = "SELECT `a``b`, `Order` FROM `t`";
+	ParseResult result = parser.parse(sql.data(), sql.size());
 	size_t count = 0;
 	const AstNode* column = find_node(result.ast, NodeType::NODE_COLUMN_REF, count);
 	ok(column != nullptr, "identifier flags: quoted column node exists");
@@ -855,8 +856,8 @@ void test_identifier_flags() {
 
 void test_double_quote_literal() {
 	Parser<Dialect::MySQL> parser;
-	const char* sql = "SELECT \"x\" FROM t";
-	ParseResult result = parser.parse(sql, std::strlen(sql));
+	const std::string_view sql = "SELECT \"x\" FROM t";
+	ParseResult result = parser.parse(sql.data(), sql.size());
 	size_t count = 0;
 	const AstNode* literal = find_node(result.ast, NodeType::NODE_LITERAL_STRING, count);
 	ok(literal != nullptr && count == 1, "double quote: double-quoted text is one string literal");
@@ -870,24 +871,24 @@ void test_double_quote_literal() {
 void test_user_variables_and_placeholders() {
 	{
 		Parser<Dialect::MySQL> parser;
-		const char* sql = "SELECT @a + 1";
-		ParseResult result = parser.parse(sql, std::strlen(sql));
+		const std::string_view sql = "SELECT @a + 1";
+		ParseResult result = parser.parse(sql.data(), sql.size());
 		ok(result.has_user_variables, "user variable: parse marks has_user_variables");
 		ok(classify_mysql_user_variable_usage(result) == UserVariableUsage::READ_ONLY,
 		   "user variable: read-only use is classified as read-only");
 	}
 	{
 		Parser<Dialect::MySQL> parser;
-		const char* sql = "SELECT @a := 1";
-		ParseResult result = parser.parse(sql, std::strlen(sql));
+		const std::string_view sql = "SELECT @a := 1";
+		ParseResult result = parser.parse(sql.data(), sql.size());
 		ok(result.has_user_variables, "user variable assignment: marked as user variable input");
 		ok(classify_mysql_user_variable_usage(result) == UserVariableUsage::UNSAFE_OR_UNKNOWN,
 		   "user variable assignment: usage is unsafe because the AST is incomplete");
 	}
 	{
 		Parser<Dialect::MySQL> parser;
-		const char* sql = "SELECT @@version";
-		ParseResult result = parser.parse(sql, std::strlen(sql));
+		const std::string_view sql = "SELECT @@version";
+		ParseResult result = parser.parse(sql.data(), sql.size());
 		ok(!result.has_user_variables,
 		   "system variable: ParserSQL does not set has_user_variables");
 		size_t count = 0;
@@ -899,8 +900,8 @@ void test_user_variables_and_placeholders() {
 	}
 	{
 		Parser<Dialect::MySQL> parser;
-		const char* sql = "SELECT ? + ?";
-		ParseResult result = parser.parse(sql, std::strlen(sql));
+		const std::string_view sql = "SELECT ? + ?";
+		ParseResult result = parser.parse(sql.data(), sql.size());
 		size_t count = 0;
 		find_node(result.ast, NodeType::NODE_PLACEHOLDER, count);
 		ok(count == 2, "placeholder: both placeholders are represented");
@@ -909,8 +910,8 @@ void test_user_variables_and_placeholders() {
 
 void test_table_statement_root() {
 	Parser<Dialect::MySQL> parser;
-	const char* sql = "TABLE t";
-	ParseResult result = parser.parse(sql, std::strlen(sql));
+	const std::string_view sql = "TABLE t";
+	ParseResult result = parser.parse(sql.data(), sql.size());
 	ok(result.status == ParseResult::OK && result.full_input,
 	   "TABLE: classified complete input");
 	ok(result.stmt_type == StmtType::SELECT, "TABLE: classified as SELECT");
@@ -923,8 +924,8 @@ void test_table_statement_root() {
 void test_parse_all_framing() {
 	{
 		Parser<Dialect::MySQL> parser;
-		const char* sql = "SELECT 1; SELECT 2; /* x */ SELECT 3";
-		BatchParseResult batch = parser.parse_all(sql, std::strlen(sql));
+		const std::string_view sql = "SELECT 1; SELECT 2; /* x */ SELECT 3";
+		BatchParseResult batch = parser.parse_all(sql.data(), sql.size());
 		ok(batch.statements.size() == 3, "parse_all: three statements are framed");
 		ok(batch.ok(), "parse_all: every statement has a complete SELECT AST");
 		if (batch.statements.size() == 3) {
@@ -948,8 +949,8 @@ void test_parse_all_framing() {
 	}
 	{
 		Parser<Dialect::MySQL> parser;
-		const char* sql = "  ; /* c */ ; SELECT 1; SELECT 2 /* x */; SELECT ; ";
-		BatchParseResult batch = parser.parse_all(sql, std::strlen(sql));
+		const std::string_view sql = "  ; /* c */ ; SELECT 1; SELECT 2 /* x */; SELECT ; ";
+		BatchParseResult batch = parser.parse_all(sql.data(), sql.size());
 		ok(batch.statements.size() == 3, "parse_all: empty and comment-only segments are skipped");
 		ok(!batch.ok(), "parse_all: a failing statement makes the batch not ok");
 		if (batch.statements.size() == 3) {
@@ -971,8 +972,8 @@ void test_parse_all_framing() {
 
 void test_ast_walk_and_transform() {
 	Parser<Dialect::MySQL> source;
-	const char* sql = "SELECT 1 + 2 FROM t";
-	ParseResult result = source.parse(sql, std::strlen(sql));
+	const std::string_view sql = "SELECT 1 + 2 FROM t";
+	ParseResult result = source.parse(sql.data(), sql.size());
 	ok(result.ast != nullptr, "ast transform: source query parses");
 
 	size_t visited = 0;
@@ -1013,27 +1014,27 @@ void test_ast_walk_and_transform() {
 }
 
 void test_provenance_and_operators() {
-	for (const char* sql : {"SELECT 1 /*! + 1 */", "SELECT 1 /*M! + 1 */"}) {
+	for (const std::string_view sql : {"SELECT 1 /*! + 1 */", "SELECT 1 /*M! + 1 */"}) {
 		Parser<Dialect::MySQL> parser;
-		ParseResult result = parser.parse(sql, std::strlen(sql));
+		ParseResult result = parser.parse(sql.data(), sql.size());
 		ok(result.full_input && result.has_comments && result.has_executable_comments,
-		   "provenance: executable comment is recorded for %s", sql);
+		   "provenance: executable comment is recorded for %s", sql.data());
 	}
-	for (const char* sql : {"SELECT 1 /* ordinary */", "SELECT '/*! quoted */'"}) {
+	for (const std::string_view sql : {"SELECT 1 /* ordinary */", "SELECT '/*! quoted */'"}) {
 		Parser<Dialect::MySQL> parser;
-		ParseResult result = parser.parse(sql, std::strlen(sql));
-		ok(!result.has_executable_comments, "provenance: no executable comment in %s", sql);
+		ParseResult result = parser.parse(sql.data(), sql.size());
+		ok(!result.has_executable_comments, "provenance: no executable comment in %s", sql.data());
 	}
 	{
 		Parser<Dialect::MySQL> parser;
-		const char* sql = "SELECT (a /* inner */ + b) AS x, c <=> d, e && f FROM t";
-		ParseResult result = parser.parse(sql, std::strlen(sql));
+		const std::string_view sql = "SELECT (a /* inner */ + b) AS x, c <=> d, e && f FROM t";
+		ParseResult result = parser.parse(sql.data(), sql.size());
 		ok(result.full_input && result.has_comments, "provenance: inline comment recorded");
 		const AstNode* list = direct_child(result.ast, NodeType::NODE_SELECT_ITEM_LIST);
 		const AstNode* item = list != nullptr ? list->first_child : nullptr;
 		ok(item != nullptr && ref_string(item->source()) == "(a /* inner */ + b)",
 		   "provenance: projection source preserves expression and excludes alias");
-		ok(item != nullptr && item->source().ptr == std::strstr(sql, "(a"),
+		ok(item != nullptr && item->source().ptr == std::strstr(sql.data(), "(a"),
 		   "provenance: projection source points into the input");
 		size_t count = 0;
 		const AstNode* op = find_node(result.ast, NodeType::NODE_BINARY_OP, count);
@@ -1052,8 +1053,8 @@ void test_provenance_and_operators() {
 
 void test_direct_emitter_comments() {
 	Parser<Dialect::MySQL> parser;
-	const char* sql = "SELECT 1 # hash comment\n";
-	ParseResult result = parser.parse(sql, std::strlen(sql));
+	const std::string_view sql = "SELECT 1 # hash comment\n";
+	ParseResult result = parser.parse(sql.data(), sql.size());
 	ok(result.ok() && result.full_input, "comment handling: hash comment is consumed");
 	ok(emit_sql(parser, result.ast) == "SELECT 1",
 	   "comment handling: emitter does not retain the comment");

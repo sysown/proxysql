@@ -4,19 +4,20 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <unistd.h>
 
 static std::string last_error;
 static unsigned int last_errno;
-static MYSQL_STMT *prepare(MYSQL *c, const char *sql) {
+static MYSQL_STMT *prepare(MYSQL *c, std::string_view sql) {
     MYSQL_STMT *s = mysql_stmt_init(c);
     if (!s)
         BAIL_OUT("stmt init failed");
-    if (mysql_stmt_prepare(s, sql, strlen(sql))) {
+    if (mysql_stmt_prepare(s, sql.data(), static_cast<unsigned long>(sql.size()))) {
         last_error = mysql_stmt_error(s);
         last_errno = mysql_stmt_errno(s);
         diag("prepare failed (%u/%s): %s; SQL: %s", mysql_stmt_errno(s), mysql_stmt_sqlstate(s),
-             mysql_stmt_error(s), sql);
+             mysql_stmt_error(s), sql.data());
         mysql_stmt_close(s);
         return nullptr;
     }
@@ -49,7 +50,7 @@ int main() {
             mysql_free_result(meta);
         long long number = 42, out1 = 0, out2 = 0;
         char text[] = "x'); DROP TABLE t; --";
-        unsigned long len = strlen(text);
+        unsigned long len = sizeof(text) - 1;
         my_bool nulls[2] = {0, 0};
         MYSQL_BIND in[2] = {}, out[2] = {};
         in[0].buffer_type = MYSQL_TYPE_LONGLONG;
@@ -217,9 +218,9 @@ int main() {
     if (result)
         mysql_free_result(result);
     const std::string wide = "duckdb_wide_my_" + std::to_string((long)getpid());
-    const char *min128 = "-170141183460469231731687303715884105728";
-    const char *maxu128 = "340282366920938463463374607431768211455";
-    const char *over128 = "170141183460469231731687303715884105728";
+    const char min128[] = "-170141183460469231731687303715884105728";
+    const char maxu128[] = "340282366920938463463374607431768211455";
+    const char over128[] = "170141183460469231731687303715884105728";
     bool wide_created =
         !mysql_query(c, ("CREATE TABLE " + wide + " (w HUGEINT, u UHUGEINT)").c_str());
     ok(wide_created, "create owned wide numeric table: %s", mysql_error(c));
@@ -239,8 +240,8 @@ int main() {
             if (meta)
                 mysql_free_result(meta);
             char input[64];
-            strcpy(input, min128);
-            unsigned long input_len = strlen(input);
+            std::memcpy(input, min128, sizeof(min128));
+            unsigned long input_len = sizeof(min128) - 1;
             MYSQL_BIND param[1] = {};
             param[0].buffer_type = MYSQL_TYPE_NEWDECIMAL;
             param[0].buffer = input;
@@ -257,19 +258,20 @@ int main() {
             }
             bool bound = !mysql_stmt_bind_param(s, param) && !mysql_stmt_bind_result(s, output);
             bool fetched = bound && !mysql_stmt_execute(s) && !mysql_stmt_fetch(s);
-            ok(fetched && result_len[0] == strlen(min128) && result_len[1] == strlen(maxu128) &&
+            ok(fetched && result_len[0] == sizeof(min128) - 1 &&
+                   result_len[1] == sizeof(maxu128) - 1 &&
                    !memcmp(result_values[0], min128, result_len[0]) &&
                    !memcmp(result_values[1], maxu128, result_len[1]),
                "bind signed minimum and return exact signed and unsigned boundaries");
             mysql_stmt_free_result(s);
-            strcpy(input, over128);
-            input_len = strlen(input);
+            std::memcpy(input, over128, sizeof(over128));
+            input_len = sizeof(over128) - 1;
             ok(mysql_stmt_execute(s) != 0, "out-of-range signed HUGEINT bind is refused");
             mysql_stmt_free_result(s);
-            strcpy(input, min128);
-            input_len = strlen(input);
+            std::memcpy(input, min128, sizeof(min128));
+            input_len = sizeof(min128) - 1;
             fetched = !mysql_stmt_execute(s) && !mysql_stmt_fetch(s);
-            ok(fetched && result_len[0] == strlen(min128) &&
+            ok(fetched && result_len[0] == sizeof(min128) - 1 &&
                    !memcmp(result_values[0], min128, result_len[0]),
                "valid wide bind recovers after overflow");
             mysql_stmt_free_result(s);

@@ -1,4 +1,6 @@
-#pragma once
+#ifndef __CLASS_EMBEDDED_SQLITE_POLICY_H
+#define __CLASS_EMBEDDED_SQLITE_POLICY_H
+
 #include "Embedded_Execution.h"
 #include <functional>
 #include <string>
@@ -41,3 +43,4 @@ private:
  bool cached_ = false, cached_select_ = false;
 };
 }
+#endif

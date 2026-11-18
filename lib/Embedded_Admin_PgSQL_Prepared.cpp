@@ -1,3 +1,4 @@
+#include <new>
 #include "Embedded_Admin_PgSQL_Prepared.h"
 #include "Embedded_Admin_SQLite_Policy.h"
 #include "Embedded_SQLite_Adapter.h"
@@ -161,7 +162,9 @@ Guard::~Guard() {
         proxysql_admin_global_sql_unlock(provider.admin->sql_query_global_mutex);
 }
 std::mutex &providers_mutex() {
-    static auto *mutex = new std::mutex;
+    // Static storage, never destroyed: unregistration can run during static teardown.
+    alignas(std::mutex) static unsigned char storage[sizeof(std::mutex)];
+    static std::mutex *mutex = new (storage) std::mutex;
     return *mutex;
 }
 using Providers = std::unordered_map<PgSQL_Session *, std::shared_ptr<Provider>>;
