@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unistd.h>
 #include <vector>
 #include "libpq-fe.h"
 #include "pg_lite_client.h"
@@ -202,11 +203,103 @@ static void libpq_checks(const char* host, const char* port, const char* user, c
     ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1, "connection remains usable after rejected statements");
     PQclear(r); PQfinish(c);
 }
-static std::string messages(PgConnection& c, int quiet = 100) {
+
+static void schema_checks(MYSQL* admin, const char* host, const char* port,
+                          const char* user, const char* pass) {
+    const std::string table = "admin_pgsql_prepared_shape_" + std::to_string(getpid());
+    using duckdb_replica_test::query;
+    if (!query(admin, "CREATE TABLE " + table + " (id INTEGER)") ||
+        !query(admin, "INSERT INTO " + table + " VALUES (7)"))
+        BAIL_OUT("cannot create the owned Admin schema fixture");
+    PGconn* connection = connect_user(host, port, user, pass);
+    if (!connection || PQstatus(connection) != CONNECTION_OK)
+        BAIL_OUT("cannot connect the PostgreSQL Admin schema test");
+    const std::string sql = "SELECT * FROM " + table;
+    PGresult* result = PQprepare(connection, "before_schema_change", sql.c_str(), 0, nullptr);
+    ok(PQresultStatus(result) == PGRES_COMMAND_OK, "prepare before an Admin schema change");
+    PQclear(result);
+    result = PQexecPrepared(connection, "before_schema_change", 0, nullptr, nullptr, nullptr, 0);
+    ok(PQresultStatus(result) == PGRES_TUPLES_OK && PQnfields(result) == 1 && PQntuples(result) == 1 &&
+       !std::strcmp(PQgetvalue(result, 0, 0), "7"), "prepared query reads the original Admin schema");
+    PQclear(result);
+    if (!query(admin, "ALTER TABLE " + table + " ADD COLUMN note TEXT DEFAULT 'fresh'"))
+        BAIL_OUT("cannot alter the owned Admin schema fixture");
+    result = PQexecPrepared(connection, "before_schema_change", 0, nullptr, nullptr, nullptr, 0);
+    ok(state(result, "0A000") && PQtransactionStatus(connection) == PQTRANS_IDLE,
+       "schema drift returns 0A000 and the connection returns to idle: %s", PQresultErrorMessage(result));
+    PQclear(result);
+    result = PQprepare(connection, "after_schema_change", sql.c_str(), 0, nullptr);
+    ok(PQresultStatus(result) == PGRES_COMMAND_OK, "reprepare after the Admin schema change");
+    PQclear(result);
+    result = PQexecPrepared(connection, "after_schema_change", 0, nullptr, nullptr, nullptr, 0);
+    ok(rows(result, "7", "fresh") && !std::strcmp(PQfname(result, 1), "note"),
+       "reprepared query reads the updated schema and default value");
+    PQclear(result);
+    PQfinish(connection);
+    if (!query(admin, "DROP TABLE " + table))
+        BAIL_OUT("cannot remove the owned Admin schema fixture");
+}
+
+static std::string messages(PgConnection& c, std::string* sqlstate = nullptr) {
     std::string s;
-    for (const auto& m : c.readUntilQuiet(quiet)) s += m.first;
+    if (sqlstate)
+        sqlstate->clear();
+    for (const auto& m : c.readUntilQuiet(100)) {
+        s += m.first;
+        if (sqlstate && m.first == 'E') {
+            BufferReader fields(m.second);
+            while (fields.remaining()) {
+                const char field = fields.readByte();
+                if (!field)
+                    break;
+                const std::string value = fields.readString();
+                if (field == 'C')
+                    *sqlstate = value;
+            }
+        }
+    }
     return s;
 }
+
+static void wire_quota_checks(PgConnection& c) {
+    constexpr int handle_limit = 128;
+    for (int i = 0; i < handle_limit; ++i)
+        c.prepareStatement("stmt_" + std::to_string(i), "SELECT 1", false);
+    c.sendSync();
+    std::string seq = messages(c);
+    ok(seq == std::string(handle_limit, '1') + "Z", "accept 128 named statements before Sync");
+    c.prepareStatement("overflow", "SELECT 1", false);
+    c.sendSync();
+    std::string sqlstate;
+    seq = messages(c, &sqlstate);
+    ok(seq == "EZ" && sqlstate == "54000", "statement quota returns 54000 and Sync restores ReadyForQuery");
+    c.closeStatement("stmt_0", false);
+    c.prepareStatement("replacement", "SELECT 1", false);
+    c.sendSync();
+    seq = messages(c);
+    ok(seq == "31Z", "closing a named statement releases quota for a replacement");
+
+    for (int i = 0; i < handle_limit; ++i)
+        c.bindStatement("replacement", "portal_" + std::to_string(i), {}, {}, false);
+    c.sendFlush();
+    seq = messages(c);
+    ok(seq == std::string(handle_limit, '2'), "accept 128 named portals before Sync");
+    c.closePortal("portal_0", false);
+    c.bindStatement("replacement", "replacement_portal", {}, {}, false);
+    c.sendFlush();
+    seq = messages(c);
+    ok(seq == "32", "closing one portal releases quota within the same cycle");
+    c.bindStatement("replacement", "overflow_portal", {}, {}, false);
+    c.sendSync();
+    seq = messages(c, &sqlstate);
+    ok(seq == "EZ" && sqlstate == "54000", "portal quota returns 54000 and Sync restores ReadyForQuery");
+    c.bindStatement("replacement", "recovered_portal", {}, {}, false);
+    c.executePortal("recovered_portal", 0, false);
+    c.sendSync();
+    seq = messages(c);
+    ok(seq == "2DCZ", "Sync releases portals and preserves the named statement");
+}
+
 static void wire_checks(const char* host, const char* port, const char* user, const char* pass) {
     try {
         PgConnection c(2000); c.connect(host, atoi(port), "main", user, pass);
@@ -236,6 +329,11 @@ static void wire_checks(const char* host, const char* port, const char* user, co
         c.bindStatement("s", "recovered", {}, {}, false);
         c.executePortal("recovered", 0, false); c.sendSync(); seq = messages(c);
         ok(seq == "2DDCZ", "named statement remains usable after rejected Parse and Sync: %s", seq.c_str());
+        c.closeStatement("s", false);
+        c.sendSync();
+        seq = messages(c);
+        ok(seq == "3Z", "close the original named statement before checking quotas");
+        wire_quota_checks(c);
     } catch (const std::exception& e) {
         diag("wire protocol test failed: %s", e.what());
         BAIL_OUT("wire protocol connection failed");
@@ -249,8 +347,8 @@ int main() {
     const char* su = env("TAP_PGSQL_STATSUSERNAME"), *sp = env("TAP_PGSQL_STATSPASSWORD");
     if (!!su != !!sp) { diag("Set both optional stats credentials"); return EXIT_FAILURE; }
     alarm(60); // Bound connect, DNS and libpq operations as well as socket reads.
-    constexpr int wire_count = 11;
-    plan(32 + wire_count + (su ? 23 + wire_count : 0) + (fixture.admin ? 2 : 0));
+    constexpr int wire_count = 19;
+    plan(32 + wire_count + (su ? 23 + wire_count : 0) + (fixture.admin ? 7 : 0));
     if (fixture.admin) {
         const std::string frontend_port = std::to_string(fixture.p);
         PGconn* frontend = connect_user(host, frontend_port.c_str(), "fixture_client", "fixture_client");
@@ -260,6 +358,7 @@ int main() {
         PQfinish(frontend);
         ok(admin_login_denied(host, port, user, "incorrect_fixture_password"),
            "PostgreSQL Admin authentication rejects an incorrect password");
+        schema_checks(fixture.admin, host, port, user, pass);
     }
     libpq_checks(host, port, user, pass, false); wire_checks(host, port, user, pass);
     if (su) {

@@ -72,6 +72,14 @@ query. PostgreSQL runs the packet sequence under both Admin and STATS
 credentials and checks that simple queries and an existing named statement
 work after a rejected Parse and Sync.
 
+The PostgreSQL suite now passes 100 checks in regular and local ASan builds.
+A legacy Admin connection changes a table while a PostgreSQL client holds a
+prepared statement. The old statement returns `0A000` without data, and
+repreparing returns the new column and its value. Raw tests cover the 128
+named statement and 128 named portal limits as both Admin and STATS. They
+check `54000` on overflow, capacity recovery after Close, and reuse of the
+named statement after Sync releases the portals.
+
 ## Published PR checks
 
 GitHub's checks for `9098425b6` cover the original mixed PR. SonarCloud's
