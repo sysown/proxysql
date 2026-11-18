@@ -1645,6 +1645,22 @@ int PgSQL_Data_Stream::buffer2array() {
 	return ret;
 }
 
+void PgSQL_Data_Stream::start_client_tls() {
+	DSS = STATE_SSL_INIT;
+	rbio_ssl = BIO_new(BIO_s_mem());
+	wbio_ssl = BIO_new(BIO_s_mem());
+#ifdef PROXYSQL31
+	tls13_handshake_complete = false;
+#endif
+	ssl = GloVars.get_SSL_new();
+	SSL_set_ex_data(ssl, pgsql_client_ssl_ex_index(), this);
+	SSL_set_fd(ssl, fd);
+	SSL_set_accept_state(ssl);
+	SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
+	encrypted = true;
+	proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+}
+
 int pgsql_client_ssl_ex_index() {
 	static const int idx = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
 	return idx;

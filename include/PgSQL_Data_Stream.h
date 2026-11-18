@@ -209,6 +209,7 @@ public:
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(PgSQL_DS_type, PgSQL_Session*, int); // initialize with arguments
+	void start_client_tls(); // begin server-side TLS handshake on this client stream
 	void shut_soft();
 	void shut_hard();
 #ifdef PROXYSQL31
