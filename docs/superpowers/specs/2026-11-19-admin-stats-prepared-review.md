@@ -24,6 +24,14 @@ either branch. All 473 wire assertions passed across the eight DuckDB,
 Admin/STATS and two-node Cluster suites. The prospective tree was
 `88a686245c783417482373b1134a341f1e2c0afd`.
 
+Review of the published checkpoint found that both DuckDB listeners
+accepted monitoring credentials through legacy authentication fallbacks.
+`e0a43b209` restricts DuckDB authentication to frontend credentials.
+The added checks pass on both protocols and verify that the existing Admin
+listeners still accept their monitoring credentials. All 325 DuckDB wire
+assertions passed in the CI base container, and all 38 unchanged legacy
+PostgreSQL Admin assertions passed with DuckDB disabled.
+
 ## Dispatch and policy
 
 The existing Admin dispatcher owns simple SQL and Cluster commands, including `PROXY_SELECT`. PostgreSQL simple Query payloads are never parsed by the prepared integration. A session that has never created a prepared provider does not enter its registry on a simple Query. With an active provider, PostgreSQL may close unnamed statements and portals before passing the original packet to the existing dispatcher. During extended-query error recovery, the controller discards messages through Sync as the protocol requires.

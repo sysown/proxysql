@@ -8121,7 +8121,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		&&
 		(
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
-			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) )
+			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE) )
 #else
 			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) )
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
@@ -8132,6 +8132,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			(default_hostgroup>=0 && ( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB ) )
 			||
 			(
+				session_type != PROXYSQL_SESSION_DUCKDB
+				&&
 				client_myds->encrypted==false
 				&&
 				strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0

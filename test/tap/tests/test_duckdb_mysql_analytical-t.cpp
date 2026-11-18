@@ -498,6 +498,10 @@ int main() {
     prepared_owned_fixture::Fixture fixture("mysql_analytical");
     if (!duckdb_replica_test::query(fixture.admin, "SET mysql-auditlog_filename='duckdb-mysql-audit'") ||
         !duckdb_replica_test::query(fixture.admin, "SET pgsql-auditlog_filename='duckdb-pgsql-audit'") ||
+        !duckdb_replica_test::query(fixture.admin, "SET mysql-monitor_username='fixture_monitor'") ||
+        !duckdb_replica_test::query(fixture.admin, "SET mysql-monitor_password='fixture_monitor'") ||
+        !duckdb_replica_test::query(fixture.admin, "SET pgsql-monitor_username='fixture_monitor'") ||
+        !duckdb_replica_test::query(fixture.admin, "SET pgsql-monitor_password='fixture_monitor'") ||
         !duckdb_replica_test::query(fixture.admin, "LOAD MYSQL VARIABLES TO RUNTIME") ||
         !duckdb_replica_test::query(fixture.admin, "LOAD PGSQL VARIABLES TO RUNTIME"))
         BAIL_OUT("cannot enable audit logs for the owned fixture");
@@ -512,6 +516,19 @@ int main() {
        "DuckDB PostgreSQL refuses credentials from the Admin credential scope");
     if (admin_on_duckdb)
         PQfinish(admin_on_duckdb);
+    const std::string pg_admin_port = std::to_string(fixture.ap);
+    const char *pg_monitor_values[] = {"127.0.0.1", pg_admin_port.c_str(), "fixture_monitor",
+                                       "fixture_monitor", "main", "disable", nullptr};
+    PGconn *pg_monitor = PQconnectdbParams(keys, pg_monitor_values, 0);
+    ok(pg_monitor && PQstatus(pg_monitor) == CONNECTION_OK,
+       "the PostgreSQL Admin listener still accepts its monitoring credentials");
+    PQfinish(pg_monitor);
+    pg_monitor_values[1] = pgport.c_str();
+    pg_monitor = PQconnectdbParams(keys, pg_monitor_values, 0);
+    ok(pg_monitor && PQstatus(pg_monitor) == CONNECTION_BAD,
+       "DuckDB PostgreSQL requires frontend credentials");
+    PQfinish(pg_monitor);
+
     PGconn *pg = PQconnectdbParams(keys, values, 0);
     if (!pg || PQstatus(pg) != CONNECTION_OK)
         BAIL_OUT("PostgreSQL fixture connect failed: %s",
@@ -584,6 +601,18 @@ int main() {
            mysql_errno(mysql_admin_on_duckdb) == 1045,
        "DuckDB MySQL refuses credentials from the Admin credential scope");
     mysql_close(mysql_admin_on_duckdb);
+    MYSQL *mysql_monitor = duckdb_replica_test::connect("127.0.0.1", fixture.a, "fixture_monitor",
+                                                      "fixture_monitor");
+    ok(mysql_monitor != nullptr, "the MySQL Admin listener still accepts its monitoring credentials");
+    if (mysql_monitor)
+        mysql_close(mysql_monitor);
+    mysql_monitor = mysql_init(nullptr);
+    if (!mysql_monitor)
+        BAIL_OUT("cannot allocate MySQL client");
+    ok(!mysql_real_connect(mysql_monitor, "127.0.0.1", "fixture_monitor", "fixture_monitor",
+                           nullptr, fixture.d, nullptr, 0) && mysql_errno(mysql_monitor) == 1045,
+       "DuckDB MySQL requires frontend credentials");
+    mysql_close(mysql_monitor);
     for (const char *database : {"no_such_database", "proxysql_replica"}) {
         MYSQL *client = mysql_init(nullptr);
         if (!client)
