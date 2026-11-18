@@ -152,6 +152,10 @@ public:
 	// An SSLRequest and a GSSENCRequest are each honoured once per connection (see PgSQL_Protocol).
 	bool startup_ssl_done = false;
 	bool startup_gss_done = false;
+	// The first byte of a client connection is peeked once, to spot a direct TLS ClientHello.
+	bool first_byte_checked = false;
+	// TLS started on a ClientHello with no SSLRequest first; ALPN postgresql is then required.
+	bool direct_tls = false;
 	unsigned char tmp_login_salt[4];
 	ScramState* scram_state;
 	// The stored secret of a login still in progress. SCRAM takes two packets and the credential is
@@ -209,7 +213,12 @@ public:
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(PgSQL_DS_type, PgSQL_Session*, int); // initialize with arguments
-	void start_client_tls(); // begin server-side TLS handshake on this client stream
+	/**
+	 * @brief Begins the server-side TLS handshake on this client stream.
+	 * Needs a valid fd and no SSL object or BIOs yet; call it at most once per stream
+	 * (after an SSLRequest, or on a direct TLS ClientHello).
+	 */
+	void start_client_tls();
 	void shut_soft();
 	void shut_hard();
 #ifdef PROXYSQL31

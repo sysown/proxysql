@@ -204,6 +204,18 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 				return PGSQL_SSLSTATUS_FAIL;
 			}
 		}
+		// As PostgreSQL: with no SSLRequest first, only ALPN says the client speaks its protocol.
+		if (direct_tls) {
+			const unsigned char* alpn = nullptr;
+			unsigned int alpn_len = 0;
+			SSL_get0_alpn_selected(ssl, &alpn, &alpn_len);
+			if (alpn == nullptr) {
+				proxy_error("received direct SSL connection request without ALPN protocol negotiation extension. Client %s:%d\n", addr.addr, addr.port);
+				// With TLS 1.2 our Finished is still queued: send it, so the client sees the handshake complete.
+				flush_tls_output_on_failure();
+				return PGSQL_SSLSTATUS_FAIL;
+			}
+		}
 #ifdef PROXYSQL31
 		// Publish the fast path only after the certificate checks above.
 		tls13_handshake_complete = myds_type == MYDS_FRONTEND &&
@@ -551,6 +563,26 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 	// this check was moved after the previous one about POLLHUP,
 	// otherwise the previous check was never true
 	if ((revents & POLLIN) == 0) return 0;
+
+	// Direct TLS (PostgreSQL 17+ sslnegotiation=direct): the client opens with a TLS handshake record
+	// (0x16) instead of a startup packet. Peeked once per connection; EOF and EAGAIN are left to the read below.
+	if (myds_type == MYDS_FRONTEND && !encrypted && !first_byte_checked) {
+		unsigned char b;
+		if (recv(fd, &b, 1, MSG_PEEK) == 1) {
+			first_byte_checked = true;
+			if (b == 0x16) {
+				const char* refusal = !pgsql_thread___have_ssl ? "pgsql-have_ssl is false" :
+					(client_addr && client_addr->sa_family == AF_UNIX) ? "not supported on a Unix socket" : nullptr;
+				if (refusal) {
+					proxy_error("Direct TLS connection from %s:%d refused: %s\n", addr.addr, addr.port, refusal);
+					shut_soft();
+					return -1;
+				}
+				start_client_tls(); // sets encrypted: the ClientHello is read by the TLS branch below
+				direct_tls = true;
+			}
+		}
+	}
 
 	int r = 0;
 	int s = queue_available(queueIN);
@@ -1657,7 +1689,7 @@ void PgSQL_Data_Stream::start_client_tls() {
 	SSL_set_fd(ssl, fd);
 	SSL_set_accept_state(ssl);
 	SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
-	encrypted = true;
+	encrypted = true; // the SSLRequest path has already set it, the direct TLS path has not
 	proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
 }
 

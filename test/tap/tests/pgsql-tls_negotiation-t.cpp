@@ -2,6 +2,7 @@
  * @file pgsql-tls_negotiation-t.cpp
  * @brief Checks that ProxySQL honours one SSLRequest and one GSSENCRequest per connection, as
  *        PostgreSQL does (ProcessStartupPacket() ssl_done / gss_done), and refuses a repeat.
+ *        Also checks ALPN and direct TLS (a ClientHello as the first bytes, ProcessSSLStartup()).
  */
 
 #include <unistd.h>
@@ -110,10 +111,10 @@ static bool read_message(int sock, char& type, std::vector<uint8_t>& body, SSL* 
 }
 
 /** The startup packet bytes for a given version. */
-static std::vector<uint8_t> startup_packet(uint32_t version) {
+static std::vector<uint8_t> startup_packet(uint32_t version, const std::string& user = frontend_user) {
 	std::vector<uint8_t> pkt(4);
 	put_uint32(pkt, version);
-	for (const std::string& p : {std::string("user"), frontend_user, std::string("database"), std::string("postgres")}) {
+	for (const std::string& p : {std::string("user"), user, std::string("database"), std::string("postgres")}) {
 		pkt.insert(pkt.end(), p.begin(), p.end());
 		pkt.push_back(0);
 	}
@@ -178,6 +179,23 @@ static std::string alpn_selected(SSL* tls) {
 	return data ? std::string((const char*)data, len) : "";
 }
 
+struct DirectTls { int sock = -1; SSL_CTX* ctx = nullptr; SSL* tls = nullptr; int reason = 0; };
+
+/** A fresh socket whose first bytes are a ClientHello. sock is kept open even when the handshake fails. */
+static DirectTls direct_tls_connect(const std::string& host, int port, const std::string& alpn_wire, int max_version = 0) {
+	DirectTls d;
+	d.sock = create_raw_connection(host, port);
+	if (d.sock >= 0) d.tls = tls_handshake(d.sock, alpn_wire, &d.ctx, max_version, &d.reason);
+	return d;
+}
+
+/** True if the peer closed the TLS connection; a receive timeout (WANT_READ) is not a close. */
+static bool tls_closed_by_peer(SSL* tls) {
+	char c;
+	const int n = SSL_read(tls, &c, 1);
+	return n <= 0 && SSL_get_error(tls, n) != SSL_ERROR_WANT_READ;
+}
+
 static MYSQL* admin_connect() {
 	MYSQL* conn = mysql_init(NULL);
 	if (!mysql_real_connect(conn, cl.admin_host, cl.admin_username, cl.admin_password,
@@ -208,9 +226,52 @@ static void close_all(int sock, SSL* tls, SSL_CTX* ctx) {
 	if (sock >= 0) close(sock);
 }
 
-static bool send_startup_pkt(int sock, SSL* tls = nullptr) {
-	const std::vector<uint8_t> s = startup_packet(PG_PROTOCOL_30);
+static bool send_startup_pkt(int sock, SSL* tls = nullptr, const std::string& user = frontend_user) {
+	const std::vector<uint8_t> s = startup_packet(PG_PROTOCOL_30, user);
 	return send_exact(sock, s.data(), s.size(), tls);
+}
+
+static uint32_t auth_type(const std::vector<uint8_t>& body) {
+	if (body.size() < 4) return UINT32_MAX;
+	return ((uint32_t)body[0] << 24) | ((uint32_t)body[1] << 16) | ((uint32_t)body[2] << 8) | body[3];
+}
+
+/** Startup, expect R type 3, send the password, read to Z. True when R type 0 was seen and no E. */
+static bool login_cleartext(int sock, SSL* tls, const std::string& user, const std::string& password) {
+	char type = '?';
+	std::vector<uint8_t> body;
+	if (!send_startup_pkt(sock, tls, user) || !read_message(sock, type, body, tls) || type != 'R' || auth_type(body) != 3) {
+		diag("login_cleartext: expected R type 3, got '%c' type %u", type, auth_type(body));
+		return false;
+	}
+	std::vector<uint8_t> pkt{ 'p' };
+	put_uint32(pkt, 4 + password.size() + 1);
+	pkt.insert(pkt.end(), password.begin(), password.end());
+	pkt.push_back(0);
+	if (!send_exact(sock, pkt.data(), pkt.size(), tls)) return false;
+	bool auth_ok = false, error = false;
+	while (read_message(sock, type, body, tls) && type != 'Z') {
+		if (type == 'R' && auth_type(body) == 0) auth_ok = true;
+		if (type == 'E') { error = true; diag("login_cleartext: error '%s'", error_field(body, 'M').c_str()); }
+	}
+	return type == 'Z' && auth_ok && !error;
+}
+
+/** Q, read to Z. True when a D arrived and no E. */
+static bool simple_query_ok(int sock, SSL* tls, const std::string& sql) {
+	std::vector<uint8_t> pkt{ 'Q' };
+	put_uint32(pkt, 4 + sql.size() + 1);
+	pkt.insert(pkt.end(), sql.begin(), sql.end());
+	pkt.push_back(0);
+	if (!send_exact(sock, pkt.data(), pkt.size(), tls)) return false;
+	char type = '?';
+	std::vector<uint8_t> body;
+	bool row = false, error = false;
+	while (read_message(sock, type, body, tls) && type != 'Z') {
+		if (type == 'D') row = true;
+		if (type == 'E') { error = true; diag("simple_query_ok: error '%s'", error_field(body, 'M').c_str()); }
+	}
+	return type == 'Z' && row && !error;
 }
 
 int main(int argc, char** argv) {
@@ -219,7 +280,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(17);
+	plan(31);
 
 	frontend_user = cl.pgsql_username;
 	const std::string host = cl.pgsql_host;
@@ -368,6 +429,129 @@ int main(int argc, char** argv) {
 	ok(admin_run(admin, "PROXYSQL RELOAD TLS"), "PROXYSQL RELOAD TLS succeeds");
 	tls_ok = alpn_case(ALPN_PG, sel, false);
 	ok(tls_ok && sel == "postgresql", "after RELOAD TLS: postgresql still selected (got '%s')", sel.c_str());
+
+	// I: direct TLS (PostgreSQL 17+ sslnegotiation=direct): the ClientHello is the first thing sent.
+	auto still_serving = [&]() {
+		int sock = create_raw_connection(host, port);
+		char t = '?';
+		std::vector<uint8_t> b;
+		if (sock >= 0 && send_startup_pkt(sock)) read_message(sock, t, b);
+		close_all(sock, nullptr, nullptr);
+		return t == 'R';
+	};
+	{
+		DirectTls d = direct_tls_connect(host, port, ALPN_PG);
+		sel = d.tls ? alpn_selected(d.tls) : "";
+		type = '?';
+		if (d.tls && send_startup_pkt(d.sock, d.tls)) read_message(d.sock, type, body, d.tls);
+		ok(d.tls && sel == "postgresql" && type == 'R', "direct TLS, ALPN postgresql: startup answered (got '%s','%c')", sel.c_str(), type);
+		close_all(d.sock, d.tls, d.ctx);
+	}
+	{
+		DirectTls d = direct_tls_connect(host, port, ALPN_FOO_PG);
+		sel = d.tls ? alpn_selected(d.tls) : "";
+		ok(d.tls && sel == "postgresql", "direct TLS, ALPN foo,postgresql: postgresql selected (got '%s')", sel.c_str());
+		close_all(d.sock, d.tls, d.ctx);
+	}
+	{
+		// As PostgreSQL: the handshake completes, then the connection is closed without a reply.
+		DirectTls d = direct_tls_connect(host, port, "");
+		type = '?';
+		if (d.tls && send_startup_pkt(d.sock, d.tls)) read_message(d.sock, type, body, d.tls);
+		ok(d.tls != nullptr && type != 'R' && tls_closed_by_peer(d.tls), "direct TLS, no ALPN: handshake completes, then closed with no authentication request");
+		close_all(d.sock, d.tls, d.ctx);
+	}
+	{
+		// TLS 1.2: the client finishes only after the server's flight, so the server-side flush before closing is what lets it complete.
+		DirectTls d = direct_tls_connect(host, port, "", TLS1_2_VERSION);
+		type = '?';
+		if (d.tls && send_startup_pkt(d.sock, d.tls)) read_message(d.sock, type, body, d.tls);
+		ok(d.tls != nullptr && type != 'R' && tls_closed_by_peer(d.tls), "direct TLS 1.2, no ALPN: handshake completes, then closed with no authentication request");
+		close_all(d.sock, d.tls, d.ctx);
+	}
+	{
+		DirectTls d = direct_tls_connect(host, port, ALPN_FOO);
+		ok(d.tls == nullptr && d.reason == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL, "direct TLS, ALPN foo: alert 120 (reason %d)", d.reason);
+		close_all(d.sock, d.tls, d.ctx);
+	}
+	{
+		DirectTls d = direct_tls_connect(host, port, ALPN_PG);
+		char reply = '?';
+		type = '?';
+		if (d.tls && send_request(d.sock, PG_SSL_REQUEST_CODE, d.tls) && read_reply_byte(d.sock, reply, d.tls) &&
+			reply == 'N' && send_startup_pkt(d.sock, d.tls))
+			read_message(d.sock, type, body, d.tls);
+		ok(reply == 'N' && type == 'R', "direct TLS, then SSLRequest: 'N', then startup works (got '%c','%c')", reply, type);
+		close_all(d.sock, d.tls, d.ctx);
+	}
+	bool auth_restored = false;
+	{
+		// Cleartext, so the password check runs inside the direct TLS session. Restored right after.
+		bool logged_in = false, queried = false;
+		if (set_pgsql_var(admin, "authentication_method", "1")) {
+			DirectTls d = direct_tls_connect(host, port, ALPN_PG);
+			logged_in = d.tls && login_cleartext(d.sock, d.tls, cl.pgsql_username, cl.pgsql_password);
+			queried = logged_in && simple_query_ok(d.sock, d.tls, "SELECT 1");
+			close_all(d.sock, d.tls, d.ctx);
+		}
+		auth_restored = set_pgsql_var(admin, "authentication_method", "3");
+		ok(logged_in && queried, "direct TLS: cleartext login and SELECT 1 succeed");
+	}
+	{
+		// TLS 1.2 carries ALPN in the ServerHello, not in EncryptedExtensions.
+		DirectTls d = direct_tls_connect(host, port, ALPN_PG, TLS1_2_VERSION);
+		sel = d.tls ? alpn_selected(d.tls) : "";
+		type = '?';
+		if (d.tls && send_startup_pkt(d.sock, d.tls)) read_message(d.sock, type, body, d.tls);
+		ok(d.tls && sel == "postgresql" && type == 'R', "direct TLS 1.2: ALPN selected, startup answered (got '%s','%c')", sel.c_str(), type);
+		close_all(d.sock, d.tls, d.ctx);
+	}
+	{
+		DirectTls d = direct_tls_connect(host, port, ALPN_PG);
+		std::vector<uint8_t> cancel;
+		for (uint32_t v : {16u, 80877102u, 0u, 0u}) put_uint32(cancel, v);
+		const bool closed = d.tls && send_exact(d.sock, cancel.data(), cancel.size(), d.tls) && tls_closed_by_peer(d.tls);
+		close_all(d.sock, d.tls, d.ctx);
+		ok(d.tls != nullptr && closed && still_serving(), "cancel over direct TLS: connection closed, ProxySQL keeps serving");
+	}
+	{
+		DirectTls d = direct_tls_connect(cl.pgsql_admin_host, cl.pgsql_admin_port, ALPN_PG);
+		sel = d.tls ? alpn_selected(d.tls) : "";
+		type = '?';
+		if (d.tls && send_startup_pkt(d.sock, d.tls, cl.admin_username)) read_message(d.sock, type, body, d.tls);
+		ok(d.tls && sel == "postgresql" && type == 'R', "direct TLS on the PgSQL admin port (%d) (got '%c')", cl.pgsql_admin_port, type);
+		close_all(d.sock, d.tls, d.ctx);
+	}
+	bool ssl_restored = false;
+	{
+		bool refused = false;
+		if (set_pgsql_var(admin, "have_ssl", "false")) {
+			DirectTls d = direct_tls_connect(host, port, ALPN_PG);
+			refused = d.tls == nullptr;
+			close_all(d.sock, d.tls, d.ctx);
+		}
+		ssl_restored = set_pgsql_var(admin, "have_ssl", "true");
+		ok(refused, "pgsql-have_ssl=false: direct TLS refused");
+	}
+	{
+		int sock = create_raw_connection(host, port);
+		if (sock >= 0) close(sock);
+		usleep(100000); // let ProxySQL see the EOF before the next connection
+		ok(still_serving(), "connect and close without a byte: ProxySQL keeps serving");
+	}
+	{
+		// The peek must neither consume nor misread a lone 0x00 (the first length byte).
+		int sock = create_raw_connection(host, port);
+		const std::vector<uint8_t> s = startup_packet(PG_PROTOCOL_30);
+		type = '?';
+		if (sock >= 0 && send_exact(sock, s.data(), 1)) {
+			usleep(100000);
+			if (send_exact(sock, s.data() + 1, s.size() - 1)) read_message(sock, type, body);
+		}
+		ok(type == 'R', "split plaintext startup (first segment 1 byte, 100 ms pause): answered (got '%c')", type);
+		close_all(sock, nullptr, nullptr);
+	}
+	ok(ssl_restored && auth_restored, "pgsql-have_ssl and pgsql-authentication_method restored");
 
 	mysql_close(admin);
 	return exit_status();
