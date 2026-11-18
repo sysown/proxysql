@@ -163,10 +163,16 @@ All 11 Makefile dependency checks pass with the restored suite registered.
   including the shared, MySQL, and PostgreSQL prepared suites.
   [ASan](https://github.com/sysown/proxysql/actions/runs/44392535868) ·
   [TSan](https://github.com/sysown/proxysql/actions/runs/44392535796)
-- DuckDB `legacy-g6` failed assertions 341 and 692 of
+- On the same draft commit, all 79 `legacy-g4` test programs passed.
+  The artifacts confirm 42 MySQL, 100 PostgreSQL, and 10 two-node Cluster
+  assertions. Coverage collection then exited with code 6 and reported the
+  same 31 missing DuckDB sources as the DuckDB run.
+  [Integration](https://github.com/sysown/proxysql/actions/runs/44392535906)
+- Both `legacy-g6` runs failed assertions 341 and 692 of
   `pgsql-query_cache_test-t`. Both had `Query_Cache_count_GET` equal to 1
   where the test expected 0. The v3.0 baseline failed the same assertions
-  with the same values. [Integration](https://github.com/sysown/proxysql/actions/runs/44392506978)
+  with the same values. [DuckDB integration](https://github.com/sysown/proxysql/actions/runs/44392506978) ·
+  [Admin integration](https://github.com/sysown/proxysql/actions/runs/44392535745)
 
 ## Build flag
 
