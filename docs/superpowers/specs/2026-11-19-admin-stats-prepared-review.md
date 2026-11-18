@@ -35,6 +35,41 @@ that four prepared clients make progress across both protocols and both roles
 during the updates, and that both peers exit cleanly with live prepared
 statements. It passed ten checks on each of five consecutive local runs.
 
-Combined integration and sanitizer CI evidence remain required for the
-separate draft PR. Prepared MySQL writes remain outside the read-only
-candidate.
+## Sanitizer comparison
+
+The Admin candidate at `af040de87` passed all 62 PostgreSQL, 31 MySQL, and
+10 two-node Cluster checks with the local ASan-instrumented ProxySQL server
+and test binaries. This run used the local prebuilt dependency libraries
+and disabled leak detection. The existing `reg_test_3847_admin_lock-t`
+also passed all three checks in a regular build.
+
+Strict local TSan stopped the candidate and its v3.0 merge base
+`663e84aa6` during startup. Both reported the read in
+`MySQL_HostGroups_Manager::commit_locked` racing with initialization in
+`GTID_syncer_run`. Temporarily suppressing that report for diagnosis
+exposed the same second report in libev's `evpipe_write` on both heads.
+The repository and CI configuration contain no new suppression from the
+comparison.
+
+In local TSan report-only mode, the candidate passed the 62 PostgreSQL and
+31 MySQL assertions. The Cluster test passed eight checks, including
+bidirectional synchronization, and exceeded the five-second shutdown
+deadline on both nodes. A temporary control that used simple queries in
+place of prepared statements reproduced the two shutdown timeouts on
+both `663e84aa6` and `af040de87`. The control passed the other eight
+checks on both heads. Sanitizer integration CI remains pending for the split branch.
+Prepared MySQL writes require their own review.
+
+## Published PR checks
+
+GitHub's checks for `9098425b6` cover the original mixed PR. SonarCloud's
+security condition is CPP S5443 on the private test fixture's temporary
+directory helper. The line uses the platform temporary parent, followed
+immediately by `mkdtemp` to atomically create a private directory with mode
+0700. Review the finding in that context when the split branch is
+analyzed. [SonarCloud issue](https://sonarcloud.io/project/issues?id=sysown_proxysql&issues=AaHtpg9ohQbbvofVHdGl&pullRequest=6648)
+
+Codecov separately reported 4.47% patch coverage and 52.26% project
+coverage while coverage jobs were still running. Final coverage and
+quality-gate results are pending for the split branch.
+[Codecov report](https://app.codecov.io/gh/sysown/proxysql/pull/6648)
