@@ -11,6 +11,7 @@
 #include <netinet/tcp.h>
 #include <netdb.h>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -89,6 +90,22 @@ static bool tls_closed_by_peer(SSL* tls) {
 	char c;
 	const int n = SSL_read(tls, &c, 1);
 	return n <= 0 && SSL_get_error(tls, n) != SSL_ERROR_WANT_READ;
+}
+
+/** Memory-BIO client I/O: send everything tls has queued in wbio. */
+static bool flush_wbio(int sock, BIO* wbio) {
+	char buf[4096];
+	int n;
+	while ((n = BIO_read(wbio, buf, sizeof(buf))) > 0)
+		if (!send_exact(sock, buf, n)) return false;
+	return true;
+}
+
+/** Memory-BIO client I/O: feed one socket read into rbio. False on EOF or receive timeout. */
+static bool feed_rbio(int sock, BIO* rbio) {
+	char buf[4096];
+	const ssize_t n = recv(sock, buf, sizeof(buf), 0);
+	return n > 0 && BIO_write(rbio, buf, n) == n;
 }
 
 static MYSQL* admin_connect() {
@@ -175,7 +192,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(31);
+	plan(32);
 
 	frontend_user = cl.pgsql_username;
 	const std::string host = cl.pgsql_host;
@@ -449,6 +466,44 @@ int main(int argc, char** argv) {
 		}
 		ok(type == 'R', "split plaintext startup (first segment 1 byte, 100 ms pause): answered (got '%c')", type);
 		close_all(sock, nullptr, nullptr);
+	}
+	{
+		// The first TCP segment holds only 2 bytes of the ClientHello: the first read sees a partial
+		// record header. Memory BIOs let the test choose where the ClientHello is cut.
+		int sock = create_raw_connection(host, port);
+		SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+		SSL* tls = ctx ? SSL_new(ctx) : nullptr;
+		bool done = false;
+		std::string alpn;
+		type = '?';
+		if (tls) SSL_set_bio(tls, BIO_new(BIO_s_mem()), BIO_new(BIO_s_mem())); // tls owns both
+		BIO* rbio = tls ? SSL_get_rbio(tls) : nullptr;
+		BIO* wbio = tls ? SSL_get_wbio(tls) : nullptr;
+		if (sock >= 0 && rbio && wbio) {
+			SSL_set_alpn_protos(tls, (const unsigned char*)ALPN_PG.data(), ALPN_PG.size());
+			SSL_set_connect_state(tls);
+			SSL_do_handshake(tls); // queues the ClientHello in wbio
+			std::string hello(BIO_ctrl_pending(wbio), '\0');
+			const bool hello_ok = hello.size() > 2 && BIO_read(wbio, &hello[0], hello.size()) == (int)hello.size();
+			if (hello_ok && send_exact(sock, hello.data(), 2)) {
+				usleep(100000);
+				if (send_exact(sock, hello.data() + 2, hello.size() - 2)) {
+					for (const time_t deadline = time(nullptr) + 5; time(nullptr) < deadline;) {
+						const int rc = SSL_do_handshake(tls);
+						if (rc == 1) { done = true; break; }
+						if (SSL_get_error(tls, rc) != SSL_ERROR_WANT_READ || !flush_wbio(sock, wbio) || !feed_rbio(sock, rbio)) break;
+					}
+				}
+			}
+			alpn = alpn_selected(tls);
+			const std::vector<uint8_t> s = startup_packet(PG_PROTOCOL_30, frontend_user);
+			if (done && SSL_write(tls, s.data(), s.size()) == (int)s.size() && flush_wbio(sock, wbio)) {
+				int rc;
+				while ((rc = SSL_read(tls, &type, 1)) <= 0 && SSL_get_error(tls, rc) == SSL_ERROR_WANT_READ && feed_rbio(sock, rbio)) {}
+			}
+		}
+		ok(done && alpn == "postgresql" && type == 'R', "direct TLS, ClientHello split (first segment 2 bytes): handshake and startup (got '%s','%c')", alpn.c_str(), type);
+		close_all(sock, tls, ctx);
 	}
 	ok(ssl_restored && auth_restored, "pgsql-have_ssl and pgsql-authentication_method restored");
 
