@@ -25,9 +25,11 @@ filesystem friendliness) and runs `make lib` inside it.
 ## Local patches
 
 `utf8-identifiers.patch` adds validated UTF-8 identifier tokenization and
-regression tests to ParserSQL 1.1.1. The dependency recipe applies it before
-building; the upstream release tarball remains unchanged. This fixes non-ASCII
-identifiers in MCP read-only validation without suppressing lexer errors.
+regression tests to ParserSQL 1.1.1, and makes PostgreSQL integer parsing treat
+an adjacent non-ASCII byte as trailing junk (`FETCH 1é` stays invalid). The
+dependency recipe applies it before building; the upstream release tarball
+remains unchanged. This fixes non-ASCII identifiers in MCP read-only validation
+without suppressing lexer errors.
 
 `mysql-analytical-ast.patch` is applied after the UTF-8 patch and carries the
 MySQL analytical AST and SQL provenance changes from [draft PR #72](https://github.com/ProxySQL/ParserSQL/pull/72), based on upstream commit
@@ -41,6 +43,16 @@ adapted to coexist with the UTF-8 patch. This local patch workflow is authorized
 while the changes are developed upstream; track further parser changes here
 and submit the upstream PR at the end of the work. The vendored archive remains
 the original 1.1.1 release.
+
+Upstream correspondence: the 1.1.1 archive equals upstream `c7adfcb`. Applying
+`utf8-identifiers.patch` and then `mysql-analytical-ast.patch` yields a tree
+that is byte-identical, for every tracked file, to branch
+`fix/mysql-analytical-ast-admission` of [PR #72](https://github.com/ProxySQL/ParserSQL/pull/72)
+at `7018f12fab540bb3e3489ebc4dd5c31756904a2f` (commits `24bae10`, `71dca32`,
+`42612d4` recursion bound, `7018f12` UTF-8). When that PR is released, bump the
+archive and delete both patches and their `deps/Makefile` entries. Any new
+parser change must be made in that PR first and then regenerated here, then
+re-verified with the same byte comparison.
 
 ## Upstream
 
