@@ -1440,7 +1440,20 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 		// This is needed by PgSQL_DateStyle_Util::parse_datestyle
 		sess->current_datestyle = PgSQL_DateStyle_Util::parse_datestyle(pgsql_thread___default_variables[PGSQL_DATESTYLE]);
 
+		// application_name is a connection-level parameter, so when it reaches the list below it came
+		// from the "options" parameter ("-c application_name=..."), as sent by PGOPTIONS and some
+		// drivers. Handle it like the connection parameter instead of as an untracked variable,
+		// which would lock the session on its hostgroup. As in PostgreSQL, a value given as a
+		// connection parameter takes precedence, and among repeated options the last one wins.
+		const bool startup_application_name = (*myds)->myconn->conn_params.get_value(PG_APPLICATION_NAME) != nullptr;
+
 		for (const auto&[param_key, param_val] : parameters) {
+
+			if (param_key == "application_name") {
+				if (!startup_application_name)
+					(*myds)->myconn->conn_params.set_value("application_name", param_val.c_str());
+				continue;
+			}
 
 			int idx = PGSQL_NAME_LAST_HIGH_WM;
 			for (int i = 0; i < PGSQL_NAME_LAST_HIGH_WM; i++) {
@@ -2854,8 +2867,7 @@ unsigned int PgSQL_Query_Result::add_copy_out_response_start(const PGresult* res
 
 unsigned int PgSQL_Query_Result::add_copy_out_row(const void* data, unsigned int len) {
 	const unsigned int res = proto->copy_out_row_to_PgSQL_Query_Result(false, this, (const unsigned char*)data, len);
-	result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT; 
-	num_rows += 1;
+	result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT;
 	return res;
 }
 
@@ -3077,7 +3089,7 @@ unsigned int PgSQL_Query_Result::add_native_backend_message(char type, const uns
 	case 'H': // CopyOutResponse: bytes forwarded verbatim (stream-through)
 		result_packet_type |= PGSQL_QUERY_RESULT_COPY_OUT;
 		break;
-	case 'd': // CopyData: count as a row for stats parity with the libpq path (add_copy_out_row also increments num_rows)
+	case 'd': // CopyData: count as a row for stats parity with the libpq path (copy_out_row_to_PgSQL_Query_Result also increments num_rows)
 		num_rows++;
 		break;
 	case 'c': // CopyDone: no side effect; CommandComplete follows
