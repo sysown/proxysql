@@ -578,7 +578,10 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 					shut_soft();
 					return -1;
 				}
-				start_client_tls(); // sets encrypted: the ClientHello is read by the TLS branch below
+				if (!start_client_tls()) { // sets encrypted: the ClientHello is read by the TLS branch below
+					shut_soft();
+					return -1;
+				}
 				direct_tls = true;
 			}
 		}
@@ -1677,20 +1680,32 @@ int PgSQL_Data_Stream::buffer2array() {
 	return ret;
 }
 
-void PgSQL_Data_Stream::start_client_tls() {
-	DSS = STATE_SSL_INIT;
+bool PgSQL_Data_Stream::start_client_tls() {
 	rbio_ssl = BIO_new(BIO_s_mem());
 	wbio_ssl = BIO_new(BIO_s_mem());
+	ssl = GloVars.get_SSL_new();
+	if (rbio_ssl == nullptr || wbio_ssl == nullptr || ssl == nullptr) {
+		// The BIOs are not attached to ssl yet, so SSL_free() would not free them.
+		if (rbio_ssl) BIO_free(rbio_ssl);
+		if (wbio_ssl) BIO_free(wbio_ssl);
+		if (ssl) SSL_free(ssl);
+		rbio_ssl = nullptr;
+		wbio_ssl = nullptr;
+		ssl = nullptr;
+		proxy_error("Cannot start TLS for client %s:%d: out of memory\n", addr.addr, addr.port);
+		return false;
+	}
+	DSS = STATE_SSL_INIT;
 #ifdef PROXYSQL31
 	tls13_handshake_complete = false;
 #endif
-	ssl = GloVars.get_SSL_new();
 	SSL_set_ex_data(ssl, pgsql_client_ssl_ex_index(), this);
 	SSL_set_fd(ssl, fd);
 	SSL_set_accept_state(ssl);
 	SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
 	encrypted = true; // the SSLRequest path has already set it, the direct TLS path has not
 	proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+	return true;
 }
 
 int pgsql_client_ssl_ex_index() {

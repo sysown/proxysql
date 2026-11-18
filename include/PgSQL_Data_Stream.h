@@ -217,8 +217,10 @@ public:
 	 * @brief Begins the server-side TLS handshake on this client stream.
 	 * Needs a valid fd and no SSL object or BIOs yet; call it at most once per stream
 	 * (after an SSLRequest, or on a direct TLS ClientHello).
+	 * @return false when the TLS objects cannot be created (out of memory); the stream then
+	 * holds no SSL object or BIOs and is not marked encrypted, and the caller must close it.
 	 */
-	void start_client_tls();
+	bool start_client_tls();
 	void shut_soft();
 	void shut_hard();
 #ifdef PROXYSQL31

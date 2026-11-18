@@ -4621,7 +4621,10 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		) {
 			// use SSL
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
-			client_myds->start_client_tls();
+			if (!client_myds->start_client_tls()) {
+				*wrong_pass = true; // forcefully close the connection
+				client_myds->setDSS_STATE_QUERY_SENT_NET();
+			}
 			l_free(pkt->size, pkt->ptr);
 			return;
 	}
