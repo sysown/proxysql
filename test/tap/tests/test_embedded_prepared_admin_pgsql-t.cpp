@@ -241,25 +241,43 @@ static void schema_checks(MYSQL* admin, const char* host, const char* port,
         BAIL_OUT("cannot remove the owned Admin schema fixture");
 }
 
-static std::string messages(PgConnection& c, std::string* sqlstate = nullptr) {
-    std::string s;
-    if (sqlstate)
-        sqlstate->clear();
-    for (const auto& m : c.readUntilQuiet(100)) {
-        s += m.first;
-        if (sqlstate && m.first == 'E') {
-            BufferReader fields(m.second);
-            while (fields.remaining()) {
-                const char field = fields.readByte();
-                if (!field)
-                    break;
-                const std::string value = fields.readString();
-                if (field == 'C')
-                    *sqlstate = value;
-            }
-        }
+static std::string response_sqlstate(const std::vector<uint8_t>& payload) {
+    BufferReader fields(payload);
+    while (fields.remaining()) {
+        const char field = fields.readByte();
+        if (!field)
+            break;
+        const std::string value = fields.readString();
+        if (field == 'C')
+            return value;
     }
+    return {};
+}
+
+static std::string messages(PgConnection& c) {
+    std::string s;
+    for (const auto& m : c.readUntilQuiet(100))
+        s += m.first;
     return s;
+}
+
+static void expect_quota_responses(PgConnection& c, const std::string& expected,
+                                   const char* description, const char* expected_state = "") {
+    const bool synced = expected.back() == 'Z';
+    std::string received;
+    std::string sqlstate;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        char type;
+        std::vector<uint8_t> payload;
+        c.readMessage(type, payload);
+        received += type;
+        if (type == 'E')
+            sqlstate = response_sqlstate(payload);
+        if (type == 'Z' || (type == 'E' && !synced))
+            break;
+    }
+    ok(received == expected && sqlstate == expected_state, "%s (responses=%zu, SQLSTATE=%s)",
+       description, received.size(), sqlstate.c_str());
 }
 
 static void wire_quota_checks(PgConnection& c) {
@@ -267,38 +285,30 @@ static void wire_quota_checks(PgConnection& c) {
     for (int i = 0; i < handle_limit; ++i)
         c.prepareStatement("stmt_" + std::to_string(i), "SELECT 1", false);
     c.sendSync();
-    std::string seq = messages(c);
-    ok(seq == std::string(handle_limit, '1') + "Z", "accept 128 named statements before Sync");
+    expect_quota_responses(c, std::string(handle_limit, '1') + "Z", "accept 128 named statements before Sync");
     c.prepareStatement("overflow", "SELECT 1", false);
     c.sendSync();
-    std::string sqlstate;
-    seq = messages(c, &sqlstate);
-    ok(seq == "EZ" && sqlstate == "54000", "statement quota returns 54000 and Sync restores ReadyForQuery");
+    expect_quota_responses(c, "EZ", "statement quota returns 54000 and Sync restores ReadyForQuery", "54000");
     c.closeStatement("stmt_0", false);
     c.prepareStatement("replacement", "SELECT 1", false);
     c.sendSync();
-    seq = messages(c);
-    ok(seq == "31Z", "closing a named statement releases quota for a replacement");
+    expect_quota_responses(c, "31Z", "closing a named statement releases quota for a replacement");
 
     for (int i = 0; i < handle_limit; ++i)
         c.bindStatement("replacement", "portal_" + std::to_string(i), {}, {}, false);
     c.sendFlush();
-    seq = messages(c);
-    ok(seq == std::string(handle_limit, '2'), "accept 128 named portals before Sync");
+    expect_quota_responses(c, std::string(handle_limit, '2'), "accept 128 named portals before Sync");
     c.closePortal("portal_0", false);
     c.bindStatement("replacement", "replacement_portal", {}, {}, false);
     c.sendFlush();
-    seq = messages(c);
-    ok(seq == "32", "closing one portal releases quota within the same cycle");
+    expect_quota_responses(c, "32", "closing one portal releases quota within the same cycle");
     c.bindStatement("replacement", "overflow_portal", {}, {}, false);
     c.sendSync();
-    seq = messages(c, &sqlstate);
-    ok(seq == "EZ" && sqlstate == "54000", "portal quota returns 54000 and Sync restores ReadyForQuery");
+    expect_quota_responses(c, "EZ", "portal quota returns 54000 and Sync restores ReadyForQuery", "54000");
     c.bindStatement("replacement", "recovered_portal", {}, {}, false);
     c.executePortal("recovered_portal", 0, false);
     c.sendSync();
-    seq = messages(c);
-    ok(seq == "2DCZ", "Sync releases portals and preserves the named statement");
+    expect_quota_responses(c, "2DCZ", "Sync releases portals and preserves the named statement");
 }
 
 static void wire_checks(const char* host, const char* port, const char* user, const char* pass) {
