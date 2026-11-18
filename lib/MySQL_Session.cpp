@@ -8445,6 +8445,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_INITDB, this, NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
+		// These sessions are answered locally, but a plugin that tracks a current
+		// database (the DuckDB analytical dialect) reads it from the session's
+		// userinfo at its next statement. Record the requested name so such a
+		// plugin never keeps resolving names in the previous database.
+		if (client_myds && client_myds->myconn && client_myds->myconn->userinfo &&
+		    pkt->size > sizeof(mysql_hdr) + 1) {
+			const char* charset = mysql_variables.client_get_value(this, SQL_CHARACTER_SET_CLIENT);
+			client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,
+				pkt->size-sizeof(mysql_hdr)-1, charset && *charset ? strtoul(charset, nullptr, 10) : default_charset);
+		}
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		unsigned int nTrx=NumActiveTransactions();

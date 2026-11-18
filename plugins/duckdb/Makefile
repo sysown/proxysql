@@ -46,13 +46,14 @@ OPTZ ?= -O2 -ggdb
 # plugin's static descriptor.
 #
 # Tier cascade (mirrors the top-level Makefile):
-#   PROXYSQL40=1 ⇒ PROXYSQL31=1 ⇒ PROXYSQLFFTO=1 + PROXYSQLTSDB=1
+#   PROXYSQL40=1 ⇒ PROXYSQL31=1 ⇒ PROXYSQLFFTO=1 + PROXYSQLTSDB=1 + PROXYSQLED25519=1
 ifeq ($(PROXYSQL40),1)
 	PROXYSQL31 := 1
 endif
 ifeq ($(PROXYSQL31),1)
 	PROXYSQLFFTO := 1
 	PROXYSQLTSDB := 1
+	PROXYSQLED25519 := 1
 endif
 
 PSQL40 :=
@@ -71,6 +72,14 @@ PSQLTSDB :=
 ifeq ($(PROXYSQLTSDB),1)
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
+# The core defines PROXYSQLED25519 when PROXYSQL31 is set (see the top-level
+# Makefile). mysql_connection.h and MySQL_Protocol.h add members under that
+# macro, so a plugin compiled without it reads core structures such as
+# MySQL_Connection::userinfo at shifted offsets.
+PSQLED25519 :=
+ifeq ($(PROXYSQLED25519),1)
+	PSQLED25519 := -DPROXYSQLED25519
+endif
 
 # -fvisibility=hidden + -fvisibility-inlines-hidden hides every C++ symbol by
 # default; only the explicitly extern "C"-declared
@@ -79,7 +88,7 @@ endif
 # leaking template instantiations across the boundary.
 CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
 	$(OPTZ) $(WGCOV) $(WASAN) -pthread \
-	$(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB)
+	$(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519)
 
 # Hardening flags. Skip _FORTIFY_SOURCE under ASAN (incompatible) and when
 # OPTZ contains -O0 (requires optimisation to take effect).
