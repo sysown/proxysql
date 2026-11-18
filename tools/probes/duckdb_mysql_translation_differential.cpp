@@ -272,6 +272,43 @@ int main(int argc, char **argv) {
             "(5,NULL,NULL,NULL,NULL)";
         mysql_exec(f.mysql, "INSERT INTO date_probe VALUES " + date_rows);
         duck_exec(f.duck, "INSERT INTO date_probe VALUES " + date_rows);
+        mysql_exec(f.mysql,
+                   "CREATE TABLE sumavg_probe (id BIGINT PRIMARY KEY, i BIGINT, u BIGINT "
+                   "UNSIGNED, d19 DECIMAL(19,2), d18 DECIMAL(18,4), d20 DECIMAL(20,2), d19i "
+                   "DECIMAL(19,0), frac DECIMAL(2,2), grp BIGINT, txt VARCHAR(10))");
+        duck_exec(f.duck,
+                  "CREATE TABLE sumavg_probe (id BIGINT PRIMARY KEY, i BIGINT, u UBIGINT, d19 "
+                  "DECIMAL(19,2), d18 DECIMAL(18,4), d20 DECIMAL(20,2), d19i DECIMAL(19,0), frac "
+                  "DECIMAL(2,2), grp BIGINT, txt VARCHAR)");
+        // One extreme row, one negative row, an all-NULL row, an all-NULL group, and
+        // two 32-row groups whose only nonzero value makes AVG land exactly on a
+        // rounding tie at every admitted result scale (4, 6 and 8 decimals).
+        string sum_rows =
+            "(1,-9223372036854775808,0,-99999999999999999.99,-99999999999999.9999,-"
+            "999999999999999999.99,-9999999999999999999,-0.99,1,'a'),"
+            "(2,9223372036854775807,18446744073709551615,99999999999999999.97,"
+            "99999999999999.9999,999999999999999999.99,9999999999999999997,0.99,1,'b'),"
+            "(3,0,1,0.01,0.0001,0.01,1,0.50,2,'c'),"
+            "(4,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL),"
+            "(5,-1,2,-0.03,-0.0003,-0.03,-3,-0.50,3,'d'),"
+            "(6,NULL,NULL,NULL,NULL,NULL,NULL,NULL,3,'e'),"
+            "(7,NULL,NULL,NULL,NULL,NULL,NULL,NULL,4,NULL)";
+        for (int n = 0; n < 32; ++n) {
+            sum_rows += ",(" + to_string(100 + n) + "," + (n == 0 ? "1" : "0") + ",0," +
+                        (n == 0 ? "0.01" : "0.00") + "," + (n == 0 ? "0.0001" : "0.0000") +
+                        ",0.00,0," + (n == 0 ? "0.01" : "0.00") + ",5,'t')";
+            sum_rows += ",(" + to_string(200 + n) + "," + (n == 0 ? "-1" : "0") + ",0," +
+                        (n == 0 ? "-0.01" : "0.00") + "," + (n == 0 ? "-0.0001" : "0.0000") +
+                        ",0.00,0," + (n == 0 ? "-0.01" : "0.00") + ",6,'u')";
+        }
+        mysql_exec(f.mysql, "INSERT INTO sumavg_probe VALUES " + sum_rows);
+        duck_exec(f.duck, "INSERT INTO sumavg_probe VALUES " + sum_rows);
+        mysql_exec(f.mysql, "CREATE TABLE scale_probe (id BIGINT PRIMARY KEY, d DECIMAL(19,19))");
+        duck_exec(f.duck, "CREATE TABLE scale_probe (id BIGINT PRIMARY KEY, d DECIMAL(19,19))");
+        const string scale_rows = "(1,-0.9999999999999999999),(2,0.9999999999999999999),"
+                                  "(3,0.0000000000000000001),(4,NULL),(5,0)";
+        mysql_exec(f.mysql, "INSERT INTO scale_probe VALUES " + scale_rows);
+        duck_exec(f.duck, "INSERT INTO scale_probe VALUES " + scale_rows);
         DuckDBMySQLSelectContext context;
         size_t calls = 0;
         context.resolve_relation = [&](const vector<string> &names, DuckDBMySQLRelation &r) {
@@ -296,6 +333,30 @@ int main(int argc, char **argv) {
                              {"ts",
                               {DuckDBMySQLTypeKind::datetime, 0, 0},
                               {DuckDBMySQLSourceType::timestamp}},
+                             {"txt", {DuckDBMySQLTypeKind::text, 0, 0}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"scale_probe"}) {
+                r.canonical_name = {"scale_probe"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"d", {DuckDBMySQLTypeKind::exact_decimal, 19, 19}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"sumavg_probe"}) {
+                r.canonical_name = {"sumavg_probe"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"i", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"u", {DuckDBMySQLTypeKind::unsigned_integer, 0, 0}},
+                             {"d19", {DuckDBMySQLTypeKind::exact_decimal, 19, 2}},
+                             {"d18", {DuckDBMySQLTypeKind::exact_decimal, 18, 4}},
+                             {"d20", {DuckDBMySQLTypeKind::exact_decimal, 20, 2}},
+                             {"d19i", {DuckDBMySQLTypeKind::exact_decimal, 19, 0}},
+                             {"frac", {DuckDBMySQLTypeKind::exact_decimal, 2, 2}},
+                             {"grp", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
                              {"txt", {DuckDBMySQLTypeKind::text, 0, 0}}};
                 r.unique_keys = {{"id"}};
                 return true;
@@ -432,6 +493,60 @@ int main(int argc, char **argv) {
             {"date format empty",
              "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe WHERE id > 99 ORDER BY id"},
             {"date format 255-byte label", date_format255.c_str()},
+            {"sum and avg integers",
+             "SELECT SUM(i) AS si, AVG(i) AS ai, SUM(u) AS su, AVG(u) AS au FROM sumavg_probe"},
+            {"sum and avg decimals",
+             "SELECT SUM(d19) AS s19, AVG(d19) AS a19, SUM(d18) AS s18, AVG(d18) AS a18, "
+             "SUM(d19i) AS s0, AVG(d19i) AS a0, SUM(frac) AS sf, AVG(frac) AS af FROM "
+             "sumavg_probe"},
+            {"sum and avg labels",
+             "SELECT SUM(i), AVG(d18), SUM(frac), AVG(frac) FROM sumavg_probe"},
+            {"sum and avg escaped identifier",
+             "SELECT SUM(`a``b`) AS s, AVG(`a``b`) AS a FROM `odd``table`"},
+            {"sum and avg mixed case", "SELECT sum(i), avg(d19) FROM sumavg_probe"},
+            {"sum spaced argument list",
+             "SELECT SUM( i ) AS si, AVG( d19 ) AS a19 FROM sumavg_probe"},
+            {"sum spaced labels", "SELECT SUM( i ), AVG( d19 ) FROM sumavg_probe"},
+            {"grouped sums",
+             "SELECT grp, SUM(i) AS si, SUM(u) AS su, SUM(d19) AS s19, SUM(d18) AS s18, "
+             "SUM(d19i) AS s0, SUM(frac) AS sf FROM sumavg_probe GROUP BY grp ORDER BY grp"},
+            {"grouped averages",
+             "SELECT grp, AVG(i) AS ai, AVG(u) AS au, AVG(d19) AS a19, AVG(d18) AS a18, "
+             "AVG(d19i) AS a0, AVG(frac) AS af FROM sumavg_probe GROUP BY grp ORDER BY grp"},
+            {"grouped sums descending",
+             "SELECT grp, SUM(i) AS si FROM sumavg_probe GROUP BY grp ORDER BY grp DESC"},
+            {"empty sum and avg",
+             "SELECT SUM(i) AS si, AVG(i) AS ai FROM sumavg_probe WHERE id > 9999"},
+            {"empty grouped averages",
+             "SELECT grp, SUM(i) AS si, AVG(i) AS ai FROM sumavg_probe WHERE id > 9999 "
+             "GROUP BY grp ORDER BY grp"},
+            {"signed max sum and avg",
+             "SELECT SUM(i) AS si, AVG(i) AS ai FROM sumavg_probe WHERE id = 2"},
+            {"unsigned max sum and avg",
+             "SELECT SUM(u) AS su, AVG(u) AS au FROM sumavg_probe WHERE id = 2"},
+            {"decimal max sum and avg",
+             "SELECT SUM(d19) AS s19, AVG(d19) AS a19 FROM sumavg_probe WHERE id = 2"},
+            {"decimal trailing zero sum and avg",
+             "SELECT SUM(a) AS sa, AVG(a) AS aa FROM decimal_probe"},
+            {"decimal min sum and avg",
+             "SELECT SUM(d18) AS s18, AVG(d18) AS a18 FROM sumavg_probe WHERE id = 1"},
+            {"integer magnitude sum",
+             "SELECT SUM(d19i) AS s0, AVG(d19i) AS a0 FROM sumavg_probe WHERE id = 2"},
+            {"scale 19 sum and avg", "SELECT SUM(d) AS s19, AVG(d) AS a19 FROM scale_probe"},
+            {"scale 19 grouped avg",
+             "SELECT id, AVG(d) AS a19 FROM scale_probe GROUP BY id ORDER BY id"},
+            {"filtered group sum and avg",
+             "SELECT SUM(d19) AS s19, AVG(d19) AS a19 FROM sumavg_probe WHERE grp = 3"},
+            {"qualified sum and avg",
+             "SELECT SUM(s.`i`) AS si, AVG(s.`d19`) AS a19 FROM sumavg_probe AS s WHERE s.id = 2"},
+            {"multi key sum and avg",
+             "SELECT grp,u,SUM(i) AS si, AVG(d19) AS a19 FROM sumavg_probe GROUP BY grp,u "
+             "ORDER BY grp,u"},
+            {"grouped sum limit",
+             "SELECT grp,SUM(i) AS si,AVG(d18) AS a18 FROM sumavg_probe GROUP BY grp ORDER BY "
+             "grp LIMIT 1, 2"},
+            {"duplicate sum and avg labels",
+             "SELECT grp,SUM(i) AS x,AVG(i) AS x FROM sumavg_probe GROUP BY grp ORDER BY grp"},
         };
         int failures = 0, comparisons = 0;
         for (auto &entry : cases) {
@@ -484,7 +599,33 @@ int main(int argc, char **argv) {
             "SELECT DATE_FORMAT (dt,'%Y-%m') FROM date_probe",
             "SELECT DATE_FORMAT(d, \"%Y-%m\") FROM date_probe",
             "SELECT DATE_FORMAT(d,'%Y-%m'),COUNT(*) FROM "
-            "date_probe"};
+            "date_probe",
+            "SELECT SUM(DISTINCT i) FROM sumavg_probe",
+            "SELECT AVG(DISTINCT i) FROM sumavg_probe",
+            "SELECT SUM(txt) FROM sumavg_probe",
+            "SELECT AVG(txt) FROM sumavg_probe",
+            "SELECT SUM(d) FROM date_probe",
+            "SELECT SUM(1)",
+            "SELECT AVG(1)",
+            "SELECT SUM(i+1) FROM sumavg_probe",
+            "SELECT AVG(i*2) FROM sumavg_probe",
+            "SELECT SUM (i) FROM sumavg_probe",
+            "SELECT AVG (i) FROM sumavg_probe",
+            "SELECT `SUM`(i) FROM sumavg_probe",
+            "SELECT `AVG`(i) FROM sumavg_probe",
+            "SELECT SUM(?) FROM sumavg_probe",
+            "SELECT AVG(?) FROM sumavg_probe",
+            "SELECT SUM(b) FROM decimal_probe",
+            "SELECT SUM(d20) FROM sumavg_probe",
+            "SELECT AVG(d20) FROM sumavg_probe",
+            "SELECT SUM(h) FROM wide_probe",
+            "SELECT AVG(h) FROM wide_probe",
+            "SELECT grp,SUM(i) FROM sumavg_probe GROUP BY grp HAVING SUM(i) IS NOT NULL",
+            "SELECT grp,AVG(i) FROM sumavg_probe GROUP BY grp HAVING AVG(i) > 0",
+            "SELECT MIN(SUM(i)) FROM sumavg_probe",
+            "SELECT SUM(i),i FROM sumavg_probe",
+            "SELECT SUM(i) FROM sumavg_probe WHERE SUM(i) > 0",
+            "SELECT SUM(i) FROM sumavg_probe ORDER BY SUM(i)"};
         for (const auto &sql : rejected) {
             auto x = duckdb_translate_mysql_select(sql, context);
             if (x.decision == DuckDBMySQLSelectDecision::supported || !x.sql.empty()) {

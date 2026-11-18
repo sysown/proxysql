@@ -273,6 +273,53 @@ static void test_date_format(MYSQL *c, const char *label) {
     if (stmt)
         mysql_stmt_close(stmt);
 }
+static void test_sum_avg(MYSQL *c, const char *label) {
+    ok(text_rows(c,
+                 "SELECT g, SUM(n), SUM(d), AVG(n), AVG(d) FROM agg_fixture GROUP BY g ORDER BY g",
+                 {"g", "SUM(n)", "SUM(d)", "AVG(n)", "AVG(d)"},
+                 {{"1", "30", "3.75", "15.0000", "1.875000"},
+                  {"2", "5", "0.01", "5.0000", "0.010000"},
+                  {"3", "-15", "-0.07", "-7.5000", "-0.035000"}}),
+       "%s matches MySQL SUM/AVG values, scales and labels per group", label);
+    ok(text_rows(c, "SELECT SUM(n) AS s, AVG(d) AS a FROM agg_fixture", {"s", "a"},
+                 {{"20", "0.738000"}}),
+       "%s rounds an ungrouped AVG exactly like MySQL", label);
+    ok(text_rows(c, "SELECT SUM(n), AVG(d) FROM agg_fixture WHERE id > 99", {"SUM(n)", "AVG(d)"},
+                 {{nullptr, nullptr}}),
+       "%s returns NULL for SUM/AVG over an empty set", label);
+    bool meta = !mysql_query(c, "SELECT AVG(d) FROM agg_fixture");
+    MYSQL_RES *r = meta ? mysql_store_result(c) : nullptr;
+    MYSQL_FIELD *field = r ? mysql_fetch_field(r) : nullptr;
+    ok(field && field->type == MYSQL_TYPE_NEWDECIMAL && field->decimals == 6,
+       "%s reports AVG(DECIMAL(10,2)) as NEWDECIMAL with scale 6", label);
+    if (r)
+        mysql_free_result(r);
+    MYSQL_STMT *stmt = prepare(c, "SELECT AVG(d) FROM agg_fixture");
+    ok(stmt != nullptr, "%s prepares AVG", label);
+    if (stmt) {
+        char text[32];
+        unsigned long length = 0;
+        MYSQL_BIND result[1]{};
+        result[0].buffer_type = MYSQL_TYPE_STRING;
+        result[0].buffer = text;
+        result[0].buffer_length = sizeof(text);
+        result[0].length = &length;
+        bool good = !mysql_stmt_bind_result(stmt, result) && !mysql_stmt_execute(stmt) &&
+                    !mysql_stmt_fetch(stmt) && length == 8 && !std::memcmp(text, "0.738000", 8) &&
+                    mysql_stmt_fetch(stmt) == MYSQL_NO_DATA;
+        mysql_stmt_free_result(stmt);
+        ok(good, "%s fetches a prepared AVG", label);
+        mysql_stmt_close(stmt);
+    }
+    for (const char *bad :
+         {"SELECT SUM(DISTINCT n) FROM agg_fixture", "SELECT SUM(n + 1) FROM agg_fixture",
+          "SELECT AVG(n) FROM agg_fixture HAVING AVG(n) > 1", "SELECT SUM (n) FROM agg_fixture"}) {
+        const int status = mysql_query(c, bad);
+        ok(status != 0 && mysql_errno(c) == 1235 && !std::strcmp(mysql_sqlstate(c), "0A000"),
+           "%s refuses %s with 1235/0A000 (got %u/%s)", label, bad, mysql_errno(c),
+           mysql_sqlstate(c));
+    }
+}
 static void test_decimal_refresh(MYSQL *c, PGconn *pg) {
     bool created = pg_exec(pg, "CREATE TABLE widen_fixture (d DECIMAL(18,4))") &&
                    pg_exec(pg, "INSERT INTO widen_fixture VALUES (2.0000)");
@@ -356,6 +403,10 @@ int main() {
                      "'TIMESTAMP'),"
                      "('fixture','main','date_fixture','ts',4,'timestamp','timestamp','','',"
                      "'TIMESTAMP')") ||
+        !pg_exec(pg, "CREATE TABLE agg_fixture (id INTEGER PRIMARY KEY, g INTEGER, n BIGINT, "
+                     "d DECIMAL(10,2))") ||
+        !pg_exec(pg, "INSERT INTO agg_fixture VALUES (1,1,10,1.25),(2,1,20,2.50),(3,2,NULL,NULL),"
+                     "(4,2,5,0.01),(5,3,-7,-0.03),(6,3,-8,-0.04)") ||
         !pg_exec(pg, "CREATE SEQUENCE analytical_sequence START 1") ||
         !pg_exec(
             pg,
@@ -399,7 +450,7 @@ int main() {
     if (r)
         mysql_free_result(r);
     for (const char *bad :
-         {"INSERT INTO analytical_fixture VALUES (4,40)", "SELECT AVG(n) FROM analytical_fixture",
+         {"INSERT INTO analytical_fixture VALUES (4,40)", "SELECT STDDEV(n) FROM analytical_fixture",
           "SELECT ABS(id) FROM analytical_fixture",
           "SELECT id FROM analytical_fixture /* comment */", "SELECT ? FROM analytical_fixture"}) {
         const int query_status = mysql_query(mysql, bad);
@@ -435,6 +486,7 @@ int main() {
     test_parameters(mysql, "direct listener");
     test_decimals(mysql, "direct listener");
     test_date_format(mysql, "direct listener");
+    test_sum_avg(mysql, "direct listener");
     test_decimal_refresh(mysql, pg);
     stmt = prepare(mysql, "SELECT COUNT(*) FROM analytical_fixture WHERE n > 1");
     ok(stmt != nullptr, "prepare COUNT with referenced integer column");
@@ -520,6 +572,7 @@ int main() {
         test_parameters(proxied, "ordinary routed listener");
         test_decimals(proxied, "ordinary routed listener");
         test_date_format(proxied, "ordinary routed listener");
+        test_sum_avg(proxied, "ordinary routed listener");
         mysql_close(proxied);
     }
     mysql_close(mysql);

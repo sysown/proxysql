@@ -244,8 +244,8 @@ coercion on that value unless collation/type rules are established.
 | `ORDER BY col [ASC|DESC]` | OK, complete | order items | Candidate | Determinism, null ordering, collation/type rules. |
 | `WITH ROLLUP` | OK, complete | group-by value `WITH ROLLUP` | Deferred | DuckDB rollup/summary semantics and null labeling need rules. |
 | `COUNT(*)` | OK, complete | function call | Candidate | Multiplicity semantics. |
-| `COUNT(expr)`, `SUM`, `MIN`, `MAX` | OK, complete | function calls | Candidate | Exact numeric types; overflow/scale/date rules; no implicit coercion. |
-| `AVG` | OK, complete | function call | Deferred | Native DuckDB loses exact-value precision in the [semantic baseline](mysql-semantic-baseline.md); requires a separately proven rewrite. |
+| `COUNT(expr)`, `SUM`, `MIN`, `MAX` | OK, complete | function calls | Admitted (bounded) | Exact integer/decimal columns only; see the SUM and AVG rules below. |
+| `AVG` | OK, complete | function call | Admitted (bounded, exact rewrite) | Native DuckDB AVG is DOUBLE; the translator emits exact decimal arithmetic. See below. |
 | `COUNT(DISTINCT ...)`, `SUM(DISTINCT ...)`, `AVG(DISTINCT ...)` | OK but partial | `full_input=false`, emits `SELECT ` | Parser gap | Refused until upstream fix; see §4. |
 | `GROUP_CONCAT(...)` | OK, complete | preserved | Deferred | Separator/order/result limits and collation. |
 | `DATE_FORMAT(d, '%Y-%m')` | OK, complete | preserved | Admitted (bounded) | SELECT-list only; first argument is a resolved DATE column, or a DATETIME column the replica recorded as a MySQL DATETIME (see below) and the format is the exact single-quoted literal `'%Y-%m'`. See the current slice and its stated value-domain limit below. |
@@ -518,17 +518,18 @@ resolved table, aliases and qualified column references, typed projections,
 nonnegative signed-range integer and NULL literals, nonnegative exact decimal
 literals, signed-integer comparisons, exact decimal comparisons, NULL
 predicates, AND/OR, COUNT and integer MIN/MAX, integer-key GROUP BY with
-aggregate HAVING predicates, numeric ordering with explicit MySQL NULL
-placement, integer-literal LIMIT with a proven strictly unique ordering key
-(the full group-key tuple establishes uniqueness for grouped rows), and the
-`DATE_FORMAT(column, '%Y-%m')` projection described below. Identifiers and
-duplicate labels are preserved.
+aggregate HAVING predicates, exact integer and DECIMAL SUM/AVG, numeric ordering
+with explicit MySQL NULL placement, integer-literal LIMIT with a proven strictly
+unique ordering key (the full group-key tuple establishes uniqueness for grouped
+rows), and the `DATE_FORMAT(column, '%Y-%m')` projection described below.
+Identifiers and duplicate labels are preserved.
 
 Unknown types, ambiguous ORDER BY aliases, comments, session-sensitive quoting,
-string literals/comparison/ordering, arithmetic, SUM/AVG, non-integer grouping,
-joins, subqueries, CTEs, windows, variables and unknown functions are currently
-refused. Later roadmap slices remain outstanding; these refusals do not
-complete the goal.
+string literals/comparison/ordering, arithmetic, non-integer grouping, joins,
+subqueries, CTEs, windows, variables and unknown functions are currently
+refused. SUM/AVG above the proved decimal precision, SUM/AVG over non-numeric
+columns, aggregate DISTINCT and SUM/AVG in HAVING remain refused. Later roadmap
+slices remain outstanding; these refusals do not complete the goal.
 
 ### Source column facts
 
@@ -545,10 +546,132 @@ and know whether a text comparison is byte-exact.
 
 MySQL resolves `COUNT (*)` only when `IGNORE_SPACE` is enabled, and a spaced
 `MIN (column)` can resolve to a stored routine. The translator does not know the
-session SQL mode, so it admits COUNT, MIN and MAX only when ParserSQL's tokenizer,
-run over the call's AST source span, shows a bare name token immediately followed
-by `(`. Spaced, tab-separated, quoted or qualified spellings are refused in
-SELECT and HAVING. Mixed-case contiguous spellings are admitted.
+session SQL mode, so it admits COUNT, MIN, MAX, SUM and AVG only when ParserSQL's
+tokenizer, run over the call's AST source span, shows a bare name token
+immediately followed by `(`. Spaced, tab-separated, quoted or qualified
+spellings are refused in SELECT and HAVING. Mixed-case contiguous spellings are
+admitted. ParserSQL normalises the function node's value to the upper-case name,
+so `sum(...)` and `sUm(...)` take the same path.
+
+### SUM and AVG
+
+`SUM(column)` and `AVG(column)` are admitted in the SELECT list wherever
+COUNT/MIN/MAX are admitted: as the only aggregate form without GROUP BY, or next
+to the admitted integer grouping keys. The argument must be one resolved plain
+column, optionally qualified by the admitted table alias or backtick-quoted.
+DISTINCT, literals, placeholders, arithmetic or any other expression inside the
+call, and text, binary, DATE, DATETIME and unknown columns are refused.
+`SUM(DISTINCT ...)` and `AVG(DISTINCT ...)` do not even reach the translator as
+complete statements: ParserSQL 1.1.1 reports a partial parse, so the stable
+reason is `incomplete_or_non_select`.
+
+The only admitted argument types are:
+
+- mapped `signed_integer` (19 integer digits),
+- mapped `unsigned_integer` (20 integer digits),
+- mapped `exact_decimal` with a valid precision/scale and precision at most 19.
+
+The precision-19 limit is an overflow proof, not a formatting preference.
+A single DuckDB table cannot hold 2^63 rows (the physical row-count bound this
+project relies on; DuckDB row identifiers are themselves signed 64-bit). A
+`DECIMAL(p,s)` value is below `10^(p-s)` in magnitude, so
+`|SUM| < 2^63 * 10^(p-s)` and the scaled integer `SUM * 10^s` is below
+`2^63 * 10^p <= 9.23e18 * 1e19 < 10^38`. DuckDB's `SUM(DECIMAL)` is
+`DECIMAL(38,s)` and errors on overflow; for `p <= 19` no admitted input can
+reach that width. `DECIMAL(20..38,s)` and the native `DECIMAL(39,0)` mapping are
+refused before execution. MySQL itself would widen the result to
+`DECIMAL(p+22,s)` (capped at 65) and could continue, which is exactly the
+difference this rule avoids.
+
+`SUM` is emitted natively:
+
+- integer columns: `SUM("col")`; DuckDB returns HUGEINT.
+- decimal columns: `SUM("col")`; DuckDB returns DECIMAL(38,s).
+
+HUGEINT cannot overflow under the same row bound: the largest unsigned sum is
+below `2^63 * (2^64 - 1) = 2^127 - 2^63`, which is below the signed HUGEINT
+maximum `2^127 - 1`; signed sums are smaller.
+
+Value text matches MySQL byte-for-byte in both cases: MySQL's integer SUM is a
+plain integer DECIMAL(...,0), and MySQL's decimal SUM keeps exactly `s`
+fractional digits, as does DuckDB's `DECIMAL(38,s)`. Metadata does not match:
+the plugin maps HUGEINT to `NEWDECIMAL` length 40 (precision 39, scale 0) while
+MySQL reports length 42 for signed and 43 for unsigned BIGINT SUM; a decimal
+SUM is reported with precision 38 while MySQL reports `p+22`. The decimal type
+category, scale and value text agree. The mapped relation type carries no
+integer width, so TINYINT, SMALLINT and INT columns are treated as the full
+signed or unsigned 64-bit width; MySQL reports a narrower SUM metadata length
+for those source types, but the value text is unchanged because every value
+fits.
+
+Native DuckDB `AVG` is DOUBLE and loses exact-value precision, so it is never
+emitted. `AVG(column)` is rewritten to exact integer arithmetic over the same
+aggregates. With `p` and `s` from the mapped column and target scale `r = s + 4`
+(MySQL's default `div_precision_increment`):
+
+```text
+K = SUM(column) * 10^s          (DECIMAL text with the point removed, cast to HUGEINT;
+                                 this equals the stored integer and avoids a decimal
+                                 multiplication that could overflow DECIMAL(38,s))
+C = COUNT(column)
+A = K // C                      (truncating integer division)
+R = K % C
+Q = A * 10^4 + round_half_away(R * 10^4 / C)
+result = Q * 10^-r              (DECIMAL multiply, then cast to DECIMAL(p+4, r))
+```
+
+The half-away-from-zero step is integer arithmetic: for negative `R` the
+magnitude is `(abs(R) * 20000 + C) // (2 * C)` and the sign is restored; `//`
+truncates toward zero in DuckDB. Every integer intermediate fits HUGEINT:
+`K < 10^38`, `abs(R) < 2^63`, `abs(R) * 20000 < 2e23`, and `abs(Q) < 10^23`
+because an average never exceeds the largest column value. Recovering `K` from
+DuckDB's decimal text is exact: a `DECIMAL(38,s)` value always renders exactly
+`s` fraction digits (including trailing zeros and a missing leading zero for
+fraction-only values), so removing the point and parsing the remaining sign and
+digits yields the stored integer. A decimal multiplication by `10^s` would
+instead require a raw product of up to `K * 10^s`, which can exceed the
+128-bit DECIMAL(38) intermediate even when the value fits, so it is not used.
+`Q * 10^-r` is an exact decimal multiplication by a fraction-only
+`DECIMAL(r+1,r)` whose stored integer is 1, so no rounding is introduced. The
+final cast is exact because the value needs at most `p-s` integer and exactly
+`r` fractional digits.
+
+The result is `DECIMAL(p+4, s+4)`, matching MySQL's AVG precision and scale for
+BIGINT, BIGINT UNSIGNED and decimal columns. The mapped integer kind has no
+width, so TINYINT, SMALLINT and INT columns use the 19- or 20-digit width and
+report a wider AVG precision than MySQL; the value text is unchanged. One
+exception for the decimal case: when `p == s` (a fraction-only
+column), DuckDB's text conversion of a `DECIMAL(r+4,r+4)` value omits the
+leading zero (`.003333` instead of MySQL's `0.003333`). Such an AVG is emitted
+as `DECIMAL(r+1, r)`, one precision digit wider than MySQL; the value text is
+identical. This mirrors the existing fraction-only column projection rule.
+
+`div_precision_increment` is assumed to be MySQL's default 4. The analytical
+endpoint's SET interceptor only accepts `SET NAMES`, `SET CHARACTER SET` and
+`SET autocommit`; a `SET div_precision_increment` is not acknowledged or applied
+by any session code and reaches DuckDB as an unknown setting, so the emitted
+scale cannot be changed through the supported client path. The translator still
+does not read the variable and does not claim support for a server whose
+default differs.
+
+NULL propagation is the native aggregate one on both engines: empty input and a
+group whose admitted column is all NULL produce NULL SUM and AVG; COUNT of the
+same values is 0, and the emitted AVG arithmetic then stays NULL rather than
+dividing by zero. No `CASE` guard is needed because DuckDB's integer `//` and
+`%` on a NULL numerator return NULL before the zero count is evaluated.
+
+SUM and AVG are deliberately refused in HAVING. The comparison and `IS [NOT]
+NULL` shapes that admit COUNT/MIN/MAX refuse them with the stable reason
+`unsupported_having_aggregate`; other HAVING shapes keep their existing
+`unsupported_ast` refusal. COUNT, MIN and MAX keep their existing HAVING
+behavior.
+
+Because AVG emits a derived `DECIMAL(p+4, s+4)`, a source column precision or
+scale change changes the emitted result type. Prepared statements re-translate
+on every execute and refresh the native handle; if an old handle were reused
+with different metadata the native check fails and MySQL error 1615 is
+surfaced. See
+[protocol compatibility](protocol-compatibility.md#prepared-queries).
 
 ### DATE_FORMAT year-month projection
 
@@ -604,8 +727,8 @@ larger scale and `p` is the larger integer-digit capacity plus `s`. Signed
 integer columns count as 19 integer digits and unsigned as 20. Comparisons
 needing precision above 38 are refused. So are decimal comparisons with text,
 floating point, NULL literals or native 128-bit integers (`DECIMAL(39,0)`
-mappings). Decimal parameters, arithmetic, SUM/AVG, MIN/MAX and grouping are
-also refused.
+mappings). Decimal parameters, arithmetic, decimal MIN/MAX and grouping are
+also refused; SUM and AVG follow the separate precision rule above.
 
 DuckDB renders a fraction-only `DECIMAL(p,p)` value as `.50`, while MySQL renders
 `0.50`. Projections of such columns, including expanded `*`, are emitted as

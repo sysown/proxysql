@@ -365,6 +365,198 @@ int main() {
                                      date_context)
                .reason == "unsupported_metadata_label",
        "256-byte implicit DATE_FORMAT label truncation boundary refused");
+    // SUM and AVG: exact integer/decimal aggregates. AVG is emitted as exact
+    // integer arithmetic because native DuckDB AVG is DOUBLE.
+    auto sum_context = context;
+    sum_context.resolve_relation = [](const std::vector<std::string> &parts,
+                                      DuckDBMySQLRelation &out) {
+        if (parts != std::vector<std::string>{"sum_table"})
+            return false;
+        out.canonical_name = {"sum_table"};
+        out.exact_name_resolution = true;
+        out.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"i", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"u", {DuckDBMySQLTypeKind::unsigned_integer, 0, 0}},
+                       {"d19", {DuckDBMySQLTypeKind::exact_decimal, 19, 2}},
+                       {"d18", {DuckDBMySQLTypeKind::exact_decimal, 18, 4}},
+                       {"d20", {DuckDBMySQLTypeKind::exact_decimal, 20, 2}},
+                       {"d19i", {DuckDBMySQLTypeKind::exact_decimal, 19, 0}},
+                       {"frac", {DuckDBMySQLTypeKind::exact_decimal, 2, 2}},
+                       {"grp", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"txt", {DuckDBMySQLTypeKind::text, 0, 0}},
+                       {"dt", {DuckDBMySQLTypeKind::date, 0, 0}},
+                       {"f", {DuckDBMySQLTypeKind::unknown, 0, 0}}};
+        out.unique_keys = {{"id"}};
+        return true;
+    };
+    duckdb_result sum_rows{};
+    bool sum_created =
+        created && duckdb_query(connection,
+                                "CREATE TABLE \"sum_table\" (id BIGINT, i BIGINT, u UBIGINT, "
+                                "d19 DECIMAL(19,2), d18 DECIMAL(18,4), d20 DECIMAL(20,2), "
+                                "d19i DECIMAL(19,0), frac DECIMAL(2,2), grp BIGINT, "
+                                "txt VARCHAR, dt DATE, f DOUBLE)",
+                                &sum_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&sum_rows);
+    ok(sum_created, "create SUM and AVG relation");
+    auto sum_integer = duckdb_translate_mysql_select(
+        "SELECT SUM(i) AS si, AVG(i) AS ai, SUM(u) AS su, AVG(u) AS au FROM sum_table",
+        sum_context);
+    ok(sum_integer.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_integer.sql.find("SUM(\"i\") AS \"si\"") != std::string::npos &&
+           sum_integer.sql.find("CAST(SUM(\"u\") AS HUGEINT)") != std::string::npos &&
+           sum_integer.sql.find("AS DECIMAL(23,4)) AS \"ai\"") != std::string::npos &&
+           sum_integer.sql.find("AS DECIMAL(24,4)) AS \"au\"") != std::string::npos,
+       "integer SUM is native and AVG is exact decimal arithmetic");
+    statement = nullptr;
+    bool sum_integer_prepared =
+        sum_created && sum_integer.decision == DuckDBMySQLSelectDecision::supported &&
+        duckdb_prepare(connection, sum_integer.sql.c_str(), &statement) == DuckDBSuccess;
+    ok(sum_integer_prepared && column_name(0) == "si" && column_name(2) == "su" &&
+           duckdb_prepared_statement_column_type(statement, 0) == DUCKDB_TYPE_HUGEINT &&
+           duckdb_prepared_statement_column_type(statement, 1) == DUCKDB_TYPE_DECIMAL &&
+           duckdb_prepared_statement_column_type(statement, 3) == DUCKDB_TYPE_DECIMAL,
+       "DuckDB prepares integer SUM and exact AVG");
+    auto decimal_meta = [&](idx_t index) {
+        std::pair<int, int> out{-1, -1};
+        auto type = duckdb_prepared_statement_column_logical_type(statement, index);
+        if (type) {
+            if (duckdb_get_type_id(type) == DUCKDB_TYPE_DECIMAL)
+                out = {duckdb_decimal_width(type), duckdb_decimal_scale(type)};
+            duckdb_destroy_logical_type(&type);
+        }
+        return out;
+    };
+    ok(sum_integer_prepared && decimal_meta(1) == std::pair<int, int>{23, 4} &&
+           decimal_meta(3) == std::pair<int, int>{24, 4},
+       "AVG result metadata carries MySQL precision p+4 and scale s+4");
+    duckdb_destroy_prepare(&statement);
+    auto sum_decimal = duckdb_translate_mysql_select(
+        "SELECT SUM(d19), AVG(d19), SUM(d18), AVG(d18), SUM(d19i), AVG(d19i), SUM(frac), "
+        "AVG(frac) FROM sum_table",
+        sum_context);
+    ok(sum_decimal.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_decimal.sql.find("SUM(\"d19\") AS \"SUM(d19)\"") != std::string::npos &&
+           sum_decimal.sql.find("replace(CAST(SUM(\"d19\") AS VARCHAR), '.', '')") !=
+               std::string::npos &&
+           sum_decimal.sql.find("AS DECIMAL(23,6)) AS \"AVG(d19)\"") != std::string::npos &&
+           sum_decimal.sql.find("AS DECIMAL(22,8)) AS \"AVG(d18)\"") != std::string::npos &&
+           sum_decimal.sql.find("AS DECIMAL(23,4)) AS \"AVG(d19i)\"") != std::string::npos &&
+           sum_decimal.sql.find("AS DECIMAL(7,6)) AS \"AVG(frac)\"") != std::string::npos,
+       "decimal SUM is native and AVG scales by column scale plus four");
+    statement = nullptr;
+    bool sum_decimal_prepared =
+        sum_created && sum_decimal.decision == DuckDBMySQLSelectDecision::supported &&
+        duckdb_prepare(connection, sum_decimal.sql.c_str(), &statement) == DuckDBSuccess;
+    ok(sum_decimal_prepared && decimal_meta(1) == std::pair<int, int>{23, 6} &&
+           decimal_meta(3) == std::pair<int, int>{22, 8} &&
+           decimal_meta(7) == std::pair<int, int>{7, 6},
+       "fraction-only AVG widens by one digit to keep MySQL zero rendering");
+    duckdb_destroy_prepare(&statement);
+    auto sum_grouped = duckdb_translate_mysql_select(
+        "SELECT grp, SUM(i) AS si, AVG(d19) AS a19 FROM sum_table GROUP BY grp ORDER BY grp "
+        "LIMIT 2",
+        sum_context);
+    ok(sum_grouped.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_grouped.sql.find("GROUP BY \"grp\" ORDER BY \"grp\" ASC NULLS FIRST LIMIT 2") !=
+               std::string::npos,
+       "grouped SUM and AVG with a deterministic limit are admitted");
+    statement = nullptr;
+    ok(sum_created && sum_grouped.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, sum_grouped.sql.c_str(), &statement) == DuckDBSuccess &&
+           column_name(2) == "a19",
+       "DuckDB prepares grouped SUM and AVG");
+    duckdb_destroy_prepare(&statement);
+    auto sum_labels =
+        duckdb_translate_mysql_select("SELECT SUM(i), AVG(d18) FROM sum_table", sum_context);
+    ok(sum_labels.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_labels.sql.find("AS \"SUM(i)\"") != std::string::npos &&
+           sum_labels.sql.find("AS \"AVG(d18)\"") != std::string::npos,
+       "unaliased SUM and AVG labels are the source call text");
+    auto sum_spaced_labels =
+        duckdb_translate_mysql_select("SELECT SUM( i ) FROM sum_table", sum_context);
+    ok(sum_spaced_labels.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_spaced_labels.sql.find("AS \"SUM( i )\"") != std::string::npos,
+       "spaces inside the argument list are kept in the implicit label");
+    auto sum_mixed = duckdb_translate_mysql_select(
+        "SELECT sum(s.`i`) AS si, avg(s.`d19`) AS a19 FROM sum_table AS s", sum_context);
+    ok(sum_mixed.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_mixed.sql.find("SUM(\"i\") AS \"si\"") != std::string::npos &&
+           sum_mixed.sql.find("COUNT(\"d19\")") != std::string::npos &&
+           sum_mixed.sql.find("AS \"a19\"") != std::string::npos,
+       "mixed-case qualified builtin spellings are admitted");
+    const std::string sum_label_spaces(249, ' ');
+    ok(duckdb_translate_mysql_select("SELECT SUM(" + sum_label_spaces + "i) FROM sum_table",
+                                     sum_context)
+               .decision == DuckDBMySQLSelectDecision::supported,
+       "255-byte implicit SUM label preserved");
+    const std::string sum_label_overflow(250, ' ');
+    ok(duckdb_translate_mysql_select("SELECT SUM(" + sum_label_overflow + "i) FROM sum_table",
+                                     sum_context)
+               .reason == "unsupported_metadata_label",
+       "256-byte implicit SUM label truncation boundary refused");
+    auto sum_reason = [&](const std::string &sql) {
+        return duckdb_translate_mysql_select(sql, sum_context).reason;
+    };
+    ok(sum_reason("SELECT SUM(DISTINCT i) FROM sum_table") == "incomplete_or_non_select",
+       "SUM(DISTINCT) remains a ParserSQL framing refusal");
+    ok(sum_reason("SELECT AVG(DISTINCT i) FROM sum_table") == "incomplete_or_non_select",
+       "AVG(DISTINCT) remains a ParserSQL framing refusal");
+    ok(sum_reason("SELECT SUM(txt) FROM sum_table") == "unsupported_ast",
+       "SUM over text is refused");
+    ok(sum_reason("SELECT AVG(dt) FROM sum_table") == "unsupported_ast",
+       "AVG over DATE is refused");
+    ok(sum_reason("SELECT SUM(f) FROM sum_table") == "unsupported_ast",
+       "SUM over a floating-point column is refused");
+    ok(sum_reason("SELECT SUM(1)") == "unsupported_ast", "SUM of a literal is refused");
+    ok(sum_reason("SELECT SUM(i+1) FROM sum_table") == "unsupported_ast",
+       "SUM of an expression is refused");
+    ok(sum_reason("SELECT AVG(i*2) FROM sum_table") == "unsupported_ast",
+       "AVG of an expression is refused");
+    ok(sum_reason("SELECT SUM(d20) FROM sum_table") == "unsupported_ast",
+       "SUM above the proved decimal precision is refused");
+    ok(sum_reason("SELECT AVG(d20) FROM sum_table") == "unsupported_ast",
+       "AVG above the proved decimal precision is refused");
+    ok(duckdb_translate_mysql_select("SELECT SUM(huge) FROM `odd``table`", context).reason ==
+           "unsupported_ast",
+       "SUM of the 39-digit wide mapping is refused");
+    ok(duckdb_translate_mysql_select("SELECT SUM(fraction) FROM `odd``table`", context).reason ==
+           "unsupported_ast",
+       "SUM of DECIMAL(38,30) is refused");
+    ok(sum_reason("SELECT SUM (i) FROM sum_table") == "session_sensitive_function_syntax",
+       "spaced SUM requires unknown IGNORE_SPACE mode");
+    ok(sum_reason("SELECT AVG\t(i) FROM sum_table") == "session_sensitive_function_syntax",
+       "tab-separated AVG cannot be treated as a builtin");
+    ok(sum_reason("SELECT `SUM`(i) FROM sum_table") == "unsupported_ast",
+       "quoted SUM name is not an admitted builtin");
+    ok(sum_reason("SELECT SUM(?) FROM sum_table") == "unsupported_ast",
+       "placeholder SUM argument is refused");
+    ok(sum_reason("SELECT AVG(?) FROM sum_table") == "unsupported_ast",
+       "placeholder AVG argument is refused");
+    ok(sum_reason("SELECT grp,SUM(i) FROM sum_table GROUP BY grp HAVING SUM(i) IS NOT NULL") ==
+           "unsupported_having_aggregate",
+       "SUM in HAVING stays refused");
+    ok(sum_reason("SELECT grp,AVG(i) FROM sum_table GROUP BY grp HAVING AVG(i) > 0") ==
+           "unsupported_having_aggregate",
+       "AVG in HAVING stays refused");
+    ok(sum_reason("SELECT SUM(i),i FROM sum_table") == "unsupported_ast",
+       "mixed aggregate and plain SUM projection is refused");
+    ok(sum_reason("SELECT SUM(i) FROM sum_table WHERE SUM(i) > 0") == "unsupported_ast",
+       "aggregate SUM in WHERE is refused");
+    ok(sum_reason("SELECT SUM(i) FROM sum_table ORDER BY SUM(i)") == "unsupported_ast",
+       "aggregate SUM in ORDER BY is refused");
+    ok(sum_reason("SELECT SUM(i) FROM sum_table GROUP BY txt") == "unsupported_ast",
+       "text grouping stays refused beside SUM");
+    auto sum_prepare = sum_context;
+    sum_prepare.parameter_mode = DuckDBMySQLParameterMode::prepare;
+    ok(duckdb_translate_mysql_select("SELECT SUM(?) FROM sum_table", sum_prepare).reason ==
+           "unsupported_ast",
+       "prepare mode also refuses a placeholder SUM argument");
+    auto bounded_sum = sum_context;
+    bounded_sum.max_output_bytes = 100;
+    auto bounded_avg = duckdb_translate_mysql_select("SELECT AVG(i) FROM sum_table", bounded_sum);
+    ok(bounded_avg.reason == "resource_limit" && bounded_avg.sql.empty(),
+       "exact AVG emission observes the output bound");
     if (connection)
         duckdb_disconnect(&connection);
     if (db)
@@ -406,8 +598,8 @@ int main() {
        "group alias shadowing refused");
     ok(refused("SELECT id,COUNT(*) AS id FROM `odd``table` GROUP BY id"),
        "group key alias ambiguity refused");
-    ok(refused("SELECT SUM(id) FROM `odd``table`"), "SUM remains refused");
-    ok(refused("SELECT AVG(id) FROM `odd``table`"), "AVG remains refused");
+    ok(admitted("SELECT SUM(id) FROM `odd``table`"), "signed integer SUM admitted");
+    ok(admitted("SELECT AVG(id) FROM `odd``table`"), "signed integer AVG admitted");
     ok(admitted("SELECT u,MIN(u),MAX(u) FROM `odd``table` GROUP BY u ORDER BY u"),
        "unsigned keys and extrema admitted");
     ok(refused("SELECT MIN(u) FROM `odd``table` HAVING MIN(u) > 1"),

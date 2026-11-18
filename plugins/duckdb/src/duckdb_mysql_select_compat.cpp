@@ -54,6 +54,11 @@ std::string quote(const std::string &s) {
     }
     return o + '\"';
 }
+enum class AggregateKind { count, min, max, sum, avg };
+// Unsigned decimal text for 10^-n as a fraction-only decimal literal.
+std::string reciprocal_of_power_of_ten(unsigned n) {
+    return "0." + std::string(n - 1, '0') + "1";
+}
 bool integer(const N *n, std::string &out) {
     if (!n || n->type != K::NODE_LITERAL_INT || n->first_child || n->flags)
         return false;
@@ -275,6 +280,8 @@ struct Translator {
         const auto function = tokens.next_token();
         const auto open = tokens.next_token();
         const auto expected = name == "COUNT" ? TokenType::TK_COUNT
+                              : name == "SUM" ? TokenType::TK_SUM
+                              : name == "AVG" ? TokenType::TK_AVG
                               : name == "MIN" ? TokenType::TK_MIN
                               : name == "MAX" ? TokenType::TK_MAX
                                               : TokenType::TK_IDENTIFIER;
@@ -290,30 +297,102 @@ struct Translator {
         }
         return true;
     }
-    bool aggregate_expr(const N *node, std::string &out, DuckDBMySQLTypeKind &type) {
+    // MySQL SUM of a DECIMAL(p,s) column is DECIMAL(p+22,s) and DuckDB's
+    // DECIMAL(38,s) is wide enough only while the row-count bound proves no
+    // overflow; see the precision rule in doc/duckdb/mysql-query-compatibility.md.
+    static bool summable_decimal(const DuckDBMySQLType &type) {
+        return valid_decimal(type) && type.precision <= 19;
+    }
+    // MySQL AVG of an exact value has scale s + div_precision_increment (4 by
+    // default). Native DuckDB AVG is DOUBLE, so emit exact integer arithmetic
+    // on SUM and COUNT and round half away from zero at the target scale.
+    std::string exact_average(const std::string &column_sql, unsigned precision, unsigned scale,
+                              unsigned integer_digits) {
+        const unsigned result_scale = scale + 4;
+        // Recover the decimal's stored integer without a decimal multiply: the
+        // text always carries exactly `scale` fraction digits, so dropping the
+        // point yields SUM * 10^scale exactly and cannot overflow the way
+        // DECIMAL(38,scale) multiplication can.
+        const std::string sum_scaled =
+            scale ? "CAST(replace(CAST(SUM(" + column_sql + ") AS VARCHAR), '.', '') AS HUGEINT)"
+                  : "CAST(SUM(" + column_sql + ") AS HUGEINT)";
+        const std::string count = "COUNT(" + column_sql + ")";
+        const std::string quotient = "(" + sum_scaled + " // " + count + ")";
+        const std::string remainder = "(" + sum_scaled + " % " + count + ")";
+        const std::string rounded = "(CASE WHEN " + remainder + " < 0 THEN -((" + "abs(" +
+                                    remainder + ") * 20000 + " + count + ") // (2 * " + count +
+                                    ")) ELSE ((" + "abs(" + remainder + ") * 20000 + " + count +
+                                    ") // (2 * " + count + ")) END)";
+        const std::string scaled = "(" + quotient + " * 10000 + " + rounded + ")";
+        // MySQL reports precision p+4. A fraction-only DECIMAL(p,p) result would
+        // render without a leading zero in DuckDB, so widen that one case by a
+        // digit, mirroring the plain fraction-only column projection above.
+        const unsigned width = precision == scale ? result_scale + 1 : integer_digits + 4;
+        return "CAST(CAST(" + scaled + " AS DECIMAL(38,0)) * CAST('" +
+               reciprocal_of_power_of_ten(result_scale) + "' AS DECIMAL(" +
+               std::to_string(result_scale + 1) + "," + std::to_string(result_scale) +
+               ")) AS DECIMAL(" + std::to_string(width) + "," + std::to_string(result_scale) + "))";
+    }
+    bool aggregate_expr(const N *node, std::string &out, DuckDBMySQLTypeKind &type,
+                        AggregateKind *kind = nullptr) {
         if (!node || node->type != K::NODE_FUNCTION_CALL || node->flags)
             return false;
         const std::string name = val(node);
-        if (name != "COUNT" && name != "MIN" && name != "MAX")
+        if (name != "COUNT" && name != "MIN" && name != "MAX" && name != "SUM" && name != "AVG")
             return false;
         if (!unambiguous_builtin(node, name))
             return false;
         const N *arg = node->first_child;
         if (!arg || arg->next_sibling)
             return false;
+        const AggregateKind selected = name == "COUNT" ? AggregateKind::count
+                                       : name == "MIN" ? AggregateKind::min
+                                       : name == "MAX" ? AggregateKind::max
+                                       : name == "SUM" ? AggregateKind::sum
+                                                       : AggregateKind::avg;
         if (name == "COUNT" && arg->type == K::NODE_ASTERISK && !arg->flags && !arg->first_child) {
             out = "COUNT(*)";
             type = DuckDBMySQLTypeKind::signed_integer;
+            if (kind)
+                *kind = selected;
             return true;
         }
         const auto *c = column(arg);
         if (!c || !known_type(c->type.kind))
             return false;
-        if (name != "COUNT" && c->type.kind != DuckDBMySQLTypeKind::signed_integer &&
-            c->type.kind != DuckDBMySQLTypeKind::unsigned_integer)
-            return false;
-        out = name + "(" + quote(c->canonical_name) + ")";
-        type = name == "COUNT" ? DuckDBMySQLTypeKind::signed_integer : c->type.kind;
+        if (name == "COUNT") {
+            out = "COUNT(" + quote(c->canonical_name) + ")";
+            type = DuckDBMySQLTypeKind::signed_integer;
+        } else if (name == "MIN" || name == "MAX") {
+            if (c->type.kind != DuckDBMySQLTypeKind::signed_integer &&
+                c->type.kind != DuckDBMySQLTypeKind::unsigned_integer)
+                return false;
+            out = name + "(" + quote(c->canonical_name) + ")";
+            type = c->type.kind;
+        } else {
+            unsigned precision = 0, scale = 0, integer_digits = 0;
+            if (c->type.kind == DuckDBMySQLTypeKind::signed_integer)
+                precision = integer_digits = 19;
+            else if (c->type.kind == DuckDBMySQLTypeKind::unsigned_integer)
+                precision = integer_digits = 20;
+            else if (summable_decimal(c->type)) {
+                precision = c->type.precision;
+                scale = c->type.scale;
+                integer_digits = precision;
+            } else
+                return false;
+            if (name == "SUM")
+                out = "SUM(" + quote(c->canonical_name) + ")";
+            else
+                out = exact_average(quote(c->canonical_name), precision, scale, integer_digits);
+            type = DuckDBMySQLTypeKind::exact_decimal;
+            if (out.size() > ctx.max_output_bytes) {
+                reason = "resource_limit";
+                return false;
+            }
+        }
+        if (kind)
+            *kind = selected;
         return true;
     }
     // The accepted format is one fixed literal, so its rendering cannot depend
@@ -375,8 +454,14 @@ struct Translator {
             auto arg = node->first_child;
             std::string x;
             DuckDBMySQLTypeKind type;
-            if (!arg || arg->next_sibling || !aggregate_expr(arg, x, type))
+            AggregateKind kind = AggregateKind::count;
+            if (!arg || arg->next_sibling || !aggregate_expr(arg, x, type, &kind))
                 return false;
+            if (kind == AggregateKind::sum || kind == AggregateKind::avg) {
+                // Comparisons over DERIVED exact values stay outside this slice.
+                reason = "unsupported_having_aggregate";
+                return false;
+            }
             out = "(" + x + (node->type == K::NODE_IS_NULL ? " IS NULL)" : " IS NOT NULL)");
             if (out.size() > ctx.max_output_bytes) {
                 reason = "resource_limit";
@@ -400,8 +485,14 @@ struct Translator {
                 op != ">=")
                 return false;
             DuckDBMySQLTypeKind type;
-            if (!aggregate_expr(a, x, type) || type != DuckDBMySQLTypeKind::signed_integer ||
-                !integer(b, y))
+            AggregateKind kind = AggregateKind::count;
+            if (!aggregate_expr(a, x, type, &kind))
+                return false;
+            if (kind == AggregateKind::sum || kind == AggregateKind::avg) {
+                reason = "unsupported_having_aggregate";
+                return false;
+            }
+            if (type != DuckDBMySQLTypeKind::signed_integer || !integer(b, y))
                 return false;
         }
         out = "(" + x + " " + op + " " + y + ")";

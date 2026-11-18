@@ -60,6 +60,8 @@ enum class DuckDBMySQLParameterMode { forbidden, prepare, execute };
 enum class DuckDBMySQLParameterKind { null_value, signed_integer, unsupported };
 // No session settings are required by the current subset: constructs whose
 // meaning depends on unknown SQL modes, collation or time zone are refused.
+// AVG assumes MySQL's default div_precision_increment of 4; the analytical
+// endpoint rejects a SET that could change it, as recorded in the contract.
 struct DuckDBMySQLSelectContext {
     // The resolver establishes exact identity in the mapped native catalog and
     // returns canonical names without executing user SQL. This does not prove

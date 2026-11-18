@@ -5,11 +5,11 @@ ProxySQL routing or the production metadata provider. The probe passes each sour
 query to `duckdb_translate_mysql_select`; it executes only admitted SQL and uses
 the translator's owned result for DuckDB. Its negative control copies the emitted
 comma-LIMIT SQL and deliberately changes its offset, proving the row comparator
-catches that error. Eighteen unsupported or invalid queries are checked for
+catches that error. Forty-four unsupported or invalid queries are checked for
 refusal and never sent to either database.
 
 On 2026-11-18, MySQL `8.0.46-0ubuntu0.24.04.5` and DuckDB `v2.0.0` matched
-all 61 candidate queries, with zero unexpected mismatches. The negative control
+all 86 candidate queries, with zero unexpected mismatches. The negative control
 was detected. Cases cover escaped table and column names, duplicate aliases,
 table alias and qualified references, `*` over signed and unsigned integers,
 text, binary and NULL values, `COUNT(*)` and `COUNT(column)`, literal `001`
@@ -24,7 +24,7 @@ aliases, duplicates and `*`, and native HUGEINT/UHUGEINT projection. The
 fixture contains signed BIGINT extremes, the unsigned BIGINT maximum, UTF-8
 and binary bytes `00 ff`.
 
-Fourteen of the 61 cases exercise `DATE_FORMAT(column, '%Y-%m')` over a DATE
+Fourteen of the 86 cases exercise `DATE_FORMAT(column, '%Y-%m')` over a DATE
 column and a DATETIME(6) column the resolver declares as a recorded DATETIME: plain and aliased projections, mixed-case and spaced
 spellings, qualified and backtick references, a backtick source label, mixed
 and duplicate-alias projections, comma LIMIT, NULL positions, an empty result
@@ -48,6 +48,34 @@ column: DuckDB's C API text conversion omits trailing fractional zeros
 (`2024-02-29 00:00:00`) while MySQL's text protocol always returns six
 fractional digits for DATETIME(6). That pre-existing difference is outside the
 translated value under test and is not compared here.
+
+Twenty-five of the 86 cases exercise SUM and AVG. The `sumavg_probe` fixture has
+signed BIGINT and unsigned BIGINT extremes, `DECIMAL(19,2)`, `DECIMAL(18,4)`,
+`DECIMAL(20,2)` and `DECIMAL(19,0)` columns, fraction-only `DECIMAL(2,2)` in
+`sumavg_probe`, and fraction-only `DECIMAL(19,19)` in `scale_probe`, nullable
+values, an all-NULL row, an all-NULL group, an empty result, multi-key
+groups and two 32-row groups whose single nonzero value makes AVG land exactly
+on a rounding tie at scales 4, 6 and 8. Both the positive and negative tie are
+covered. Cases include unaliased and aliased labels, mixed case, backtick and
+qualified arguments, grouped and ungrouped queries, ORDER BY/LIMIT, duplicate
+aggregate aliases, single rows at the signed/unsigned/decimal extrema, and
+empty or all-NULL inputs. SUM integer and decimal values, AVG values for every
+admitted scale, NULL positions, row order/multiplicity and labels match. The
+26 new refusal checks cover DISTINCT, text and DATE arguments, literals,
+arithmetic arguments, spaced/quoted names, placeholders, `DECIMAL(38,30)`,
+`DECIMAL(20,2)`, the 39-digit HUGEINT mapping, HAVING aggregates, nested
+aggregates, mixed projections and aggregates in WHERE/ORDER BY.
+
+Three differences were found and handled by the emission rather than admitted
+natively: DuckDB's native AVG is DOUBLE (so it is never used), DuckDB renders a
+fraction-only decimal without a leading zero (so a fraction-only AVG is emitted
+one precision digit wider), and DuckDB's DECIMAL multiply can overflow its
+128-bit intermediate for very large scaled sums while MySQL widens its result
+(so AVG recovers the exact stored integer from DuckDB's exact decimal text
+instead of multiplying by a power of ten). A fourth difference, decimal SUM
+overflow above precision 19, is avoided by refusing those columns before
+execution. Result metadata precision is not compared by this probe and does
+differ for SUM and for fraction-only AVG; see the compatibility contract.
 
 The comparison checks exact result labels, NULL positions, value bytes without
 decimal normalization, row order and multiplicity, and coarse type categories:
