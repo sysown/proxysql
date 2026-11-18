@@ -9,6 +9,9 @@
 #include "PgSQL_PreparedStatement.h"
 #include "PgSQL_Data_Stream.h"
 
+#include <sys/socket.h>
+#include <sys/uio.h>
+
 #include "openssl/x509v3.h"
 #include "openssl/crypto.h"   // OPENSSL_cleanse - a wipe the compiler is not allowed to drop
 
@@ -230,6 +233,7 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	bytes_info.bytes_sent = 0;
 	pkts_recv = 0;
 	pkts_sent = 0;
+	write_head_partial = 0;
 	client_addr = NULL;
 
 	addr.addr = NULL;
@@ -901,6 +905,186 @@ int PgSQL_Data_Stream::write_to_net() {
 	return bytes_io;
 }
 
+static constexpr int PGSQL_WRITEV_MAX_IOV = 64;
+
+struct PgSQL_WriteVView {
+	struct iovec iov[PGSQL_WRITEV_MAX_IOV];
+	int iovcnt = 0;
+	size_t total = 0;
+};
+
+/**
+ * @brief Move a frontend stream that finished authentication out of
+ *        STATE_CLIENT_AUTH_OK before the first direct send.
+ *
+ * The buffered writer performs this transition when it removes the first
+ * packet from PSarrayOUT; the direct path bypasses that removal, so it has to
+ * make the same transition itself, clearing the connection compression status
+ * exactly like the buffered path does for a plaintext frontend.
+ */
+static void prepare_direct_frontend_stream(PgSQL_Data_Stream* myds) {
+	if (!myds || myds->DSS != STATE_CLIENT_AUTH_OK) return;
+
+	myds->DSS = STATE_SLEEP;
+	if (myds->myconn) {
+		myds->myconn->set_status(false, STATUS_PGSQL_CONNECTION_COMPRESSION);
+	}
+}
+
+bool PgSQL_Data_Stream::can_writev_direct() const {
+	if (!pgsql_thread___writev_direct && write_head_partial == 0) return false;
+	if (active == 0 || net_failure || fd <= 0) return false;
+	if (encrypted) return false;
+	if (myds_type != MYDS_FRONTEND) return false;
+	if (DSS != STATE_SLEEP && DSS != STATE_CLIENT_AUTH_OK) return false;
+	if (sess == nullptr || sess->session_type != PROXYSQL_SESSION_PGSQL) return false;
+	if (sess->mirror) return false;
+	if (mypolls == nullptr || poll_fds_idx < 0) return false;
+	if (PSarrayOUT == nullptr || PSarrayOUT->len == 0) return false;
+	if (queue_data(queueOUT) != 0) return false;
+	if (queueOUT.partial != 0 || queueOUT.pkt.ptr != nullptr) return false;
+	return true;
+}
+
+bool PgSQL_Data_Stream::should_writev_direct() const {
+	if (!writev_batch_ready()) return false;
+	return can_writev_direct();
+}
+
+bool PgSQL_Data_Stream::writev_batch_ready() const {
+	if (write_head_partial != 0) return true;
+	if (PSarrayOUT == nullptr || PSarrayOUT->len == 0) return false;
+
+	size_t pending = 0;
+	unsigned int packets = 0;
+	for (unsigned int i = 0; i < PSarrayOUT->len; ++i) {
+		const PtrSize_t* pkt = PSarrayOUT->index(i);
+		if (!pkt) continue;
+		++packets;
+		if (packets >= 2) {
+			return true;
+		}
+		if (pkt->size > QUEUE_T_DEFAULT_SIZE ||
+				pending > QUEUE_T_DEFAULT_SIZE - pkt->size) {
+			return true;
+		}
+		pending += pkt->size;
+	}
+	return false;
+}
+
+static bool build_writev_view(
+	PgSQL_Data_Stream* myds,
+	size_t byte_budget,
+	PgSQL_WriteVView& view) {
+	if (!myds || !myds->PSarrayOUT || myds->PSarrayOUT->len == 0) return false;
+	if (byte_budget == 0) byte_budget = QUEUE_T_DEFAULT_SIZE;
+
+	for (unsigned int i = 0;
+			i < myds->PSarrayOUT->len && view.iovcnt < PGSQL_WRITEV_MAX_IOV &&
+			view.total < byte_budget; ++i) {
+		PtrSize_t* pkt = myds->PSarrayOUT->index(i);
+		const size_t offset = (i == 0) ? myds->write_head_partial : 0;
+		if (offset >= pkt->size) return false;
+
+		size_t len = pkt->size - offset;
+		const size_t remaining_budget = byte_budget - view.total;
+		if (len > remaining_budget) len = remaining_budget;
+		if (len == 0) break;
+
+		view.iov[view.iovcnt].iov_base = static_cast<unsigned char*>(pkt->ptr) + offset;
+		view.iov[view.iovcnt].iov_len = len;
+		view.total += len;
+		++view.iovcnt;
+	}
+	return view.iovcnt > 0;
+}
+
+static unsigned int apply_accepted_write_bytes(
+	PgSQL_Data_Stream* myds,
+	size_t bytes) {
+	unsigned int full_packets = 0;
+	while (bytes > 0 && myds->PSarrayOUT && full_packets < myds->PSarrayOUT->len) {
+		PtrSize_t* pkt = myds->PSarrayOUT->index(full_packets);
+		const size_t offset = (full_packets == 0) ?
+			myds->write_head_partial : 0;
+		const size_t remaining = pkt->size - offset;
+		if (bytes < remaining) {
+			myds->write_head_partial = offset + bytes;
+			bytes = 0;
+			break;
+		}
+
+		bytes -= remaining;
+		add_to_data_packet_history_without_alloc(
+			myds->data_packets_history_OUT, pkt->ptr, pkt->size);
+		myds->write_head_partial = 0;
+		++myds->pkts_sent;
+		++full_packets;
+	}
+
+	if (full_packets > 0) {
+		myds->PSarrayOUT->remove_index_range(0, full_packets);
+	}
+	return full_packets;
+}
+
+int PgSQL_Data_Stream::writev_to_net_poll(size_t byte_budget) {
+	if (!writev_batch_ready()) {
+		return 0;
+	}
+	if (!can_writev_direct()) {
+		return 0;
+	}
+	return writev_to_net_poll_unchecked(byte_budget);
+}
+
+int PgSQL_Data_Stream::writev_to_net_poll_unchecked(size_t byte_budget) {
+	PgSQL_WriteVView view;
+	if (!build_writev_view(this, byte_budget, view)) {
+		return 0;
+	}
+	if (write_head_partial == 0) {
+		prepare_direct_frontend_stream(this);
+	}
+
+	struct msghdr msg {};
+	msg.msg_iov = view.iov;
+	msg.msg_iovlen = static_cast<size_t>(view.iovcnt);
+#ifdef __APPLE__
+	const int flags = 0;
+#else
+	const int flags = MSG_NOSIGNAL;
+#endif
+	const ssize_t bytes_io = sendmsg(fd, &msg, flags);
+	if (bytes_io < 0) {
+		const int myds_errno = errno;
+		if (myds_errno == EINTR || myds_errno == EAGAIN || myds_errno == EWOULDBLOCK) {
+			set_pollout();
+			return -1;
+		}
+		shut_soft();
+		return 0;
+	}
+	if (bytes_io == 0) {
+		set_pollout();
+		return 0;
+	}
+
+	const size_t accepted = static_cast<size_t>(bytes_io);
+	const unsigned int full_packets = apply_accepted_write_bytes(this, accepted);
+
+	if (mypolls && sess && sess->thread) {
+		mypolls->last_sent[poll_fds_idx] = sess->thread->curtime;
+	}
+	bytes_info.bytes_sent += accepted;
+	if (sess && sess->thread) {
+		sess->thread->status_variables.stvar[st_var_queries_frontends_bytes_sent] += accepted;
+	}
+	set_pollout();
+	return static_cast<int>(accepted);
+}
+
 bool PgSQL_Data_Stream::available_data_out() {
 	int buflen = queue_data(queueOUT);
 	if (buflen || PSarrayOUT->len) {
@@ -1040,6 +1224,9 @@ int PgSQL_Data_Stream::write_to_net_poll() {
 			}
 		}
 	}
+	if (should_writev_direct()) {
+		return writev_to_net_poll_unchecked(0);
+	}
 	proxy_debug(PROXY_DEBUG_NET, 1, "Session=%p, DataStream=%p --\n", sess, this);
 	bool call_write_to_net = false;
 	if (queue_data(queueOUT)) {
@@ -1083,6 +1270,12 @@ int PgSQL_Data_Stream::read_pkts() {
 }
 
 int PgSQL_Data_Stream::array2buffer() {
+	// A direct writev send already handed the front of PSarrayOUT[0] to the
+	// kernel; the buffered path does not know about the partially sent packet
+	// and would resend it from the start. Only the direct path may resume it.
+	if (write_head_partial != 0) {
+		return 0;
+	}
 	int ret = 0;
 	unsigned int idx = 0;
 	bool cont = true;
@@ -1238,6 +1431,11 @@ void PgSQL_Data_Stream::copy_buffer_to_resultset(PtrSizeArray* resultset, unsign
 }
 
 int PgSQL_Data_Stream::array2buffer_full() {
+	// Leave the packets in PSarrayOUT when the direct path will send them:
+	// copying them into queueOUT first would defeat the zero-copy send.
+	if (should_writev_direct()) {
+		return 0;
+	}
 	int rc = 0;
 	int r = 0;
 	while ((r = array2buffer())) rc += r;

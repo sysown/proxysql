@@ -235,7 +235,7 @@ void Base_Session<S,DS,B,T>::writeout() {
 			}
 			int retbytes=client_myds->write_to_net_poll();
 			total_written+=retbytes;
-			if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+			if (retbytes>=QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
 				runloop=true;
 			}
 			while (runloop && (disable_throttle || total_written < mwpl)) {
@@ -250,7 +250,7 @@ void Base_Session<S,DS,B,T>::writeout() {
 					if (fds.revents==POLLOUT) {
 						retbytes=client_myds->write_to_net_poll();
 						total_written+=retbytes;
-						if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+						if (retbytes>=QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
 							runloop=true;
 						}
 					}

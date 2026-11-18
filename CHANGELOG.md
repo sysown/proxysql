@@ -4,6 +4,17 @@
 
 ### Unreleased
 
+- PostgreSQL: send frontend result packets to the client with a direct
+  scatter/gather `sendmsg()` instead of copying them one by one into the
+  32 KiB `queueOUT` ring buffer first. Plaintext PgSQL frontend streams with
+  at least two pending packets (or a single packet larger than one queue
+  buffer) are now handed to the kernel straight from `PSarrayOUT`, removing
+  a full memcpy of every result byte. A short direct write keeps a partial
+  offset into the first packet and is resumed by the next poll cycle; the
+  buffered writer is untouched for everything else (single small packets,
+  TLS, mirrors, backends). New variable `pgsql-writev_direct` (bool, default
+  `true`) disables the direct path and restores the fully buffered output.
+
 - Prevent replaying a MySQL multi-statement batch on another backend when its backend goes offline after an earlier result was returned to the client.
 
 #### Pass-Through Authentication (Phase 1 — opt-in, MySQL only)
