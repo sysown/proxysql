@@ -354,6 +354,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 	if (sess) {
 		switch (sess->session_type) {
 			case PROXYSQL_SESSION_SQLITE:
+			case PROXYSQL_SESSION_DUCKDB:
 			case PROXYSQL_SESSION_ADMIN:
 			case PROXYSQL_SESSION_STATS:
 				internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
@@ -579,6 +580,7 @@ bool MySQL_Protocol::generate_pkt_OK64(bool send, void **ptr, unsigned int *len,
 	if (sess) {
 		switch (sess->session_type) {
 			case PROXYSQL_SESSION_SQLITE:
+			case PROXYSQL_SESSION_DUCKDB:
 			case PROXYSQL_SESSION_ADMIN:
 			case PROXYSQL_SESSION_STATS:
 				internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
@@ -1624,9 +1626,8 @@ bool MySQL_Protocol::verify_user_pass(
 		// EXCHANGE are deliberately two different scopes:
 		//   - Reservation (this denial): applies to every session type that
 		//     consumes GloMyAuth's USERNAME_FRONTEND credential scope, i.e.
-		//     PROXYSQL_SESSION_MYSQL *and* PROXYSQL_SESSION_SQLITE -- the
-		//     SQLite3-server frontend (ProxySQL's own admin-clone SQL port)
-		//     reads the same mysql_users rows. Narrowing this to MYSQL-only
+		//     MySQL, SQLite and DuckDB frontends. The
+		//     SQLite and DuckDB listeners read the same mysql_users rows. Narrowing this to MYSQL-only
 		//     reopened a cleartext fall-through on the SQLite3 port: a stored
 		//     "$ED$short" value would again be compared literally and the
 		//     stored string itself would authenticate there -- exactly what
@@ -1637,7 +1638,7 @@ bool MySQL_Protocol::verify_user_pass(
 		//     MYSQL-only. That is a protocol capability -- only a MySQL-wire
 		//     client can complete a MySQL Auth Switch -- not a trust
 		//     decision, so it is scoped independently of this reservation.
-		if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) && proxysql_ed25519_has_prefix(password)) {
+		if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) && proxysql_ed25519_has_prefix(password)) {
 			ret = false;
 		} else
 #endif
@@ -1682,7 +1683,7 @@ bool MySQL_Protocol::verify_user_pass(
 			// SCRAMBLE_LENGTH (20) bytes, so it needs the same bound as the
 			// cleartext branch above. This is the COMMON path -- stored passwords are
 			// normally hashed ('*'-prefixed).
-			if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) &&
+			if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) &&
 				auth_response_has(pass_len, SCRAMBLE_LENGTH)) {
 				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 				if (ret) {
@@ -1694,7 +1695,7 @@ bool MySQL_Protocol::verify_user_pass(
 				}
 			}
 		} else {
-			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
 				unsigned char md1_buf[SHA_DIGEST_LENGTH];
 				unsigned char md2_buf[SHA_DIGEST_LENGTH];
@@ -1922,7 +1923,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	#ifdef PROXYSQL31
 		&& !target_policy.has_spiffe_id
 	#endif
-		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE)) {
+		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB)) {
 		// Rationale for the pre-mutation ordering and the two eligible
 		// cases is documented on the doxygen block above this gate.
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
@@ -2973,7 +2974,7 @@ void MySQL_Protocol::PPHR_6auth2(
 	MyProt_tmp_auth_vars& vars1
 	) {
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
-	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 		if (
 			caching_sha2_fast_auth_verify(
 				vars1.password, (*myds)->myconn->scramble_buff, vars1.pass, vars1.pass_len
@@ -2993,7 +2994,7 @@ void MySQL_Protocol::PPHR_7auth1(
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	// As in verify_user_pass(): proxy_scramble_sha1() reads SCRAMBLE_LENGTH (20)
 	// bytes from 'vars1.pass', which is sized from the client-declared length.
-	if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) &&
+	if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) &&
 		auth_response_has(vars1.pass_len, SCRAMBLE_LENGTH)) {
 		ret=proxy_scramble_sha1((char *)vars1.pass,(*myds)->myconn->scramble_buff,vars1.password+1, reply);
 		if (ret) {
@@ -3016,7 +3017,7 @@ void MySQL_Protocol::PPHR_7auth2(
 	account_details_t& attr1
 ) {
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
-	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, vars1.user, session_type);
 /*
 		uint8_t hash_stage1[SHA_DIGEST_LENGTH];
@@ -3162,7 +3163,7 @@ void MySQL_Protocol::PPHR_sha2full(
 		}
 		if (ret == true) {
 			enum proxysql_session_type session_type = (*myds)->sess->session_type;
-			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 				// currently proxysql doesn't know the clear text password for that specific user, let's set it!
 				GloMyAuth->set_clear_text_password((char *)vars1.user, USERNAME_FRONTEND, (const char *)vars1.pass, passtype);
 				// Update 'vars1' password with 'clear text' one, so session can be later updated with it
@@ -3382,6 +3383,7 @@ void MySQL_Protocol::PPHR_next_auth_stage(MyProt_tmp_auth_vars& vars1, PASSWORD_
 			if (
 				session_type == PROXYSQL_SESSION_MYSQL ||
 				session_type == PROXYSQL_SESSION_SQLITE ||
+				session_type == PROXYSQL_SESSION_DUCKDB ||
 				session_type == PROXYSQL_SESSION_ADMIN ||
 				session_type == PROXYSQL_SESSION_STATS
 			) {
@@ -3744,6 +3746,8 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			((*myds)->sess->session_type == PROXYSQL_SESSION_STATS)
 			||
 			((*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE)
+			||
+			((*myds)->sess->session_type == PROXYSQL_SESSION_DUCKDB)
 		) {
 			PPHR_5passwordFalse_0(ret, vars1, reply, account_details);
 		} else {
@@ -3819,7 +3823,7 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			// cleartext/native password comparison below.
 			// Session scope matches the $ED$ reservation rule: MYSQL (the
 			// only session type the ed25519 exchange is offered on) and
-			// SQLITE (shares the USERNAME_FRONTEND credential rows, so the
+			// SQLITE and DUCKDB (share the USERNAME_FRONTEND credential rows, so the
 			// fail-closed reservation must hold there too). ADMIN/STATS are
 			// deliberately excluded: their credentials flow through this
 			// same function under PROXYSQL31, and routing a $ED$-prefixed
@@ -3827,7 +3831,8 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			// unrecoverable admin-port lockout -- they fall through to the
 			// pre-existing cleartext comparison instead.
 			if (((*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL ||
-				(*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE) &&
+				(*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE ||
+				(*myds)->sess->session_type == PROXYSQL_SESSION_DUCKDB) &&
 				(auth_plugin_id == AUTH_MYSQL_ED25519 || proxysql_ed25519_has_prefix(vars1.password))) {
 				// signature collected by PPHR_1 after the Auth Switch; a stored
 				// "$ED$" key with a non-ed25519 response fails the length check

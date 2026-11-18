@@ -369,6 +369,10 @@ uint64_t PgSQL_Event::write(LogBuffer *f, PgSQL_Session *sess) {
 		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_ERR:
 		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_CLOSE:
 		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_QUIT:
+		case PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_OK:
+		case PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_ERR:
+		case PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_CLOSE:
+		case PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_QUIT:
 			write_auth(f, sess);
 			break;
 		default:
@@ -455,6 +459,18 @@ void PgSQL_Event::write_auth(LogBuffer *f, PgSQL_Session *sess) {
 		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_QUIT:
 			j["event"]="PGSQL_SQLite3_Quit";
 			break;
+		case PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_OK:
+			j["event"]="PGSQL_DuckDB_Connect_OK";
+			break;
+		case PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_ERR:
+			j["event"]="PGSQL_DuckDB_Connect_ERR";
+			break;
+		case PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_CLOSE:
+			j["event"]="PGSQL_DuckDB_Close";
+			break;
+		case PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_QUIT:
+			j["event"]="PGSQL_DuckDB_Quit";
+			break;
 		default:
 			break;
 	}
@@ -462,6 +478,7 @@ void PgSQL_Event::write_auth(LogBuffer *f, PgSQL_Session *sess) {
 		case PGSQL_LOG_EVENT_TYPE::AUTH_CLOSE:
 		case PGSQL_LOG_EVENT_TYPE::ADMIN_AUTH_CLOSE:
 		case PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_CLOSE:
+		case PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_CLOSE:
 			{
 				uint64_t curtime_real=realtime_time();
 				uint64_t curtime_mono=sess->thread->curtime;
@@ -1212,6 +1229,9 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 						break;
 					case PROXYSQL_SESSION_SQLITE:
 						_et = PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_OK;
+						break;
+					case PROXYSQL_SESSION_DUCKDB:
+						_et = PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_OK;
 					default:
 						break;
 				}
@@ -1224,6 +1244,9 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 						break;
 					case PROXYSQL_SESSION_SQLITE:
 						_et = PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_ERR;
+						break;
+					case PROXYSQL_SESSION_DUCKDB:
+						_et = PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_ERR;
 					default:
 						break;
 				}
@@ -1236,6 +1259,9 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 						break;
 					case PROXYSQL_SESSION_SQLITE:
 						_et = PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_QUIT;
+						break;
+					case PROXYSQL_SESSION_DUCKDB:
+						_et = PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_QUIT;
 					default:
 						break;
 				}
@@ -1248,6 +1274,9 @@ void PgSQL_Logger::log_audit_entry(PGSQL_LOG_EVENT_TYPE _et, PgSQL_Session *sess
 						break;
 					case PROXYSQL_SESSION_SQLITE:
 						_et = PGSQL_LOG_EVENT_TYPE::SQLITE_AUTH_CLOSE;
+						break;
+					case PROXYSQL_SESSION_DUCKDB:
+						_et = PGSQL_LOG_EVENT_TYPE::DUCKDB_AUTH_CLOSE;
 					default:
 						break;
 				}

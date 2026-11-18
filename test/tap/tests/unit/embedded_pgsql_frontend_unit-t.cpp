@@ -109,7 +109,7 @@ int main() {
     test_init_minimal();
     auto *s = new PgSQL_Session;
     auto *st = new PgSQL_Data_Stream;
-    s->session_type = PROXYSQL_SESSION_SQLITE;
+    s->session_type = PROXYSQL_SESSION_DUCKDB;
     s->connections_handler = true;
     s->client_myds = st;
     st->sess = s;
@@ -118,7 +118,7 @@ int main() {
     Policy policy;
     ok(!register_pgsql_prepared(*s, adapter, policy), "register embedded session");
     auto *nested = new PgSQL_Session;
-    nested->session_type = PROXYSQL_SESSION_SQLITE;
+    nested->session_type = PROXYSQL_SESSION_DUCKDB;
     nested->connections_handler = true;
     bool nested_ok = false;
     GuardFactory reentrant = [&](const OperationContext &,

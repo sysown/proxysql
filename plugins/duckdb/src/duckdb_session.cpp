@@ -1635,7 +1635,7 @@ void duckdb_send_pgsql_error(PgSQL_Session* sess, const char* sqlstate,
 
 template <typename S>
 void duckdb_session_handler(S* sess, void* pa, PtrSize_t* pkt) {
-	(void)pa;   // core passes GloSQLite3Server; the plugin ignores it.
+	(void)pa;   // DuckDB owns its listener context.
 
 	std::string sql;
 	if constexpr (std::is_same_v<S, MySQL_Session>) {

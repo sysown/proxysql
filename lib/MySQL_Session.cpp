@@ -1211,7 +1211,7 @@ MySQL_Session::MySQL_Session() {
 void MySQL_Session::reset() {
 	const bool was_healthy = healthy;
 	// Registered embedded endpoints own native statements outside proxy metadata.
-	if (session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_DUCKDB) {
 		if (auto error = embedded::reset_mysql_prepared(*this)) {
 			proxy_error("Embedded prepared reset failed: %s\n", error->message.c_str());
 			healthy = false;
@@ -1315,7 +1315,7 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
-	if (session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_DUCKDB) {
 		embedded::teardown_plugin_mysql(*this);
 		embedded::destroy_mysql_prepared(*this);
 	}
@@ -5322,6 +5322,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			handler_function(this, (void *)GloSQLite3Server, &pkt);
 			l_free(pkt.size,pkt.ptr);
 			break;
+		case PROXYSQL_SESSION_DUCKDB:
+			handler_function(this, nullptr, &pkt);
+			l_free(pkt.size,pkt.ptr);
+			break;
 #ifdef PROXYSQLCLICKHOUSE
 		case PROXYSQL_SESSION_CLICKHOUSE:
 			handler_function(this, (void *)GloClickHouseServer, &pkt);
@@ -5420,7 +5424,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PAC
 // here we only process the not so common ones
 // we return false if the enum_mysql_command is not found
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass) {
-	if (session_type == PROXYSQL_SESSION_SQLITE && embedded::handle_mysql_prepared(*this, *pkt)) return true;
+	if (session_type == PROXYSQL_SESSION_DUCKDB && embedded::handle_mysql_prepared(*this, *pkt)) return true;
 	unsigned char c;
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	switch ((enum_mysql_command)c) {
@@ -5721,7 +5725,7 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 
 
 void MySQL_Session::GPFC_PreparedStatements(PtrSize_t& pkt, unsigned char c) {
-	if (session_type == PROXYSQL_SESSION_SQLITE && embedded::handle_mysql_prepared(*this, pkt)) return;
+	if (session_type == PROXYSQL_SESSION_DUCKDB && embedded::handle_mysql_prepared(*this, pkt)) return;
 	switch ((enum_mysql_command)c) {
 		case _MYSQL_COM_STMT_PREPARE:
 			if (GloMyLdapAuth) {
@@ -8105,7 +8109,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		&&
 		(
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
-			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE) )
+			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) )
 #else
 			(default_hostgroup<0 && ( session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) )
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
@@ -8113,7 +8117,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			(default_hostgroup == 0 && session_type == PROXYSQL_SESSION_CLICKHOUSE)
 			||
 			//(default_hostgroup>=0 && session_type == PROXYSQL_SESSION_MYSQL)
-			(default_hostgroup>=0 && ( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE ) )
+			(default_hostgroup>=0 && ( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB ) )
 			||
 			(
 				client_myds->encrypted==false
@@ -8152,12 +8156,13 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			if (
 				( max_connections_reached == false )
 				&&
-				( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE || session_type == PROXYSQL_SESSION_SQLITE)
+				( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB)
 			) {
 			//if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 				client_authenticated=true;
 				switch (session_type) {
 					case PROXYSQL_SESSION_SQLITE:
+					case PROXYSQL_SESSION_DUCKDB:
 //#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 						free_users=1;
 						break;
@@ -8339,7 +8344,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						free(_s);
 						__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 					} else {
-						if (session_type == PROXYSQL_SESSION_SQLITE && !switching_user &&
+						if (session_type == PROXYSQL_SESSION_DUCKDB && !switching_user &&
 						    requested_database && *requested_database) {
 							const uint16_t code = embedded::plugin_mysql_select_database(
 								*this, requested_database, strlen(requested_database));
@@ -8468,7 +8473,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		client_myds->DSS=STATE_SLEEP;
 	} else {
 		constexpr size_t payload_offset = sizeof(mysql_hdr) + 1;
-		if (session_type == PROXYSQL_SESSION_SQLITE && pkt->size >= payload_offset) {
+		if (session_type == PROXYSQL_SESSION_DUCKDB && pkt->size >= payload_offset) {
 			const auto* database = static_cast<const char*>(pkt->ptr) + payload_offset;
 			const uint16_t code = embedded::plugin_mysql_select_database(
 				*this, database, pkt->size - payload_offset);
@@ -8478,7 +8483,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				return;
 			}
 		}
-		if (session_type == PROXYSQL_SESSION_SQLITE && client_myds && client_myds->myconn &&
+		if (session_type == PROXYSQL_SESSION_DUCKDB && client_myds && client_myds->myconn &&
 		    client_myds->myconn->userinfo && pkt->size > payload_offset) {
 			const char* charset = mysql_variables.client_get_value(this, SQL_CHARACTER_SET_CLIENT);
 			client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,
@@ -10160,7 +10165,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_CHANGE_USER packet\n");
 	//if (session_type == PROXYSQL_SESSION_MYSQL) {
-	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE ||
+	    session_type == PROXYSQL_SESSION_DUCKDB) {
 		reset();
 		if (!healthy) { l_free(pkt->size, pkt->ptr); return; }
 		init();
@@ -10248,7 +10254,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got MYSQL_COM_RESET_CONNECTION packet\n");
 
-	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE ||
+	    session_type == PROXYSQL_SESSION_DUCKDB) {
 		// Backup the current relevant session values
 		int default_hostgroup = this->default_hostgroup;
 		bool transaction_persistent = this->transaction_persistent;
@@ -10905,7 +10912,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 			setStatus |= (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		} else {
 			// this is for SQLite3 Server
-			if (session_type == PROXYSQL_SESSION_SQLITE) {
+			if (session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) {
 				//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			} else {
 				// for sessions that are not SQLITE . Admin and Clickhouse .
@@ -10965,7 +10972,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			} else {
 				// this is for SQLite3 Server
-				if (session_type == PROXYSQL_SESSION_SQLITE) {
+				if (session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) {
 					//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 				} else {
 					// for sessions that are not SQLITE . Admin and Clickhouse .

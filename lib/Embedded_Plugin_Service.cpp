@@ -93,9 +93,9 @@ template<class S> int unregister_impl(S* s, ProxySQL_Embedded_Error* out, bool t
 template<class S> int register_impl(void* opaque, const ProxySQL_Embedded_RequestV1* req,
                                      ProxySQL_Embedded_Error* out) {
     auto* s = static_cast<S*>(opaque);
-    if (!s || s->session_type != PROXYSQL_SESSION_SQLITE)
+    if (!s || s->session_type != PROXYSQL_SESSION_DUCKDB)
         return report(failure(ErrorKind::invalid_parameter,
-                              "session must be a plugin SQLite session"), out);
+                              "session must be a DuckDB session"), out);
     auto& r = registry<S>();
     {
         std::lock_guard<std::mutex> lock(r.mutex);
@@ -164,7 +164,7 @@ const ProxySQL_Embedded_ServiceV1* proxysql_embedded_execution_service() noexcep
 namespace embedded {
 uint16_t plugin_mysql_select_database(MySQL_Session& s, const char* database,
                                       size_t size) noexcept {
-    if (s.session_type != PROXYSQL_SESSION_SQLITE)
+    if (s.session_type != PROXYSQL_SESSION_DUCKDB)
         return 0;
     try {
         auto& r = registry<MySQL_Session>();
@@ -186,8 +186,7 @@ uint16_t plugin_mysql_select_database(MySQL_Session& s, const char* database,
     }
 }
 void teardown_plugin_mysql(MySQL_Session& s) noexcept {
-    // An ordinary proxy session is never plugin-registered; do not lock the registry for it.
-    if (s.session_type == PROXYSQL_SESSION_MYSQL) return;
+    if (s.session_type != PROXYSQL_SESSION_DUCKDB) return;
     try {
         unregister_impl(&s, nullptr, true);
     } catch (...) {
@@ -195,7 +194,7 @@ void teardown_plugin_mysql(MySQL_Session& s) noexcept {
     }
 }
 void teardown_plugin_pgsql(PgSQL_Session& s) noexcept {
-    if (s.session_type == PROXYSQL_SESSION_PGSQL) return;
+    if (s.session_type != PROXYSQL_SESSION_DUCKDB) return;
     try {
         unregister_impl(&s, nullptr, true);
     } catch (...) {

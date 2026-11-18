@@ -1091,6 +1091,8 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			((*myds)->sess->session_type == PROXYSQL_SESSION_STATS)
 			||
 			((*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE)
+			||
+			((*myds)->sess->session_type == PROXYSQL_SESSION_DUCKDB)
 			) {
 			if (strcmp((const char*)user, pgsql_thread___monitor_username) == 0) {
 				(*myds)->sess->default_hostgroup = STATS_HOSTGROUP;

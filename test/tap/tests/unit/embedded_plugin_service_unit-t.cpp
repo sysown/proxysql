@@ -123,7 +123,7 @@ static uint16_t mysql_status(void*) noexcept { return 2; }
 static uint8_t state = 'T';
 static uint8_t pgsql_status(void*) noexcept { return state; }
 int main() {
-    plan(42);
+    plan(45);
     test_init_minimal();
     auto* svc = proxysql_embedded_execution_service();
     ok(svc && svc->abi_version == 1 && svc->struct_size == sizeof(*svc),
@@ -133,7 +133,7 @@ int main() {
     MySQL_Session mysql;
     mysql.session_type = PROXYSQL_SESSION_ADMIN;
     ok(svc->register_mysql(&mysql, nullptr, &err) == 1, "admin rejected");
-    mysql.session_type = PROXYSQL_SESSION_SQLITE;
+    mysql.session_type = PROXYSQL_SESSION_DUCKDB;
     ok(svc->register_mysql(&mysql, nullptr, &err) == 1, "null request rejected");
     ProxySQL_Embedded_EngineV1 engine{1, sizeof(engine), nullptr,
         ProxySQL_Embedded_CAP_READ_ONLY | ProxySQL_Embedded_CAP_PARAMETER_POSITIONS, 510,
@@ -142,6 +142,12 @@ int main() {
     ProxySQL_Embedded_PolicyV1 policy{1, sizeof(policy), nullptr, auth, auth_exec, auth};
     ProxySQL_Embedded_RequestV1 req{1, sizeof(req), &engine, &policy,
         ProxySQL_Embedded_REQUEST_READ_ONLY, mysql_status, nullptr, pgsql_status, nullptr};
+    mysql.session_type = PROXYSQL_SESSION_SQLITE;
+    ok(svc->register_mysql(&mysql, &req, &err) == 1,
+       "SQLite MySQL sessions cannot register the DuckDB provider");
+    mysql.session_type = PROXYSQL_SESSION_DUCKDB;
+    ok(proxysql_session_type_str(mysql.session_type) == "PROXYSQL_SESSION_DUCKDB",
+       "DuckDB session has its own diagnostic name");
     auto bad = req;
     bad.abi_version = 2;
     ok(svc->register_mysql(&mysql, &bad, &err) == 1, "bad version rejected");
@@ -168,8 +174,12 @@ int main() {
     ok(svc->unregister_mysql(&mysql, &err) == 0, "owner unregisters");
     ok(svc->unregister_mysql(&mysql, &err) == 1, "missing registration rejected");
     PgSQL_Session pg;
-    pg.session_type = PROXYSQL_SESSION_SQLITE;
+    pg.session_type = PROXYSQL_SESSION_DUCKDB;
     req.flags |= ProxySQL_Embedded_REQUEST_PG_IMPLICIT_CYCLES;
+    pg.session_type = PROXYSQL_SESSION_SQLITE;
+    ok(svc->register_pgsql(&pg, &req, &err) == 1,
+       "SQLite PostgreSQL sessions cannot register the DuckDB provider");
+    pg.session_type = PROXYSQL_SESSION_DUCKDB;
     ok(svc->register_pgsql(&pg, &req, &err) == 0, "pgsql registered");
     auto *stream = new PgSQL_Data_Stream;
     pg.connections_handler = true;
@@ -264,7 +274,7 @@ int main() {
         request.engine = &callbacks;
         request.flags = ProxySQL_Embedded_REQUEST_READ_ONLY;
         auto* session = new MySQL_Session;
-        session->session_type = PROXYSQL_SESSION_SQLITE;
+        session->session_type = PROXYSQL_SESSION_DUCKDB;
         session->connections_handler = true;
         auto* ds = new MySQL_Data_Stream;
         ds->sess = session;
@@ -289,7 +299,7 @@ int main() {
         auto reset_status = embedded::reset_mysql_prepared(*session);
         ok(!reset_status && context.finalized == 1 && context.unguarded_finalizes == 0,
            "MySQL prepared reset finalizes the first handle under guard");
-        session->session_type = PROXYSQL_SESSION_SQLITE;
+        session->session_type = PROXYSQL_SESSION_DUCKDB;
         packet.size = sizeof(bytes);
         packet.ptr = malloc(packet.size);
         memcpy(packet.ptr, bytes, packet.size);
@@ -315,7 +325,7 @@ int main() {
         auto request = req;
         request.engine = &callbacks;
         auto* session = new PgSQL_Session;
-        session->session_type = PROXYSQL_SESSION_SQLITE;
+        session->session_type = PROXYSQL_SESSION_DUCKDB;
         session->connections_handler = true;
         auto* ds = new PgSQL_Data_Stream;
         ds->sess = session;

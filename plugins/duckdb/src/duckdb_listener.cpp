@@ -467,14 +467,14 @@ void DuckDBListener::run_session(int client_fd) {
 	// Required per-thread Query_Processor init. MySQL_Thread::init() /
 	// PgSQL_Thread::init() -- the canonical thread-startup path used by
 	// every other core accept loop, including src/SQLite3_Server.cpp's own
-	// child_mysql() for the same PROXYSQL_SESSION_SQLITE session type --
+	// child_mysql() for PROXYSQL_SESSION_SQLITE --
 	// always call GloMyQPro->init_thread() / GloPgQPro->init_thread()
 	// before refresh_variables(). This constructs `Thr` directly via
 	// `new Thr()` rather than through init(), so without this call the
 	// thread-local Query_Processor rule table (_thr_SQP_rules, a `__thread`
 	// pointer -- lib/Query_Processor.cpp) is left null for the life of the
 	// thread. MySQL_Session::handler()'s query-processing path is not
-	// skipped for PROXYSQL_SESSION_SQLITE (only the eventual backend-routing
+	// skipped for PROXYSQL_SESSION_DUCKDB (only the eventual backend-routing
 	// decision is, via the plugin's handler_function); left uninitialized,
 	// every query on this connection hung indefinitely with its
 	// connection thread spinning at ~100% CPU instead of returning a
@@ -500,15 +500,12 @@ void DuckDBListener::run_session(int client_fd) {
 	} else {
 		GloPgQPro->init_thread();
 	}
-	// Left null on purpose: core casts gen_args to SQLite3_Session* for
-	// PROXYSQL_SESSION_SQLITE and null-checks first. Anything else here
-	// would be type confusion.
 	thr->gen_args = nullptr;
 	thr->refresh_variables();
 
 	auto* sess = thr->template create_new_session_and_client_data_stream<Thr, Sess>(client_fd);
 	sess->thread = thr;
-	sess->session_type = PROXYSQL_SESSION_SQLITE;
+	sess->session_type = PROXYSQL_SESSION_DUCKDB;
 	sess->handler_function = duckdb_session_handler<typename std::remove_pointer<Sess>::type>;
 
 	// Registration is session-scoped and its callbacks borrow this provider.

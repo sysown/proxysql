@@ -123,6 +123,11 @@ Other statements, including DuckDB-native `SET` commands, go to DuckDB.
 
 ## Database namespace (analytical MySQL)
 
+Both DuckDB listeners use the dedicated `PROXYSQL_SESSION_DUCKDB` core session
+type. They authenticate using frontend credentials and dispatch to DuckDB's
+handler. Authentication audit events use the `DuckDB_*` prefix for MySQL and
+`PGSQL_DuckDB_*` for PostgreSQL.
+
 With `duckdb-mysql_dialect=mysql_analytical`, MySQL database names select
 schemas of the replica's single DuckDB catalog. See
 [the compatibility contract](mysql-query-compatibility.md#database-namespace-mysql_analytical)

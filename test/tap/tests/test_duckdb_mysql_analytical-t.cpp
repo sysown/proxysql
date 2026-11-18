@@ -353,6 +353,18 @@ static void test_namespace(MYSQL *c, const char *label, bool routed) {
     ok(!mysql_select_db(c, "main"), "%s switches back with COM_INIT_DB", label);
     ok(text_rows(c, "SELECT id FROM ns_same ORDER BY id", {"id"}, {{"1"}}),
        "%s honors COM_INIT_DB for later statements", label);
+    if (!routed) {
+        ok(!mysql_change_user(c, "fixture_client", "fixture_client", "ns_other"),
+           "DuckDB accepts COM_CHANGE_USER with valid frontend credentials");
+        ok(text_rows(c, "SELECT id FROM ns_same ORDER BY id", {"id"}, {{"2"}}),
+           "COM_CHANGE_USER switches the DuckDB native database");
+        MYSQL_STMT *after_change = prepare(c, "SELECT id FROM ns_same ORDER BY id");
+        ok(after_change && fetch_ids(after_change, {2}),
+           "shared prepared execution still works after COM_CHANGE_USER");
+        if (after_change)
+            mysql_stmt_close(after_change);
+        ok(!mysql_select_db(c, "main"), "COM_INIT_DB still works after COM_CHANGE_USER");
+    }
 }
 static void test_joins(MYSQL *c, const char *label) {
     ok(text_rows(c,
@@ -484,10 +496,22 @@ static void test_decimal_refresh(MYSQL *c, PGconn *pg) {
 int main() {
     plan(NO_PLAN);
     prepared_owned_fixture::Fixture fixture("mysql_analytical");
+    if (!duckdb_replica_test::query(fixture.admin, "SET mysql-auditlog_filename='duckdb-mysql-audit'") ||
+        !duckdb_replica_test::query(fixture.admin, "SET pgsql-auditlog_filename='duckdb-pgsql-audit'") ||
+        !duckdb_replica_test::query(fixture.admin, "LOAD MYSQL VARIABLES TO RUNTIME") ||
+        !duckdb_replica_test::query(fixture.admin, "LOAD PGSQL VARIABLES TO RUNTIME"))
+        BAIL_OUT("cannot enable audit logs for the owned fixture");
     const std::string pgport = std::to_string(fixture.dp);
     const char *keys[] = {"host", "port", "user", "password", "dbname", "sslmode", nullptr};
     const char *values[] = {"127.0.0.1", pgport.c_str(), "fixture_client", "fixture_client",
                             "main",      "disable",      nullptr};
+    const char *admin_values[] = {"127.0.0.1", pgport.c_str(), "fixture_admin", "fixture_admin",
+                                  "main",      "disable",      nullptr};
+    PGconn *admin_on_duckdb = PQconnectdbParams(keys, admin_values, 0);
+    ok(admin_on_duckdb && PQstatus(admin_on_duckdb) == CONNECTION_BAD,
+       "DuckDB PostgreSQL refuses credentials from the Admin credential scope");
+    if (admin_on_duckdb)
+        PQfinish(admin_on_duckdb);
     PGconn *pg = PQconnectdbParams(keys, values, 0);
     if (!pg || PQstatus(pg) != CONNECTION_OK)
         BAIL_OUT("PostgreSQL fixture connect failed: %s",
@@ -552,6 +576,14 @@ int main() {
             "CREATE VIEW analytical_side_effect AS SELECT nextval('analytical_sequence') AS id"))
         BAIL_OUT("PostgreSQL fixture setup failed");
     ok(true, "native PostgreSQL listener creates tables, data, sequence and view");
+    MYSQL *mysql_admin_on_duckdb = mysql_init(nullptr);
+    if (!mysql_admin_on_duckdb)
+        BAIL_OUT("cannot allocate MySQL client");
+    ok(!mysql_real_connect(mysql_admin_on_duckdb, "127.0.0.1", "fixture_admin", "fixture_admin",
+                           nullptr, fixture.d, nullptr, 0) &&
+           mysql_errno(mysql_admin_on_duckdb) == 1045,
+       "DuckDB MySQL refuses credentials from the Admin credential scope");
+    mysql_close(mysql_admin_on_duckdb);
     for (const char *database : {"no_such_database", "proxysql_replica"}) {
         MYSQL *client = mysql_init(nullptr);
         if (!client)
@@ -759,5 +791,24 @@ int main() {
        "binary ordering stays case-sensitive after native replacement");
     mysql_close(mysql);
     PQfinish(pg);
+    if (!duckdb_replica_test::query(fixture.admin, "PROXYSQL FLUSH LOGS"))
+        BAIL_OUT("cannot flush audit logs for the owned fixture");
+    const auto auth_logged = [&](const std::string& filename, const std::string& prefix) {
+        bool connected = false;
+        bool rejected = false;
+        for (const auto& entry : std::filesystem::directory_iterator(fixture.dir)) {
+            if (entry.path().filename().string().find(filename + ".") != 0)
+                continue;
+            std::ifstream log(entry.path());
+            for (std::string line; std::getline(log, line);) {
+                connected |= line.find(prefix + "_Connect_OK") != std::string::npos;
+                rejected |= line.find(prefix + "_Connect_ERR") != std::string::npos;
+            }
+        }
+        return connected && rejected;
+    };
+    ok(auth_logged("duckdb-mysql-audit", "DuckDB"), "MySQL logs DuckDB authentication events");
+    ok(auth_logged("duckdb-pgsql-audit", "PGSQL_DuckDB"),
+       "PostgreSQL logs DuckDB authentication events");
     return exit_status();
 }
