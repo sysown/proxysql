@@ -146,7 +146,15 @@ void free_packet(PtrSize_t& pkt) {
     }
 }
 
+// Embedded endpoints (plugin/SQLite3 server, Admin, STATS) are the only sessions ever registered.
+// An ordinary proxy session must not take a process-wide lock for every prepared packet or at
+// teardown, so it is excluded before the registry is touched.
+bool may_be_registered(const MySQL_Session& session) {
+    return session.session_type != PROXYSQL_SESSION_MYSQL;
+}
+
 std::shared_ptr<SharedState> lookup(MySQL_Session& session) {
+    if (!may_be_registered(session)) return nullptr;
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto it = registry().find(&session);
     if (it == registry().end()) return nullptr;
@@ -394,6 +402,7 @@ void unregister_mysql_prepared(MySQL_Session& session) noexcept {
 }
 
 void destroy_mysql_prepared(MySQL_Session& session) noexcept {
+    if (!may_be_registered(session)) return;
     unregister_mysql_prepared(session);
     std::lock_guard<std::mutex> lock(registry_mutex());
     // A wrong-thread unregister leaves the registration alive.

@@ -171,7 +171,9 @@ From the repository root with its locally patched vendored ParserSQL built,
 the build and run are:
 
 ```sh
-ROOT=/mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica
+ROOT="$(git rev-parse --show-toplevel)"
+OUT="${TMPDIR:-/tmp}"
+PROBE_SOCKET=/path/to/private-mysql.sock   # a server you own; never shared or production
 MDB="$ROOT/deps/mariadb-client-library/mariadb-connector-c-3.3.8-src"
 SSL="$ROOT/deps/libssl/openssl-3.5.9"
 g++ -std=c++17 -Wall -Wextra -Werror \
@@ -184,7 +186,6 @@ g++ -std=c++17 -Wall -Wextra -Werror \
   -Wl,-rpath,"$ROOT/deps/duckdb/duckdb/build/release/src" \
   -lduckdb "$MDB/libmariadb/libmariadbclient.a" \
   "$SSL/libssl.a" "$SSL/libcrypto.a" -lz -ldl -lpthread \
-  -o /tmp/duckdb-query-implementation/translation-probe
-/tmp/duckdb-query-implementation/translation-probe \
-  /tmp/duckdb-query-implementation/mysql-oracle.sock
+  -o "$OUT/translation-probe"
+"$OUT/translation-probe" "$PROBE_SOCKET"
 ```

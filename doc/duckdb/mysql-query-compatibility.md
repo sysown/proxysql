@@ -510,55 +510,23 @@ collation and text `GROUP BY` until collation/padding rules exist.
 
 ## 7. Verification commands and results
 
-The assigned worktree does not contain an extracted ParserSQL source tree
-(`deps/parsersql/parsersql` is a symlink to an absent `parsersql-1.1.1`), so the
-standalone compile used the read-only merged-worktree headers and archive. The
-vendored tarball SHA-256 is identical in both worktrees. No Makefile was
-modified.
-
-`test/tap/tap/tap.cpp` exists in the assigned worktree. `tap_noise_stubs.cpp` is
-not a source file in this tree; the unit Makefile generates it inline. The
-standalone run used an equivalent temporary stub outside the repository.
+The parser-capability matrix in this document is executable. It lives in
+`test/tap/tests/unit/duckdb_mysql_select_compat_unit-t.cpp` and runs against the
+vendored, locally patched ParserSQL (see `deps/parsersql/README.md`). Build and run
+it from the repository root with the feature flags used for the rest of the tree:
 
 ```bash
-cat > /tmp/opencode/tap_noise_stubs.cpp <<'EOF'
-#include <vector>
-#include <string>
-#include <mutex>
-std::vector<std::string> noise_failures;
-std::mutex noise_failure_mutex;
-extern "C" { void stop_noise_tools(){} int get_noise_tools_count(){return 0;} }
-EOF
-
-cd /home/rene/.codex/worktrees/1382/duckdb-mysql-replica
-g++ -std=c++17 -O0 -g \
-  -I/home/rene/.codex/worktrees/1382/duckdb-mysql-replica/test/tap/tap \
-  -I/mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica/deps/parsersql/parsersql/include \
-  test/tap/tests/unit/duckdb_mysql_select_compat_unit-t.cpp \
-  test/tap/tap/tap.cpp /tmp/opencode/tap_noise_stubs.cpp \
-  /mnt/data/rene/proxysql3/worktrees/duckdb-mysql-replica/deps/parsersql/parsersql/libsqlparser.a \
-  -lpthread -o /tmp/opencode/duckdb_mysql_select_compat_unit-t
-
-/tmp/opencode/duckdb_mysql_select_compat_unit-t > /tmp/opencode/test.out
-grep -c '^ok'     /tmp/opencode/test.out
-grep -c '^not ok' /tmp/opencode/test.out
-tail -1 /tmp/opencode/test.out
+make -C test/tap/tests/unit PROXYSQL40=1 PROXYSQL31=1 PROXYSQLFFTO=1 PROXYSQLTSDB=1 \
+  PROXYSQLED25519=1 duckdb_mysql_select_compat_unit-t
+test/tap/tests/unit/duckdb_mysql_select_compat_unit-t
 ```
 
-Recorded result:
+The test needs no database or network. At the time of writing it reports 843
+assertions and no failures; a failure means the vendored parser no longer behaves
+the way the matrix above records.
 
-- compile exit: `0` (only the existing `tap.cpp` `CLOCKS_PER_SEC` warning);
-- `^ok`: `818` (worker run before two root review fixtures);
-- `^not ok`: `0`;
-- plan line: `1..818` (worker run);
-- runtime: under one second.
-
-Repository hygiene commands:
-
-```bash
-git -C /home/rene/.codex/worktrees/1382/duckdb-mysql-replica diff --check
-git -C /home/rene/.codex/worktrees/1382/duckdb-mysql-replica status --short
-```
+Whole-tree hygiene is checked by `git diff --check` and by the repository lint,
+`test/infra/control/run-ci-lint.bash`.
 
 ## 8. Current boundaries and ParserSQL change tracking
 

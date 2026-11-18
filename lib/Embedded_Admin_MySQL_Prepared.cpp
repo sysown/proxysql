@@ -102,6 +102,8 @@ using Providers = std::unordered_map<MySQL_Session*, std::shared_ptr<Provider>>;
 Providers& providers() { static auto* map = new Providers; return *map; }
 }
 void unregister_admin_mysql_prepared(MySQL_Session& session) noexcept {
+ // Only Admin/STATS sessions own a provider; skip the registry lock for ordinary sessions.
+ if (session.session_type != PROXYSQL_SESSION_ADMIN && session.session_type != PROXYSQL_SESSION_STATS) return;
  std::shared_ptr<Provider> owned;
  {
   std::lock_guard<std::mutex> lock(providers_mutex());

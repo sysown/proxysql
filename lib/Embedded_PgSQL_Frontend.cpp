@@ -236,6 +236,9 @@ Status register_pgsql_prepared(PgSQL_Session &s, Adapter &a, EndpointPolicy &p,
     }
 }
 void unregister_pgsql_prepared(PgSQL_Session &s) noexcept {
+    // Embedded endpoints register here; an ordinary proxy session skips the registry lock.
+    if (s.session_type == PROXYSQL_SESSION_PGSQL)
+        return;
     std::shared_ptr<Entry> entry;
     {
         auto &r = registry();

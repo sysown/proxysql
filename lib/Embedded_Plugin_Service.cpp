@@ -154,6 +154,8 @@ const ProxySQL_Embedded_ServiceV1* proxysql_embedded_execution_service() noexcep
 }
 namespace embedded {
 void teardown_plugin_mysql(MySQL_Session& s) noexcept {
+    // An ordinary proxy session is never plugin-registered; do not lock the registry for it.
+    if (s.session_type == PROXYSQL_SESSION_MYSQL) return;
     try {
         unregister_impl(&s, nullptr, true);
     } catch (...) {
@@ -161,6 +163,7 @@ void teardown_plugin_mysql(MySQL_Session& s) noexcept {
     }
 }
 void teardown_plugin_pgsql(PgSQL_Session& s) noexcept {
+    if (s.session_type == PROXYSQL_SESSION_PGSQL) return;
     try {
         unregister_impl(&s, nullptr, true);
     } catch (...) {
