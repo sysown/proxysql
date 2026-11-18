@@ -35,6 +35,8 @@ struct DuckDBMySQLRelation {
     // Each key must guarantee that no two rows tie, including NULL values.
     std::vector<std::vector<std::string>> unique_keys;
 };
+enum class DuckDBMySQLParameterMode { forbidden, prepare, execute };
+enum class DuckDBMySQLParameterKind { null_value, signed_integer, unsupported };
 // No session settings are required by the current subset: constructs whose
 // meaning depends on unknown SQL modes, collation or time zone are refused.
 struct DuckDBMySQLSelectContext {
@@ -42,6 +44,9 @@ struct DuckDBMySQLSelectContext {
     // returns canonical names without executing user SQL. This does not prove
     // the name-resolution policy of an external MySQL source database.
     std::function<bool(const std::vector<std::string> &, DuckDBMySQLRelation &)> resolve_relation;
+    // Execute facts contain kinds only, never parameter values. Maximum 256.
+    DuckDBMySQLParameterMode parameter_mode = DuckDBMySQLParameterMode::forbidden;
+    std::vector<DuckDBMySQLParameterKind> parameter_kinds;
     size_t max_input_bytes = 65536, max_output_bytes = 262144;
     // AST limits apply after parsing; ParserSQL must independently bound recursion.
     size_t max_nodes = 4096, max_depth = 128, max_resolver_calls = 1;
@@ -52,6 +57,7 @@ struct DuckDBMySQLSelectTranslation {
     std::string sql;
     std::string reason;
     std::vector<std::string> required_context;
+    size_t parameter_count = 0;
 };
 DuckDBMySQLSelectTranslation duckdb_translate_mysql_select(const std::string &,
                                                            const DuckDBMySQLSelectContext &);

@@ -513,17 +513,54 @@ ASan/UBSan run pass with the DuckDB library itself uninstrumented.
 
 `duckdb_translate_mysql_select` consumes only the locally patched ParserSQL AST.
 It emits owned DuckDB SQL and stable refusal reasons without executing a query;
-its caller supplies bounded relation facts. The initial implemented slice covers
-one resolved table, aliases and qualified column references, typed projections,
-nonnegative signed-range integer and NULL literals, signed-integer comparisons,
-NULL predicates, AND/OR, aggregate-only COUNT, numeric ordering with explicit
-MySQL NULL placement, and integer-literal LIMIT with a proven strictly unique
-ordering key. Identifiers and duplicate labels are preserved.
+its caller supplies bounded relation facts. The implemented slice covers one
+resolved table, aliases and qualified column references, typed projections,
+nonnegative signed-range integer and NULL literals, nonnegative exact decimal
+literals, signed-integer comparisons, exact decimal comparisons, NULL
+predicates, AND/OR, COUNT and integer MIN/MAX, integer-key GROUP BY with
+aggregate HAVING predicates, numeric ordering with explicit MySQL NULL
+placement, and integer-literal LIMIT with a proven strictly unique ordering key
+(the full group-key tuple establishes uniqueness for grouped rows). Identifiers
+and duplicate labels are preserved.
 
 Unknown types, ambiguous ORDER BY aliases, comments, session-sensitive quoting,
-string literals/comparison/ordering, arithmetic, AVG, grouping, joins, subqueries,
-CTEs, windows, variables and unknown functions are currently refused. Later
-roadmap slices remain outstanding; these refusals do not complete the goal.
+string literals/comparison/ordering, arithmetic, SUM/AVG, non-integer grouping,
+joins, subqueries, CTEs, windows, variables and unknown functions are currently
+refused. Later roadmap slices remain outstanding; these refusals do not
+complete the goal.
+
+### Built-in function spelling
+
+MySQL resolves `COUNT (*)` only when `IGNORE_SPACE` is enabled, and a spaced
+`MIN (column)` can resolve to a stored routine. The translator does not know the
+session SQL mode, so it admits COUNT, MIN and MAX only when ParserSQL's tokenizer,
+run over the call's AST source span, shows a bare name token immediately followed
+by `(`. Spaced, tab-separated, quoted or qualified spellings are refused in
+SELECT and HAVING. Mixed-case contiguous spellings are admitted.
+
+### Exact decimals
+
+Decimal literals must be plain digit/dot tokens (no exponent, no sign) with at
+most 38 digits and scale 30. They are emitted as a cast from the validated token
+text, so no approximate intermediate value is used. A comparison involving a
+decimal operand casts both sides to a common `DECIMAL(p,s)`, where `s` is the
+larger scale and `p` is the larger integer-digit capacity plus `s`. Signed
+integer columns count as 19 integer digits and unsigned as 20. Comparisons
+needing precision above 38 are refused. So are decimal comparisons with text,
+floating point, NULL literals or native 128-bit integers (`DECIMAL(39,0)`
+mappings). Decimal parameters, arithmetic, SUM/AVG, MIN/MAX and grouping are
+also refused.
+
+DuckDB renders a fraction-only `DECIMAL(p,p)` value as `.50`, while MySQL renders
+`0.50`. Projections of such columns, including expanded `*`, are emitted as
+`CAST(column AS DECIMAL(p+1,p))` under the original label. Value and scale are
+unchanged, but **the reported precision is one larger than the column's**.
+`*` is expanded only when such a column is present. Expansion uses ordered
+native metadata and is refused if two names fold to the same identifier.
+
+Because these casts depend on current column metadata, prepared statements
+regenerate them at every execution. See
+[protocol compatibility](protocol-compatibility.md#prepared-queries).
 Native catalog facts describe the MySQL-facing mapping of native objects, not
 original replication-source metadata. Text projection does not establish a
 collation suitable for comparison. See the [actual translator differential

@@ -17,18 +17,6 @@ struct Cell {
         return null == o.null && (null || text == o.text);
     }
 };
-static string exact_decimal(string s) {
-    auto dot = s.find('.');
-    if (dot != string::npos) {
-        while (!s.empty() && s.back() == '0')
-            s.pop_back();
-        if (!s.empty() && s.back() == '.')
-            s.pop_back();
-    }
-    if (s == "-0")
-        s = "0";
-    return s;
-}
 struct Result {
     vector<string> names;
     vector<int> types;
@@ -69,13 +57,14 @@ static int duck_kind(duckdb_type t) {
     case DUCKDB_TYPE_SMALLINT:
     case DUCKDB_TYPE_INTEGER:
     case DUCKDB_TYPE_BIGINT:
-    case DUCKDB_TYPE_HUGEINT:
     case DUCKDB_TYPE_UTINYINT:
     case DUCKDB_TYPE_USMALLINT:
     case DUCKDB_TYPE_UINTEGER:
     case DUCKDB_TYPE_UBIGINT:
-    case DUCKDB_TYPE_UHUGEINT:
         return 1;
+    // The plugin maps both 128-bit native integers to DECIMAL(39,0).
+    case DUCKDB_TYPE_HUGEINT:
+    case DUCKDB_TYPE_UHUGEINT:
     case DUCKDB_TYPE_DECIMAL:
         return 2;
     case DUCKDB_TYPE_DATE:
@@ -122,10 +111,7 @@ static Result mysql_result(MYSQL *m, const string &sql) {
         auto lengths = mysql_fetch_lengths(r);
         vector<Cell> cells;
         for (unsigned i = 0; i < n; i++)
-            cells.push_back({row[i] == nullptr,
-                             row[i] ? (out.types[i] == 2 ? exact_decimal(string(row[i], lengths[i]))
-                                                         : string(row[i], lengths[i]))
-                                    : ""});
+            cells.push_back({row[i] == nullptr, row[i] ? string(row[i], lengths[i]) : ""});
         out.rows.push_back(cells);
     }
     if (mysql_errno(m))
@@ -172,8 +158,7 @@ static Result duck_result(duckdb_connection c, const string &sql) {
                                                                duckdb_free);
                 if (!value)
                     throw runtime_error("DuckDB value conversion failed");
-                cells.push_back(
-                    {false, out.types[i] == 2 ? exact_decimal(value.get()) : string(value.get())});
+                cells.push_back({false, string(value.get())});
             }
         }
         out.rows.push_back(cells);
@@ -238,10 +223,76 @@ int main(int argc, char **argv) {
         duck_exec(f.duck, "INSERT INTO \"odd`table\" VALUES " + values);
         mysql_exec(f.mysql, "UPDATE `odd``table` SET bin=X'00FF' WHERE id=1");
         duck_exec(f.duck, "UPDATE \"odd`table\" SET bin=from_hex('00FF') WHERE id=1");
+        mysql_exec(
+            f.mysql,
+            "CREATE TABLE decimal_probe (id BIGINT PRIMARY KEY, a DECIMAL(18,4), b DECIMAL(38,30), "
+            "c DECIMAL(38,0), s BIGINT, u BIGINT UNSIGNED, small DECIMAL(10,2))");
+        duck_exec(f.duck,
+                  "CREATE TABLE decimal_probe (id BIGINT PRIMARY KEY, a DECIMAL(18,4), b "
+                  "DECIMAL(38,30), c DECIMAL(38,0), s BIGINT, u UBIGINT, small DECIMAL(10,2))");
+        const string decimal_values =
+            "INSERT INTO decimal_probe VALUES "
+            "(1,-99999999999999.9999,-99999999.999999999999999999999999999999,-"
+            "99999999999999999999999999999999999999,-9223372036854775808,0,-99.99),"
+            "(2,-10.2500,0.000000000000000000000000000001,1,9223372036854775807,"
+            "18446744073709551615,-10.25),"
+            "(3,99999999999999.9999,1.000000000000000000000000000000,"
+            "99999999999999999999999999999999999999,0,1,1.50),"
+            "(4,NULL,NULL,NULL,NULL,NULL,NULL)";
+        mysql_exec(f.mysql, decimal_values);
+        duck_exec(f.duck, decimal_values);
+        mysql_exec(
+            f.mysql,
+            "CREATE TABLE fraction_probe (id BIGINT PRIMARY KEY, f DECIMAL(2,2), `é` BIGINT)");
+        duck_exec(
+            f.duck,
+            "CREATE TABLE fraction_probe (id BIGINT PRIMARY KEY, f DECIMAL(2,2), \"é\" BIGINT)");
+        mysql_exec(f.mysql, "INSERT INTO fraction_probe VALUES (1,.50,10),(2,-.25,20),(3,NULL,30)");
+        duck_exec(f.duck, "INSERT INTO fraction_probe VALUES (1,.50,10),(2,-.25,20),(3,NULL,30)");
+        mysql_exec(
+            f.mysql,
+            "CREATE TABLE wide_probe (id BIGINT PRIMARY KEY, h DECIMAL(39,0), u DECIMAL(39,0))");
+        duck_exec(f.duck, "CREATE TABLE wide_probe (id BIGINT PRIMARY KEY, h HUGEINT, u UHUGEINT)");
+        const string wide_rows = "(1,'-170141183460469231731687303715884105728','"
+                                 "340282366920938463463374607431768211455'),(2,'"
+                                 "170141183460469231731687303715884105727','0'),(3,NULL,NULL)";
+        mysql_exec(f.mysql, "INSERT INTO wide_probe VALUES " + wide_rows);
+        duck_exec(f.duck, "INSERT INTO wide_probe VALUES " + wide_rows);
         DuckDBMySQLSelectContext context;
         size_t calls = 0;
         context.resolve_relation = [&](const vector<string> &names, DuckDBMySQLRelation &r) {
             ++calls;
+            if (names == vector<string>{"wide_probe"}) {
+                r.canonical_name = {"wide_probe"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"h", {DuckDBMySQLTypeKind::exact_decimal, 39, 0}},
+                             {"u", {DuckDBMySQLTypeKind::exact_decimal, 39, 0}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"fraction_probe"}) {
+                r.canonical_name = {"fraction_probe"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"f", {DuckDBMySQLTypeKind::exact_decimal, 2, 2}},
+                             {"é", {DuckDBMySQLTypeKind::signed_integer, 0, 0}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
+            if (names == vector<string>{"decimal_probe"}) {
+                r.canonical_name = {"decimal_probe"};
+                r.exact_name_resolution = true;
+                r.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"a", {DuckDBMySQLTypeKind::exact_decimal, 18, 4}},
+                             {"b", {DuckDBMySQLTypeKind::exact_decimal, 38, 30}},
+                             {"c", {DuckDBMySQLTypeKind::exact_decimal, 38, 0}},
+                             {"s", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                             {"u", {DuckDBMySQLTypeKind::unsigned_integer, 0, 0}},
+                             {"small", {DuckDBMySQLTypeKind::exact_decimal, 10, 2}}};
+                r.unique_keys = {{"id"}};
+                return true;
+            }
             if (names != vector<string>{"odd`table"})
                 return false;
             r.canonical_name = {"odd`table"};
@@ -255,7 +306,39 @@ int main(int argc, char **argv) {
             r.unique_keys = {{"id"}};
             return true;
         };
+        const std::string long_integer = "SELECT " + std::string(300, '0') + "1";
+        const std::string alias256 = "SELECT 1 AS `" + std::string(256, 'a') + "`";
+        std::string bmp;
+        for (size_t i = 0; i < 128; ++i)
+            bmp += "é";
+        const std::string bmp256 = "SELECT 1 AS `" + bmp + "`";
+        const std::string aggregate255 = "SELECT COUNT(" + std::string(247, ' ') + "*)";
         const Case cases[] = {
+            {"huge extrema projection", "SELECT h,u FROM wide_probe ORDER BY id"},
+            {"huge star", "SELECT * FROM wide_probe ORDER BY id"},
+            {"huge duplicate labels", "SELECT h AS x,u AS x FROM wide_probe ORDER BY id"},
+            {"fraction column", "SELECT f FROM fraction_probe ORDER BY id"},
+            {"fraction alias", "SELECT f AS val FROM fraction_probe ORDER BY id"},
+            {"fraction duplicate", "SELECT f,f FROM fraction_probe ORDER BY id"},
+            {"fraction star", "SELECT * FROM fraction_probe ORDER BY id"},
+            {"fraction comparison", "SELECT f FROM fraction_probe WHERE f > .40 ORDER BY id"},
+            {"decimal literal labels", "SELECT 001.2300,.50,1.,00.0"},
+            {"decimal projections and nulls", "SELECT id,a,b,c FROM decimal_probe ORDER BY id"},
+            {"mixed decimal scales", "SELECT id FROM decimal_probe WHERE a = small ORDER BY id"},
+            {"signed decimal", "SELECT id FROM decimal_probe WHERE a < s ORDER BY id"},
+            {"unsigned decimal", "SELECT id FROM decimal_probe WHERE a < u ORDER BY id"},
+            {"decimal boundary",
+             "SELECT id FROM decimal_probe WHERE a = 99999999999999.9999 ORDER BY id"},
+            {"signed max decimal",
+             "SELECT id FROM decimal_probe WHERE s = 9223372036854775807.0000 ORDER BY id"},
+            {"unsigned max decimal",
+             "SELECT id FROM decimal_probe WHERE u = 18446744073709551615.0 ORDER BY id"},
+            {"scale30 small integer", "SELECT id FROM decimal_probe WHERE b = 1 ORDER BY id"},
+            {"scale30 fraction",
+             "SELECT id FROM decimal_probe WHERE b = 0.000000000000000000000000000001 ORDER BY id"},
+            {"38 digit integer", "SELECT id FROM decimal_probe WHERE c = "
+                                 "99999999999999999999999999999999999999 ORDER BY id"},
+            {"decimal null filtering", "SELECT id FROM decimal_probe WHERE a = 1.0 ORDER BY id"},
             {"escaped and duplicate labels",
              "SELECT `a``b` AS same, id AS same FROM `odd``table` ORDER BY id"},
             {"qualified alias", "SELECT q.id, q.`a``b` FROM `odd``table` AS q ORDER BY q.id"},
@@ -263,11 +346,37 @@ int main(int argc, char **argv) {
             {"count", "SELECT COUNT(*) AS n FROM `odd``table`"},
             {"count nullable", "SELECT COUNT(grp) AS n FROM `odd``table`"},
             {"integer literal", "SELECT 001"},
+            {"canonical NULL labels", "SELECT null, NuLl"},
+            {"long integral literal label", long_integer.c_str()},
+            {"256-byte alias", alias256.c_str()},
+            {"256-byte BMP alias", bmp256.c_str()},
+            {"trailing alias whitespace", "SELECT 1 AS `x `"},
+            {"255-byte aggregate label", aggregate255.c_str()},
             {"null literal", "SELECT NULL"},
             {"null ascending", "SELECT id, grp FROM `odd``table` ORDER BY grp ASC, id ASC"},
             {"null descending", "SELECT id, grp FROM `odd``table` ORDER BY grp DESC, id ASC"},
             {"comma limit", "SELECT id FROM `odd``table` ORDER BY id LIMIT 1, 2"},
             {"integer predicate", "SELECT id FROM `odd``table` WHERE id > 1 ORDER BY id"},
+            {"nullable groups ascending", "SELECT grp,COUNT(*) AS n,MIN(id) AS lo,MAX(id) AS hi "
+                                          "FROM `odd``table` GROUP BY grp ORDER BY grp"},
+            {"nullable groups descending",
+             "SELECT grp,COUNT(*) AS n FROM `odd``table` GROUP BY grp ORDER BY grp DESC"},
+            {"grouped having", "SELECT grp,COUNT(*) AS n FROM `odd``table` GROUP BY grp HAVING "
+                               "COUNT(*) > 1 ORDER BY grp"},
+            {"grouped null predicate", "SELECT grp,MIN(id) AS lo FROM `odd``table` GROUP BY grp "
+                                       "HAVING MIN(id) IS NOT NULL ORDER BY grp"},
+            {"group limit",
+             "SELECT grp,COUNT(*) AS n FROM `odd``table` GROUP BY grp ORDER BY grp LIMIT 1, 2"},
+            {"multi key",
+             "SELECT grp,u,COUNT(*) AS n FROM `odd``table` GROUP BY grp,u ORDER BY grp,u"},
+            {"unsigned grouping",
+             "SELECT u,MIN(u) AS lo,MAX(u) AS hi FROM `odd``table` GROUP BY u ORDER BY u"},
+            {"duplicate aggregate names",
+             "SELECT grp,COUNT(*) AS x,MIN(id) AS x FROM `odd``table` GROUP BY grp ORDER BY grp"},
+            {"empty count and min", "SELECT COUNT(*) AS n, MIN(id) AS lo FROM `odd``table` WHERE "
+                                    "id > 9 HAVING COUNT(*) = 0"},
+            {"empty grouped rows",
+             "SELECT grp,COUNT(*) AS n FROM `odd``table` WHERE id > 9 GROUP BY grp ORDER BY grp"},
         };
         int failures = 0, comparisons = 0;
         for (auto &entry : cases) {
@@ -281,6 +390,12 @@ int main(int argc, char **argv) {
                  right = duck_result(f.duck, translated.sql);
             ++comparisons;
             bool values_match = left.names == right.names && left.rows == right.rows;
+            if (!values_match && left.rows.size() == 1 && right.rows.size() == 1) {
+                for (size_t i = 0; i < left.names.size() && i < right.names.size(); ++i)
+                    cerr << " column " << i << " name [" << left.names[i] << "]/[" << right.names[i]
+                         << "] value [" << left.rows[0][i].text << "]/[" << right.rows[0][i].text
+                         << "]\n";
+            }
             bool types_match = left.types == right.types;
             bool known = true;
             for (auto kind : left.types)
@@ -294,7 +409,15 @@ int main(int argc, char **argv) {
                 ++failures;
         }
         // Rejecting input must not reach either engine.
-        for (const char *sql : {"SELECT nextval('x')", "SELECT @x", "SELECT 1; SELECT 2"}) {
+        const std::vector<std::string> rejected = {"SELECT nextval('x')",
+                                                   "SELECT @x",
+                                                   "SELECT 1; SELECT 2",
+                                                   "SELECT id FROM wide_probe WHERE h = 1.0",
+                                                   "SELECT 1 AS `" + std::string(257, 'a') + "`",
+                                                   "SELECT 1 AS `x😀y`",
+                                                   "SELECT 1 AS ` x`",
+                                                   "SELECT COUNT(" + std::string(248, ' ') + "*)"};
+        for (const auto &sql : rejected) {
             auto x = duckdb_translate_mysql_select(sql, context);
             if (x.decision == DuckDBMySQLSelectDecision::supported || !x.sql.empty()) {
                 cerr << "unexpected admission: " << sql << "\n";

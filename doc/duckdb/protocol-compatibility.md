@@ -10,7 +10,7 @@ not attempt complete dialect or wire-feature compatibility.
 |---|---|---|
 | Authentication | `mysql_users` | `pgsql_users` |
 | Simple text query | Supported | Supported |
-| Client prepared statements | Read-only native SELECT; opt-in translated zero-parameter subset | Read-only native SELECT subset |
+| Client prepared statements | Read-only native SELECT; opt-in translated subset with signed-integer predicate parameters | Read-only native SELECT subset |
 | Extended-query protocol | N/A | Supported for the prepared subset |
 | Multiple statements in one request | Rejected | Rejected |
 | Transaction status | Protocol OK/status behavior | `ReadyForQuery` I/T/E |
@@ -22,9 +22,28 @@ Both listeners support client prepared SELECT through the shared ABI 17 executio
 service. Native DuckDB SQL is the default. With startup-only
 `duckdb-mysql_dialect=mysql_analytical`, the MySQL listener translates the
 [bounded analytical subset](mysql-query-compatibility.md) for text and
-zero-parameter prepared queries. Analytical placeholders are currently refused;
-the native mode retains its documented typed-parameter support. Original SQL is
-re-admitted against current metadata before every analytical prepared execution.
+prepared queries. Analytical placeholders are admitted only as WHERE comparison
+operands against signed integer columns of at most 64 bits. They are emitted
+as `CAST(? AS BIGINT)` against `CAST(column AS BIGINT)`, and bound natively.
+Only NULL and signed 64-bit values may be bound to them. Other kinds return
+1235/`0A000`, and a parameter count mismatch is an invalid-parameter error.
+Placeholders in projections, HAVING, GROUP BY, ORDER BY, LIMIT, against
+decimal, unsigned or text columns, or on both sides of one comparison are
+refused at prepare. Text COM_QUERY never admits placeholders. The native mode
+retains its documented typed-parameter support.
+
+Before every analytical prepared execution, the original SQL is re-admitted
+against current metadata inside the same private read-only transaction. The
+freshly translated SQL is prepared as a new native statement, so casts that
+depend on column precision or scale never come from an earlier schema. If the
+new statement's parameter or result names, types, precision, scale or
+nullability differ from the existing statement, execution fails with 1615
+(reprepare) before any row is produced. Otherwise the new native handle replaces
+the old one. A widened or rescaled column referenced only in a predicate
+therefore keeps working without client action. A projected column whose scale
+changes requires reprepare. This costs one native prepare per analytical
+execution, and the translated SQL is retained only for that one operation.
+
 Preparation is
 limited to implicit, autocommit client cycles: explicit client transactions,
 prepared DML and RETURNING, temporal and nested values, cursors and

@@ -5,23 +5,37 @@ ProxySQL routing or the production metadata provider. The probe passes each sour
 query to `duckdb_translate_mysql_select`; it executes only admitted SQL and uses
 the translator's owned result for DuckDB. Its negative control copies the emitted
 comma-LIMIT SQL and deliberately changes its offset, proving the row comparator
-catches that error. Three unsupported or invalid queries are checked for refusal
+catches that error. Eight unsupported or invalid queries are checked for refusal
 and never sent to either database.
 
-On 2026-11-16, MySQL `8.0.46-0ubuntu0.24.04.5` and DuckDB `v2.0.0` matched
-all 11 candidate queries, with zero unexpected mismatches. The negative control
+On 2026-11-18, MySQL `8.0.46-0ubuntu0.24.04.5` and DuckDB `v2.0.0` matched
+all 47 candidate queries, with zero unexpected mismatches. The negative control
 was detected. Cases cover escaped table and column names, duplicate aliases,
 table alias and qualified references, `*` over signed and unsigned integers,
 text, binary and NULL values, `COUNT(*)` and `COUNT(column)`, literal `001`
 and NULL labels, ascending and descending NULL order, comma LIMIT, and a signed
-integer predicate. The fixture contains signed BIGINT extremes, the unsigned
-BIGINT maximum, UTF-8 and binary bytes `00 ff`.
+integer predicate. Additional cases cover integer-key GROUP BY, COUNT/MIN/MAX, HAVING, nullable
+and multi-key groups, grouped LIMIT, unsigned extrema and empty grouped/aggregate
+results, metadata label boundaries, and exact decimals. The decimal cases cover
+literal labels such as `001.2300`, `.50` and `1.`, scale 30 and 38-digit
+boundaries, decimal comparisons with signed and unsigned integer extremes,
+mixed scales, NULL filtering, fraction-only projection through a column,
+aliases, duplicates and `*`, and native HUGEINT/UHUGEINT projection. The
+fixture contains signed BIGINT extremes, the unsigned BIGINT maximum, UTF-8
+and binary bytes `00 ff`.
 
-The comparison checks exact result labels, NULL positions, value bytes, row order
-and multiplicity, and coarse type categories: integer, decimal, date, datetime,
-text, binary and SQL NULL. Unknown categories fail. It does not compare integer
-width or signedness, decimal precision/scale, MySQL flags/collations, or proxy
-wire metadata. Text is compared as bytes for these fixtures; embedded NUL text
+The comparison checks exact result labels, NULL positions, value bytes without
+decimal normalization, row order and multiplicity, and coarse type categories:
+integer, decimal, date, datetime, text, binary and SQL NULL. Native HUGEINT and
+UHUGEINT count as decimal, matching the plugin's `DECIMAL(39,0)` mapping.
+Unknown categories fail. It does not compare integer width or signedness,
+decimal precision/scale, MySQL flags/collations, or proxy wire metadata.
+
+The separate `tools/probes/duckdb_mysql_parameter_differential.cpp` probe
+compares natively bound signed-integer predicate parameters (NULL, INT64
+extremes, narrow-column comparisons and distinct positions) against MySQL
+server-side prepared statements. It was built with the same command, using that
+source file instead, and passed all seven cases on 2026-11-18. Text is compared as bytes for these fixtures; embedded NUL text
 is not covered. The match says nothing about untested inputs or the broader
 analytical subset. The SQL mode, connection collation and time zone are fixed by
 the probe; MySQL/engine version changes require a fresh run.

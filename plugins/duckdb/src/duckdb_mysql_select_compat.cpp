@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <new>
 #include <set>
 #include <sql_parser/ast_walk.h>
 #include <sql_parser/parser.h>
@@ -76,10 +77,25 @@ struct Translator {
     bool has_relation = false;
     std::string reason = "unsupported_ast";
     std::vector<std::string> required;
-    Translator(const std::string &in, const DuckDBMySQLSelectContext &c) : input(in), ctx(c) {}
+    const std::vector<const N *> &parameters;
+    size_t parameter_index = 0;
+    Translator(const std::string &in, const DuckDBMySQLSelectContext &c,
+               const std::vector<const N *> &p)
+        : input(in), ctx(c), parameters(p) {}
     bool valid_name(const std::string &s) const {
         return !s.empty() && s.size() <= std::min(ctx.max_output_bytes, size_t(4096)) &&
                s.find('\0') == std::string::npos;
+    }
+    bool output_label(const std::string &name, size_t maximum = 256) {
+        const auto whitespace = [](unsigned char c) {
+            return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+        };
+        if (!valid_name(name) || name.size() > maximum || whitespace(name.front()) ||
+            std::any_of(name.begin(), name.end(), [](unsigned char c) { return c >= 0xf0; })) {
+            reason = "unsupported_metadata_label";
+            return false;
+        }
+        return true;
     }
     std::set<std::string> aliases;
     std::string qualifier;
@@ -131,18 +147,114 @@ struct Translator {
             }
         return found;
     }
+    struct ExactNumber {
+        std::string sql;
+        unsigned integer_digits = 0;
+        unsigned scale = 0;
+        bool decimal = false;
+    };
+    static bool valid_decimal(const DuckDBMySQLType &type) {
+        return type.kind == DuckDBMySQLTypeKind::exact_decimal && type.precision >= 1 &&
+               type.precision <= 38 && type.scale <= 30 && type.scale <= type.precision;
+    }
+    static bool projectable_decimal(const DuckDBMySQLType &type) {
+        return valid_decimal(type) || (type.kind == DuckDBMySQLTypeKind::exact_decimal &&
+                                       type.precision == 39 && type.scale == 0);
+    }
+    static bool fraction_only(const DuckDBMySQLType &type) {
+        return valid_decimal(type) && type.precision == type.scale;
+    }
+    static std::string projected_column(const DuckDBMySQLColumn &column) {
+        const auto name = quote(column.canonical_name);
+        if (!fraction_only(column.type))
+            return name;
+        return "CAST(" + name + " AS DECIMAL(" + std::to_string(column.type.precision + 1) + "," +
+               std::to_string(column.type.scale) + "))";
+    }
+    // Inspect only ParserSQL's literal token; no SQL scanning or syntax reconstruction.
+    bool exact_literal(const N *node, ExactNumber &number) {
+        if (!node || (node->type != K::NODE_LITERAL_FLOAT && node->type != K::NODE_LITERAL_INT) ||
+            node->flags || node->first_child || !node->value_ptr || !node->source_ptr ||
+            node->source_ptr != node->value_ptr || node->value_len != node->source_len ||
+            !node->value_len)
+            return false;
+        const auto begin = reinterpret_cast<uintptr_t>(input.data());
+        const auto ptr = reinterpret_cast<uintptr_t>(node->value_ptr);
+        if (ptr < begin || ptr - begin > input.size() ||
+            node->value_len > input.size() - (ptr - begin))
+            return false;
+        const auto text = std::string(input.data() + (ptr - begin), node->value_len);
+        unsigned before = 0, after = 0;
+        bool dot = false;
+        for (char ch : text) {
+            if (ch == '.') {
+                if (dot)
+                    return false;
+                dot = true;
+            } else if (ch >= '0' && ch <= '9') {
+                if (dot)
+                    ++after;
+                else
+                    ++before;
+            } else
+                return false;
+            if (before > 38 || after > 30)
+                return false;
+        }
+        if ((!before && !after) || (node->type == K::NODE_LITERAL_FLOAT && !dot) ||
+            (node->type == K::NODE_LITERAL_INT && dot) || before + after > 38)
+            return false;
+        const unsigned precision = std::max(1u, before) + after;
+        if (precision > 38)
+            return false;
+        number.sql = "CAST('" + text + "' AS DECIMAL(" + std::to_string(precision) + "," +
+                     std::to_string(after) + "))";
+        number.integer_digits = std::max(1u, before);
+        number.scale = after;
+        number.decimal = node->type == K::NODE_LITERAL_FLOAT;
+        return true;
+    }
+    bool exact_number(const N *node, ExactNumber &number) {
+        if (const auto *c = column(node)) {
+            if (!output_label(c->canonical_name))
+                return false;
+            if (c->type.kind == DuckDBMySQLTypeKind::signed_integer)
+                number.integer_digits = 19;
+            else if (c->type.kind == DuckDBMySQLTypeKind::unsigned_integer)
+                number.integer_digits = 20;
+            else if (valid_decimal(c->type)) {
+                number.integer_digits = c->type.precision - c->type.scale;
+                number.scale = c->type.scale;
+                number.decimal = true;
+            } else
+                return false;
+            number.sql = quote(c->canonical_name);
+            return true;
+        }
+        return exact_literal(node, number);
+    }
     bool expr(const N *n, std::string &out, DuckDBMySQLTypeKind &type) {
         if (!n)
             return false;
         if (auto c = column(n)) {
-            if (!known_type(c->type.kind))
+            if (!known_type(c->type.kind) || !output_label(c->canonical_name) ||
+                (c->type.kind == DuckDBMySQLTypeKind::exact_decimal &&
+                 !projectable_decimal(c->type)))
                 return false;
-            out = quote(c->canonical_name);
+            out = projected_column(*c);
             type = c->type.kind;
             return true;
         }
         if (integer(n, out)) {
             type = DuckDBMySQLTypeKind::signed_integer;
+            return true;
+        }
+        if (n->type == K::NODE_LITERAL_FLOAT) {
+            ExactNumber number;
+            if (!exact_literal(n, number))
+                return false;
+            out = std::move(number.sql);
+            type = DuckDBMySQLTypeKind::exact_decimal;
             return true;
         }
         if (n->type == K::NODE_LITERAL_NULL && !n->first_child && !n->flags) {
@@ -152,9 +264,117 @@ struct Translator {
         }
         return false;
     }
+    bool unambiguous_builtin(const N *node, const std::string &name) {
+        const auto begin = reinterpret_cast<uintptr_t>(input.data());
+        const auto source = reinterpret_cast<uintptr_t>(node->source_ptr);
+        if (!node->source_ptr || source < begin || source - begin > input.size() ||
+            node->source_len > input.size() - (source - begin))
+            return false;
+        Tokenizer<Dialect::MySQL> tokens;
+        tokens.reset(node->source_ptr, node->source_len);
+        const auto function = tokens.next_token();
+        const auto open = tokens.next_token();
+        const auto expected = name == "COUNT" ? TokenType::TK_COUNT
+                              : name == "MIN" ? TokenType::TK_MIN
+                                              : TokenType::TK_MAX;
+        // IGNORE_SPACE changes MySQL's resolution of spaced native names.
+        // ParserSQL supplies token/source identity; no private SQL lexer is used.
+        if (function.type != expected || function.source.ptr != node->source_ptr ||
+            function.text.ptr != function.source.ptr || function.text.len != function.source.len ||
+            !function.text.equals_ci(name.data(), name.size()) ||
+            open.type != TokenType::TK_LPAREN ||
+            function.source.ptr + function.source.len != open.source.ptr) {
+            reason = "session_sensitive_function_syntax";
+            return false;
+        }
+        return true;
+    }
+    bool aggregate_expr(const N *node, std::string &out, DuckDBMySQLTypeKind &type) {
+        if (!node || node->type != K::NODE_FUNCTION_CALL || node->flags)
+            return false;
+        const std::string name = val(node);
+        if (name != "COUNT" && name != "MIN" && name != "MAX")
+            return false;
+        if (!unambiguous_builtin(node, name))
+            return false;
+        const N *arg = node->first_child;
+        if (!arg || arg->next_sibling)
+            return false;
+        if (name == "COUNT" && arg->type == K::NODE_ASTERISK && !arg->flags && !arg->first_child) {
+            out = "COUNT(*)";
+            type = DuckDBMySQLTypeKind::signed_integer;
+            return true;
+        }
+        const auto *c = column(arg);
+        if (!c || !known_type(c->type.kind))
+            return false;
+        if (name != "COUNT" && c->type.kind != DuckDBMySQLTypeKind::signed_integer &&
+            c->type.kind != DuckDBMySQLTypeKind::unsigned_integer)
+            return false;
+        out = name + "(" + quote(c->canonical_name) + ")";
+        type = name == "COUNT" ? DuckDBMySQLTypeKind::signed_integer : c->type.kind;
+        return true;
+    }
+    bool having_pred(const N *node, std::string &out) {
+        if (!node || node->flags)
+            return false;
+        if (node->type == K::NODE_IS_NULL || node->type == K::NODE_IS_NOT_NULL) {
+            auto arg = node->first_child;
+            std::string x;
+            DuckDBMySQLTypeKind type;
+            if (!arg || arg->next_sibling || !aggregate_expr(arg, x, type))
+                return false;
+            out = "(" + x + (node->type == K::NODE_IS_NULL ? " IS NULL)" : " IS NOT NULL)");
+            if (out.size() > ctx.max_output_bytes) {
+                reason = "resource_limit";
+                return false;
+            }
+            return true;
+        }
+        if (node->type != K::NODE_BINARY_OP)
+            return false;
+        auto a = node->first_child;
+        auto b = a ? a->next_sibling : nullptr;
+        if (!b || b->next_sibling)
+            return false;
+        const auto op = val(node);
+        std::string x, y;
+        if (op == "AND" || op == "OR") {
+            if (!having_pred(a, x) || !having_pred(b, y))
+                return false;
+        } else {
+            if (op != "=" && op != "<>" && op != "!=" && op != "<" && op != "<=" && op != ">" &&
+                op != ">=")
+                return false;
+            DuckDBMySQLTypeKind type;
+            if (!aggregate_expr(a, x, type) || type != DuckDBMySQLTypeKind::signed_integer ||
+                !integer(b, y))
+                return false;
+        }
+        out = "(" + x + " " + op + " " + y + ")";
+        if (out.size() > ctx.max_output_bytes) {
+            reason = "resource_limit";
+            return false;
+        }
+        return true;
+    }
     bool pred(const N *n, std::string &out) {
         if (!n || n->flags)
             return false;
+        if (n->type == K::NODE_EXPRESSION) {
+            auto child = n->first_child;
+            if (!child || child->next_sibling || n->value_len)
+                return false;
+            std::string nested;
+            if (!pred(child, nested))
+                return false;
+            out = "(" + nested + ")";
+            if (out.size() > ctx.max_output_bytes) {
+                reason = "resource_limit";
+                return false;
+            }
+            return true;
+        }
         if (n->type == K::NODE_IS_NULL || n->type == K::NODE_IS_NOT_NULL) {
             auto a = n->first_child;
             std::string x;
@@ -179,17 +399,60 @@ struct Translator {
             if (op != "=" && op != "<>" && op != "!=" && op != "<" && op != "<=" && op != ">" &&
                 op != ">=")
                 return false;
-            DuckDBMySQLTypeKind ta, tb;
-            if (!expr(a, x, ta) || !expr(b, y, tb) || ta != tb ||
-                ta != DuckDBMySQLTypeKind::signed_integer)
-                return false;
+            const bool a_param = a->type == K::NODE_PLACEHOLDER;
+            const bool b_param = b->type == K::NODE_PLACEHOLDER;
+            if (a_param || b_param) {
+                if (a_param == b_param || ctx.parameter_mode == DuckDBMySQLParameterMode::forbidden)
+                    return false;
+                const N *parameter = a_param ? a : b;
+                const N *column_node = a_param ? b : a;
+                const auto *c = column(column_node);
+                if (!c || c->type.kind != DuckDBMySQLTypeKind::signed_integer)
+                    return false;
+                if (parameter_index >= parameters.size() ||
+                    parameters[parameter_index] != parameter) {
+                    reason = "parameter_order";
+                    return false;
+                }
+                ++parameter_index;
+                const auto column_sql = "CAST(" + quote(c->canonical_name) + " AS BIGINT)";
+                if (a_param) {
+                    x = "CAST(? AS BIGINT)";
+                    y = column_sql;
+                } else {
+                    x = column_sql;
+                    y = "CAST(? AS BIGINT)";
+                }
+            } else {
+                ExactNumber lhs, rhs;
+                if (exact_number(a, lhs) && exact_number(b, rhs) && (lhs.decimal || rhs.decimal)) {
+                    const unsigned scale = std::max(lhs.scale, rhs.scale);
+                    const unsigned precision =
+                        std::max(1u, std::max(lhs.integer_digits, rhs.integer_digits) + scale);
+                    if (precision > 38 || scale > 30)
+                        return false;
+                    const std::string target = " AS DECIMAL(" + std::to_string(precision) + "," +
+                                               std::to_string(scale) + "))";
+                    x = "CAST(" + lhs.sql + target;
+                    y = "CAST(" + rhs.sql + target;
+                } else {
+                    DuckDBMySQLTypeKind ta, tb;
+                    if (!expr(a, x, ta) || !expr(b, y, tb) || ta != tb ||
+                        ta != DuckDBMySQLTypeKind::signed_integer)
+                        return false;
+                }
+            }
         }
         out = "(" + x + " " + op + " " + y + ")";
+        if (out.size() > ctx.max_output_bytes) {
+            reason = "resource_limit";
+            return false;
+        }
         return true;
     }
     bool run(const N *root, std::string &out) {
-        const N *items = nullptr, *from = nullptr, *where = nullptr, *order = nullptr,
-                *limit = nullptr;
+        const N *items = nullptr, *from = nullptr, *where = nullptr, *group = nullptr,
+                *having = nullptr, *order = nullptr, *limit = nullptr;
         if (root->flags || root->next_sibling)
             return false;
         for (auto n = root->first_child; n; n = n->next_sibling) {
@@ -203,6 +466,12 @@ struct Translator {
                 break;
             case K::NODE_WHERE_CLAUSE:
                 slot = &where;
+                break;
+            case K::NODE_GROUP_BY_CLAUSE:
+                slot = &group;
+                break;
+            case K::NODE_HAVING_CLAUSE:
+                slot = &having;
                 break;
             case K::NODE_ORDER_BY_CLAUSE:
                 slot = &order;
@@ -284,6 +553,42 @@ struct Translator {
                     return false;
             has_relation = true;
         }
+        // MySQL permits output aliases in GROUP BY. Refuse any possible alias
+        // collision rather than guessing whether it shadows a source column.
+        for (auto item = items->first_child; item; item = item->next_sibling) {
+            auto expr_node = item->first_child;
+            auto alias = expr_node ? expr_node->next_sibling : nullptr;
+            if (alias) {
+                if (alias->type != K::NODE_ALIAS || alias->next_sibling || alias->first_child ||
+                    (alias->flags & ~FLAG_IDENT_DELIMITED) || !safe_identifier(alias))
+                    return false;
+                auto name = ident(alias);
+                if (!output_label(name))
+                    return false;
+                aliases.insert(name);
+            }
+        }
+        std::set<std::string> group_keys;
+        std::string group_sql;
+        if (group) {
+            if (!has_relation || group->value_len || !group->first_child)
+                return false;
+            for (auto n = group->first_child; n; n = n->next_sibling) {
+                const auto *c = column(n);
+                if (!c || alias_conflicts(c->canonical_name) ||
+                    (c->type.kind != DuckDBMySQLTypeKind::signed_integer &&
+                     c->type.kind != DuckDBMySQLTypeKind::unsigned_integer))
+                    return false;
+                if (!group_sql.empty())
+                    group_sql += ", ";
+                group_sql += quote(c->canonical_name);
+                if (group_sql.size() > ctx.max_output_bytes) {
+                    reason = "resource_limit";
+                    return false;
+                }
+                group_keys.insert(c->canonical_name);
+            }
+        }
         out = "SELECT ";
         bool first = true;
         bool aggregate = false, plain = false;
@@ -304,31 +609,58 @@ struct Translator {
             first = false;
             if (n->type == K::NODE_ASTERISK && !n->first_child && !n->flags && !alias &&
                 has_relation) {
-                for (const auto &c : relation.columns)
-                    if (!known_type(c.type.kind))
+                bool expand = false;
+                for (const auto &c : relation.columns) {
+                    if (!known_type(c.type.kind) || !output_label(c.canonical_name) ||
+                        (c.type.kind == DuckDBMySQLTypeKind::exact_decimal &&
+                         !projectable_decimal(c.type)))
                         return false;
+                    expand = expand || fraction_only(c.type);
+                }
+                if (group)
+                    return false;
                 plain = true;
-                out += "*";
+                if (!expand)
+                    out += "*";
+                else {
+                    std::set<std::string> seen;
+                    bool sep = false;
+                    for (const auto &c : relation.columns) {
+                        // DuckDB identifiers are case-insensitive; an ambiguous
+                        // expanded column cannot be resolved safely.
+                        std::string folded = c.canonical_name;
+                        for (char &ch : folded) {
+                            if (ch >= 'A' && ch <= 'Z')
+                                ch += 'a' - 'A';
+                        }
+                        if (!seen.insert(folded).second)
+                            return false;
+                        if (sep)
+                            out += ", ";
+                        sep = true;
+                        out += projected_column(c);
+                        if (fraction_only(c.type))
+                            out += " AS " + quote(c.canonical_name);
+                        if (out.size() > ctx.max_output_bytes) {
+                            reason = "resource_limit";
+                            return false;
+                        }
+                    }
+                }
                 continue;
             }
             std::string s;
             DuckDBMySQLTypeKind type;
-            if (n->type == K::NODE_FUNCTION_CALL && val(n) == "COUNT" && !n->flags) {
-                auto arg = n->first_child;
-                if (!arg || arg->next_sibling)
-                    return false;
-                if (arg->type == K::NODE_ASTERISK && !arg->flags && !arg->first_child)
-                    s = "COUNT(*)";
-                else {
-                    auto c = column(arg);
-                    if (!c || !known_type(c->type.kind))
-                        return false;
-                    s = "COUNT(" + quote(c->canonical_name) + ")";
-                }
+            if (aggregate_expr(n, s, type)) {
                 aggregate = true;
             } else {
                 if (!expr(n, s, type))
                     return false;
+                if (group) {
+                    const auto *c = column(n);
+                    if (!c || !group_keys.count(c->canonical_name))
+                        return false;
+                }
                 plain = true;
             }
             out += s;
@@ -336,10 +668,13 @@ struct Translator {
                 if (!safe_identifier(alias))
                     return false;
                 auto a = ident(alias);
-                if (!valid_name(a))
+                if (!output_label(a))
                     return false;
                 aliases.insert(a);
                 out += " AS " + quote(a);
+            } else if ((n->type == K::NODE_COLUMN_REF || n->type == K::NODE_QUALIFIED_NAME) &&
+                       column(n) && fraction_only(column(n)->type)) {
+                out += " AS " + quote(column(n)->canonical_name);
             } else if (n->type != K::NODE_COLUMN_REF && n->type != K::NODE_QUALIFIED_NAME) {
                 // ParserSQL records the original expression span; validate it belongs to input.
                 auto p = reinterpret_cast<uintptr_t>(item->source_ptr),
@@ -347,10 +682,15 @@ struct Translator {
                 if (!item->source_ptr || p < begin || p - begin > input.size() ||
                     item->source_len > input.size() - (p - begin))
                     return false;
-                out += " AS " + quote(std::string(item->source_ptr, item->source_len));
+                std::string label = n->type == K::NODE_LITERAL_NULL
+                                        ? "NULL"
+                                        : std::string(item->source_ptr, item->source_len);
+                if (n->type == K::NODE_FUNCTION_CALL && !output_label(label, 255))
+                    return false;
+                out += " AS " + quote(label);
             }
         }
-        if (aggregate && (plain || order || limit))
+        if ((!group && aggregate && (plain || order || limit)) || (having && !group && !aggregate))
             return false;
         if (from) {
             out += " FROM ";
@@ -371,6 +711,15 @@ struct Translator {
                 return false;
             out += " WHERE " + p;
         }
+        if (group)
+            out += " GROUP BY " + group_sql;
+        if (having) {
+            std::string p;
+            auto n = having->first_child;
+            if (!n || n->next_sibling || !having_pred(n, p))
+                return false;
+            out += " HAVING " + p;
+        }
         std::set<std::string> ordered;
         if (order) {
             out += " ORDER BY ";
@@ -381,7 +730,8 @@ struct Translator {
                 auto n = item->first_child;
                 auto dir = n ? n->next_sibling : nullptr;
                 auto c = n ? column(n) : nullptr;
-                if (!c || alias_conflicts(c->canonical_name) ||
+                if (!c || (group && !group_keys.count(c->canonical_name)) ||
+                    alias_conflicts(c->canonical_name) ||
                     (c->type.kind != DuckDBMySQLTypeKind::signed_integer &&
                      c->type.kind != DuckDBMySQLTypeKind::unsigned_integer &&
                      c->type.kind != DuckDBMySQLTypeKind::exact_decimal))
@@ -410,8 +760,13 @@ struct Translator {
                 return false;
         }
         if (limit) {
-            bool unique = false;
+            bool unique = group && std::all_of(group_keys.begin(), group_keys.end(),
+                                               [&](const std::string &key) {
+                                                   return ordered.count(key) != 0;
+                                               });
             for (const auto &key : relation.unique_keys) {
+                if (group)
+                    break;
                 if (!key.empty() && std::all_of(key.begin(), key.end(), [&](const std::string &s) {
                         return ordered.count(s) != 0;
                     }))
@@ -498,24 +853,77 @@ static DuckDBMySQLSelectTranslation translate(const std::string &input,
         result.reason = "unsupported_provenance";
         return result;
     }
-    auto walk =
-        sql_parser::walk_ast(parsed.ast,
-                             [](const sql_parser::AstNode &, const sql_parser::AstVisitContext &) {
-                                 return sql_parser::AstVisitAction::Continue;
-                             },
-                             {ctx.max_nodes, ctx.max_depth});
-    if (walk.status != sql_parser::AstWalkStatus::Completed) {
+    std::vector<std::pair<size_t, const sql_parser::AstNode *>> found;
+    bool bad_parameter_source = false, too_many_parameters = false;
+    auto walk = sql_parser::walk_ast(
+        parsed.ast,
+        [&](const sql_parser::AstNode &node, const sql_parser::AstVisitContext &) {
+            if (node.type != sql_parser::NodeType::NODE_PLACEHOLDER)
+                return sql_parser::AstVisitAction::Continue;
+            if (found.size() >= 256) {
+                too_many_parameters = true;
+                return sql_parser::AstVisitAction::Stop;
+            }
+            const auto begin = reinterpret_cast<uintptr_t>(input.data());
+            const auto ptr = reinterpret_cast<uintptr_t>(node.value_ptr);
+            if (!node.value_ptr || ptr < begin || ptr - begin >= input.size() ||
+                node.value_len != 1 || input[ptr - begin] != '?' || node.first_child ||
+                node.flags ||
+                (node.source_ptr && (node.source_ptr != node.value_ptr || node.source_len != 1)) ||
+                (!node.source_ptr && node.source_len)) {
+                bad_parameter_source = true;
+                return sql_parser::AstVisitAction::Stop;
+            }
+            found.emplace_back(static_cast<size_t>(ptr - begin), &node);
+            return sql_parser::AstVisitAction::Continue;
+        },
+        {ctx.max_nodes, ctx.max_depth});
+    if (too_many_parameters || walk.status == sql_parser::AstWalkStatus::LimitExceeded) {
         result.reason = "resource_limit";
         return result;
     }
-    Translator t{input, ctx};
+    if (bad_parameter_source || walk.status != sql_parser::AstWalkStatus::Completed) {
+        result.reason = "parameter_provenance";
+        return result;
+    }
+    std::sort(found.begin(), found.end(),
+              [](const auto &a, const auto &b) { return a.first < b.first; });
+    std::vector<const sql_parser::AstNode *> parameters;
+    for (size_t i = 0; i < found.size(); ++i) {
+        if (i && found[i - 1].first == found[i].first) {
+            result.reason = "parameter_provenance";
+            return result;
+        }
+        parameters.push_back(found[i].second);
+    }
+    if ((ctx.parameter_mode != DuckDBMySQLParameterMode::execute && !ctx.parameter_kinds.empty()) ||
+        (ctx.parameter_mode == DuckDBMySQLParameterMode::execute &&
+         ctx.parameter_kinds.size() != parameters.size())) {
+        result.reason = "parameter_count_mismatch";
+        return result;
+    }
+    if (ctx.parameter_mode == DuckDBMySQLParameterMode::execute) {
+        for (auto kind : ctx.parameter_kinds) {
+            if (kind != DuckDBMySQLParameterKind::signed_integer &&
+                kind != DuckDBMySQLParameterKind::null_value) {
+                result.reason = "unsupported_parameter_type";
+                return result;
+            }
+        }
+    }
+    Translator t{input, ctx, parameters};
     std::string sql;
     if (!t.run(parsed.ast, sql)) {
         result.reason = t.reason;
         result.required_context = std::move(t.required);
         return result;
     }
+    if (t.parameter_index != parameters.size()) {
+        result.reason = "unsupported_ast";
+        return result;
+    }
     result.decision = DuckDBMySQLSelectDecision::supported;
+    result.parameter_count = parameters.size();
     result.sql = std::move(sql);
     result.reason = "supported";
     return result;
@@ -524,6 +932,17 @@ static DuckDBMySQLSelectTranslation translate(const std::string &input,
 DuckDBMySQLSelectTranslation
 duckdb_translate_mysql_select(const std::string &input, const DuckDBMySQLSelectContext &context) {
     try {
+        DuckDBMySQLSelectTranslation rejected;
+        if (context.parameter_kinds.size() > 256) {
+            rejected.reason = "resource_limit";
+            return rejected;
+        }
+        if (context.parameter_mode != DuckDBMySQLParameterMode::forbidden &&
+            context.parameter_mode != DuckDBMySQLParameterMode::prepare &&
+            context.parameter_mode != DuckDBMySQLParameterMode::execute) {
+            rejected.reason = "invalid_parameter_mode";
+            return rejected;
+        }
         auto ctx = context;
         ctx.max_input_bytes = std::min(ctx.max_input_bytes, size_t(65536));
         ctx.max_output_bytes = std::min(ctx.max_output_bytes, size_t(262144));

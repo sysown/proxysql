@@ -70,6 +70,12 @@ struct DuckDBPreparedProvider::Impl {
     std::string message;
     bool active = false, failed = false, poisoned = false;
     bool mysql_analytical = false;
+    std::string fresh_sql;
+    NativeStatement *fresh_bound = nullptr;
+    uint32_t guard_op = 0;
+    void clear_fresh_sql() noexcept {
+        std::string{}.swap(fresh_sql);
+    }
     char passive_guard = 0;
     char session_reset_guard = 0;
     Impl(duckdb_connection c, Status s, Failure f, ResetClient r, void *arg, DuckDBSourceDialect d)
@@ -101,6 +107,8 @@ struct DuckDBPreparedProvider::Impl {
     }
     int error(E *e, ErrorKind k, const char *text) noexcept {
         failed = true;
+        clear_fresh_sql();
+        fresh_bound = nullptr;
         try {
             message = text ? text : "DuckDB provider failure";
             if (e) {
@@ -111,6 +119,7 @@ struct DuckDBPreparedProvider::Impl {
                     break;
                 case ErrorKind::unsupported:
                     e->kind = ProxySQL_Embedded_ERROR_UNSUPPORTED;
+                    memcpy(e->sqlstate, "0A000", 6);
                     break;
                 case ErrorKind::policy:
                     e->kind = ProxySQL_Embedded_ERROR_POLICY;
@@ -160,8 +169,8 @@ struct DuckDBPreparedProvider::Impl {
         }
         return r;
     }
-    int translate(ProxySQL_Embedded_BytesView sql, std::string &emitted, E *e,
-                  bool schema_recheck) {
+    int translate(ProxySQL_Embedded_BytesView sql, std::string &emitted, E *e, bool schema_recheck,
+                  const V *values = nullptr, size_t value_count = 0) {
         if (!active)
             return error(e, ErrorKind::transaction,
                          "analytical operation requires a read-only guard");
@@ -173,8 +182,33 @@ struct DuckDBPreparedProvider::Impl {
                              sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
                          sql.size);
         auto context = duckdb_mysql_select_context(conn);
+        context.parameter_mode =
+            schema_recheck ? DuckDBMySQLParameterMode::execute : DuckDBMySQLParameterMode::prepare;
+        if (schema_recheck) {
+            if (value_count > 256)
+                return error(e, ErrorKind::resource, "analytical parameter limit exceeded");
+            if (!values && value_count)
+                return error(e, ErrorKind::invalid_parameter,
+                             "missing analytical parameter values");
+            context.parameter_kinds.reserve(value_count);
+            for (size_t i = 0; i < value_count; ++i) {
+                auto kind = values[i].kind == ProxySQL_Embedded_VALUE_INT64
+                                ? DuckDBMySQLParameterKind::signed_integer
+                            : values[i].kind == ProxySQL_Embedded_VALUE_NULL
+                                ? DuckDBMySQLParameterKind::null_value
+                                : DuckDBMySQLParameterKind::unsupported;
+                context.parameter_kinds.push_back(kind);
+            }
+        }
         auto translated = duckdb_translate_mysql_select(text, context);
         if (translated.decision != DuckDBMySQLSelectDecision::supported) {
+            if (translated.reason == "parameter_count_mismatch")
+                return error(e, ErrorKind::invalid_parameter,
+                             "analytical parameter count mismatch");
+            if (translated.reason == "unsupported_parameter_type")
+                return error(e, ErrorKind::unsupported, "unsupported analytical parameter type");
+            if (translated.reason == "resource_limit")
+                return error(e, ErrorKind::resource, "analytical SQL resource limit exceeded");
             if (schema_recheck)
                 return error(e, ErrorKind::schema_changed,
                              "analytical statement no longer admitted");
@@ -270,6 +304,45 @@ struct DuckDBPreparedProvider::Impl {
             auto &p = self(c);
             if (!st || (!values && n))
                 return p.error(e, ErrorKind::invalid_parameter, "invalid bindings");
+            auto &native = statement(st);
+            if (p.mysql_analytical) {
+                p.fresh_bound = nullptr;
+                if (!p.active || p.guard_op != ProxySQL_Embedded_OPERATION_EXECUTE ||
+                    p.fresh_sql.empty())
+                    return p.error(e, ErrorKind::transaction,
+                                   "analytical execute requires revalidation");
+                std::unique_ptr<Statement> fresh;
+                auto r = p.adapter.prepare(p.fresh_sql, fresh);
+                p.clear_fresh_sql();
+                if (r)
+                    return p.result(e, r);
+                std::vector<Type> old_params, new_params;
+                std::vector<uint32_t> old_positions, new_positions;
+                std::vector<Column> old_columns, new_columns;
+                if ((r = p.adapter.describe_parameters(*native.stmt, old_params)) ||
+                    (r = p.adapter.describe_parameters(*fresh, new_params)) ||
+                    (r = p.adapter.describe_parameter_positions(*native.stmt, old_positions)) ||
+                    (r = p.adapter.describe_parameter_positions(*fresh, new_positions)) ||
+                    (r = p.adapter.describe_result(*native.stmt, old_columns)) ||
+                    (r = p.adapter.describe_result(*fresh, new_columns)))
+                    return p.result(e, r);
+                auto same_type = [](const Type &a, const Type &b) {
+                    return a.kind == b.kind && a.precision == b.precision && a.scale == b.scale &&
+                           a.nullable == b.nullable;
+                };
+                bool same = old_positions == new_positions &&
+                            old_params.size() == new_params.size() &&
+                            old_columns.size() == new_columns.size();
+                for (size_t i = 0; same && i < old_params.size(); ++i)
+                    same = same_type(old_params[i], new_params[i]);
+                for (size_t i = 0; same && i < old_columns.size(); ++i)
+                    same = old_columns[i].name == new_columns[i].name &&
+                           same_type(old_columns[i].type, new_columns[i].type);
+                if (!same)
+                    return p.error(e, ErrorKind::schema_changed,
+                                   "analytical statement metadata changed");
+                native.stmt = std::move(fresh);
+            }
             std::vector<Value> vals;
             vals.reserve(n);
             for (size_t i = 0; i < n; ++i) {
@@ -311,7 +384,12 @@ struct DuckDBPreparedProvider::Impl {
                     return p.error(e, ErrorKind::invalid_parameter, "invalid value kind");
                 }
             }
-            return p.result(e, p.adapter.bind(*statement(st).stmt, vals));
+            auto bound = p.adapter.bind(*native.stmt, vals);
+            if (bound)
+                return p.result(e, bound);
+            if (p.mysql_analytical)
+                p.fresh_bound = &native;
+            return 0;
         }
         CATCH(c, e)
     }
@@ -320,6 +398,13 @@ struct DuckDBPreparedProvider::Impl {
             auto &p = self(c);
             if (!st || !info)
                 return p.error(e, ErrorKind::invalid_parameter, "invalid execute");
+            if (p.mysql_analytical) {
+                if (!p.active || p.guard_op != ProxySQL_Embedded_OPERATION_EXECUTE ||
+                    p.fresh_bound != &statement(st))
+                    return p.error(e, ErrorKind::transaction,
+                                   "analytical execute requires fresh binding");
+                p.fresh_bound = nullptr;
+            }
             ExecInfo x;
             auto r = p.adapter.execute(*statement(st).stmt, x);
             if (r)
@@ -406,6 +491,9 @@ struct DuckDBPreparedProvider::Impl {
                      E *e) noexcept {
         try {
             auto &p = self(c);
+            p.clear_fresh_sql();
+            p.fresh_bound = nullptr;
+            p.guard_op = 0;
             if (!guard)
                 return p.error(e, ErrorKind::invalid_parameter, "invalid guard");
             *guard = nullptr;
@@ -443,6 +531,7 @@ struct DuckDBPreparedProvider::Impl {
             }
             p.active = true;
             p.failed = false;
+            p.guard_op = op;
             *guard = &p;
             return 0;
         }
@@ -450,6 +539,9 @@ struct DuckDBPreparedProvider::Impl {
     }
     static void leave(void *c, void *guard) noexcept {
         auto &p = self(c);
+        p.clear_fresh_sql();
+        p.fresh_bound = nullptr;
+        p.guard_op = 0;
         if (!guard || guard == &p.passive_guard)
             return;
         if (guard == &p.session_reset_guard) {
@@ -500,14 +592,15 @@ struct DuckDBPreparedProvider::Impl {
         }
         CATCH(c, e)
     }
-    static int authorize_execute(void *c, ProxySQL_Embedded_BytesView sql, const V *, size_t,
-                                 E *e) noexcept {
+    static int authorize_execute(void *c, ProxySQL_Embedded_BytesView sql, const V *values,
+                                 size_t count, E *e) noexcept {
         try {
             auto &p = self(c);
             if (!p.mysql_analytical)
                 return 0;
-            std::string emitted;
-            return p.translate(sql, emitted, e, true);
+            p.clear_fresh_sql();
+            p.fresh_bound = nullptr;
+            return p.translate(sql, p.fresh_sql, e, true, values, count);
         }
         CATCH(c, e)
     }
