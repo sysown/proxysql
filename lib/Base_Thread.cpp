@@ -586,11 +586,27 @@ template<typename T, typename DS>
 bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsigned int n) {
 	T* thr = static_cast<T*>(this);
 	if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
-		// we pause receiving from backend at mysql_thread___threshold_resultset_size * 8
+		// We pause receiving from backend at mysql_thread___threshold_resultset_size * 8
 		// but assuming that client isn't completely blocked, we will stop checking for data
-		// only at mysql_thread___threshold_resultset_size * 4
+		// only at mysql_thread___threshold_resultset_size * 4.
+#ifdef PROXYSQL31
+		//
+		// `len * RESULTSET_BUFLEN` estimates the bytes queued in PSarrayOUT: a
+		// result slab is normally about that large, but a single row can exceed
+		// one slab and receive its own allocation, so this is an estimate rather
+		// than a strict upper bound. The estimate (and therefore the point at
+		// which the backend is paused) scales with the slab size, which is why
+		// the constant is larger in this tier. A packet that array2buffer()
+		// removed from PSarrayOUT is owned by queueOUT.pkt and is added back
+		// below, because PSarrayOUT->len no longer counts it.
+#endif
 		if constexpr (std::is_same_v<T, PgSQL_Thread>) {
-			const unsigned int buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
+			unsigned int buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
+#ifdef PROXYSQL31
+			if (myds->sess->client_myds->queueOUT.pkt.ptr) {
+				buffered_data += myds->sess->client_myds->queueOUT.pkt.size;
+			}
+#endif
 			if (buffered_data > overflow_safe_multiply<4,unsigned int>(pgsql_thread___threshold_resultset_size)) {
 				thr->mypolls.fds[n].events = 0;
 				return true;
@@ -599,6 +615,11 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
 			unsigned int buffered_data = 0;
 			buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
 			buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
+#ifdef PROXYSQL31
+			if (myds->sess->client_myds->queueOUT.pkt.ptr) {
+				buffered_data += myds->sess->client_myds->queueOUT.pkt.size;
+			}
+#endif
 			if (buffered_data > overflow_safe_multiply<4,unsigned int>(mysql_thread___threshold_resultset_size)) {
 				thr->mypolls.fds[n].events = 0;
 				return true;
