@@ -2089,7 +2089,8 @@ int PgSQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 		// A simple-query COPY takes only CopyData, CopyDone and CopyFail from the client. Once the COPY is
 		// over none of them gets a reply of its own. Anything else waits here like a query pipelined behind
 		// any other: its reply would come after the COPY's ReadyForQuery, which ends fast forward and can
-		// give the backend to the pool.
+		// give the backend to the pool. Sent before CopyDone, such a message (a protocol error) holds the
+		// COPY data behind it too: that COPY ends only when the client leaves.
 		bool copy_hold = false;
 		if (session_fast_forward == SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT) {
 			const char t = *static_cast<const char*>(client_myds->PSarrayIN->index(0)->ptr);
