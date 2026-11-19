@@ -1517,7 +1517,9 @@ handler_again:
 			if (!ret_mysql) {
 				int myerr = mysql_errno(mysql);
 				if (mysql_backend_auth_uses_token(backend_auth_type())) {
-					proxy_error("Failed to connect IAM backend on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: authentication details redacted.\n",
+					// The AWS text stays as before #6649.
+					proxy_error("Failed to connect %s backend on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: authentication details redacted.\n",
+						backend_auth_type() == MySQLBackendAuthType::AZURE_ENTRA ? "Azure Entra" : "IAM",
 						parent->myhgc->hid, parent->address, parent->port,
 						mysql->net.fd, myds->fd, myerr);
 				} else if (ssl_params != NULL && myerr == 2026) {
