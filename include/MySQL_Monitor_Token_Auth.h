@@ -38,6 +38,17 @@ bool prepare_monitor_token_auth(MYSQL *mysql, const char *hostname, uint16_t por
 /** @brief Drop the token copies left in the connector after mysql_real_connect(). */
 void cleanse_monitor_connector_password(MYSQL *mysql);
 
+/** @brief True when mysql-monitor_backend_auth is 'azure_entra' in this thread. */
+bool monitor_backend_auth_is_entra();
+
+/**
+ * @brief True when a pooled monitor connection was made with the auth mode that
+ *   is active now. A token connection has a null passwd, because
+ *   cleanse_monitor_connector_password() clears it; a password connection keeps
+ *   the copy that the connector made.
+ */
+bool monitor_connection_matches_auth_mode(const MYSQL *mysql);
+
 #endif // PROXYSQL40
 
 #endif // MYSQL_MONITOR_TOKEN_AUTH_H

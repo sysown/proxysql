@@ -69,4 +69,13 @@ void cleanse_monitor_connector_password(MYSQL *mysql) {
 	mysql->passwd = nullptr;
 }
 
+bool monitor_backend_auth_is_entra() {
+	return mysql_thread___monitor_backend_auth != nullptr &&
+		strcmp(mysql_thread___monitor_backend_auth, "azure_entra") == 0;
+}
+
+bool monitor_connection_matches_auth_mode(const MYSQL *mysql) {
+	return (mysql->passwd == nullptr) == monitor_backend_auth_is_entra();
+}
+
 #endif // PROXYSQL40

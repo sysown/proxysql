@@ -415,7 +415,12 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 
 					// close connection if not used for a while
 					unsigned long long then = *(unsigned long long*)mysql->net.buff;
-					if (now > (then + mysql_thread___monitor_ping_interval * 1000 * 10)) {
+					bool close_conn = now > (then + mysql_thread___monitor_ping_interval * 1000 * 10);
+#ifdef PROXYSQL40
+					// #6649: a connection serves only the auth mode it was created with.
+					close_conn = close_conn || !monitor_connection_matches_auth_mode(mysql);
+#endif // PROXYSQL40
+					if (close_conn) {
 						MySQL_Monitor_State_Data* mmsd = new MySQL_Monitor_State_Data(MON_CLOSE_CONNECTION, (char*)"", 0, false);
 						mmsd->mysql = mysql;
 						GloMyMon->queue->add(new WorkItem<MySQL_Monitor_State_Data>(mmsd, NULL));
@@ -1691,8 +1696,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 	// #6649: with mysql-monitor_backend_auth='azure_entra' the monitor sends an
 	// Entra token over verified TLS and never falls back to the password.
 	MonitorTokenAuth token_auth;
-	const bool entra = mysql_thread___monitor_backend_auth != nullptr &&
-		strcmp(mysql_thread___monitor_backend_auth, "azure_entra") == 0;
+	const bool entra = monitor_backend_auth_is_entra();
 	if (entra) {
 		if (!prepare_monitor_token_auth(mysql, hostname, port, use_ssl, ssl_params.get(),
 				mysql_thread___monitor_username, mysql_thread___monitor_connect_timeout, token_auth)) {
