@@ -8,8 +8,8 @@
  * ReadyForQuery. The backend went back to the pool with the pipelined message's reply still on its way,
  * and the next client of that backend got it. A SET or a BEGIN stayed on the pooled backend, and a
  * Terminate pooled a closed one, and a Sync left its ReadyForQuery there. ProxySQL now relays only
- * CopyData, CopyDone, CopyFail and Flush, and keeps the rest queued until the COPY ends, as it does for
- * a query pipelined behind any other query.
+ * CopyData, CopyDone and CopyFail, and keeps the rest queued until the COPY ends, as it does for a query
+ * pipelined behind any other query.
  *
  * Messages are written raw on the socket of a libpq connection. Whether a reply leaks depends on timing,
  * so the checks do not rely on that alone: a query rule rewrites the pipelined query, and only a query
@@ -378,8 +378,9 @@ static void held_vanish_case(PGconn* probe, const std::string& what, int round) 
 	const std::string active = "FROM pg_stat_activity WHERE query LIKE 'COPY " + TBL + " FROM STDIN%' AND state = 'active'";
 	std::string left;
 	for (int i = 0; i < 50 && (left = queryOneValue(probe, "SELECT count(*) " + active)) != "0"; i++) usleep(100000);
-	ok(sent > 0 && left == "0", "%s round %d: the client leaves while a held Sync stalls its COPY: the backend is "
-		"released (sent %lld MB; COPYs left: '%s')", what.c_str(), round, sent >> 20, left.c_str());
+	ok(sent >= VANISH_BYTES && left == "0", "%s round %d: the client leaves while a held Sync stalls its COPY: the "
+		"backend is released (sent %lld of %lld MB; COPYs left: '%s')", what.c_str(), round, sent >> 20,
+		VANISH_BYTES >> 20, left.c_str());
 	// Free a backend left in the COPY, or the rest of the test waits on its lock.
 	if (left != "0") queryOneValue(probe, "SELECT count(pg_terminate_backend(pid)) " + active);
 }
