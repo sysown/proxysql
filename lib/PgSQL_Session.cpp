@@ -2086,7 +2086,17 @@ int PgSQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 			break;
 		}
 
-		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
+		// A simple-query COPY takes only CopyData, CopyDone and CopyFail from the client. Once the COPY is
+		// over none of them gets a reply of its own, nor does a Flush. Anything else waits here like a
+		// query pipelined behind any other: its reply would come after the COPY's ReadyForQuery, which
+		// ends fast forward and can give the backend to the pool.
+		bool copy_hold = false;
+		if (session_fast_forward == SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT) {
+			const char t = *static_cast<const char*>(client_myds->PSarrayIN->index(0)->ptr);
+			copy_hold = t != 'd' && t != 'c' && t != 'f' && t != 'H';
+		}
+
+		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE || copy_hold) {
 			// If the client sends a new packet while a query is still executing,
 			// we no longer treat this as an error. Previously, such packets were
 			// considered unexpected and the session was terminated.
@@ -3629,15 +3639,15 @@ handler_again:
 			}
 		}
 		if (is_copy_ready_packet) {
-			// The backend has ended the COPY, so it ignores any client COPY message still queued for
-			// it, such as a CopyDone that arrived with its error. Sent after the TLS is given back,
-			// that message goes out unencrypted and the backend drops the connection. Discard them,
-			// as normal mode discards the ones that arrive later.
+			// The backend has ended the COPY, so it ignores any client COPY message or Flush still
+			// queued for it, such as a CopyDone that arrived with its error. Sent after the TLS is
+			// given back, that message goes out unencrypted and the backend drops the connection.
+			// Discard them, as normal mode discards the ones that arrive later.
 			PtrSizeArray* out = mybe->server_myds->PSarrayOUT;
 			unsigned int n = 0;
 			for (; n < out->len; n++) {
 				const char type = *(const char*)out->index(n)->ptr;
-				if (type != 'd' && type != 'c' && type != 'f') break;
+				if (type != 'd' && type != 'c' && type != 'f' && type != 'H') break;
 				l_free(out->index(n)->size, out->index(n)->ptr);
 			}
 			out->remove_index_range(0, n);
