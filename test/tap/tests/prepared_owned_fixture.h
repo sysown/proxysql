@@ -3,16 +3,18 @@
 // Each acceptance client owns its ProxySQL process, listeners and private data.
 #include "duckdb_replica_test_utils.h"
 #undef PROTOCOL_VERSION
+#include <algorithm>
 #include <filesystem>
 #include <map>
 namespace prepared_owned_fixture {
 using namespace duckdb_replica_test;
 struct Fixture {
-    inline static Fixture *active = nullptr;
+    inline static std::vector<Fixture *> active;
     static void exit_cleanup() {
-        if (active) {
-            active->cleanup();
-            active = nullptr;
+        while (!active.empty()) {
+            Fixture *fixture = active.back();
+            active.pop_back();
+            fixture->cleanup();
         }
     }
     std::string dir, binary, plugin;
@@ -104,17 +106,19 @@ struct Fixture {
             diag("owned fixture failed to start; log: %s/proxysql.log", dir.c_str());
         return ready;
     }
-    void stop() {
+    bool stop() {
         if (admin) {
             mysql_close(admin);
             admin = nullptr;
         }
         if (pid > 0) {
             kill(pid, SIGTERM);
-            int status;
+            int status = 0;
+            bool clean = false;
             bool reaped = wait_for(
                 [&] {
                     pid_t r = waitpid(pid, &status, WNOHANG);
+                    clean = r == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
                     return r == pid || (r < 0 && errno == ECHILD);
                 },
                 5);
@@ -124,17 +128,21 @@ struct Fixture {
                 }
             }
             pid = -1;
+            return reaped && clean;
         }
+        return true;
     }
-    Fixture(const char *mysql_dialect = "native") {
+    Fixture(const char *mysql_dialect = "native", bool with_duckdb = true) {
         const char *external = getenv("TAP_EMBEDDED_PREPARED_EXTERNAL");
         if (external && std::string(external) == "1") {
             if (std::string(mysql_dialect) != "native")
                 BAIL_OUT("analytical tests require an owned fixture");
             return;
         }
-        active = this;
-        std::atexit(exit_cleanup);
+        static const int cleanup_registered = std::atexit(exit_cleanup);
+        if (cleanup_registered)
+            BAIL_OUT("cannot register fixture cleanup");
+        active.push_back(this);
         // Keep fixture data in the test workspace. mkdtemp creates its own mode-0700 directory.
         const char *workdir = getenv("TAP_WORKDIR");
         const auto workspace = workdir && *workdir ? std::filesystem::absolute(workdir)
@@ -157,23 +165,25 @@ struct Fixture {
         p = port();
         d = port();
         dp = port();
-        if (access(binary.c_str(), X_OK) || access(plugin.c_str(), R_OK) || !start(false)) {
+        if (access(binary.c_str(), X_OK) || (with_duckdb && access(plugin.c_str(), R_OK)) || !start(false)) {
             cleanup();
             BAIL_OUT("cannot start owned prepared fixture");
         }
-        bool configured = query(
-            admin, "INSERT OR REPLACE INTO disk.global_variables VALUES('duckdb-database_path'," +
-                       quote(dir + "/prepared.duckdb") + "),('duckdb-mysql_ifaces'," +
-                       quote("127.0.0.1:" + std::to_string(d)) + "),('duckdb-pgsql_ifaces'," +
-                       quote("127.0.0.1:" + std::to_string(dp)) + "),('duckdb-threads','2')," +
-                       "('duckdb-mysql_dialect'," + quote(mysql_dialect) + ")");
-        stop();
-        if (!configured || !start(true)) {
-            std::ifstream log(dir + "/proxysql.log");
-            std::string line;
-            while (std::getline(log, line)) diag("fixture log: %s", line.c_str());
-            cleanup();
-            BAIL_OUT("cannot initialize owned prepared fixture");
+        if (with_duckdb) {
+            bool configured = query(
+                admin, "INSERT OR REPLACE INTO disk.global_variables VALUES('duckdb-database_path'," +
+                           quote(dir + "/prepared.duckdb") + "),('duckdb-mysql_ifaces'," +
+                           quote("127.0.0.1:" + std::to_string(d)) + "),('duckdb-pgsql_ifaces'," +
+                           quote("127.0.0.1:" + std::to_string(dp)) + "),('duckdb-threads','2')," +
+                           "('duckdb-mysql_dialect'," + quote(mysql_dialect) + ")");
+            stop();
+            if (!configured || !start(true)) {
+                std::ifstream log(dir + "/proxysql.log");
+                std::string line;
+                while (std::getline(log, line)) diag("fixture log: %s", line.c_str());
+                cleanup();
+                BAIL_OUT("cannot initialize owned prepared fixture");
+            }
         }
         set("TAP_HOST", "127.0.0.1");
         set("TAP_USERNAME", "fixture_client");
@@ -228,8 +238,7 @@ struct Fixture {
             cleanup();
         } catch (...) {
         }
-        if (active == this)
-            active = nullptr;
+        active.erase(std::remove(active.begin(), active.end(), this), active.end());
     }
 };
 } // namespace prepared_owned_fixture
