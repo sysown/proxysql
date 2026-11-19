@@ -664,7 +664,6 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	embedded_mysql_prepared_unit-t \
 	embedded_mysql_result_unit-t \
 	duckdb_prepared_adapter_unit-t \
-	duckdb_prepared_policy_unit-t \
 	duckdb_mysql_set_unit-t \
 	duckdb_prepared_provider_unit-t \
 	pgsql_error_helper_unit-t \
@@ -1166,11 +1165,6 @@ $(DUCKDB_AR):
 $(DUCKDB_STATIC_LOADER_SRCS): $(DUCKDB_AR)
 	@test -s $@ || { echo "ERROR: missing DuckDB static extension loader: $@; rebuild deps/duckdb" >&2; exit 1; }
 
-duckdb_prepared_policy_unit-t: duckdb_prepared_policy_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_policy.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_policy.h $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_policy.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
-		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(PARSERSQL_IDIR) $(STDCPP) -O0 -ggdb \
-		$(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a -lpthread -o $@
-
 duckdb_mysql_select_metadata_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
 
 duckdb_prepared_adapter_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
@@ -1227,8 +1221,7 @@ DUCKDB_SESSION_SUPPORT_SRCS := $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_
 	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp
 DUCKDB_LISTENER_SUPPORT_SRCS := $(DUCKDB_SESSION_SUPPORT_SRCS) \
 	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp \
-	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_provider.cpp \
-	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_policy.cpp
+	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_provider.cpp
 
 # duckdb_session.cpp pulls in MySQL_Session.h / PgSQL_Session.h / *_Protocol.h
 # for the templated handler, but this test exercises only the two pure
@@ -1750,8 +1743,8 @@ genai_sql_readonly_unit-t: genai_sql_readonly_unit-t.cpp $(PROXYSQL_PATH)/plugin
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/genai/include -I$(PARSERSQL_IDIR) \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
-duckdb_prepared_provider_unit-t: duckdb_prepared_provider_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_provider.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_policy.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_adapter.h $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_provider.h $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_policy.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/ProxySQL_EmbeddedExecution.h $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR) $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_compat.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_compat.h $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_context.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_context.h $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_metadata.h
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_provider.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_policy.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_compat.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_context.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+duckdb_prepared_provider_unit-t: duckdb_prepared_provider_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_provider.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_adapter.h $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_provider.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/ProxySQL_EmbeddedExecution.h $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR) $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_compat.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_compat.h $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_context.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_context.h $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_metadata.h
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_provider.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_compat.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_context.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(DUCKDB_IDIR) -I$(PARSERSQL_IDIR) $(STDCPP) -O0 -ggdb \
 		$(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) -lpthread -ldl -lm -o $@
 

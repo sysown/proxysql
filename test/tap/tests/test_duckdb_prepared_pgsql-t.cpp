@@ -97,39 +97,75 @@ int main() {
         PQclear(q);
         return n;
     };
-    r = PQprepare(c, "write", ("INSERT INTO " + table + " (v) VALUES (2)").c_str(), 0, nullptr);
-    ok(!good(r, PGRES_COMMAND_OK) && state(r, "0A000") &&
-           strstr(PQresultErrorMessage(r), "prepared SQL is not an allowed read-only SELECT"),
-       "prepared DML refused by read-only policy: %s", PQresultErrorMessage(r));
+    auto write = [&](const char *name, const std::string &sql, const char *value,
+                     const char *affected) {
+        Oid type[] = {23};
+        PGresult *q = PQprepare(c, name, sql.c_str(), 1, type);
+        bool success = good(q, PGRES_COMMAND_OK);
+        if (!success) diag("prepare write failed: %s", PQresultErrorMessage(q));
+        PQclear(q);
+        if (!success) return false;
+        const char *values[] = {value};
+        q = PQexecPrepared(c, name, 1, values, nullptr, nullptr, 0);
+        success = good(q, PGRES_COMMAND_OK) && !strcmp(PQcmdTuples(q), affected);
+        if (!success) diag("execute write failed: %s", PQresultErrorMessage(q));
+        PQclear(q);
+        return success;
+    };
+    ok(write("insert_value", "INSERT INTO " + table + " (v) VALUES ($1)", "2", "1"),
+       "bound INSERT reports one affected row");
+    ok(count() == 2, "ordinary SELECT sees prepared INSERT");
+    ok(write("update_value", "UPDATE " + table + " SET v = 5 WHERE v = $1", "2", "1"),
+       "bound UPDATE reports one affected row");
+    ok(write("delete_value", "DELETE FROM " + table + " WHERE v = $1", "5", "1"),
+       "bound DELETE reports one affected row");
+    const char *missing[] = {"5"};
+    r = PQexecPrepared(c, "delete_value", 1, missing, nullptr, nullptr, 0);
+    ok(good(r, PGRES_COMMAND_OK) && !strcmp(PQcmdTuples(r), "0"),
+       "bound DELETE reports zero affected rows when no rows match");
     PQclear(r);
-    ok(count() == 1, "refused DML leaves fixture unchanged");
+    ok(count() == 1, "ordinary SELECT sees prepared UPDATE and DELETE");
+    Oid returning_type[] = {23};
+    r = PQprepare(c, "insert_returning", ("INSERT INTO " + table + " (v) VALUES ($1) RETURNING v").c_str(), 1, returning_type);
+    bool returning_prepared = good(r, PGRES_COMMAND_OK);
+    ok(returning_prepared, "prepare bound INSERT RETURNING: %s", PQresultErrorMessage(r));
+    PQclear(r);
+    const char *returning_value[] = {"9"};
+    r = PQexecPrepared(c, "insert_returning", 1, returning_value, nullptr, nullptr, 0);
+    ok(returning_prepared && good(r, PGRES_TUPLES_OK) && PQntuples(r) == 1 &&
+           !strcmp(PQgetvalue(r, 0, 0), "9"), "bound INSERT RETURNING yields inserted value");
+    PQclear(r);
+    ok(count() == 2, "ordinary SELECT sees successful RETURNING write");
+    r = PQexec(c, ("DELETE FROM " + table + " WHERE v = 9").c_str());
+    ok(good(r, PGRES_COMMAND_OK), "remove successful RETURNING row");
+    PQclear(r);
+    r = PQprepare(c, "oversized_returning", ("INSERT INTO " + table + " (v) VALUES (10) RETURNING repeat('x', 67108865)").c_str(), 0, nullptr);
+    bool oversized_prepared = good(r, PGRES_COMMAND_OK);
+    ok(oversized_prepared, "prepare write with oversized RETURNING result: %s", PQresultErrorMessage(r));
+    PQclear(r);
+    r = PQexecPrepared(c, "oversized_returning", 0, nullptr, nullptr, nullptr, 0);
+    ok(!good(r, PGRES_TUPLES_OK) && strstr(PQresultErrorMessage(r), "budget"),
+       "oversized RETURNING result is refused by the result budget: %s", PQresultErrorMessage(r));
+    PQclear(r);
+    ok(count() == 1, "refused oversized RETURNING rolls back write");
     r = PQprepare(c, "external",
                   "SELECT * FROM read_parquet('/tmp/duckdb_prepared_forbidden.parquet')", 0,
                   nullptr);
     ok(!good(r, PGRES_COMMAND_OK) &&
-           (strstr(PQresultErrorMessage(r), "prepared SQL is not an allowed read-only SELECT") ||
-            strstr(PQresultErrorMessage(r), "external access")),
-       "external file access refused: %s", PQresultErrorMessage(r));
+           (strstr(PQresultErrorMessage(r), "external access") ||
+            strstr(PQresultErrorMessage(r), "file system operations are disabled")),
+       "prepared external file access respects database policy: %s", PQresultErrorMessage(r));
     PQclear(r);
     r = PQexec(c, "BEGIN");
-    bool began = good(r, PGRES_COMMAND_OK);
-    ok(began, "begin explicit transaction");
+    ok(good(r, PGRES_COMMAND_OK), "begin explicit transaction");
     PQclear(r);
-    r = PQexec(c, ("INSERT INTO " + table + " (v) VALUES (3)").c_str());
-    ok(good(r, PGRES_COMMAND_OK), "insert inside transaction: %s", PQresultErrorMessage(r));
-    PQclear(r);
-    r = PQprepare(c, "in_tx", "SELECT 1", 0, nullptr);
-    ok(!good(r, PGRES_COMMAND_OK) && state(r, "25000") &&
-           strstr(PQresultErrorMessage(r),
-                  "prepared execution requires an idle autocommit session"),
-       "prepare refused in explicit transaction: %s", PQresultErrorMessage(r));
-    PQclear(r);
-    ok(PQtransactionStatus(c) == PQTRANS_INTRANS || PQtransactionStatus(c) == PQTRANS_INERROR,
-       "transaction remains active after refusal");
+    ok(write("insert_in_tx", "INSERT INTO " + table + " (v) VALUES ($1)", "3", "1"),
+       "bound INSERT executes in explicit transaction");
+    ok(count() == 2, "ordinary SELECT sees prepared transaction write");
     r = PQexec(c, "ROLLBACK");
     ok(good(r, PGRES_COMMAND_OK), "rollback transaction");
     PQclear(r);
-    ok(count() == 1, "rollback preserves initial row and removes transaction insert");
+    ok(count() == 1, "rollback removes prepared transaction write");
     r = PQexec(c, "SELECT 1");
     ok(good(r, PGRES_TUPLES_OK) && !strcmp(PQgetvalue(r, 0, 0), "1"),
        "session healthy after refusals");
@@ -201,6 +237,37 @@ int main() {
         ok(good(r, PGRES_COMMAND_OK), "drop owned table");
         PQclear(r);
     }
-    PQfinish(c);
+    const std::string readonly_table = table + "_ro";
+    if (!fixture.dir.empty()) {
+        r = PQexec(c, ("CREATE TABLE " + readonly_table + " (v INTEGER)").c_str());
+        bool seeded = good(r, PGRES_COMMAND_OK); PQclear(r);
+        r = PQexec(c, ("INSERT INTO " + readonly_table + " VALUES (1)").c_str());
+        seeded = seeded && good(r, PGRES_COMMAND_OK); PQclear(r);
+        ok(seeded, "seed read-only database fixture");
+        PQfinish(c); c = nullptr;
+        bool reopened = seeded && fixture.reopen_read_only();
+        ok(reopened, "reopen DuckDB read-only");
+        if (reopened) {
+            c = PQconnectdbParams(keys, vals, 0);
+            bool connected_ro = PQstatus(c) == CONNECTION_OK;
+            ok(connected_ro, "connect to read-only DuckDB");
+            if (connected_ro) {
+                r = PQexec(c, ("SELECT * FROM " + readonly_table).c_str());
+                ok(good(r, PGRES_TUPLES_OK) && PQntuples(r) == 1, "ordinary read works in read-only database"); PQclear(r);
+                r = PQexec(c, ("INSERT INTO " + readonly_table + " VALUES (2)").c_str());
+                ok(!good(r, PGRES_COMMAND_OK), "ordinary write is refused by read-only database"); PQclear(r);
+                Oid type[] = {23};
+                r = PQprepare(c, "readonly_write", ("INSERT INTO " + readonly_table + " VALUES ($1)").c_str(), 1, type);
+                bool denied = !good(r, PGRES_COMMAND_OK); PQclear(r);
+                if (!denied) {
+                    const char *value[] = {"2"};
+                    r = PQexecPrepared(c, "readonly_write", 1, value, nullptr, nullptr, 0);
+                    denied = !good(r, PGRES_COMMAND_OK); PQclear(r);
+                }
+                ok(denied, "prepared write is refused by read-only database");
+            }
+        }
+    }
+    if (c) PQfinish(c);
     return exit_status();
 }

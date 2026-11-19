@@ -100,13 +100,12 @@ int main() {
  check(bool(a.prepare("SELECT 1; SELECT 2",s)) && !s,"multiple statements rejected");
  check(bool(a.prepare(std::string("SELECT 1\0; SELECT 2",19),s)) && !s,"embedded SQL NUL rejected");
  check(query(c,"CREATE TABLE test_write(i INTEGER)"),"fixture table");
- check(bool(a.prepare("INSERT INTO test_write VALUES (1) RETURNING i",s)) && !s,"write returning rejected before execution");
- check(!a.prepare("SELECT count(*) FROM test_write",s) && !a.bind(*s,{}) && !a.execute(*s,info) && !a.fetch(*s,row,done,8) && std::get<int64_t>(row[0])==0,"rejected write did not mutate");
+ check(!a.prepare("INSERT INTO test_write VALUES (1) RETURNING i",s) && !a.bind(*s,{}) && !a.execute(*s,info) && !a.fetch(*s,row,done,8) && std::get<int64_t>(row[0])==1,"write returning executes and yields inserted value");
  a.finalize(std::move(s));
  check(query(c,"BEGIN") && query(c,"INSERT INTO test_write VALUES (2)"),"owner transaction setup");
- check(bool(a.prepare("COMMIT",s)) && !a.prepare("SELECT count(*) FROM test_write",s) && !a.bind(*s,{}) && !a.execute(*s,info) && !a.fetch(*s,row,done,8) && std::get<int64_t>(row[0])==1,"owner transaction visible and adapter commit refused");
+ check(!a.prepare("SELECT count(*) FROM test_write",s) && !a.bind(*s,{}) && !a.execute(*s,info) && !a.fetch(*s,row,done,8) && std::get<int64_t>(row[0])==2,"owner transaction remains visible to prepared SELECT");
  a.finalize(std::move(s)); check(query(c,"ROLLBACK"),"owner rollback");
- check(!a.prepare("SELECT count(*) FROM test_write",s) && !a.bind(*s,{}) && !a.execute(*s,info) && !a.fetch(*s,row,done,8) && std::get<int64_t>(row[0])==0,"rollback remains effective");
+ check(!a.prepare("SELECT count(*) FROM test_write",s) && !a.bind(*s,{}) && !a.execute(*s,info) && !a.fetch(*s,row,done,8) && std::get<int64_t>(row[0])==1,"rollback remains effective");
  a.finalize(std::move(s));
  check(!a.prepare("SELECT * FROM test_write",s) && query(c,"ALTER TABLE test_write ADD COLUMN j INTEGER") && !a.bind(*s,{}) && bool(a.execute(*s,info)) && bool(a.fetch(*s,row,done,100)),"schema change rejected before fetch");
  }

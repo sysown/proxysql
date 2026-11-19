@@ -524,9 +524,7 @@ void DuckDBListener::run_session(int client_fd) {
 	};
 	auto idle = [](void* opaque) noexcept -> uint8_t {
 		auto* session = static_cast<PreparedStatus*>(opaque)->session;
-		if (duckdb_pgsql_transaction_status(duckdb_session_state().conn) != 'I') return 'T';
 		if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
-			if (!session->autocommit) return 'T';
 			const char* value = mysql_variables.client_get_value(session, SQL_CHARACTER_SET_CLIENT);
 			if (!value || !*value) return 'E';
 			char* end = nullptr; unsigned long id = strtoul(value, &end, 10);
@@ -535,6 +533,10 @@ void DuckDBListener::run_session(int client_fd) {
 		} else {
 			const char* value = pgsql_variables.client_get_value(session, PGSQL_CLIENT_ENCODING);
 			if (value && *value && strcasecmp(value, "UTF8") && strcasecmp(value, "UTF-8")) return 'E';
+		}
+		if (duckdb_pgsql_transaction_status(duckdb_session_state().conn) != 'I') return 'T';
+		if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+			if (!session->autocommit) return 'T';
 		}
 		return 'I';
 	};
@@ -567,6 +569,8 @@ void DuckDBListener::run_session(int client_fd) {
 			};
 			provider = std::make_unique<DuckDBPreparedProvider>(st.conn, idle, failure, reset_client, &prepared_status, dialect);
 			provider->set_mysql_analytical(st.mysql_analytical);
+			provider->set_config_policy(duckdb_client_config_before_prepare, duckdb_client_config_after_prepare);
+			provider->set_transaction_outcome(duckdb_prepared_transaction_outcome);
 			if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
 				if (st.mysql_analytical) {
 					// Prepared statements need the session's current database
@@ -589,7 +593,7 @@ void DuckDBListener::run_session(int client_fd) {
 			ProxySQL_Embedded_RequestV1 request{};
 			request.abi_version = ProxySQL_Embedded_ABI_V1; request.struct_size = sizeof(request);
 			request.engine = provider->engine(); request.policy = provider->policy();
-			request.flags = ProxySQL_Embedded_REQUEST_READ_ONLY;
+			request.flags = st.mysql_analytical ? ProxySQL_Embedded_REQUEST_READ_ONLY : 0;
 			request.mysql_status = mysql_status; request.status_context = &prepared_status;
 			request.pgsql_status = pg_status; request.pgsql_status_context = &prepared_status;
 			if (st.mysql_analytical) {

@@ -193,8 +193,8 @@ verify the new database explicitly.
 ## Client-library guidance
 
 Use `mysql_query`/`mysql_real_query` or `PQexec` for text queries. Native
-read-only prepared SELECT is also available in implicit autocommit cycles;
-explicit transactions and prepared DML are refused. See the
+prepared reads and writes are available with `PROXYSQL40=1`, including DML
+inside an explicit client transaction. See the
 [protocol compatibility guide](protocol-compatibility.md#prepared-queries) for
 types, encoding and parser limitations. Parameterize untrusted values rather
 than concatenating them into SQL. For example, with an existing typed table

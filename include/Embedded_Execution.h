@@ -13,7 +13,7 @@ enum class ErrorKind { syntax, unsupported, policy, invalid_parameter, range, re
 struct Error { ErrorKind kind; int native_code; std::string message; std::string sqlstate; };
 using Status = std::optional<Error>; // Empty means success.
 enum class Operation { prepare, execute, fetch, reset, close, disconnect, long_data, session_reset };
-struct OperationGuard { virtual ~OperationGuard() = default; };
+struct OperationGuard { virtual ~OperationGuard() = default; virtual Status finish() { return {}; } };
 // On success a factory must provide an owned guard. Disconnect acquisition must
 // succeed and must not throw; failure is a fatal provider contract violation.
 // sql is borrowed only for the synchronous factory call; it must not be retained.
@@ -38,7 +38,8 @@ enum class TypeKind { unknown, dynamic, signed_integer, unsigned_integer, floati
 struct Type { TypeKind kind = TypeKind::unknown; int32_t precision = 0; int32_t scale = 0; bool nullable = true; };
 struct Column { std::string name; Type type; };
 using Row = std::vector<Value>; // Owned by caller, valid until caller changes it.
-struct ExecInfo { uint64_t affected_rows = 0; uint64_t last_insert_id = 0; bool has_result = false; };
+enum class Command { unknown, select, insert, update, delete_ };
+struct ExecInfo { uint64_t affected_rows = 0; uint64_t last_insert_id = 0; bool has_result = false; Command command = Command::unknown; };
 struct Statement { virtual ~Statement() = default; };
 // One adapter instance belongs to one engine connection. It outlives Session.
 // Operations are synchronous. Bind must copy values if needed after return.

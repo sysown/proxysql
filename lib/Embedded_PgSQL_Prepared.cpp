@@ -54,6 +54,7 @@ struct PgSQLPrepared::Impl {
         std::vector<int16_t> formats;
         std::vector<PgSQLFieldRow> rows;
         size_t cursor = 0, bind_bytes = 0, result_bytes = 0;
+        ExecInfo info;
         bool started = false, complete = false;
     };
     QuotaPool &quota;
@@ -545,6 +546,8 @@ Status PgSQLPrepared::execute(const std::string &name, uint32_t max_rows, PgSQLE
                     if (!materialized.resize(result_usage)) return s.fail(limit());
                     rows.push_back(std::move(fields));
                 }
+            // Reserve the first response before committing native writes.
+            out.rows.reserve(max_rows ? std::min(rows.size(), size_t(max_rows)) : rows.size());
             // No cached rows are published until the native cursor is reset.
             if (auto e = s.session.reset(p.id)) {
                 native_cleanup.close();
@@ -552,6 +555,9 @@ Status PgSQLPrepared::execute(const std::string &name, uint32_t max_rows, PgSQLE
                 return s.fail(e);
             }
             native_cleanup.active = false;
+            if (auto e = g->finish())
+                return s.fail(e);
+            p.info = info;
             p.result_bytes = used - s.result_bytes();
             p.rows = std::move(rows);
             // Retain conservative charge even after rows transfer to the transport.
@@ -563,7 +569,9 @@ Status PgSQLPrepared::execute(const std::string &name, uint32_t max_rows, PgSQLE
         for (size_t i = 0; i < n; ++i)
             out.rows.push_back(std::move(p.rows[p.cursor + i]));
         p.cursor += n;
-        out.row_count = n;
+        out.command = p.info.command;
+        out.row_count = (p.info.has_result || p.info.command == Command::unknown || p.info.command == Command::select)
+                            ? p.cursor : p.info.affected_rows;
         out.suspended = max_rows && n == max_rows;
         if (!out.suspended)
             p.complete = true;

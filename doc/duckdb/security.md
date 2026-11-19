@@ -104,10 +104,9 @@ The plugin rejects multiple statements in one request, closing a statement
 smuggling path where earlier side effects could be hidden by the final result.
 That is not a substitute for normal SQL-injection defenses.
 
-Use supported native prepared SELECT parameter binding for untrusted values;
-do not concatenate untrusted values into SQL. Prepared operations use private
-read-only transactions to prevent hidden database writes. External access remains
-disabled by default and applies to prepared execution as well as text queries.
+Bind untrusted values as native prepared statement parameters. The DuckDB
+access mode and external-access setting apply to both prepared and ordinary
+SQL. Translated analytical SELECT operations use a private read-only transaction.
 These engine controls do not provide an operating-system sandbox. See the
 [prepared-query restrictions](protocol-compatibility.md#prepared-queries).
 

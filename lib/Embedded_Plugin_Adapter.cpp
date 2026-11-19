@@ -480,7 +480,16 @@ class PluginAdapter : public Adapter {
                 return clear(*n, internal("invalid result flag"));
             if (auto st = check(*n))
                 return clear(*n, st);
-            out = {info.affected_rows, info.last_insert_id, info.has_result != 0};
+            Command command;
+            switch (info.command) {
+            case PROXYSQL_EMBEDDED_COMMAND_UNKNOWN: command = Command::unknown; break;
+            case PROXYSQL_EMBEDDED_COMMAND_SELECT: command = Command::select; break;
+            case PROXYSQL_EMBEDDED_COMMAND_INSERT: command = Command::insert; break;
+            case PROXYSQL_EMBEDDED_COMMAND_UPDATE: command = Command::update; break;
+            case PROXYSQL_EMBEDDED_COMMAND_DELETE: command = Command::delete_; break;
+            default: return clear(*n, internal("invalid command"));
+            }
+            out = {info.affected_rows, info.last_insert_id, info.has_result != 0, command};
             n->executed = true;
             return {};
         } catch (const std::bad_alloc &) {
@@ -672,6 +681,11 @@ struct Guard : OperationGuard {
     ProxySQL_Embedded_EngineV1 e;
     void *h;
     Guard(ProxySQL_Embedded_EngineV1 engine, void *handle) : e(engine), h(handle) {}
+    Status finish() override {
+        if (!e.guard_finish || !h) return {};
+        PE error{};
+        return callback(e.guard_finish(e.context, h, &error), error);
+    }
     ~Guard() override {
         if (e.guard_leave && h)
             e.guard_leave(e.context, h);
@@ -792,8 +806,11 @@ Status make_plugin_provider(const ProxySQL_Embedded_RequestV1 *r, bool pgsql,
         constexpr uint64_t mask = (UINT64_C(1) << 9) - 2;
         const uint64_t flags = ProxySQL_Embedded_REQUEST_READ_ONLY |
                                (pgsql ? ProxySQL_Embedded_REQUEST_PG_IMPLICIT_CYCLES : 0);
-        if (r->flags != flags || (pgsql && !r->pgsql_status) || (!pgsql && !r->mysql_status) ||
-            (e->capabilities & ~caps) || !(e->capabilities & ProxySQL_Embedded_CAP_READ_ONLY) ||
+        if ((r->flags & ~flags) || (pgsql && !(r->flags & ProxySQL_Embedded_REQUEST_PG_IMPLICIT_CYCLES)) ||
+            ((r->flags & ProxySQL_Embedded_REQUEST_READ_ONLY) &&
+             !(e->capabilities & ProxySQL_Embedded_CAP_READ_ONLY)) ||
+            (pgsql && !r->pgsql_status) || (!pgsql && !r->mysql_status) ||
+            (e->capabilities & ~caps) ||
             (pgsql && !(e->capabilities & ProxySQL_Embedded_CAP_PARAMETER_POSITIONS)) ||
             (e->value_type_mask & ~mask) ||
             !(e->value_type_mask & (UINT64_C(1) << ProxySQL_Embedded_VALUE_NULL)))

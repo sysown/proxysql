@@ -178,6 +178,9 @@ struct Fixture {
                            "('duckdb-mysql_dialect'," + quote(mysql_dialect) + ")");
             stop();
             if (!configured || !start(true)) {
+                std::ifstream log(dir + "/proxysql.log");
+                std::string line;
+                while (std::getline(log, line)) diag("fixture log: %s", line.c_str());
                 cleanup();
                 BAIL_OUT("cannot initialize owned prepared fixture");
             }
@@ -198,6 +201,14 @@ struct Fixture {
         set("TAP_PGSQL_ADMINPASSWORD", "fixture_admin");
         set("TAP_PGSQL_STATSUSERNAME", "fixture_stats");
         set("TAP_PGSQL_STATSPASSWORD", "fixture_stats");
+    }
+    bool reopen_read_only() {
+        if (dir.empty() || !admin)
+            return false;
+        const bool configured = query(admin,
+            "INSERT OR REPLACE INTO disk.global_variables VALUES('duckdb-read_only','true')");
+        stop();
+        return configured && start(true);
     }
     void cleanup() {
         stop();
