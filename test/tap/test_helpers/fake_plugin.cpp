@@ -351,7 +351,7 @@ void destroy_fake_entra_source(AwsIamTokenSource *source) { delete source; }
 
 bool fake_install_entra_source(ProxySQL_PluginServices *services) {
 	if (services == nullptr || services->install_azure_entra_token_source == nullptr) return false;
-	void *handle = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+	void *handle = retain_fake_module();
 	auto *source = new FakeEntraSource();
 	if (handle == nullptr ||
 		!services->install_azure_entra_token_source(source, destroy_fake_entra_source, handle)) {
@@ -757,7 +757,9 @@ extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 	if (env("ENABLE_RUNTIME_READY") != nullptr) {
 		return &fake_descriptor_with_runtime_ready;
 	}
-	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+	// Both services need a descriptor with the current ABI layout.
+	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr ||
+		env("INSTALL_ENTRA_SOURCE") != nullptr) {
 		return &fake_descriptor_with_server_discovery;
 	}
 	if (env("ENABLE_PHASE_B") != nullptr) {

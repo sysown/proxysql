@@ -426,7 +426,9 @@ void test_entra_change_user_destroys(MySQL_Thread& worker) {
 	fixture.backend()->attach_connection(pooled);
 	fixture.session->set_status(CHANGING_USER_SERVER);
 	fixture.run();
-	ok(fixture.backend()->myconn != pooled &&
+	// The fd marks the pooled object: a new connection at the same address has another fd.
+	const MySQL_Connection *current = fixture.backend()->myconn;
+	ok((current == nullptr || current->fd != 605) &&
 		entra_server->ConnectionsUsed->conns_length() <= 1 && azure.keys.size() == 1,
 		"entra_change_user_destroys: a password connection is replaced, never COM_CHANGE_USER'd to an Entra user");
 	worker.drain_aws_iam_completions();

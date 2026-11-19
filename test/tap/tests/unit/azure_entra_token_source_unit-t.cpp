@@ -3,6 +3,8 @@
  * @brief Azure Entra token source: cache, refresh, coalescing, backoff (issue #6649).
  */
 #include "tap.h"
+#include "test_globals.h"
+#include "test_init.h"
 
 #include "curl_transport.h"
 #include "entra_token_source.h"
@@ -16,7 +18,11 @@
 #include <thread>
 #include <vector>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
 #include <stdlib.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 using namespace std::chrono_literals;
@@ -329,14 +335,30 @@ void test_request_blocking() {
 }
 
 void test_curl_refuses_plain_http() {
-	const HttpResponse r = make_curl_post()("http://127.0.0.1:9/token", "a=b", 1000ms);
-	ok(r.status == 0, "the curl transport refuses a non-https URL");
+	// A listener shows that the refusal comes before any connection.
+	const int listener = socket(AF_INET, SOCK_STREAM, 0);
+	sockaddr_in addr {};
+	addr.sin_family = AF_INET;
+	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	socklen_t len = sizeof(addr);
+	const bool listening = listener >= 0 &&
+		bind(listener, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0 &&
+		listen(listener, 1) == 0 &&
+		getsockname(listener, reinterpret_cast<sockaddr *>(&addr), &len) == 0;
+	const std::string url = "http://127.0.0.1:" + std::to_string(ntohs(addr.sin_port)) + "/token";
+	const HttpResponse r = make_curl_post()(url, "a=b", 1000ms);
+	pollfd pending { listener, POLLIN, 0 };
+	const bool connected = poll(&pending, 1, 0) > 0;
+	if (listener >= 0) close(listener);
+	ok(listening && r.status == 0 && !connected,
+		"the curl transport refuses a non-https URL before any connection");
 }
 
 } // namespace
 
 int main() {
 	plan(0);
+	if (test_init_minimal() != 0) BAIL_OUT("failed to initialize unit-test globals");
 	test_cold_cache_and_cache_hit();
 	test_concurrent_requests_coalesce();
 	test_refresh_ahead();
@@ -351,5 +373,6 @@ int main() {
 	test_shutdown_answers_waiters();
 	test_request_blocking();
 	test_curl_refuses_plain_http();
+	test_cleanup_minimal();
 	return exit_status();
 }

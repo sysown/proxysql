@@ -3,6 +3,8 @@
  * @brief One token-source slot per provider: AWS IAM and Azure Entra (issue #6649).
  */
 #include "tap.h"
+#include "test_globals.h"
+#include "test_init.h"
 
 #include "proxysql.h"
 #include "cpp.h"
@@ -179,11 +181,13 @@ void test_publish_per_slot() {
 
 int main() {
 	plan(0);
+	if (test_init_minimal() != 0) BAIL_OUT("failed to initialize unit-test globals");
 	test_entra_prometheus_metrics();
 	test_provider_mapping();
 	test_slots_independent();
 	test_lease_blocks_own_slot_only();
 	test_shutdown_retires_both();
 	test_publish_per_slot();
+	test_cleanup_minimal();
 	return exit_status();
 }
