@@ -92,9 +92,41 @@ static string runtime_monitor_auth(MYSQL *admin) {
 		" WHERE variable_name='mysql-monitor_backend_auth'");
 }
 
+static string last_ping_time(MYSQL *admin) {
+	return scalar(admin, "SELECT COALESCE(MAX(time_start_us), 0) FROM monitor.mysql_server_ping_log");
+}
+
+/** Poll for up to 15 s for a row of 'q'; return its first column, or "" if none comes. */
+static string wait_row(MYSQL *admin, const string& q) {
+	for (int i = 0; i < 300; i++) {
+		const string v = scalar(admin, q);
+		if (!v.empty()) return v;
+		usleep(50000);
+	}
+	return "";
+}
+
+/** 'OK' when a ping passes after 'marker'. */
+static string wait_ping_ok(MYSQL *admin, const string& marker) {
+	return wait_row(admin, "SELECT 'OK' FROM monitor.mysql_server_ping_log"
+		" WHERE time_start_us > " + marker + " AND ping_error IS NULL LIMIT 1");
+}
+
+/**
+ * The error of the first monitor check after 'marker' that fails in azure_entra mode.
+ * The read_only log comes first where it exists: its interval is shorter, so the mode
+ * goes back to 'password' before the monitor acts on the failed checks.
+ */
+static string wait_entra_check_error(MYSQL *admin, const string& marker) {
+	return wait_row(admin, "SELECT e FROM ("
+		"SELECT time_start_us t, ping_error e FROM monitor.mysql_server_ping_log"
+		" UNION ALL SELECT time_start_us, error FROM monitor.mysql_server_read_only_log)"
+		" WHERE t > " + marker + " AND e LIKE '%azure_entra:%' LIMIT 1");
+}
+
 int main() {
 	CommandLine cl;
-	plan(9);
+	plan(11);
 	if (cl.getEnv()) return exit_status();
 
 	MYSQL *backend = mysql_init(nullptr);
@@ -125,16 +157,36 @@ int main() {
 		"entra_no_backend_attempt: no backend connection is opened (%lld -> %lld)",
 		connects_before, connects_after);
 
+	// A short ping interval shows the mode change in the ping log in about one second.
+	const string ping_interval = scalar(admin, "SELECT variable_value FROM global_variables"
+		" WHERE variable_name='mysql-monitor_ping_interval'");
+	run(admin, "SET mysql-monitor_ping_interval=1000");
+	run(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	// The monitor pool now holds password connections.
+	const string pooled_ping = wait_ping_ok(admin, last_ping_time(admin));
+
+	const string before_entra = last_ping_time(admin);
 	ok(run(admin, "SET mysql-monitor_backend_auth='azure_entra'") &&
 		run(admin, "LOAD MYSQL VARIABLES TO RUNTIME") && runtime_monitor_auth(admin) == "azure_entra",
 		"mysql-monitor_backend_auth='azure_entra' loads to runtime");
+	const string entra_check = wait_entra_check_error(admin, before_entra);
 	mysql_query(admin, "SET mysql-monitor_backend_auth='bogus'");
 	run(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	const string after_bogus = runtime_monitor_auth(admin);
+	// Back to 'password' at once: the monitor acts on 3 failed checks in a row.
+	const string before_password = last_ping_time(admin);
 	run(admin, "SET mysql-monitor_backend_auth='password'");
 	run(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	ok(after_bogus == "azure_entra" && runtime_monitor_auth(admin) == "password",
 		"an unknown mysql-monitor_backend_auth value never reaches runtime (got '%s')", after_bogus.c_str());
+	ok(pooled_ping == "OK" && !entra_check.empty(),
+		"monitor_pool_follows_mode: in azure_entra mode no pooled password connection serves a check"
+		" (before '%s', after '%s')", pooled_ping.c_str(), entra_check.c_str());
+	const string password_ping = wait_ping_ok(admin, before_password);
+	ok(password_ping == "OK", "monitor_password_mode_returns: a ping passes again in password mode (got '%s')",
+		password_ping.c_str());
+	run(admin, "SET mysql-monitor_ping_interval=" + ping_interval);
+	run(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	ok(scalar(admin, "SELECT COUNT(*) FROM stats_mysql_global WHERE Variable_Name LIKE 'AzureEntra\\_%' ESCAPE '\\'") == "0",
 		"no AzureEntra_* stats rows without a token source");

@@ -162,10 +162,35 @@ void test_monitor_provider_failure_logged(FakeSource& source) {
 	source.refuse = false;
 }
 
+void set_monitor_mode(const char *mode) {
+	free(mysql_thread___monitor_backend_auth);
+	mysql_thread___monitor_backend_auth = strdup(mode);
+}
+
+// A pooled monitor connection serves only the auth mode it was created with.
+void test_pool_follows_auth_mode() {
+	MYSQL *password_conn = mysql_init(nullptr);
+	password_conn->passwd = strdup("monitor-password");
+	MYSQL *token_conn = mysql_init(nullptr);
+	token_conn->passwd = strdup("ENTRA_MONITOR_TOKEN");
+	cleanse_monitor_connector_password(token_conn);
+
+	set_monitor_mode("azure_entra");
+	ok(!monitor_connection_matches_auth_mode(password_conn) &&
+		monitor_connection_matches_auth_mode(token_conn),
+		"monitor_pool_entra_mode: a pooled password connection is refused, a token connection is kept");
+	set_monitor_mode("password");
+	ok(monitor_connection_matches_auth_mode(password_conn) &&
+		!monitor_connection_matches_auth_mode(token_conn),
+		"monitor_pool_password_mode: a pooled token connection is refused, a password connection is kept");
+	mysql_close(password_conn);
+	mysql_close(token_conn);
+}
+
 } // namespace
 
 int main() {
-	plan(9);
+	plan(11);
 	if (test_init_minimal() != 0 || test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -183,6 +208,7 @@ int main() {
 	}
 	test_no_source();
 	test_monitor_connect_failure_reported();
+	test_pool_follows_auth_mode();
 	test_cleanup_hostgroups();
 	test_cleanup_query_processor();
 	test_cleanup_minimal();
