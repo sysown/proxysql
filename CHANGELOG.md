@@ -5,6 +5,7 @@
 ### Unreleased
 
 - Prevent replaying a MySQL multi-statement batch on another backend when its backend goes offline after an earlier result was returned to the client.
+- Output queues no longer copy a packet that does not fit in the ring. `queueOUT` keeps its owned storage and, when that storage is empty, points the send span at the packet. Storage is 1 KiB; the input ring stays 32 KiB. Compressed MySQL connections raise the output ring back to 32 KiB when compression is negotiated, because every compressed frame is staged through it. Result frames (`RESULTSET_BUFLEN`, `PGSQL_RESULTSET_BUFLEN`) are 32 KiB. Capacity is fixed otherwise, and set when the queue is created. `writeout()` now drains while the client still has output pending (including a borrowed span or a partly staged packet), and a retryable `send()` failure (`EAGAIN`/`EWOULDBLOCK`/`EINTR`) no longer closes a healthy client.
 
 #### Pass-Through Authentication (Phase 1 — opt-in, MySQL only)
 
