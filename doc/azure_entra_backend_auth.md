@@ -42,6 +42,10 @@ In `proxysql.cnf`:
 plugins = ( "/usr/lib/proxysql/plugins/proxysql_azure_entra.so" )
 ```
 
+`make install` puts the plugin at this path. The release packages do not include
+the plugin yet: build it with `PROXYSQL40=1` and copy
+`plugins/azure_entra/proxysql_azure_entra.so` to this path on the host.
+
 At start, the plugin logs `azure_entra: token source installed for client ...`.
 If an environment variable is missing or invalid, the plugin fails to start and
 logs the variable name.
