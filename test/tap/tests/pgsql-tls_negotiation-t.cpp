@@ -204,6 +204,16 @@ int main(int argc, char** argv) {
 	MYSQL* admin = admin_connect();
 	if (!admin) BAIL_OUT("cannot connect to admin");
 
+	// Direct TLS and the ALPN refusal are v3.1+ (PROXYSQL31): the Stable tier keeps its old behaviour.
+	std::string version;
+	int major = 0, minor = 0;
+	if (get_variable_value(admin, "admin-version", version, true) != EXIT_SUCCESS ||
+		sscanf(version.c_str(), "%d.%d", &major, &minor) != 2)
+		BAIL_OUT("cannot read admin-version (got '%s')", version.c_str());
+	const bool v31 = major > 3 || (major == 3 && minor >= 1);
+	const char* const NO_DIRECT_TLS = "direct TLS is v3.1+ only";
+	diag("ProxySQL %s: direct TLS and the ALPN refusal %s", version.c_str(), v31 ? "tested" : "not in this tier");
+
 	// A: SSLRequest, 'S', TLS, SSLRequest inside TLS
 	{
 		SSL_CTX* ctx = nullptr;
@@ -338,8 +348,14 @@ int main(int argc, char** argv) {
 		int sock = create_raw_connection(host, port);
 		const bool got_s = sock >= 0 && send_request(sock, PG_SSL_REQUEST_CODE) && read_reply_byte(sock, reply) && reply == 'S';
 		if (got_s) tls = tls_handshake(sock, ALPN_FOO, &ctx, 0, &reason);
-		ok(got_s && tls == nullptr && reason == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL,
-			"SSLRequest, ALPN foo: refused with alert 120 (got_s %d, reason %d)", (int)got_s, reason);
+		if (v31) {
+			ok(got_s && tls == nullptr && reason == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL,
+				"SSLRequest, ALPN foo: refused with alert 120 (got_s %d, reason %d)", (int)got_s, reason);
+		} else {
+			const std::string foo_sel = tls ? alpn_selected(tls) : "";
+			ok(got_s && tls != nullptr && foo_sel.empty(),
+				"SSLRequest, ALPN foo, Stable tier: accepted, nothing selected (got_s %d, reason %d)", (int)got_s, reason);
+		}
 		close_all(sock, tls, ctx);
 	}
 	ok(admin_run(admin, "PROXYSQL RELOAD TLS"), "PROXYSQL RELOAD TLS succeeds");
@@ -355,7 +371,13 @@ int main(int argc, char** argv) {
 		close_all(sock, nullptr, nullptr);
 		return t == 'R';
 	};
-	{
+	if (!v31) {
+		DirectTls d = direct_tls_connect(host, port, ALPN_PG);
+		const bool connected = d.sock >= 0, refused = d.tls == nullptr;
+		close_all(d.sock, d.tls, d.ctx);
+		ok(connected && refused && still_serving(), "Stable tier: direct TLS is refused, plaintext still served (connected %d, refused %d)",
+			(int)connected, (int)refused);
+	} else {
 		DirectTls d = direct_tls_connect(host, port, ALPN_PG);
 		sel = d.tls ? alpn_selected(d.tls) : "";
 		type = '?';
@@ -363,12 +385,14 @@ int main(int argc, char** argv) {
 		ok(d.tls && sel == "postgresql" && type == 'R', "direct TLS, ALPN postgresql: startup answered (got '%s','%c')", sel.c_str(), type);
 		close_all(d.sock, d.tls, d.ctx);
 	}
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		DirectTls d = direct_tls_connect(host, port, ALPN_FOO_PG);
 		sel = d.tls ? alpn_selected(d.tls) : "";
 		ok(d.tls && sel == "postgresql", "direct TLS, ALPN foo,postgresql: postgresql selected (got '%s')", sel.c_str());
 		close_all(d.sock, d.tls, d.ctx);
 	}
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		// As PostgreSQL: the handshake completes, then the connection is closed without a reply.
 		DirectTls d = direct_tls_connect(host, port, "");
@@ -377,6 +401,7 @@ int main(int argc, char** argv) {
 		ok(d.tls != nullptr && type != 'R' && tls_closed_by_peer(d.tls), "direct TLS, no ALPN: handshake completes, then closed with no authentication request");
 		close_all(d.sock, d.tls, d.ctx);
 	}
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		// TLS 1.2: the client finishes only after the server's flight, so the server-side flush before closing is what lets it complete.
 		DirectTls d = direct_tls_connect(host, port, "", TLS1_2_VERSION);
@@ -385,11 +410,13 @@ int main(int argc, char** argv) {
 		ok(d.tls != nullptr && type != 'R' && tls_closed_by_peer(d.tls), "direct TLS 1.2, no ALPN: handshake completes, then closed with no authentication request");
 		close_all(d.sock, d.tls, d.ctx);
 	}
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		DirectTls d = direct_tls_connect(host, port, ALPN_FOO);
 		ok(d.tls == nullptr && d.reason == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL, "direct TLS, ALPN foo: alert 120 (reason %d)", d.reason);
 		close_all(d.sock, d.tls, d.ctx);
 	}
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		DirectTls d = direct_tls_connect(host, port, ALPN_PG);
 		char reply = '?';
@@ -400,7 +427,8 @@ int main(int argc, char** argv) {
 		ok(reply == 'N' && type == 'R', "direct TLS, then SSLRequest: 'N', then startup works (got '%c','%c')", reply, type);
 		close_all(d.sock, d.tls, d.ctx);
 	}
-	bool auth_restored = false;
+	bool auth_restored = !v31; // only the direct TLS login case changes it
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		// Cleartext, so the password check runs inside the direct TLS session. Restored right after.
 		bool logged_in = false, queried = false;
@@ -415,6 +443,7 @@ int main(int argc, char** argv) {
 		auth_restored = auth_read && set_pgsql_var(admin, "authentication_method", auth_method);
 		ok(logged_in && queried, "direct TLS: cleartext login and SELECT 1 succeed");
 	}
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		// TLS 1.2 carries ALPN in the ServerHello, not in EncryptedExtensions.
 		DirectTls d = direct_tls_connect(host, port, ALPN_PG, TLS1_2_VERSION);
@@ -424,6 +453,7 @@ int main(int argc, char** argv) {
 		ok(d.tls && sel == "postgresql" && type == 'R', "direct TLS 1.2: ALPN selected, startup answered (got '%s','%c')", sel.c_str(), type);
 		close_all(d.sock, d.tls, d.ctx);
 	}
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		DirectTls d = direct_tls_connect(host, port, ALPN_PG);
 		std::vector<uint8_t> cancel;
@@ -432,6 +462,7 @@ int main(int argc, char** argv) {
 		close_all(d.sock, d.tls, d.ctx);
 		ok(d.tls != nullptr && closed && still_serving(), "cancel over direct TLS: connection closed, ProxySQL keeps serving");
 	}
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		DirectTls d = direct_tls_connect(cl.pgsql_admin_host, cl.pgsql_admin_port, ALPN_PG);
 		sel = d.tls ? alpn_selected(d.tls) : "";
@@ -476,6 +507,7 @@ int main(int argc, char** argv) {
 		ok(type == 'R', "split plaintext startup (first segment 1 byte, 100 ms pause): answered (got '%c')", type);
 		close_all(sock, nullptr, nullptr);
 	}
+	SKIP_BLOCK_IF(!v31, 1, NO_DIRECT_TLS)
 	{
 		// The first TCP segment holds only 2 bytes of the ClientHello: the first read sees a partial
 		// record header. Memory BIOs let the test choose where the ClientHello is cut.

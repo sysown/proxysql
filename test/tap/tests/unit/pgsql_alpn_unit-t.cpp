@@ -41,7 +41,11 @@ int main() {
 	ok(outlen == 10 && memcmp(out, "postgresql", 10) == 0, "marked: selected protocol is exactly postgresql");
 	ok(cb(marked, {foo, pg}) == SSL_TLSEXT_ERR_OK, "marked: postgresql selected from a list");
 	ok(outlen == 10 && memcmp(out, "postgresql", 10) == 0, "marked: list case selects exactly postgresql");
+#ifdef PROXYSQL31
 	ok(cb(marked, {foo}) == SSL_TLSEXT_ERR_ALERT_FATAL, "marked: foreign-only list refused with a fatal alert");
+#else
+	ok(cb(marked, {foo}) == SSL_TLSEXT_ERR_NOACK, "marked, Stable tier: foreign-only list accepted with no protocol selected");
+#endif
 
 	SSL_free(marked);
 	SSL_free(unmarked);

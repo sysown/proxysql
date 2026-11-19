@@ -204,6 +204,7 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 				return PGSQL_SSLSTATUS_FAIL;
 			}
 		}
+#ifdef PROXYSQL31
 		// As PostgreSQL: with no SSLRequest first, only ALPN says the client speaks its protocol.
 		if (direct_tls) {
 			const unsigned char* alpn = nullptr;
@@ -216,6 +217,7 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 				return PGSQL_SSLSTATUS_FAIL;
 			}
 		}
+#endif // PROXYSQL31
 #ifdef PROXYSQL31
 		// Publish the fast path only after the certificate checks above.
 		tls13_handshake_complete = myds_type == MYDS_FRONTEND &&
@@ -578,6 +580,8 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 				// we are reading the very first packet
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 5, 0);
+#ifdef PROXYSQL31
+				// v3.1+ only: on the Stable tier these bytes still read as a packet and close the connection, as before.
 				// Direct TLS (PostgreSQL 17+ sslnegotiation=direct): the client opens with a TLS handshake record
 				// (0x16) instead of a startup packet. Spotted in this read, so no extra syscall: as PostgreSQL's
 				// raw_buf, the bytes already read are replayed into OpenSSL. EOF and EAGAIN are left to the code below.
@@ -608,6 +612,7 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 						return 0; // the rest of the ClientHello is read by the TLS branch on the next POLLIN
 					}
 				}
+#endif // PROXYSQL31
 				if (r == 5) {
 					// let's try to read a whole packet
 					unsigned int read_pos = 0;
@@ -1727,7 +1732,15 @@ int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* out
 	if (SSL_get_ex_data(ssl, pgsql_client_ssl_ex_index()) == nullptr) return SSL_TLSEXT_ERR_NOACK;
 	static const unsigned char pg_alpn[] = { 10, 'p','o','s','t','g','r','e','s','q','l' };
 	if (SSL_select_next_proto(const_cast<unsigned char**>(out), outlen, pg_alpn, sizeof(pg_alpn), in, inlen)
-		!= OPENSSL_NPN_NEGOTIATED) return SSL_TLSEXT_ERR_ALERT_FATAL;
+		!= OPENSSL_NPN_NEGOTIATED) {
+#ifdef PROXYSQL31
+		return SSL_TLSEXT_ERR_ALERT_FATAL;
+#else
+		// The Stable tier keeps accepting a client that offers only other protocols, as before ALPN
+		// support: refusing it, as PostgreSQL 17+ does, is a client-visible change (v3.1+ only).
+		return SSL_TLSEXT_ERR_NOACK;
+#endif
+	}
 	return SSL_TLSEXT_ERR_OK;
 }
 
