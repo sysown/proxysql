@@ -13,16 +13,59 @@ typedef unsigned char uchar;
 
 #include "ma_pvio.h"
 
-#define QUEUE_T_DEFAULT_SIZE	32768
+// Input ring. One per connection, paid by idle clients.
+#define QUEUE_IN_DEFAULT_SIZE	32768
+// Output ring. Packs only what is not sent as its own span.
+// 1 KiB holds protocol chatter; result slabs point at their own buffer.
+// A packet larger than this is sent directly from its own allocation once the
+// ring is empty (see pgsql_queue_t); it is not copied through the ring.
+#define QUEUE_OUT_DEFAULT_SIZE	1024
+// Bytes on the wire before writeout() looks at the client rate. Not a capacity.
+// The old code compared against QUEUE_T_DEFAULT_SIZE because the output ring was
+// always 32 KiB; the throttle is about wire bytes, so keep it as its own name.
+#define WRITEOUT_THROTTLE_BYTES	32768
+// Historical name for the input ring.
+#define QUEUE_T_DEFAULT_SIZE	QUEUE_IN_DEFAULT_SIZE
 #define MY_SSL_BUFFER	8192
 
+/*
+ * A queue has two independent identities:
+ *
+ *   storage / capacity
+ *       The owned, contiguous ring. Allocated by queue_init() and never
+ *       resized. PostgreSQL has no per-connection compression, so queueOUT
+ *       never grows after init.
+ *
+ *   buffer / size
+ *       The span the next send()/SSL_write() reads. It is normally storage, but
+ *       while a packet larger than the ring is being sent from an empty ring it
+ *       points directly at that packet ("borrowed span"). Borrowing avoids the
+ *       copy that the old staging path made for every large resultset slab.
+ *
+ * head / tail are offsets into buffer and queue_data(q) == head - tail is the
+ * number of queued bytes in the current span. For an owned ring, array2buffer()
+ * appends at head. For a borrowed span the whole packet is one span: head is
+ * its length and tail advances as the socket accepts bytes. Because a borrowed
+ * packet is not ring storage:
+ *
+ *   - a borrow may only start when the ring is empty (queue_data() == 0);
+ *   - array2buffer() must not append while a borrow is active;
+ *   - release_borrowed_out_span() restores storage only after the span drains;
+ *   - queue_zero(), which compacts in place, is used on queueIN only.
+ *
+ * partial is the number of bytes of pkt already copied into an owned ring. It
+ * is always 0 for a borrowed span. pkt owns the packet (from PSarrayOUT) and is
+ * freed by queue_destroy() if the stream dies mid-transfer.
+ */
 typedef struct _pgsql_queue_t {
-	void* buffer;
-	unsigned int size;
-	unsigned int head;
-	unsigned int tail;
-	unsigned int partial;
-	PtrSize_t pkt;
+	void* buffer;		// span send()/SSL_write() read; storage, or a borrowed packet
+	void* storage;		// owned ring. destroy() frees this, never buffer
+	unsigned int size;	// length of the current span (capacity for an owned ring)
+	unsigned int capacity;	// immutable size of storage, set at init
+	unsigned int head;	// end of queued data within buffer
+	unsigned int tail;	// start of unsent data within buffer
+	unsigned int partial;	// bytes of pkt already copied into an owned ring
+	PtrSize_t pkt;		// packet being staged, or the borrowed span
 	mysql_hdr hdr;
 } pgsql_queue_t;
 

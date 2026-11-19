@@ -18,7 +18,9 @@ enum class MySQLFrontendAuthError : uint8_t {
 };
 #endif
 
-#define RESULTSET_BUFLEN 16300
+// Result slabs. 32 KiB stays in the jemalloc tcache (lg_tcache_max=16).
+// A slab larger than the output ring is sent in place, so this is not copied again.
+#define RESULTSET_BUFLEN (32 * 1024)
 
 extern MySQL_Variables mysql_variables;
 
