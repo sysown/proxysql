@@ -73,6 +73,15 @@ struct ScramState;
 // for the floor (caller runs the generic mock-fail). Defined in PgSQL_Protocol.cpp.
 int pgsql_reconcile_auth_method(int floor, int stored, bool* reject);
 
+// Parse the body of a SASLInitialResponse ('p') message: a NUL-terminated mechanism name, then a
+// 4-byte big-endian length and that many bytes of initial response. Returns false if the message
+// is malformed: no NUL, the length field missing or truncated, or a length larger than the bytes
+// that follow (including -1, "no initial response"). On success '*mech' points to the mechanism
+// name and '*response' / '*response_len' to the initial response, all inside 'data'.
+// Defined in PgSQL_Protocol.cpp.
+bool pgsql_parse_sasl_initial_response(const unsigned char* data, uint32_t size, const char** mech,
+	const unsigned char** response, uint32_t* response_len);
+
 enum class EXECUTION_STATE {
 	FAILED = 0,
 	SUCCESSFUL,
