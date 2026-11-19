@@ -8,7 +8,8 @@
  * worker thread's stack (1 MiB by default, 256 KiB minimum) and crashed
  * ProxySQL. The rules now run with a recursion limit derived from the stack
  * of the thread that compiles and matches them, and a limit hit means "the
- * rule is not applied to this query", negated or not, as on engine 3.
+ * rule does not match", negated or not, as on engine 3. process_query() then
+ * rejects the request (#6510).
  *
  * Each case runs in a forked child, in a thread with the stack size of a
  * ProxySQL worker, so that a stack overflow (the bug) fails the case instead
@@ -77,6 +78,13 @@ bool engine1_matches(const QP_rule_t& rule, const std::string& query) {
 		0, nullptr, query.c_str(), nullptr, 1);
 }
 
+// Same, reporting whether a regex runtime failure stopped the evaluation (#6510).
+bool engine1_matches_flag(const QP_rule_t& rule, const std::string& query, QP_regex_failure* failure) {
+	*failure = QP_regex_failure();
+	return rule_matches_query(&rule, 0, "u", "d", "1.2.3.4", nullptr, "127.0.0.1", nullptr, 6033,
+		0, nullptr, query.c_str(), nullptr, 1, failure);
+}
+
 struct thread_job {
 	std::function<int()> fn;
 	int result;
@@ -127,7 +135,7 @@ std::string pathological_query(size_t len) {
 }
 
 // --------------------------------------------------------------------------
-// A limit hit is "not applied", negated or not, and does not crash.
+// A limit hit does not match, negated or not, and does not crash.
 // --------------------------------------------------------------------------
 
 void test_pathological_match(size_t stack_size, const char* stack_name) {
@@ -140,8 +148,38 @@ void test_pathological_match(size_t stack_size, const char* stack_name) {
 		return (engine1_matches(rule, query) ? 1 : 0) | (engine1_matches(negated, query) ? 2 : 0);
 	}, &result);
 	ok(alive, "%s stack: '^(.|\\n)*FOR UPDATE' on a 100 KB query does not overflow the stack", stack_name);
-	ok(alive && (result & 1) == 0, "%s stack: the rule hitting the recursion limit is not applied", stack_name);
-	ok(alive && (result & 2) == 0, "%s stack: the negated rule hitting the recursion limit is not applied", stack_name);
+	ok(alive && (result & 1) == 0, "%s stack: the rule hitting the recursion limit does not match", stack_name);
+	ok(alive && (result & 2) == 0, "%s stack: the negated rule hitting the recursion limit does not match", stack_name);
+}
+
+// A limit hit is reported as an evaluation failure (the request is rejected by
+// process_query()), distinct from a completed match or no-match (#6510).
+void test_failure_is_reported() {
+	const std::string query = pathological_query(100 * KiB);
+	int result = -1;
+	const bool alive = run_isolated(kMinStack, [&query]() {
+		int bits = 0;
+		QP_regex_failure failure;
+		const QP_rule_t rule = make_rule("^(.|\\n)*FOR UPDATE");
+		engine1_matches_flag(rule, query, &failure);
+		if (failure.regex_index != 0) bits |= 1;
+		// match_pattern is criterion 2, and a PCRE recursion limit is a resource limit.
+		if (failure.regex_index == 2 && failure.resource_limit) bits |= 16;
+		const QP_rule_t negated = make_rule("^(.|\\n)*FOR UPDATE", true);
+		engine1_matches_flag(negated, query, &failure);
+		if (failure.regex_index != 0) bits |= 2;
+		const QP_rule_t plain = make_rule("FOR UPDATE$");
+		const bool matched = engine1_matches_flag(plain, "SELECT 1 FOR UPDATE", &failure);
+		if (matched && failure.regex_index == 0) bits |= 4;
+		const bool nomatch = engine1_matches_flag(plain, "SELECT 1", &failure);
+		if (!nomatch && failure.regex_index == 0) bits |= 8;
+		return bits;
+	}, &result);
+	ok(alive && (result & 1), "a recursion-limit hit is reported as an evaluation failure");
+	ok(alive && (result & 2), "a recursion-limit hit on a negated rule is reported as an evaluation failure");
+	ok(alive && (result & 4), "a completed match is not reported as a failure");
+	ok(alive && (result & 8), "a completed no-match is not reported as a failure");
+	ok(alive && (result & 16), "the failure names match_pattern and a resource limit");
 }
 
 // The crash reported in #6466: a query of a few KB is enough without a limit.
@@ -152,7 +190,7 @@ void test_small_pathological_query() {
 		const QP_rule_t negated = make_rule("^(.|\\n)*FOR UPDATE", true);
 		return engine1_matches(negated, query) ? 1 : 0;
 	}, &result);
-	ok(alive && result == 0, "1 MiB stack: a negated '^(.|\\n)*FOR UPDATE' on a 4 KB query is not applied, no crash");
+	ok(alive && result == 0, "1 MiB stack: a negated '^(.|\\n)*FOR UPDATE' on a 4 KB query does not match, no crash");
 }
 
 // --------------------------------------------------------------------------
@@ -189,7 +227,7 @@ void test_normal_rules_on_large_queries() {
 	ok(alive, "256 KiB stack: matching 1 MB queries completes");
 	ok(alive && (result & 1), "'^SELECT\\s.*\\sFROM\\s+t\\b' matches a query with a 1 MB value after FROM t");
 	ok(alive && (result & 2), "'^SELECT\\s.*\\sFROM\\s+t\\b' matches a query with a 1 MB value before FROM t");
-	ok(alive && (result & 4), "the negated rule is not applied to the matching 1 MB query");
+	ok(alive && (result & 4), "the negated rule does not match the matching 1 MB query");
 	ok(alive && (result & 8), "a CASELESS rule matches the 1 MB query");
 	ok(alive && (result & 16), "'[\\s\\S]*FOR UPDATE$' matches a 1 MB query");
 	ok(alive && (result & 32), "a repeated group matches a short IN list");
@@ -218,7 +256,7 @@ void test_limit_scales_with_stack() {
 #endif
 	result = -1;
 	alive = run_isolated(kMinStack, fn, &result);
-	ok(alive && result == 0, "256 KiB stack: the same rule hits the recursion limit and is not applied, negated or not");
+	ok(alive && result == 0, "256 KiB stack: the same rule hits the recursion limit and does not match, negated or not");
 }
 
 #ifdef DEBUG
@@ -282,15 +320,16 @@ void test_replace() {
 
 int main() {
 #ifdef DEBUG
-	plan(23);
+	plan(28);
 #else
-	plan(17);
+	plan(22);
 #endif
 	test_init_minimal();
 
 	test_pathological_match(kMinStack, "256 KiB");
 	test_pathological_match(kDefaultStack, "1 MiB");
 	test_small_pathological_query();
+	test_failure_is_reported();
 	test_normal_rules_on_large_queries();
 	test_limit_scales_with_stack();
 #ifdef DEBUG
