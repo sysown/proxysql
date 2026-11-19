@@ -444,6 +444,21 @@ void test_entra_reset_destroys(MySQL_Thread& worker) {
 		"entra_reset_destroys: an Entra connection is destroyed, no reset session is created");
 }
 
+void test_entra_connect_failure_log(MySQL_Thread& worker) {
+	SessionFixture fixture(worker, kEntraUser, kEntraHostgroup);
+	MySQL_Connection *entra = established_connection(
+		entra_server, kEntraUser, MySQLBackendAuthType::AZURE_ENTRA, 607);
+	entra_server->ConnectionsUsed->add(entra);
+	fixture.backend()->attach_connection(entra);
+	entra->mysql->net.last_errno = 1226;
+	entra->ret_mysql = nullptr;
+	entra->async_state_machine = ASYNC_CONNECT_END;
+	const std::string log = capture_stderr([entra] { entra->handler(0); });
+	ok(log.find("Failed to connect Azure Entra backend") != std::string::npos &&
+		log.find("IAM backend") == std::string::npos,
+		"entra_connect_failure_log: the failed-connect line names Azure Entra, not IAM");
+}
+
 } // namespace
 
 extern "C" {
@@ -486,7 +501,7 @@ int __wrap_mysql_real_connect_start(MYSQL **ret, MYSQL *mysql, const char *host,
 } // extern "C"
 
 int main() {
-	plan(6);
+	plan(7);
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -518,6 +533,7 @@ int main() {
 		test_entra_retry_flag_reset_on_success(worker);
 		test_entra_change_user_destroys(worker);
 		test_entra_reset_destroys(worker);
+		test_entra_connect_failure_log(worker);
 	}
 	GloAwsIamTokenSource = nullptr;
 
