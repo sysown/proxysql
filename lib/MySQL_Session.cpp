@@ -11080,10 +11080,16 @@ void MySQL_Session::Memory_Stats() {
 		internal+=sizeof(MySQL_Query_Processor_Output);
 	if (client_myds) {
 		internal+=sizeof(MySQL_Data_Stream);
-		if (client_myds->queueIN.buffer)
-			frontend+=QUEUE_T_DEFAULT_SIZE;
-		if (client_myds->queueOUT.buffer)
-			frontend+=QUEUE_T_DEFAULT_SIZE;
+		// Rings are fixed at creation: 32 KiB input, 1 KiB output unless the
+		// connection is compressed and grew it to 32 KiB. A borrowed output
+		// span is no longer in PSarrayOUT, so account for the packet it points
+		// at; PSarrayOUT->total_size() below would otherwise miss it.
+		if (client_myds->queueIN.storage)
+			frontend+=client_myds->queueIN.capacity;
+		if (client_myds->queueOUT.storage)
+			frontend+=client_myds->queueOUT.capacity;
+		if (client_myds->queueOUT.buffer != client_myds->queueOUT.storage && client_myds->queueOUT.pkt.ptr)
+			frontend+=client_myds->queueOUT.pkt.size;
 		if (client_myds->myconn) {
 			internal+=sizeof(MySQL_Connection);
 		}
@@ -11104,10 +11110,14 @@ void MySQL_Session::Memory_Stats() {
 			internal+=sizeof(MySQL_Backend);
 		if (_mybe->server_myds) {
 			internal+=sizeof(MySQL_Data_Stream);
-			if (_mybe->server_myds->queueIN.buffer)
-				backend+=QUEUE_T_DEFAULT_SIZE;
-			if (_mybe->server_myds->queueOUT.buffer)
-				backend+=QUEUE_T_DEFAULT_SIZE;
+			// Same accounting as the client stream above: fixed rings plus a
+			// borrowed output packet that PSarrayOUT no longer references.
+			if (_mybe->server_myds->queueIN.storage)
+				backend+=_mybe->server_myds->queueIN.capacity;
+			if (_mybe->server_myds->queueOUT.storage)
+				backend+=_mybe->server_myds->queueOUT.capacity;
+			if (_mybe->server_myds->queueOUT.buffer != _mybe->server_myds->queueOUT.storage && _mybe->server_myds->queueOUT.pkt.ptr)
+				backend+=_mybe->server_myds->queueOUT.pkt.size;
 			if (_mybe->server_myds->myconn) {
 				MySQL_Connection *myconn=_mybe->server_myds->myconn;
 				internal+=sizeof(MySQL_Connection);

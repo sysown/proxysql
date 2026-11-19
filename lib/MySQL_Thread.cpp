@@ -7216,7 +7216,12 @@ void MySQL_Thread::Get_Memory_Stats() {
 				sess->Memory_Stats();
 			}
 		} else {
-			status_variables.stvar[st_var_mysql_frontend_buffers_bytes]+=(mysql_sessions->len * QUEUE_T_DEFAULT_SIZE * 2);
+			// Epoll/idle worker: sessions may be owned/moved by another thread,
+			// so they are not inspected individually. Report the default per
+			// connection rings. A session that negotiated compression keeps the
+			// larger QUEUE_OUT_COMPRESSED_SIZE ring; it is not counted here (the
+			// per-session path below, used by normal workers, reports it exactly).
+			status_variables.stvar[st_var_mysql_frontend_buffers_bytes]+=(mysql_sessions->len * (QUEUE_IN_DEFAULT_SIZE + QUEUE_OUT_DEFAULT_SIZE));
 			status_variables.stvar[st_var_mysql_session_internal_bytes]+=(mysql_sessions->len * sizeof(MySQL_Connection));
 #if !defined(__FreeBSD__) && !defined(__APPLE__)
 			status_variables.stvar[st_var_mysql_session_internal_bytes]+=((sizeof(int) + sizeof(int) + sizeof(std::_Rb_tree_node_base)) * mysql_sessions->len );
