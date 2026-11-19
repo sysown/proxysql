@@ -561,6 +561,27 @@ static void check_connect_failure_without_error() {
 	ok(label == "08006", "a connect that failed with no error is labelled 08006 (got '%s')", label.c_str());
 }
 
+// The label of a failed query, ping or reset in the pgsql error counter. libpq reports its own failures
+// (a lost connection) without a SQLSTATE, which set_error_from_PQerrorMessage() fills with P0001: that is
+// 08006, as the native protocol reports it, and so is no error at all. A P0001 the backend sent, and any
+// other SQLSTATE, keep their label. 4 checks.
+static void check_counter_error_labels() {
+	Conn* c = new Conn(false);
+	const std::string none = c->get_counter_error_code_str();
+	c->set_error(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION, "server closed the connection unexpectedly", true);
+	c->error_without_sqlstate = true;
+	const std::string lib = c->get_counter_error_code_str();
+	c->error_without_sqlstate = false;
+	const std::string raised = c->get_counter_error_code_str();
+	c->set_error(PGSQL_ERROR_CODES::ERRCODE_UNIQUE_VIOLATION, "duplicate key value violates unique constraint", false);
+	const std::string unique = c->get_counter_error_code_str();
+	delete c;
+	ok(none == "08006", "counter label: no error is 08006 (got '%s')", none.c_str());
+	ok(lib == "08006", "counter label: a libpq failure without a SQLSTATE is 08006, not P0001 (got '%s')", lib.c_str());
+	ok(raised == "P0001", "counter label: a P0001 the backend sent stays P0001 (got '%s')", raised.c_str());
+	ok(unique == "23505", "counter label: a backend SQLSTATE is kept (got '%s')", unique.c_str());
+}
+
 // --- monitor pings ---------------------------------------------------------------------------
 
 bool server_responds_to_ping(SQLite3DB& db, const char* addr, int port, int max_fails);
@@ -590,6 +611,7 @@ static const PingCase PINGS[] = {
 	{ PG_FAILED "FATAL:  too many connections for database \"postgres\"", true, "53300 database connection limit" },
 	{ PG_FAILED "FATAL:  database \"postgres\" is not currently accepting connections", true, "55000 database not accepting" },
 	{ PG_FAILED "FATAL:  cannot connect to invalid database \"postgres\"", true, "55000 invalid database" },
+	{ PG_FAILED "fe_sendauth: no password supplied", true, "libpq no password supplied" },
 	{ PG_FAILED "Connection refused \tIs the server running on that host and accepting TCP/IP connections?",
 		false, "connection refused" },
 	{ PG_FAILED "FATAL:  sorry, too many clients already", false, "53300 server full" },
@@ -644,7 +666,7 @@ int main() {
 
 	const int ncases = sizeof(CASES) / sizeof(CASES[0]);
 	const int npings = sizeof(PINGS) / sizeof(PINGS[0]);
-	plan(2 * ncases * CHECKS_PER_CASE + 2 * 2 + 1 + 2 + 1 + 2 + 2 * 2 * 2 + 1 + 2 + npings);
+	plan(2 * ncases * CHECKS_PER_CASE + 2 * 2 + 1 + 2 + 1 + 2 + 2 * 2 * 2 + 1 + 4 + 2 + npings);
 
 	int hid = 9600;
 	for (bool native : { true, false }) {
@@ -667,6 +689,7 @@ int main() {
 		check_session_connect_failure(thr, hid++, native, false);
 	}
 	check_connect_failure_without_error();
+	check_counter_error_labels();
 	check_error_counter_labels(hid++);
 	check_monitor_pings();
 

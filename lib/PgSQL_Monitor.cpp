@@ -606,6 +606,14 @@ mf_unique_ptr<char> strdup_no_lf(const char* input) {
 	return mf_unique_ptr<char>(res);
 }
 
+static bool is_refused_monitor_login(const char* err);
+
+// Appended to a failed monitor connect whose login was refused (see REFUSED_MONITOR_LOGIN): its pings do not
+// count against the server, and every check fails until the monitor's credentials or access are fixed.
+static const char* refused_login_note(const char* err) {
+	return is_refused_monitor_login(err) ? " (the login of the monitoring user is refused)" : "";
+}
+
 void set_failed_st(state_t& st, ASYNC_ST new_st, mf_unique_ptr<char> err) {
 	st.conn.state = new_st;
 	st.conn.err = std::move(err);
@@ -761,8 +769,8 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 			auto err { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
 
 			proxy_error(
-				"Monitor connect failed   addr='%s:%d' error='%s'\n",
-				srv.addr.c_str(), srv.port, err.get()
+				"Monitor connect failed   addr='%s:%d' error='%s'%s\n",
+				srv.addr.c_str(), srv.port, err.get(), refused_login_note(err.get())
 			);
 			set_failed_st(st, ASYNC_CONNECT_FAILED, std::move(err));
 			break;
@@ -1100,8 +1108,8 @@ pgsql_conn_t create_new_conn(task_st_t& task_st) {
 		if (pgconn.conn) {
 			auto error { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
 			proxy_error(
-				"Monitor connect failed   addr='%s:%d' error='%s'\n",
-				srv.addr.c_str(), srv.port, error.get()
+				"Monitor connect failed   addr='%s:%d' error='%s'%s\n",
+				srv.addr.c_str(), srv.port, error.get(), refused_login_note(error.get())
 			);
 
 			pgconn.err = std::move(error);
@@ -1487,6 +1495,8 @@ static const char* const REFUSED_MONITOR_LOGIN[] {
 	"*too many connections for database*",
 	"*is not currently accepting connections*",
 	"*cannot connect to invalid database*",
+	// libpq's own refusal to log in without a password (an empty pgsql-monitor_password), no SQLSTATE
+	"*no password supplied*",
 };
 
 static bool is_refused_monitor_login(const char* err) {
@@ -1567,10 +1577,6 @@ void update_connect_table(SQLite3DB* db, state_t& state) {
 		PgHGM->p_update_pgsql_error_counter(
 			p_pgsql_error_type::proxysql, 0, srv_addr, srv.port, err_code
 		);
-		// The server is up and its pings do not count against it, so say why every check fails.
-		if (is_refused_monitor_login(state.conn.err.get())) {
-			proxy_error("Server %s:%d refuses the login of the monitoring user: %s\n", srv_addr, srv.port, state.conn.err.get());
-		}
 		__sync_fetch_and_add(&GloPgMon->connect_check_ERR, 1);
 	} else {
 		__sync_fetch_and_add(&GloPgMon->connect_check_OK, 1);
