@@ -282,6 +282,10 @@ bool valid_admin_variable(const std::string &name, const std::string &value) {
     return number(0, 10);
   if (name == "prometheus_memory_metrics_interval")
     return number(1, 7 * 24 * 3600 - 1);
+#ifdef PROXYSQL31
+  if (name == "stats_query_digest_memory_refresh_pct")
+    return number(0, 100);
+#endif
   if (name == "coredump_generation_interval_ms")
     return number(0, INT_MAX - 1);
   if (name == "coredump_generation_threshold")

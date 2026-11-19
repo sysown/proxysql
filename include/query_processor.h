@@ -541,7 +541,28 @@ public:
 	void wrunlock(); // explicit unlock
 	void commit(); // this applies all the changes in memory
 
+#ifdef PROXYSQL31
+	/**
+	 * @brief Returns an estimate of the memory used by the query digest maps (#6673).
+	 * @details The expensive part of the estimate, the bytes of the strings owned by the digest entries,
+	 *   is only computed with a full scan of the maps when the cached sample is missing or stale:
+	 *   - no sample was taken yet, or the map is below 'DIGEST_STATS_FAST_MINSIZE';
+	 *   - entries were removed or the maps replaced (purge, reset, stats swap) since the sample;
+	 *   - the entry count of either map shrank, or grew by more than 'refresh_pct' percent since the sample.
+	 *   Otherwise the cached string bytes are scaled linearly with the current entry counts. 'refresh_pct'
+	 *   is a refresh policy, not an accuracy bound on the returned value. With 'refresh_pct == 0' every
+	 *   call above the threshold scans, as before.
+	 *
+	 *   Concurrent collectors (SQL stats, Prometheus) are serialized on 'digest_size_cache_mutex', so only
+	 *   one of them scans and the others reuse its sample. That mutex is never taken by query workers.
+	 * @param refresh_pct Entry count growth, in percent, that triggers a new scan.
+	 */
+	unsigned long long get_query_digests_total_size(unsigned int refresh_pct = 5);
+	/** @brief Number of full scans performed by get_query_digests_total_size(). For tests and diagnostics. */
+	unsigned long long get_query_digests_total_size_scans();
+#else
 	unsigned long long get_query_digests_total_size();
+#endif
 	unsigned long long get_rules_mem_used();
 	unsigned long long get_new_req_conns_count();
 
@@ -621,6 +642,31 @@ private:
 	umap_query_digest digest_umap;
 	umap_query_digest_text digest_text_umap;
 	pthread_rwlock_t digest_rwlock;
+#ifdef PROXYSQL31
+	/**
+	 * @brief Incremented, with 'digest_rwlock' held for writing, whenever digest entries can have been
+	 *   removed or the maps replaced. Invalidates the cached estimate of get_query_digests_total_size().
+	 *   Inserting a new digest does not increment it: growth is tracked by the entry counts.
+	 */
+	uint64_t digest_maps_epoch = 0;
+	/** @brief Serializes get_query_digests_total_size() callers and protects 'digest_size_cache'. */
+	pthread_mutex_t digest_size_cache_mutex;
+	struct {
+		bool valid = false;
+		uint64_t epoch = 0;
+		size_t umap_size = 0;            ///< digest_umap entries at sample time
+		size_t text_umap_size = 0;       ///< digest_text_umap entries at sample time
+		unsigned long long umap_bytes = 0;      ///< string bytes owned by digest_umap entries
+		unsigned long long text_umap_bytes = 0; ///< string bytes owned by digest_text_umap entries
+		unsigned long long scans = 0;    ///< full scans performed
+	} digest_size_cache;
+#endif
+	/** @brief Invalidates the cached digest size estimate. Caller holds 'digest_rwlock' for writing. */
+	inline void digest_maps_changed() {
+#ifdef PROXYSQL31
+		digest_maps_epoch++;
+#endif
+	}
 	pthread_rwlock_t rwlock;
 	khash_t(khStrInt)* rules_fast_routing;
 	char* rules_fast_routing___keys_values;

@@ -1439,6 +1439,9 @@ Query_Processor<QP_DERIVED>::Query_Processor(int _query_rules_fast_routing_algor
 #else
 	pthread_rwlock_init(&digest_rwlock, NULL);
 #endif
+#ifdef PROXYSQL31
+	pthread_mutex_init(&digest_size_cache_mutex, NULL);
+#endif
 	version=0;
 	rules_mem_used=0;
 	
@@ -1484,6 +1487,9 @@ Query_Processor<QP_DERIVED>::~Query_Processor() {
 	}
 	digest_umap.clear();
 	digest_text_umap.clear();
+#ifdef PROXYSQL31
+	pthread_mutex_destroy(&digest_size_cache_mutex);
+#endif
 	if (query_rules_resultset) {
 		delete query_rules_resultset;
 		query_rules_resultset = NULL;
@@ -1796,6 +1802,82 @@ void * get_query_digests_total_size_parallel(void *_arg) {
 	return NULL;
 }
 
+#ifdef PROXYSQL31
+/**
+ * @brief Arguments for get_query_digests_total_size_partitioned().
+ * @details Each helper scans a disjoint, contiguous slice [begin, end) of each map, so every entry is visited
+ *   by exactly one helper (#6673). The legacy helpers each walked the whole of both maps and skipped the
+ *   entries of the other helpers. Slicing by bucket was also measured and rejected: with libstdc++ the
+ *   hash of 'uint64_t' keys is not cached, so every local iterator increment recomputes a bucket index.
+ */
+struct get_query_digests_size_partition_args {
+	pthread_t thr;
+	umap_query_digest::const_iterator gu_begin, gu_end;
+	umap_query_digest_text::const_iterator gtu_begin, gtu_end;
+	unsigned long long umap_bytes;
+	unsigned long long text_umap_bytes;
+};
+
+/**
+ * @brief Splits 'map' into 'n' contiguous slices of (about) the same number of entries.
+ * @details Fills 'bounds' with n+1 iterators; slice 'i' is [bounds[i], bounds[i+1]). The walk only follows
+ *   the node links, it does not touch the entries.
+ */
+template <typename Map>
+static void split_map_slices(const Map& map, int n, std::vector<typename Map::const_iterator>& bounds) {
+	bounds.assign(n + 1, map.cend());
+	const size_t size = map.size();
+	size_t i = 0;
+	int k = 0;
+	for (auto it = map.cbegin(); k < n; ++it, ++i) {
+		while (k < n && i == size * k / n) {
+			bounds[k++] = it;
+		}
+		if (it == map.cend()) {
+			break;
+		}
+	}
+}
+
+/**
+ * @brief Bytes of the strings owned by a digest entry, as accounted by get_query_digests_total_size().
+ */
+static inline unsigned long long qds_owned_strings_size(const QP_query_digest_stats* qds) {
+	unsigned long long ret = 0;
+	if (qds->username && qds->username != qds->username_buf)
+		ret += strlen(qds->username) + 1;
+	if (qds->schemaname && qds->schemaname != qds->schemaname_buf)
+		ret += strlen(qds->schemaname) + 1;
+	if (qds->client_address && qds->client_address != qds->client_address_buf)
+		ret += strlen(qds->client_address) + 1;
+	if (qds->digest_text)
+		ret += strlen(qds->digest_text) + 1;
+	return ret;
+}
+
+/*
+	Scans the slices in 'args'. The caller holds 'digest_rwlock' (at least for reading), so the maps cannot
+	change, or rehash, during the scan.
+*/
+static void * get_query_digests_total_size_partitioned(void *_arg) {
+	get_query_digests_size_partition_args *arg = (get_query_digests_size_partition_args *)_arg;
+	set_thread_name("GetQueryDigeTot", GloVars.set_thread_name);
+	unsigned long long umap_bytes = 0;
+	for (auto it = arg->gu_begin; it != arg->gu_end; ++it) {
+		umap_bytes += qds_owned_strings_size(static_cast<const QP_query_digest_stats*>(it->second));
+	}
+	unsigned long long text_umap_bytes = 0;
+	for (auto it = arg->gtu_begin; it != arg->gtu_end; ++it) {
+		if (it->second) {
+			text_umap_bytes += strlen(it->second) + 1;
+		}
+	}
+	arg->umap_bytes = umap_bytes;
+	arg->text_umap_bytes = text_umap_bytes;
+	return NULL;
+}
+#endif // PROXYSQL31
+
 void * get_query_digests_parallel(void *_arg) {
 	get_query_digests_parallel_args *arg = (get_query_digests_parallel_args *)_arg;
 	unsigned long long i = 0;
@@ -1950,6 +2032,7 @@ unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_async(time_t
 	umap_query_digest_text digest_text_umap_aux;
 
 	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_maps_changed();
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
@@ -2007,6 +2090,7 @@ unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_async(time_t
 		}
 
 		pthread_rwlock_wrlock(&digest_rwlock);
+		digest_maps_changed();
 		digest_umap_aux.swap(digest_umap);
 		// digest_umap now holds the surviving entries, digest_umap_aux the
 		// entries created while the purge was running (purge window)
@@ -2059,6 +2143,7 @@ unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_sync(bool pa
 	unsigned long long digest_deleted = 0;
 
 	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_maps_changed();
 
 	size_t map_size = digest_umap.size();
 
@@ -2125,6 +2210,116 @@ unsigned long long Query_Processor<QP_DERIVED>::purge_query_digests_sync(bool pa
 	return digest_deleted;
 }
 
+#ifdef PROXYSQL31
+/**
+ * @brief Returns true when 'cur' grew by more than 'pct' percent over 'base'.
+ */
+static inline bool digest_count_grew_beyond(size_t cur, size_t base, unsigned int pct) {
+	if (cur <= base) {
+		return false;
+	}
+	// (cur - base) * 100 > base * pct, without overflow for any realistic map size
+	return (static_cast<unsigned long long>(cur - base) * 100ULL) > (static_cast<unsigned long long>(base) * pct);
+}
+
+/**
+ * @brief Scales a byte count sampled with 'base' entries to 'cur' entries.
+ */
+static inline unsigned long long digest_scale_bytes(unsigned long long bytes, size_t cur, size_t base) {
+	if (base == 0 || cur == base) {
+		return bytes;
+	}
+	return static_cast<unsigned long long>(static_cast<long double>(bytes) * cur / base);
+}
+
+template <typename QP_DERIVED>
+unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size_scans() {
+	pthread_mutex_lock(&digest_size_cache_mutex);
+	unsigned long long scans = digest_size_cache.scans;
+	pthread_mutex_unlock(&digest_size_cache_mutex);
+	return scans;
+}
+
+template <typename QP_DERIVED>
+unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size(unsigned int refresh_pct) {
+	unsigned long long ret = 0;
+	// Collectors are serialized here, never on 'digest_rwlock': a second collector waits for the scan of
+	// the first one and then reuses its sample.
+	pthread_mutex_lock(&digest_size_cache_mutex);
+	pthread_rwlock_rdlock(&digest_rwlock);
+
+	const size_t map_size = digest_umap.size();
+	const size_t text_map_size = digest_text_umap.size();
+	ret += sizeof(QP_query_digest_stats) * map_size;
+
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		auto& c = digest_size_cache;
+		const bool refresh =
+			refresh_pct == 0 ||
+			c.valid == false ||
+			c.epoch != digest_maps_epoch ||
+			map_size < c.umap_size ||
+			text_map_size < c.text_umap_size ||
+			digest_count_grew_beyond(map_size, c.umap_size, refresh_pct) ||
+			digest_count_grew_beyond(text_map_size, c.text_umap_size, refresh_pct);
+
+		if (refresh) {
+			const int n = DIGEST_STATS_FAST_THREADS;
+			get_query_digests_size_partition_args args[n];
+			std::vector<umap_query_digest::const_iterator> gu_bounds;
+			std::vector<umap_query_digest_text::const_iterator> gtu_bounds;
+			split_map_slices(digest_umap, n, gu_bounds);
+			split_map_slices(digest_text_umap, n, gtu_bounds);
+			for (int i = 0; i < n; i++) {
+				args[i].gu_begin = gu_bounds[i];
+				args[i].gu_end = gu_bounds[i + 1];
+				args[i].gtu_begin = gtu_bounds[i];
+				args[i].gtu_end = gtu_bounds[i + 1];
+				args[i].umap_bytes = 0;
+				args[i].text_umap_bytes = 0;
+				if (pthread_create(&args[i].thr, NULL, &get_query_digests_total_size_partitioned, &args[i]) != 0) {
+					// LCOV_EXCL_START
+					assert(0);
+					// LCOV_EXCL_STOP
+				}
+			}
+			unsigned long long umap_bytes = 0;
+			unsigned long long text_umap_bytes = 0;
+			for (int i = 0; i < n; i++) {
+				pthread_join(args[i].thr, NULL);
+				umap_bytes += args[i].umap_bytes;
+				text_umap_bytes += args[i].text_umap_bytes;
+			}
+			c.valid = true;
+			c.epoch = digest_maps_epoch;
+			c.umap_size = map_size;
+			c.text_umap_size = text_map_size;
+			c.umap_bytes = umap_bytes;
+			c.text_umap_bytes = text_umap_bytes;
+			c.scans++;
+			ret += umap_bytes + text_umap_bytes;
+		} else {
+			ret += digest_scale_bytes(c.umap_bytes, map_size, c.umap_size);
+			ret += digest_scale_bytes(c.text_umap_bytes, text_map_size, c.text_umap_size);
+		}
+	} else {
+		// Below the threshold the string bytes are not accounted (unchanged behaviour); drop the sample so
+		// that crossing the threshold again always starts with a scan.
+		digest_size_cache.valid = false;
+	}
+#if !defined(__FreeBSD__) && !defined(__APPLE__)
+	ret += ((sizeof(uint64_t) + sizeof(void *) + sizeof(std::_Rb_tree_node_base)) * map_size );
+	ret += ((sizeof(uint64_t) + sizeof(void *) + sizeof(std::_Rb_tree_node_base)) * text_map_size );
+#else
+	ret += ((sizeof(uint64_t) + sizeof(void *) + 32) * map_size );
+	ret += ((sizeof(uint64_t) + sizeof(void *) + 32) * text_map_size );
+#endif
+
+	pthread_rwlock_unlock(&digest_rwlock);
+	pthread_mutex_unlock(&digest_size_cache_mutex);
+	return ret;
+}
+#else
 template <typename QP_DERIVED>
 unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size() {
 	unsigned long long ret=0;
@@ -2180,6 +2375,7 @@ unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size() {
 	pthread_rwlock_unlock(&digest_rwlock);
 	return ret;
 }
+#endif // PROXYSQL31
 
 template <typename QP_DERIVED>
 std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_v2(const bool use_resultset) {
@@ -2191,6 +2387,8 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 	umap_query_digest digest_umap_aux, digest_umap_aux_2;
 	umap_query_digest_text digest_text_umap_aux, digest_text_umap_aux_2;
 	pthread_rwlock_wrlock(&digest_rwlock);
+	// No digest_maps_changed(): this snapshot moves the entries out and merges them back without
+	// removing any. The size cache detects the temporary shrink through the entry counts.
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
@@ -2614,6 +2812,7 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
 	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_maps_changed();
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
@@ -2743,6 +2942,7 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 template <typename QP_DERIVED>
 void Query_Processor<QP_DERIVED>::get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt) {
 	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_maps_changed();
 	digest_umap.swap(*uqd);
 	digest_text_umap.swap(*uqdt);
 	pthread_rwlock_unlock(&digest_rwlock);
@@ -2752,6 +2952,7 @@ template <typename QP_DERIVED>
 SQLite3_result * Query_Processor<QP_DERIVED>::get_query_digests_reset() {
 	SQLite3_result *result = NULL;
 	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_maps_changed();
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	bool free_me = true;
