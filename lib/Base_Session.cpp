@@ -235,6 +235,7 @@ void Base_Session<S,DS,B,T>::writeout() {
 			}
 			int retbytes=client_myds->write_to_net_poll();
 			total_written+=retbytes;
+#ifdef PROXYSQL31
 			// Keep draining while the last write made progress and the client
 			// still has output pending (queued bytes, a borrowed span, a partly
 			// staged packet, or packets still in PSarrayOUT). The old check was
@@ -245,6 +246,11 @@ void Base_Session<S,DS,B,T>::writeout() {
 			if (retbytes > 0 && client_myds->available_data_out()) {
 				runloop=true;
 			}
+#else
+			if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+				runloop=true;
+			}
+#endif
 			while (runloop && (disable_throttle || total_written < mwpl)) {
 				runloop=false; // the default
 				client_myds->array2buffer_full();
@@ -257,9 +263,15 @@ void Base_Session<S,DS,B,T>::writeout() {
 					if (fds.revents==POLLOUT) {
 						retbytes=client_myds->write_to_net_poll();
 						total_written+=retbytes;
+#ifdef PROXYSQL31
 						if (retbytes > 0 && client_myds->available_data_out()) {
 							runloop=true;
 						}
+#else
+						if (retbytes==QUEUE_T_DEFAULT_SIZE) { // optimization to solve memory bloat
+							runloop=true;
+						}
+#endif
 					}
 				}
 			}
@@ -275,7 +287,11 @@ void Base_Session<S,DS,B,T>::writeout() {
 			client_myds->pause_until = thread->curtime + add_;
 		}
 		else {
+#ifdef PROXYSQL31
 			if (total_written >= WRITEOUT_THROTTLE_BYTES) {
+#else
+			if (total_written >= QUEUE_T_DEFAULT_SIZE) {
+#endif
 				unsigned long long time_diff = thread->curtime - last_sent_;
 				if (time_diff == 0) { // sending data really too fast!
 					unsigned long long add_ = 1000000 / tps + 1000000 / tps * ((unsigned long long)total_written - (unsigned long long)mwpl) / mwpl;

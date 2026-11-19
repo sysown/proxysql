@@ -13,6 +13,7 @@ typedef unsigned char uchar;
 
 #include "ma_pvio.h"
 
+#ifdef PROXYSQL31
 // Input ring. One per connection, paid by idle clients.
 #define QUEUE_IN_DEFAULT_SIZE	32768
 // Output ring. Packs only what is not sent as its own span.
@@ -26,7 +27,6 @@ typedef unsigned char uchar;
 #define WRITEOUT_THROTTLE_BYTES	32768
 // Historical name for the input ring.
 #define QUEUE_T_DEFAULT_SIZE	QUEUE_IN_DEFAULT_SIZE
-#define MY_SSL_BUFFER	8192
 
 /*
  * A queue has two independent identities:
@@ -68,6 +68,20 @@ typedef struct _pgsql_queue_t {
 	PtrSize_t pkt;		// packet being staged, or the borrowed span
 	mysql_hdr hdr;
 } pgsql_queue_t;
+#else
+#define QUEUE_T_DEFAULT_SIZE	32768
+
+typedef struct _pgsql_queue_t {
+	void* buffer;
+	unsigned int size;
+	unsigned int head;
+	unsigned int tail;
+	unsigned int partial;
+	PtrSize_t pkt;
+	mysql_hdr hdr;
+} pgsql_queue_t;
+#endif // PROXYSQL31
+#define MY_SSL_BUFFER	8192
 
 // this class avoid copying data
 class PgSQL_MyDS_real_query {

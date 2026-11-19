@@ -566,6 +566,7 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
 		// We pause receiving from backend at mysql_thread___threshold_resultset_size * 8
 		// but assuming that client isn't completely blocked, we will stop checking for data
 		// only at mysql_thread___threshold_resultset_size * 4.
+#ifdef PROXYSQL31
 		//
 		// `len * RESULTSET_BUFLEN` is an O(1) upper bound on the bytes queued in
 		// PSarrayOUT, not the exact sum: each entry is at most one result slab.
@@ -574,6 +575,7 @@ bool Base_Thread::set_backend_to_be_skipped_if_frontend_is_slow(DS * myds, unsig
 		// That is intentional: a 32 KiB result slab really can be that large.
 		// Packets already borrowed as the send span are no longer in PSarrayOUT
 		// and are not counted, which is also correct: they are being sent now.
+#endif
 		if constexpr (std::is_same_v<T, PgSQL_Thread>) {
 			const unsigned int buffered_data = myds->sess->client_myds->PSarrayOUT->len * PGSQL_RESULTSET_BUFLEN;
 			if (buffered_data > overflow_safe_multiply<4,unsigned int>(pgsql_thread___threshold_resultset_size)) {

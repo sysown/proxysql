@@ -32,6 +32,7 @@ typedef struct P_st_ma_pvio_tls {
 } P_MARIADB_TLS;
 
 
+#ifdef PROXYSQL31
 // Input ring. One per connection, paid by idle clients.
 #define QUEUE_IN_DEFAULT_SIZE	32768
 // Output ring. Packs only what is not sent as its own span.
@@ -50,7 +51,6 @@ typedef struct P_st_ma_pvio_tls {
 #define WRITEOUT_THROTTLE_BYTES	32768
 // Historical name for the input ring.
 #define QUEUE_T_DEFAULT_SIZE	QUEUE_IN_DEFAULT_SIZE
-#define MY_SSL_BUFFER	8192
 
 /*
  * A queue has two independent identities:
@@ -94,6 +94,20 @@ typedef struct _queue_t {
 	PtrSize_t pkt;		// packet being staged, or the borrowed span
 	mysql_hdr hdr;
 } queue_t;
+#else
+#define QUEUE_T_DEFAULT_SIZE	32768
+
+typedef struct _queue_t {
+	void *buffer;
+	unsigned int size;
+	unsigned int head;
+	unsigned int tail;
+	unsigned int partial;
+	PtrSize_t pkt;
+	mysql_hdr hdr;
+} queue_t;
+#endif // PROXYSQL31
+#define MY_SSL_BUFFER	8192
 
 
 // this class avoid copying data
@@ -258,10 +272,12 @@ class MySQL_Data_Stream
 	// during fast forward grace close, allowing buffers to drain.
 	bool defer_close_due_to_fast_forward;
 	bool net_failure;
+#ifdef PROXYSQL31
 	// Set once when growing queueOUT for a compressed connection fails. The
 	// growth is retried on later frames, but the failure is logged only once so
 	// a persistent allocation failure cannot flood the error log per frame.
 	bool queue_out_grow_failed;
+#endif // PROXYSQL31
 
 	uint8_t pkt_sid;
 

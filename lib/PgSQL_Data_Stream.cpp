@@ -45,6 +45,7 @@ static void __dump_pkt(const char* func, unsigned char* _ptr, unsigned int len) 
 }
 #endif
 
+#ifdef PROXYSQL31
 // Allocate the owned ring. `capacity` is fixed for the life of the queue;
 // PostgreSQL has no per-connection output compression, so queueOUT never grows.
 // After init, buffer == storage and head == tail == 0: the common case.
@@ -73,6 +74,26 @@ static void __dump_pkt(const char* func, unsigned char* _ptr, unsigned int len) 
 		_q.pkt.ptr=NULL; \
 	} \
 }
+#else
+#define queue_init(_q,_s) { \
+    _q.size=_s; \
+    _q.buffer=malloc(_q.size); \
+    _q.head=0; \
+    _q.tail=0; \
+	_q.partial=0; \
+	_q.pkt.ptr=NULL; \
+	_q.pkt.size=0; \
+}
+
+#define queue_destroy(_q) { \
+	if (_q.buffer) free(_q.buffer); \
+	_q.buffer=NULL; \
+	if (_q.pkt.ptr) { \
+		l_free(_q.pkt.size,_q.pkt.ptr); \
+		queueOUT.pkt.ptr=NULL; \
+	} \
+}
+#endif // PROXYSQL31
 
 // Compact queued bytes to offset 0. Valid only for queueIN: queueOUT can hold a
 // borrowed span (buffer != storage) or a partially staged packet, and moving its
@@ -281,8 +302,13 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	PSarrayIN = NULL;
 	PSarrayOUT = NULL;
 	//resultset = NULL;
+#ifdef PROXYSQL31
 	queue_init(queueIN, QUEUE_IN_DEFAULT_SIZE);
 	queue_init(queueOUT, QUEUE_OUT_DEFAULT_SIZE);
+#else
+	queue_init(queueIN, QUEUE_T_DEFAULT_SIZE);
+	queue_init(queueOUT, QUEUE_T_DEFAULT_SIZE);
+#endif
 	mybe = NULL;
 	active = 1;
 	mypolls = NULL;
@@ -455,12 +481,21 @@ void PgSQL_Data_Stream::init() {
 	}
 }
 
+#ifdef PROXYSQL31
 void PgSQL_Data_Stream::reinit_queues() {
 	if (queueIN.storage == NULL)
 		queue_init(queueIN, QUEUE_IN_DEFAULT_SIZE);
 	if (queueOUT.storage == NULL)
 		queue_init(queueOUT, QUEUE_OUT_DEFAULT_SIZE);
 }
+#else
+void PgSQL_Data_Stream::reinit_queues() {
+	if (queueIN.buffer == NULL)
+		queue_init(queueIN, QUEUE_T_DEFAULT_SIZE);
+	if (queueOUT.buffer == NULL)
+		queue_init(queueOUT, QUEUE_T_DEFAULT_SIZE);
+}
+#endif // PROXYSQL31
 
 // this function initializes a PgSQL_Data_Stream with arguments
 void PgSQL_Data_Stream::init(PgSQL_DS_type _type, PgSQL_Session* _sess, int _fd) {
@@ -767,6 +802,7 @@ int PgSQL_Data_Stream::read_from_net() {
 	return r;
 }
 
+#ifdef PROXYSQL31
 // Finish a borrowed output span, if one is active and fully sent.
 //
 // array2buffer() borrows a packet when the ring is empty and the packet is
@@ -795,6 +831,7 @@ static void release_borrowed_out_span(PgSQL_Data_Stream* ds) {
 	q.size = q.capacity;
 	q.partial = 0;
 }
+#endif // PROXYSQL31
 
 int PgSQL_Data_Stream::write_to_net() {
 	int bytes_io = 0;
@@ -901,7 +938,9 @@ int PgSQL_Data_Stream::write_to_net() {
 	}
 	else {
 		queue_r(queueOUT, bytes_io);
+#ifdef PROXYSQL31
 		release_borrowed_out_span(this);
+#endif
 		/**
 		 * @brief Update send timestamp in ProxySQL_Poll for PostgreSQL activity tracking
 		 *
@@ -946,7 +985,11 @@ int PgSQL_Data_Stream::write_to_net() {
 //   - PSarrayOUT->len: packets not staged yet.
 bool PgSQL_Data_Stream::available_data_out() {
 	int buflen = queue_data(queueOUT);
+#ifdef PROXYSQL31
 	if (buflen || queueOUT.partial || PSarrayOUT->len) {
+#else
+	if (buflen || PSarrayOUT->len) {
+#endif
 		return true;
 	}
 	return false;
@@ -1165,11 +1208,13 @@ int PgSQL_Data_Stream::array2buffer() {
 			goto __exit_array2buffer;
 		}
 	}
+#ifdef PROXYSQL31
 	// A borrowed span is already the send buffer. Do not copy into it: buffer
 	// points at the packet, not at the owned ring.
 	if (queueOUT.buffer != queueOUT.storage) {
 		return 0;
 	}
+#endif
 	while (cont) {
 		//VALGRIND_DISABLE_ERROR_REPORTING;
 		if (queue_available(queueOUT) == 0) {
@@ -1178,6 +1223,7 @@ int PgSQL_Data_Stream::array2buffer() {
 		if (queueOUT.partial == 0) { // read a new packet
 			if (PSarrayOUT->len - idx) {
 				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Removing a packet from array\n", sess, this);
+#ifdef PROXYSQL31
 				// A packet that does not fit in storage is sent in place, but only
 				// once the ring is empty. Leave it queued until then.
 				{
@@ -1186,6 +1232,7 @@ int PgSQL_Data_Stream::array2buffer() {
 						goto __exit_array2buffer;
 					}
 				}
+#endif
 				if (queueOUT.pkt.ptr) {
 					//l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
 					add_to_data_packet_history_without_alloc(data_packets_history_OUT, queueOUT.pkt.ptr, queueOUT.pkt.size);
@@ -1206,6 +1253,7 @@ int PgSQL_Data_Stream::array2buffer() {
 #ifdef DEBUG
 				{ __dump_pkt(__func__, (unsigned char*)queueOUT.pkt.ptr, queueOUT.pkt.size); }
 #endif
+#ifdef PROXYSQL31
 				// Ring is empty and this packet does not fit in it.
 				if (queue_data(queueOUT) == 0 && queueOUT.pkt.ptr &&
 						queueOUT.pkt.size > queueOUT.capacity) {
@@ -1218,6 +1266,7 @@ int PgSQL_Data_Stream::array2buffer() {
 					ret = static_cast<int>(queueOUT.pkt.size);
 					goto __exit_array2buffer;
 				}
+#endif
 			}
 			else {
 				cont = false;

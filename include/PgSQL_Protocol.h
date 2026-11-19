@@ -55,9 +55,13 @@
 /* new style V3 packet header len - type:1b, len:4b */
 #define NEW_HEADER_LEN  5
 
+#ifdef PROXYSQL31
 // Result slabs. 32 KiB stays in the jemalloc tcache (lg_tcache_max=16).
 // A slab larger than the output ring is sent in place, so this is not copied again.
 #define PGSQL_RESULTSET_BUFLEN		(32 * 1024)
+#else
+#define PGSQL_RESULTSET_BUFLEN		(16 * 1024)
+#endif // PROXYSQL31
 
 class ProxySQL_Admin;
 struct PgCredentials;

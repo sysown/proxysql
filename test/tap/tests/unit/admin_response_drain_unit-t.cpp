@@ -57,9 +57,13 @@ static void check_stream(const char* name) {
 	memcpy(packet, payload.data(), payload.size());
 	stream.PSarrayOUT->add(packet, payload.size());
 	stream.array2buffer_full();
+#ifdef PROXYSQL31
 	ok(stream.queueOUT.buffer != stream.queueOUT.storage && stream.queueOUT.partial == 0 &&
 		stream.queueOUT.head == payload.size(),
 		"%s: oversized packet is sent in place, not sliced into the ring", name);
+#else
+	ok(stream.queueOUT.partial > 0, "%s: oversized packets require staged refills", name);
+#endif
 	std::atomic<bool> finished{false};
 	std::string received;
 	std::thread reader([&received, filler, &payload, &fds, &finished] {
@@ -144,12 +148,17 @@ static void check_tls(const char* name, const std::filesystem::path& fixtures) {
 	require(SSL_is_init_finished(peer) && SSL_is_init_finished(stream.ssl));
 	const size_t filler = fill_socket(fds[0]);
 	const std::string payload(16000, 't');
+#ifdef PROXYSQL31
 	// Larger than the output ring. Point the span at the payload; it is not queue-owned.
 	stream.queueOUT.buffer = const_cast<char*>(payload.data());
 	stream.queueOUT.size = static_cast<unsigned int>(payload.size());
 	stream.queueOUT.head = static_cast<unsigned int>(payload.size());
 	stream.queueOUT.tail = 0;
 	stream.queueOUT.partial = 0;
+#else
+	memcpy(stream.queueOUT.buffer, payload.data(), payload.size());
+	stream.queueOUT.head = payload.size();
+#endif
 	// Force ciphertext EAGAIN after SSL_write has accepted the plaintext.
 	stream.write_to_net();
 	ok(stream.queueOUT.head == stream.queueOUT.tail && stream.ssl_write_len > 0,

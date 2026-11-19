@@ -33,6 +33,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifdef PROXYSQL31
 int main() {
 	plan(14);
 
@@ -104,3 +105,10 @@ int main() {
 	test_cleanup_minimal();
 	return exit_status();
 }
+#else
+int main() {
+	// The compressed output ring is a PROXYSQL31 feature; v3.0 keeps the staging path.
+	plan(0);
+	return exit_status();
+}
+#endif // PROXYSQL31
