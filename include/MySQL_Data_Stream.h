@@ -43,7 +43,7 @@ typedef struct P_st_ma_pvio_tls {
 #define QUEUE_OUT_DEFAULT_SIZE	1024
 // Compressed connections stage every compressed frame through the ring, and
 // recompression already happened before the copy. Keep the historical 32 KiB
-// for them; the ring is raised once, when compression is negotiated.
+// for them; the ring is raised once, on the first compressed frame.
 #define QUEUE_OUT_COMPRESSED_SIZE	32768
 // Bytes on the wire before writeout() looks at the client rate. Not a capacity.
 // The old code compared against QUEUE_T_DEFAULT_SIZE because the output ring was

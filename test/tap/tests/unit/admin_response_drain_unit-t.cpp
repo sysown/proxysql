@@ -149,20 +149,30 @@ static void check_tls(const char* name, const std::filesystem::path& fixtures) {
 	const size_t filler = fill_socket(fds[0]);
 	const std::string payload(16000, 't');
 #ifdef PROXYSQL31
-	// Larger than the output ring. Point the span at the payload; it is not queue-owned.
-	stream.queueOUT.buffer = const_cast<char*>(payload.data());
+	// Larger than the output ring. Hand a queue-owned packet to the span, as the
+	// borrow path does in production, so the release path is exercised too.
+	void* owned = l_alloc(payload.size());
+	memcpy(owned, payload.data(), payload.size());
+	stream.queueOUT.buffer = owned;
 	stream.queueOUT.size = static_cast<unsigned int>(payload.size());
 	stream.queueOUT.head = static_cast<unsigned int>(payload.size());
 	stream.queueOUT.tail = 0;
 	stream.queueOUT.partial = 0;
+	stream.queueOUT.pkt.ptr = owned;
+	stream.queueOUT.pkt.size = payload.size();
 #else
 	memcpy(stream.queueOUT.buffer, payload.data(), payload.size());
 	stream.queueOUT.head = payload.size();
 #endif
 	// Force ciphertext EAGAIN after SSL_write has accepted the plaintext.
 	stream.write_to_net();
-	ok(stream.queueOUT.head == stream.queueOUT.tail && stream.ssl_write_len > 0,
-		"%s: TLS backpressure consumes plaintext once and retains ciphertext", name);
+#ifdef PROXYSQL31
+	const bool packet_released = stream.queueOUT.pkt.ptr == NULL;
+#else
+	const bool packet_released = true;
+#endif
+	ok(stream.queueOUT.head == stream.queueOUT.tail && stream.ssl_write_len > 0 && packet_released,
+		"%s: TLS backpressure consumes plaintext once, releases the packet and retains ciphertext", name);
 	std::atomic<bool> finished{false};
 	std::string received;
 	std::thread reader([&fds, filler, input, peer, &received, &finished] {

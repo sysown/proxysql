@@ -7218,11 +7218,11 @@ void MySQL_Thread::Get_Memory_Stats() {
 		} else {
 #ifdef PROXYSQL31
 			// Epoll/idle worker: sessions may be owned/moved by another thread,
-			// so they are not inspected individually. Report the default per
-			// connection rings. A session that negotiated compression keeps the
-			// larger QUEUE_OUT_COMPRESSED_SIZE ring; it is not counted here (the
-			// per-session path below, used by normal workers, reports it exactly).
-			status_variables.stvar[st_var_mysql_frontend_buffers_bytes]+=(mysql_sessions->len * (QUEUE_IN_DEFAULT_SIZE + QUEUE_OUT_DEFAULT_SIZE));
+			// so their rings cannot be inspected safely. Report a conservative
+			// per-connection upper bound: the input ring plus the largest output
+			// ring a compressed connection can grow to. The per-session path
+			// used by normal workers reports the actual capacities.
+			status_variables.stvar[st_var_mysql_frontend_buffers_bytes]+=(mysql_sessions->len * (QUEUE_IN_DEFAULT_SIZE + QUEUE_OUT_COMPRESSED_SIZE));
 #else
 			status_variables.stvar[st_var_mysql_frontend_buffers_bytes]+=(mysql_sessions->len * QUEUE_T_DEFAULT_SIZE * 2);
 #endif

@@ -116,7 +116,7 @@ int main() {
 			"the waiting packet is staged after the release");
 	}
 
-	if (fds[0] >= 0) close(fds[0]);
+	// fds[0] belongs to the data stream; its destructor already closed it.
 	if (fds[1] >= 0) close(fds[1]);
 	test_cleanup_minimal();
 	return exit_status();
@@ -124,7 +124,8 @@ int main() {
 #else
 int main() {
 	// The output-span model is a PROXYSQL31 feature; v3.0 keeps the staging path.
-	plan(0);
+	plan(1);
+	ok(1, "SKIP: PROXYSQL31 is not enabled");
 	return exit_status();
 }
 #endif // PROXYSQL31
