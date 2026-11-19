@@ -98,6 +98,10 @@ static const char* const kill_cases[] = {
 static const struct { const char* sql; MYSQL_COM_QUERY_command expected; } legacy_only_cases[] = {
 	{ "FLUSH LOGS", MYSQL_COM_QUERY_FLUSH },
 	{ "RELEASE SAVEPOINT sp1", MYSQL_COM_QUERY_RELEASE_SAVEPOINT },
+	// The savepoint name is replaced by '?' in the digest (#6671); the keywords the
+	// classifier needs must survive.
+	{ "RELEASE SAVEPOINT `sp 1`", MYSQL_COM_QUERY_RELEASE_SAVEPOINT },
+	{ "SAVEPOINT `before_edit`", MYSQL_COM_QUERY_SAVEPOINT },
 	{ "OPTIMIZE TABLE t1", MYSQL_COM_QUERY_OPTIMIZE },
 	{ "PURGE BINARY LOGS TO 'mysql-bin.000010'", MYSQL_COM_QUERY_PURGE },
 	{ "CHANGE MASTER TO MASTER_HOST='h1'", MYSQL_COM_QUERY_CHANGE_MASTER },
@@ -122,7 +126,7 @@ int main() {
 	const size_t n_kill = sizeof(kill_cases) / sizeof(kill_cases[0]);
 	const size_t n_legacy = sizeof(legacy_only_cases) / sizeof(legacy_only_cases[0]);
 	const size_t n_parser = sizeof(parser_cases) / sizeof(parser_cases[0]);
-	plan(3 * n_kill + 3 * n_legacy + 2 * n_parser + 2 * 4 + 2);
+	plan(3 * n_kill + 3 * n_legacy + 2 * n_parser + 2 * 4 + 2 + 1);
 	test_init_minimal();
 	mysql_thread___query_digests_max_query_length = 65000;
 	mysql_thread___query_digests_max_digest_length = 2048;
@@ -145,6 +149,15 @@ int main() {
 		ok(legacy == c.expected, "parser=0 classifies [%s] as %d (got: %d)", c.sql, c.expected, legacy);
 		ok(parser == c.expected, "parser=1 classifies [%s] as %d (got: %d)", c.sql, c.expected, parser);
 		ok(parser == legacy, "parser=1 and parser=0 classify [%s] identically", c.sql);
+	}
+
+	{
+		// Legacy classification of ROLLBACK TO SAVEPOINT reads the digest text, whose savepoint
+		// name is replaced by '?' (#6671). (parser=1 maps it to ROLLBACK through ParserSQL.)
+		const char* sql = "ROLLBACK TO SAVEPOINT `sp 1`";
+		const MYSQL_COM_QUERY_command legacy = legacy_command(sql);
+		ok(legacy == MYSQL_COM_QUERY_ROLLBACK_SAVEPOINT, "parser=0 classifies [%s] as %d (got: %d)",
+			sql, MYSQL_COM_QUERY_ROLLBACK_SAVEPOINT, legacy);
 	}
 
 	for (const auto& c : parser_cases) {

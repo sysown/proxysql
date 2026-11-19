@@ -1934,6 +1934,129 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 }
 
 /**
+ * @brief If 'p' starts with the keyword 'kw' (case-insensitive) followed by a single space, returns the
+ *   position after that space. Otherwise returns NULL.
+ * @details Digest text has already collapsed every run of whitespace into one space.
+ */
+static inline const char* skip_digest_keyword(const char* p, const char* kw, size_t kw_len) {
+	if (strncasecmp(p, kw, kw_len) == 0 && p[kw_len] == ' ') {
+		return p + kw_len + 1;
+	}
+	return NULL;
+}
+
+/**
+ * @brief Returns true if [p, end) is a single savepoint identifier as it appears in a digest.
+ * @details Accepted forms are:
+ *   - A backtick-quoted identifier (doubled backticks are escapes) spanning the whole range.
+ *   - An unquoted identifier: letters, digits, '_', '$' and multibyte (>= 0x80) characters. '?' is also
+ *     accepted, since 'query_digests_no_digits' can already have replaced digits inside the name.
+ *   Anything else (more tokens, a second statement, operators, ...) is rejected, so the digest is left as is.
+ */
+static inline bool is_digest_savepoint_ident(const char* p, const char* end) {
+	if (p >= end) {
+		return false;
+	}
+	if (*p == '`') {
+		const char* c = p + 1;
+		while (c < end) {
+			if (*c == '`') {
+				if (c + 1 < end && c[1] == '`') {
+					c += 2;
+					continue;
+				}
+				// closing backtick must be the last character
+				return c + 1 == end && c > p + 1;
+			}
+			c++;
+		}
+		return false;
+	}
+	for (const char* c = p; c < end; c++) {
+		const unsigned char uc = static_cast<unsigned char>(*c);
+		if (!(isalnum(uc) || uc == '_' || uc == '$' || uc == '?' || uc >= 0x80)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * @brief Replaces the savepoint name operand of savepoint statements with '?' (#6671).
+ * @details Handles the MySQL savepoint statements:
+ *   - SAVEPOINT ident
+ *   - RELEASE SAVEPOINT ident
+ *   - ROLLBACK [WORK] TO [SAVEPOINT] ident
+ *
+ *   Leading comments kept by 'query_digests_keep_comment' are skipped. Only the name is replaced; the keywords are kept as written, so different statements still produce
+ *   different digests and the command type derived from the digest text is unchanged. The digest is only
+ *   modified when, after the keywords, the rest of the digest is exactly one identifier.
+ *
+ *   The replacement never grows the digest, so it is performed in place.
+ *
+ * @param res Start of the NUL terminated digest.
+ * @param end Position of the digest NUL terminator.
+ * @return The new position of the NUL terminator.
+ */
+static inline char* normalize_savepoint_name(char* res, char* end) {
+	const char* stmt = res;
+	// With 'query_digests_keep_comment' the digest can start with comments, skip them.
+	while (stmt[0] == '/' && stmt[1] == '*') {
+		const char* c_end = strstr(stmt + 2, "*/");
+		if (c_end == NULL) {
+			return end;
+		}
+		stmt = c_end + 2;
+		if (*stmt == ' ') {
+			stmt++;
+		}
+	}
+
+	// Fast path: only statements starting with 'S' or 'R' are candidates.
+	const char f = stmt[0];
+	if (f != 'S' && f != 's' && f != 'R' && f != 'r') {
+		return end;
+	}
+
+	const char* name = NULL;
+	if (f == 'S' || f == 's') {
+		name = skip_digest_keyword(stmt, "SAVEPOINT", 9);
+	} else {
+		const char* p = skip_digest_keyword(stmt, "RELEASE", 7);
+		if (p) {
+			name = skip_digest_keyword(p, "SAVEPOINT", 9);
+		} else {
+			p = skip_digest_keyword(stmt, "ROLLBACK", 8);
+			if (p) {
+				const char* w = skip_digest_keyword(p, "WORK", 4);
+				if (w) {
+					p = w;
+				}
+				p = skip_digest_keyword(p, "TO", 2);
+				if (p) {
+					const char* s = skip_digest_keyword(p, "SAVEPOINT", 9);
+					if (s) {
+						name = s;
+					} else if (strcasecmp(p, "SAVEPOINT") != 0) {
+						// 'ROLLBACK TO ident'. A bare 'ROLLBACK TO SAVEPOINT' has no name and is left as is.
+						name = p;
+					}
+				}
+			}
+		}
+	}
+
+	if (name == NULL || !is_digest_savepoint_ident(name, end)) {
+		return end;
+	}
+
+	char* name_pos = res + (name - res);
+	name_pos[0] = '?';
+	name_pos[1] = '\0';
+	return name_pos + 1;
+}
+
+/**
  * @brief Helper function for testing 'first_stage' digest parsing.
  *
  * @param q Query to be parsed.
@@ -2101,6 +2224,9 @@ char* mysql_query_digest_and_first_comment(const char* const q, int q_len, char*
 	}
 
 	final_stage(&shared_st, &stage_1_st, opts);
+
+	// Group savepoint statements regardless of the savepoint name (#6671)
+	shared_st.res_cur_pos = normalize_savepoint_name(res, shared_st.res_cur_pos);
 
 	return res;
 }
