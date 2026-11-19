@@ -1697,8 +1697,9 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		if (!prepare_monitor_token_auth(mysql, hostname, port, use_ssl, ssl_params.get(),
 				mysql_thread___monitor_username, mysql_thread___monitor_connect_timeout, token_auth)) {
 			mysql_error_msg = strdup(("azure_entra: " + token_auth.failure_code).c_str());
-			proxy_error("Azure Entra monitor connection failure user='%s' endpoint='%s' port=%d category='%s'\n",
-				mysql_thread___monitor_username, hostname, port, token_auth.failure_code.c_str());
+			proxy_error("Azure Entra monitor connection failure user='%s' endpoint='%s' port=%d category='%s' code='%s' request_id='%s'\n",
+				mysql_thread___monitor_username, hostname, port, token_auth.failure_code.c_str(),
+				token_auth.provider_failure.aws_error_code.c_str(), token_auth.provider_failure.request_id.c_str());
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, 9002);
 			mysql_close(mysql);
 			mysql = NULL;

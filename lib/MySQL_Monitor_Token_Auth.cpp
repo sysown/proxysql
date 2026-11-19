@@ -45,6 +45,7 @@ bool prepare_monitor_token_auth(MYSQL *mysql, const char *hostname, uint16_t por
 	if (result.status != AwsIamStatus::OK || result.token.empty()) {
 		out.failure_code = result.status == AwsIamStatus::TIMEOUT ? "token_timeout"
 			: result.failure.category.empty() ? "token_request_failed" : result.failure.category;
+		out.provider_failure = result.failure;
 		return false;
 	}
 	out.key = config.key;

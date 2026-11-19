@@ -18,6 +18,8 @@ struct MonitorTokenAuth {
 	AwsIamTokenKey key;
 	uint64_t generation { 0 };
 	std::string failure_code;
+	/** @brief Entra error code and correlation id of a refused token request; empty otherwise. */
+	AwsIamRedactedFailure provider_failure;
 };
 
 /**
