@@ -71,6 +71,9 @@ struct DuckDBSessionState {
 	bool mysql_schema_applied { false };
 };
 DuckDBSessionState& duckdb_session_state();
+bool duckdb_client_config_before_prepare(const std::string&, std::string&, bool&, std::string&);
+bool duckdb_client_config_after_prepare(const std::string&, duckdb_statement_type, bool, std::string&);
+void duckdb_prepared_transaction_outcome(const std::string&, bool);
 
 // Result of parsing exactly one MySQL USE statement from the client's COM_QUERY.
 struct DuckDBMySQLUseStatement {

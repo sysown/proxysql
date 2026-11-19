@@ -1,4 +1,5 @@
 #include "duckdb_prepared_adapter.h"
+#include "duckdb/main/capi/capi_internal.hpp"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -129,8 +130,11 @@ Status DuckDBAdapter::prepare(const std::string& sql, std::unique_ptr<Statement>
     out.reset();
     if (!connection_) return error(ErrorKind::internal, "missing connection");
     if (sql.find('\0') != std::string::npos) return error(ErrorKind::syntax, "embedded NUL in SQL");
+    std::string effective = sql, policy_error;
+    bool confined = false;
+    if (before_ && !before_(sql, effective, confined, policy_error)) return error(ErrorKind::policy, policy_error.c_str());
     duckdb_extracted_statements raw_extracted = nullptr;
-    const auto statement_count = duckdb_extract_statements(connection_, sql.c_str(), &raw_extracted);
+    const auto statement_count = duckdb_extract_statements(connection_, effective.c_str(), &raw_extracted);
     ExtractedStatementsHandle extracted(raw_extracted);
     if (statement_count != 1) {
         std::string message = "expected exactly one statement";
@@ -143,15 +147,20 @@ Status DuckDBAdapter::prepare(const std::string& sql, std::unique_ptr<Statement>
     auto p = std::make_unique<State>(this);
     const auto rc = duckdb_prepare_extracted_statement(connection_, extracted.get(), 0, &p->stmt);
     if (rc != DuckDBSuccess) return error(ErrorKind::engine, duckdb_prepare_error(p->stmt));
-    if (duckdb_prepared_statement_type(p->stmt) != DUCKDB_STATEMENT_TYPE_SELECT) {
-        return error(ErrorKind::unsupported, "only native SELECT statements are supported");
-    }
+    if (after_ && !after_(sql, duckdb_prepared_statement_type(p->stmt), confined, policy_error)) return error(ErrorKind::policy, policy_error.c_str());
     for (idx_t i = 1; i <= duckdb_nparams(p->stmt); ++i) {
         LogicalTypeHandle logical(duckdb_param_logical_type(p->stmt, i));
         p->params.push_back(map_type(logical.get()));
         p->native_params.push_back(logical ? duckdb_get_type_id(logical.get()) : DUCKDB_TYPE_INVALID);
     }
-    for (idx_t i = 0; i < duckdb_prepared_statement_column_count(p->stmt); ++i) {
+    // The pinned DuckDB C API only exposes the result return type after
+    // execution. Describe needs it at prepare to distinguish a row set from
+    // DuckDB's internal affected-row count column.
+    const auto* wrapper = reinterpret_cast<duckdb::PreparedStatementWrapper*>(p->stmt);
+    const auto return_type = wrapper->statement->GetStatementProperties().return_type;
+    const idx_t ncols = duckdb_prepared_statement_column_count(p->stmt);
+    const bool count_only = return_type != duckdb::StatementReturnType::QUERY_RESULT;
+    for (idx_t i = 0; i < (count_only ? 0 : ncols); ++i) {
         LogicalTypeHandle logical(duckdb_prepared_statement_column_logical_type(p->stmt, i));
         const auto type = map_type(logical.get());
         if (type.kind == TypeKind::unknown) {
@@ -164,6 +173,12 @@ Status DuckDBAdapter::prepare(const std::string& sql, std::unique_ptr<Statement>
     }
     out = std::move(p);
     return {};
+}
+bool DuckDBAdapter::modifies_database(Statement& s) const noexcept {
+    auto p = checked(s);
+    if (!p) return false;
+    const auto* wrapper = reinterpret_cast<duckdb::PreparedStatementWrapper*>(p->stmt);
+    return !wrapper->statement->GetStatementProperties().IsReadOnly();
 }
 Status DuckDBAdapter::describe_parameters(Statement& s,std::vector<Type>& out) { auto p=checked(s); if (!p) return error(ErrorKind::internal,"foreign statement"); out=p->params; return {}; }
 Status DuckDBAdapter::describe_parameter_positions(Statement& statement,
@@ -265,6 +280,13 @@ Status DuckDBAdapter::execute(Statement& s,ExecInfo& info) {
     auto p = checked(s);
     info = {};
     if (!p) return error(ErrorKind::internal, "foreign statement");
+    switch (duckdb_prepared_statement_type(p->stmt)) {
+    case DUCKDB_STATEMENT_TYPE_SELECT: info.command = Command::select; break;
+    case DUCKDB_STATEMENT_TYPE_INSERT: info.command = Command::insert; break;
+    case DUCKDB_STATEMENT_TYPE_UPDATE: info.command = Command::update; break;
+    case DUCKDB_STATEMENT_TYPE_DELETE: info.command = Command::delete_; break;
+    default: break;
+    }
     if (!p->bound && !p->params.empty()) {
         return error(ErrorKind::invalid_parameter, "parameters not bound");
     }
@@ -273,6 +295,13 @@ Status DuckDBAdapter::execute(Statement& s,ExecInfo& info) {
     p->has_result = true;
     if (duckdb_execute_prepared(p->stmt, &p->result) != DuckDBSuccess) {
         return error(ErrorKind::engine, duckdb_result_error(&p->result));
+    }
+    const auto result_type = duckdb_result_return_type(p->result);
+    if (result_type != DUCKDB_RESULT_TYPE_QUERY_RESULT) {
+        info.has_result = false;
+        info.affected_rows = result_type == DUCKDB_RESULT_TYPE_CHANGED_ROWS ? duckdb_rows_changed(&p->result) : 0;
+        p->ready = true;
+        return {};
     }
     if (duckdb_column_count(&p->result) != p->columns.size()) {
         return error(ErrorKind::schema_changed, "result column count changed");

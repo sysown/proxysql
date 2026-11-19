@@ -758,6 +758,10 @@ void apply_txn_outcome(DuckDBSessionState& st, DuckDBTxnVerb verb, bool ok) {
 
 } // namespace
 
+void duckdb_prepared_transaction_outcome(const std::string& sql, bool ok) {
+    apply_txn_outcome(duckdb_session_state(), classify_txn_verb(sql), ok);
+}
+
 char duckdb_pgsql_transaction_status(duckdb_connection conn) {
 	if (conn == nullptr) return 'I';
 	return duckdb_session_state().pgsql_txn_status;
@@ -1090,6 +1094,13 @@ bool check_prepared_config_policy(const std::string& sql, duckdb_statement_type 
 }
 
 } // namespace
+
+bool duckdb_client_config_before_prepare(const std::string& sql, std::string& out, bool& confined, std::string& err) {
+    return apply_client_config_policy(sql, out, confined, err);
+}
+bool duckdb_client_config_after_prepare(const std::string& sql, duckdb_statement_type type, bool confined, std::string& err) {
+    return check_prepared_config_policy(sql, type, confined, err);
+}
 
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective, DuckDBResultProtocol protocol) {
 	DuckDBExecOutcome outcome;

@@ -10,7 +10,7 @@ not attempt complete dialect or wire-feature compatibility.
 |---|---|---|
 | Authentication | `mysql_users` | `pgsql_users` |
 | Simple text query | Supported | Supported |
-| Client prepared statements | Read-only native SELECT; opt-in translated subset with signed-integer predicate parameters | Read-only native SELECT subset |
+| Client prepared statements | Native SQL reads and writes, plus opt-in analytical SELECT translation | Native SQL reads and writes |
 | Extended-query protocol | N/A | Supported for the prepared subset |
 | Multiple statements in one request | Rejected | Rejected |
 | Transaction status | Protocol OK/status behavior | `ReadyForQuery` I/T/E |
@@ -18,8 +18,9 @@ not attempt complete dialect or wire-feature compatibility.
 
 ## Prepared queries
 
-Both listeners support client prepared SELECT through the shared ABI 17 execution
-service. Native DuckDB SQL is the default. With startup-only
+Both listeners support native prepared reads and writes through the shared
+ABI 17 execution service with `PROXYSQL40=1`. The same database access mode
+and session configuration rules apply to prepared and ordinary native SQL. With startup-only
 `duckdb-mysql_dialect=mysql_analytical`, the MySQL listener translates the
 [bounded analytical subset](mysql-query-compatibility.md) for text and
 prepared queries. Analytical placeholders are admitted only as WHERE comparison
@@ -54,26 +55,25 @@ identity is treated exactly like changed metadata: 1615 before execution. The
 connection's own DuckDB schema therefore cannot redirect a prepared statement,
 and `USE` never invalidates or retargets a live handle.
 
-Preparation is
-limited to implicit, autocommit client cycles: explicit client transactions,
-prepared DML and RETURNING, temporal and nested values, cursors and
-cancellation are unsupported. MySQL clients must negotiate UTF-8 or issue a
-separate `SET NAMES utf8`, `utf8mb3`, or `utf8mb4`; PostgreSQL requires UTF8.
+Native prepared DML can run in autocommit or within a client transaction.
+Plain DML returns the affected-row count. DML with `RETURNING` sends rows,
+and autocommit writes are committed after result materialization succeeds.
+The translated analytical subset requires an idle autocommit session. Cursor
+operations, cancellation, and some temporal and nested value mappings remain
+unsupported. MySQL clients must negotiate UTF-8 or issue a separate
+`SET NAMES utf8`, `utf8mb3`, or `utf8mb4`. PostgreSQL requires UTF8.
 
 Output metadata must be known at native preparation. Expressions such as
 `SELECT ? + 0` and `SELECT length(?)` can be refused when DuckDB cannot resolve
 their output types; selecting typed table columns with parameters in predicates
 works. PostgreSQL can use `CAST($1 AS BIGINT)` with an explicit parameter OID.
-The current policy rejects opaque `DECIMAL(p,s)` cast type names on PostgreSQL;
-ParserSQL 1.1.1 also rejects MySQL `CAST(? AS INTEGER)` and `COUNT(DISTINCT ...)`.
 Typed table results support boolean, decimal and blob, with signed and unsigned
 integers, floating point, text and NULL within the supported mappings. Native
 HUGEINT/UHUGEINT and integer SUM results use exact DECIMAL/NUMERIC(39,0), including
 typed predicate binding and checked overflow.
 
-Each native prepared operation is protected by a private read-only transaction,
-including protection against hidden database writes. Engine external access
-remains disabled by default. These controls are not an OS sandbox.
+Translated analytical operations run in a private read-only transaction.
+Engine external access remains disabled by default across both dialect modes.
 
 ## One statement per request
 
@@ -304,7 +304,6 @@ Text `BEGIN`, `COMMIT`, and `ROLLBACK` commands execute in DuckDB. PostgreSQL
   admitted subset and are refused before execution.
 - Analytical `SELECT` against a dropped current database is refused with 1235
   instead of MySQL's 1049.
-- Prepared execution is limited to the read-only subset described above.
 - No query timeout or `duckdb_interrupt()` policy.
 - No general MySQL/PostgreSQL dialect translation.
 - No structured protocol error when the connection cap rejects a newly

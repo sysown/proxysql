@@ -303,13 +303,11 @@ class MakefileDependencyTest(unittest.TestCase):
         provider = (
             "duckdb_prepared_adapter.cpp",
             "duckdb_prepared_provider.cpp",
-            "duckdb_prepared_policy.cpp",
         )
         targets = {
             "duckdb_listener_unit-t": ("duckdb_listener.cpp", "duckdb_session.cpp", mysql_set, *provider),
             "duckdb_admin_schema_unit-t": ("duckdb_listener.cpp", "duckdb_session.cpp", mysql_set, *provider),
             "duckdb_session_unit-t": ("duckdb_session.cpp", mysql_set),
-            "duckdb_prepared_policy_unit-t": ("duckdb_prepared_policy.cpp",),
         }
         for target, support_sources in targets.items():
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
@@ -347,7 +345,7 @@ class MakefileDependencyTest(unittest.TestCase):
             (ROOT / "lib", ".oo", (
                 "Query_Processor_ParserSQL",)),
             (ROOT / "plugins/duckdb", ".o", (
-                "duckdb_prepared_policy", "duckdb_mysql_set", "duckdb_mysql_select_compat")),
+                "duckdb_mysql_set", "duckdb_mysql_select_compat")),
         )
         with tempfile.TemporaryDirectory() as tmp:
             scratch = Path(tmp)

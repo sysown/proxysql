@@ -75,8 +75,10 @@ struct DuckDBPreparedProvider::Impl {
     ProxySQL_Embedded_PolicyV1 policy{};
     std::string message;
     bool active = false, failed = false, poisoned = false;
+    bool native_write = false, native_executed = false, native_finished = false;
     bool mysql_analytical = false;
     std::function<std::string()> namespace_database;
+    std::function<void(const std::string&, bool)> transaction_outcome;
     std::vector<NativeStatement *> live;
     // The provider keeps each analytical statement's client SQL to find its
     // prepare-time namespace at execute. The shared quota does not see this
@@ -109,7 +111,7 @@ struct DuckDBPreparedProvider::Impl {
         api = {ProxySQL_Embedded_ABI_V1,
                sizeof(api),
                this,
-               ProxySQL_Embedded_CAP_READ_ONLY | ProxySQL_Embedded_CAP_PARAMETER_POSITIONS,
+               ProxySQL_Embedded_CAP_PARAMETER_POSITIONS,
                ((UINT64_C(1) << ProxySQL_Embedded_VALUE_NULL) |
                 (UINT64_C(1) << ProxySQL_Embedded_VALUE_INT64) |
                 (UINT64_C(1) << ProxySQL_Embedded_VALUE_UINT64) |
@@ -127,7 +129,8 @@ struct DuckDBPreparedProvider::Impl {
                reset,
                finalize,
                enter,
-               leave};
+               leave,
+               finish};
         policy = {ProxySQL_Embedded_ABI_V1, sizeof(policy),    this,
                   authorize_prepare,        authorize_execute, authorize_fetch};
     }
@@ -322,9 +325,12 @@ struct DuckDBPreparedProvider::Impl {
                         sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
                     sql.size);
             }
+            if (!p.mysql_analytical) s->sql = prepared_sql;
             auto r = p.adapter.prepare(prepared_sql, s->stmt);
-            if (r)
+            if (r) {
+                if (!p.mysql_analytical && p.transaction_outcome) p.transaction_outcome(s->sql, false);
                 return p.result(e, r);
+            }
             if (p.mysql_analytical) {
                 p.live.push_back(s.get());
                 p.retained_sql_bytes += s->sql.size();
@@ -491,11 +497,26 @@ struct DuckDBPreparedProvider::Impl {
                                    "analytical execute requires fresh binding");
                 p.fresh_bound = nullptr;
             }
+            if (!p.mysql_analytical && p.adapter.modifies_database(*statement(st).stmt)) {
+                p.native_write = true;
+                if (p.status && p.status(p.status_arg) == 'I') {
+                    if (!p.query("BEGIN TRANSACTION"))
+                        return p.error(e, ErrorKind::transaction, "cannot begin private transaction");
+                    p.active = true;
+                }
+            }
             ExecInfo x;
             auto r = p.adapter.execute(*statement(st).stmt, x);
+            if (!p.mysql_analytical) {
+                // A stale result description can be detected after DuckDB
+                // executed the write. Roll it back if the result cannot be sent.
+                p.native_executed = !r || r->kind == ErrorKind::schema_changed;
+                if (p.transaction_outcome) p.transaction_outcome(statement(st).sql, !r);
+            }
             if (r)
                 return p.result(e, r);
-            *info = {static_cast<uint8_t>(x.has_result), x.affected_rows, x.last_insert_id};
+            *info = {static_cast<uint8_t>(x.has_result), x.affected_rows, x.last_insert_id,
+                     static_cast<uint32_t>(x.command)};
             return 0;
         }
         CATCH(c, e)
@@ -618,6 +639,13 @@ struct DuckDBPreparedProvider::Impl {
                 *guard = &p.passive_guard;
                 return 0;
             }
+            if (!p.mysql_analytical) {
+                if (p.status && p.status(p.status_arg) == 'E')
+                    return p.error(e, ErrorKind::engine, "prepared statements require UTF8 client encoding");
+                p.native_write = p.native_executed = p.native_finished = false;
+                *guard = op == ProxySQL_Embedded_OPERATION_EXECUTE ? static_cast<void*>(&p) : static_cast<void*>(&p.passive_guard);
+                return 0;
+            }
             if (p.poisoned || p.active || !p.status || p.status(p.status_arg) != 'I')
                 return p.error(e, ErrorKind::transaction,
                                "prepared execution requires an idle autocommit session");
@@ -632,6 +660,19 @@ struct DuckDBPreparedProvider::Impl {
             p.failed = false;
             p.guard_op = op;
             *guard = &p;
+            return 0;
+        }
+        CATCH(c, e)
+    }
+    static int finish(void *c, void *guard, E *e) noexcept {
+        try {
+            auto &p = self(c);
+            if (p.mysql_analytical || guard != &p) return 0;
+            if (p.active) {
+                if (!p.query("COMMIT")) return p.error(e, ErrorKind::transaction, "cannot commit private transaction");
+                p.active = false;
+            }
+            p.native_finished = true;
             return 0;
         }
         CATCH(c, e)
@@ -655,6 +696,19 @@ struct DuckDBPreparedProvider::Impl {
             }
             p.conn = conn;
             p.adapter.reset_connection(conn);
+            return;
+        }
+        if (!p.mysql_analytical && guard == &p) {
+            if (!p.native_finished && (p.active || (p.native_write && p.native_executed))) {
+                const bool explicit_transaction = !p.active;
+                if (!p.query("ROLLBACK")) {
+                    p.poisoned = true;
+                    if (p.failure) p.failure(p.status_arg);
+                } else if (explicit_transaction && p.transaction_outcome) {
+                    p.transaction_outcome("ROLLBACK", true);
+                }
+                p.active = false;
+            }
             return;
         }
         if (!p.active || guard != &p) {
@@ -701,12 +755,6 @@ struct DuckDBPreparedProvider::Impl {
                 return p.translate(sql, emitted, e, false, nullptr, 0,
                                    p.namespace_database ? &database : nullptr);
             }
-            std::string text(reinterpret_cast<const char *>(
-                                 sql.data ? sql.data : reinterpret_cast<const uint8_t *>("")),
-                             sql.size);
-            if (!duckdb_readonly_prepared_select(text, p.dialect))
-                return p.error(e, ErrorKind::unsupported,
-                               "prepared SQL is not an allowed read-only SELECT");
             return 0;
         }
         CATCH(c, e)
@@ -759,6 +807,8 @@ DuckDBPreparedProvider::DuckDBPreparedProvider(duckdb_connection c, Status s, Fa
 DuckDBPreparedProvider::~DuckDBPreparedProvider() = default;
 void DuckDBPreparedProvider::set_mysql_analytical(bool enabled) noexcept {
     impl_->mysql_analytical = enabled && impl_->dialect == embedded::DuckDBSourceDialect::mysql;
+    if (impl_->mysql_analytical) impl_->api.capabilities |= ProxySQL_Embedded_CAP_READ_ONLY;
+    else impl_->api.capabilities &= ~ProxySQL_Embedded_CAP_READ_ONLY;
 }
 void DuckDBPreparedProvider::set_mysql_namespace(std::function<std::string()> current_database) {
     impl_->namespace_database = std::move(current_database);
@@ -769,3 +819,6 @@ const ProxySQL_Embedded_EngineV1 *DuckDBPreparedProvider::engine() const noexcep
 const ProxySQL_Embedded_PolicyV1 *DuckDBPreparedProvider::policy() const noexcept {
     return &impl_->policy;
 }
+
+void DuckDBPreparedProvider::set_config_policy(embedded::DuckDBAdapter::BeforePrepare before, embedded::DuckDBAdapter::AfterPrepare after) { impl_->adapter.set_config_policy(std::move(before), std::move(after)); }
+void DuckDBPreparedProvider::set_transaction_outcome(std::function<void(const std::string&, bool)> f) { impl_->transaction_outcome = std::move(f); }

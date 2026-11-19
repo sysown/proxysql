@@ -300,10 +300,10 @@ test_embedded_prepared_schema_mysql-t: %: %.cpp unit/obj/tap.o unit/obj/tap_nois
 		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
 
 # Standalone native DuckDB prepared-statement protocol clients.
-test_duckdb_prepared_mysql-t: %: %.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+test_duckdb_prepared_mysql-t: %: %.cpp prepared_owned_fixture.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(MARIADB_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
 
-test_duckdb_prepared_pgsql-t: %: %.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+test_duckdb_prepared_pgsql-t: %: %.cpp prepared_owned_fixture.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
 
 # Owns an isolated ProxySQL child for real SIGKILL recovery testing.

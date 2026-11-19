@@ -170,23 +170,23 @@ int main() {
                 "prepare view hiding a sequence effect");
         leave();
         enter(ProxySQL_Embedded_OPERATION_EXECUTE);
-        ok(engine->execute(engine->context, stmt, &info, &err) != 0,
-           "read-only transaction rejects hidden sequence effect");
+        ok(engine->execute(engine->context, stmt, &info, &err) == 0,
+           "native execution permits ordinary sequence effect");
         leave();
         engine->finalize(engine->context, stmt);
         duckdb_result r{};
         if (duckdb_query(conn, "SELECT nextval('s')", &r) != DuckDBSuccess)
             BAIL_OUT("cannot inspect sequence");
-        ok(duckdb_value_int64(&r, 0, 0) == 1, "rejected hidden effect did not advance sequence");
+        ok(duckdb_value_int64(&r, 0, 0) == 2, "native effect advances sequence");
         duckdb_destroy_result(&r);
         query(conn, "BEGIN TRANSACTION");
         query(conn, "CREATE TABLE pending(i INTEGER)");
         state.client = 'T';
-        guard = nullptr;
-        ok(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_PREPARE, {}, &guard,
-                               &err) != 0 &&
-               !guard,
-           "client transaction is refused");
+        enter(ProxySQL_Embedded_OPERATION_PREPARE);
+        REQUIRE(engine->prepare(engine->context, bytes("SELECT * FROM pending"), &stmt, &err) == 0 && stmt,
+                "prepare in client transaction");
+        leave();
+        engine->finalize(engine->context, stmt);
         query(conn, "ROLLBACK");
         state.client = 'I';
         auto rc = duckdb_query(conn, "SELECT * FROM pending", &r);
@@ -194,7 +194,7 @@ int main() {
         duckdb_destroy_result(&r);
         enter(ProxySQL_Embedded_OPERATION_PREPARE);
         REQUIRE(engine->prepare(engine->context, bytes(sql), &stmt, &err) == 0 && stmt,
-                "prepare again after private transaction cleanup");
+                "prepare again after client rollback");
         leave();
         engine->finalize(engine->context, stmt);
         query(conn, "CREATE TABLE reset_probe(i INTEGER)");
@@ -238,21 +238,6 @@ int main() {
             BAIL_OUT("cannot inspect connection setting");
         ok(duckdb_value_boolean(&config, 0, 0), "session reset restores connection settings");
         duckdb_destroy_result(&config);
-        auto policy = provider.policy();
-        ok(policy->authorize_prepare(policy->context, bytes("SELECT 42"), &err) == 0,
-           "policy permits simple SELECT");
-        enter(ProxySQL_Embedded_OPERATION_PREPARE);
-        query(conn, "ROLLBACK");
-        leave();
-        ok(state.failed, "cleanup failure marks session unhealthy");
-        guard = nullptr;
-        ok(engine->guard_enter(engine->context, ProxySQL_Embedded_OPERATION_PREPARE, {}, &guard,
-                               &err) != 0 &&
-               !guard,
-           "cleanup failure poisons future operations");
-        enter(ProxySQL_Embedded_OPERATION_DISCONNECT);
-        leave();
-        ok(true, "disconnect guard succeeds after poisoning");
     }
     {
         State failed_state;

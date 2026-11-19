@@ -106,10 +106,19 @@ enum ProxySQL_Embedded_Operation : std::uint32_t {
     ProxySQL_Embedded_OPERATION_SESSION_RESET = 8
 };
 
+enum ProxySQL_Embedded_Command : std::uint32_t {
+    PROXYSQL_EMBEDDED_COMMAND_UNKNOWN = 0,
+    PROXYSQL_EMBEDDED_COMMAND_SELECT = 1,
+    PROXYSQL_EMBEDDED_COMMAND_INSERT = 2,
+    PROXYSQL_EMBEDDED_COMMAND_UPDATE = 3,
+    PROXYSQL_EMBEDDED_COMMAND_DELETE = 4
+};
+
 struct ProxySQL_Embedded_ExecInfo {
     std::uint8_t has_result;
     std::uint64_t affected_rows;
     std::uint64_t last_insert_id;
+    std::uint32_t command;
 };
 
 struct ProxySQL_Embedded_EngineV1 {
@@ -134,6 +143,8 @@ struct ProxySQL_Embedded_EngineV1 {
     int (*guard_enter)(void*, std::uint32_t, ProxySQL_Embedded_BytesView,
         void**, ProxySQL_Embedded_Error*) noexcept;
     void (*guard_leave)(void*, void*) noexcept;
+    // Finalize a successful operation; failure leaves cleanup to guard_leave.
+    int (*guard_finish)(void*, void*, ProxySQL_Embedded_Error*) noexcept;
 };
 
 struct ProxySQL_Embedded_PolicyV1 {

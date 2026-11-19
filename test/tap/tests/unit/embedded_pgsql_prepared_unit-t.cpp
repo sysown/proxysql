@@ -20,7 +20,9 @@ struct Fake : Adapter {
     };
     int executes = 0, finals = 0, prepares = 0;
     bool mutate = false, bad_position = false, fail_fetch = false, boolean_parameters = false;
-    bool active_result = false, reset_guarded = true, fail_reset = false;
+    bool active_result = false, reset_guarded = true, fail_reset = false, no_result = false;
+    Command command = Command::select;
+    uint64_t affected_rows = 0;
     int *guard_depth = nullptr;
     bool all_guarded = true;
     std::vector<Value> bound;
@@ -52,7 +54,9 @@ struct Fake : Adapter {
     Status execute(Statement &, ExecInfo &i) override {
         ++executes;
         active_result = true;
-        i.has_result = true;
+        i.has_result = !no_result;
+        i.command = command;
+        i.affected_rows = affected_rows;
         return {};
     }
     Status fetch(Statement &s, Row &r, bool &done, size_t) override {
@@ -126,12 +130,25 @@ int main() {
            std::get<int64_t>(a.bound[1]) == 1 && std::get<int64_t>(a.bound[2]) == 2,
        "native slots follow logical positions");
     ok(!p.execute("p", 2, result) && result.rows.empty() && !result.suspended &&
-           result.row_count == 0,
-       "next execution completes exact boundary");
+           result.row_count == 2 && result.command == Command::select,
+       "next execution completes with total row count");
     ok(!p.execute("p", 0, result) && result.rows.empty() && a.executes == 1,
        "completed portal never reexecutes");
     ok(!p.execute("q", 0, result) && result.rows.size() == 2 && a.executes == 2,
        "other portal executes independently");
+    { Fake dml; dml.command = Command::update; dml.affected_rows = 7;
+      dml.no_result = true;
+      PgSQLPrepared dml_controller(dml, policy);
+      ok(!dml_controller.parse("d", "UPDATE", {pgsql_oid_int8, pgsql_oid_int8}) &&
+         !dml_controller.bind("dp", "d", data, {}) &&
+         !dml_controller.execute("dp", 0, result) && result.command == Command::update &&
+         result.row_count == 7, "completion preserves native command and affected rows"); }
+    { Fake returning; returning.command = Command::insert; returning.affected_rows = 99;
+      PgSQLPrepared returning_controller(returning, policy);
+      ok(!returning_controller.parse("r", "INSERT RETURNING", {pgsql_oid_int8, pgsql_oid_int8}) &&
+         !returning_controller.bind("rp", "r", data, {}) &&
+         !returning_controller.execute("rp", 0, result) && result.command == Command::insert &&
+         result.row_count == 2, "RETURNING completion counts returned rows"); }
     ok(!p.parse("s", "SELECT $2, $1, $2", {pgsql_oid_int8, pgsql_oid_int8}), "parse again");
     auto e = p.parse("s", "x", {});
     ok(e && e->sqlstate == "42P05" && p.ignoring(), "duplicate poisons cycle");

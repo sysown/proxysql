@@ -1186,6 +1186,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         // execute core
         ExecInfo info;
         if (auto err = state->core.execute(st.core_id, values, info)) {
+            if (state->core.reset(st.core_id)) state->core.close(st.core_id);
             // clear longdata
             state->longdata.reset(wid);
             state->longdata_total_used -= st.longdata_bytes;
@@ -1215,6 +1216,19 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         };
 
         if (!info.has_result) {
+            if (auto err = state->core.reset(st.core_id)) {
+                state->core.close(st.core_id);
+                clear_longdata();
+                send_err(session, rseq + 1, mysql_error_code(*err), err->sqlstate, err->message);
+                finish_consume();
+                return true;
+            }
+            if (auto err = guard->finish()) {
+                clear_longdata();
+                send_err(session, rseq + 1, mysql_error_code(*err), err->sqlstate, err->message);
+                finish_consume();
+                return true;
+            }
             // DML no result: OK
             void* okptr = nullptr; unsigned int oksz = 0;
             ds->myprot.generate_pkt_OK64(false, &okptr, &oksz, seq, info.affected_rows, info.last_insert_id,
@@ -1316,7 +1330,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             ds->pkt_sid = output_swap.old_sid;
             output_swap.committed = true;
             // reset core
-            state->core.reset(st.core_id);
+            if (state->core.reset(st.core_id)) state->core.close(st.core_id);
             clear_longdata();
             send_err(session, rseq + 1, 1105, "HY000", fail_msg);
             finish_consume();
@@ -1345,9 +1359,25 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
             ds->PSarrayOUT = original_ptr;
             ds->pkt_sid = output_swap.old_sid;
             output_swap.committed = true;
-            state->core.reset(st.core_id);
+            if (state->core.reset(st.core_id)) state->core.close(st.core_id);
             clear_longdata();
             send_err(session, rseq + 1, 1105, "HY000", "response bytes limit exceeded");
+            finish_consume();
+            return true;
+        }
+
+        auto finalize_error = state->core.reset(st.core_id);
+        if (!finalize_error) finalize_error = guard->finish();
+        if (finalize_error) {
+            const auto &err = *finalize_error;
+            free_temp_packets(temp);
+            temp.len = 0;
+            ds->PSarrayOUT = original_ptr;
+            ds->pkt_sid = output_swap.old_sid;
+            output_swap.committed = true;
+            if (state->core.reset(st.core_id)) state->core.close(st.core_id);
+            clear_longdata();
+            send_err(session, rseq + 1, mysql_error_code(err), err.sqlstate, err.message);
             finish_consume();
             return true;
         }

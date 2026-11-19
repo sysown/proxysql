@@ -39,6 +39,7 @@ struct PgSQLExecution {
     std::vector<PgSQLFieldRow> rows;
     bool suspended = false;
     uint64_t row_count = 0;
+    Command command = Command::unknown;
 };
 class PgSQLPrepared {
   public:

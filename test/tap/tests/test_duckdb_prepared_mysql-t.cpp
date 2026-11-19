@@ -154,32 +154,84 @@ int main() {
         mysql_free_result(r);
         return n;
     };
-    s = prepare(c, ("INSERT INTO " + table + " (v) VALUES (2)").c_str());
-    ok(!s && last_errno == 1235 &&
-           last_error.find("prepared SQL is not an allowed read-only SELECT") != std::string::npos,
-       "prepared DML refused by read-only policy: %s", last_error.c_str());
-    if (s)
+    auto write = [&](const std::string &sql, int value, my_ulonglong affected) {
+        MYSQL_STMT *stmt = prepare(c, sql);
+        if (!stmt) return false;
+        MYSQL_BIND param[1] = {};
+        param[0].buffer_type = MYSQL_TYPE_LONG;
+        param[0].buffer = &value;
+        bool success = !mysql_stmt_bind_param(stmt, param) && !mysql_stmt_execute(stmt) &&
+                       mysql_stmt_affected_rows(stmt) == affected;
+        if (!success) diag("prepared write failed: %s", mysql_stmt_error(stmt));
+        mysql_stmt_close(stmt);
+        return success;
+    };
+    ok(write("INSERT INTO " + table + " (v) VALUES (?)", 2, 1),
+       "bound INSERT reports one affected row");
+    ok(count() == 2, "ordinary SELECT sees prepared INSERT");
+    ok(write("UPDATE " + table + " SET v = 5 WHERE v = ?", 2, 1),
+       "bound UPDATE reports one affected row");
+    ok(write("DELETE FROM " + table + " WHERE v = ?", 5, 1),
+       "bound DELETE reports one affected row");
+    ok(write("DELETE FROM " + table + " WHERE v = ?", 5, 0),
+       "bound DELETE reports zero affected rows when no rows match");
+    ok(count() == 1, "ordinary SELECT sees prepared UPDATE and DELETE");
+    s = prepare(c, ("INSERT INTO " + table + " (v) VALUES (?) RETURNING v").c_str());
+    ok(s != nullptr, "prepare bound INSERT RETURNING");
+    if (s) {
+        int input = 9, output = 0;
+        MYSQL_BIND in[1] = {}, out[1] = {};
+        in[0].buffer_type = out[0].buffer_type = MYSQL_TYPE_LONG;
+        in[0].buffer = &input;
+        out[0].buffer = &output;
+        bool returned = !mysql_stmt_bind_param(s, in) && !mysql_stmt_bind_result(s, out) &&
+                        !mysql_stmt_execute(s) && !mysql_stmt_fetch(s);
+        ok(returned && output == 9, "bound INSERT RETURNING yields inserted value");
         mysql_stmt_close(s);
-    ok(count() == 1, "refused DML leaves fixture unchanged");
+    }
+    ok(count() == 2, "ordinary SELECT sees successful RETURNING write");
+    ok(!mysql_query(c, ("DELETE FROM " + table + " WHERE v = 9").c_str()),
+       "remove successful RETURNING row");
+    s = prepare(c, ("INSERT INTO " + table + " (v) VALUES (10) RETURNING repeat('x', 67108865)").c_str());
+    ok(s != nullptr, "prepare write with oversized RETURNING result");
+    if (s) {
+        int oversized_rc = mysql_stmt_execute(s);
+        diag("oversized RETURNING error %u: %s", mysql_stmt_errno(s), mysql_stmt_error(s));
+        ok(oversized_rc != 0 && strstr(mysql_stmt_error(s), "budget"),
+           "oversized RETURNING result is refused by the result budget");
+        mysql_stmt_close(s);
+    }
+    MYSQL *verify = mysql_init(nullptr);
+    bool connected = verify && mysql_real_connect(verify, host && *host ? host : "127.0.0.1",
+                                                   user, pass, nullptr,
+                                                   port && *port ? atoi(port) : 6031, nullptr, 0);
+    long verify_count = -1;
+    if (connected && !mysql_query(verify, ("SELECT COUNT(*) FROM " + table).c_str())) {
+        MYSQL_RES *check = mysql_store_result(verify);
+        MYSQL_ROW value = check ? mysql_fetch_row(check) : nullptr;
+        if (value && value[0]) verify_count = strtol(value[0], nullptr, 10);
+        if (check) mysql_free_result(check);
+    }
+    diag("fresh connection count %ld, error %u: %s", verify_count, verify ? mysql_errno(verify) : 0, verify ? mysql_error(verify) : "init failed");
+    ok(verify_count == 1, "fresh connection sees oversized RETURNING write rolled back");
+    if (verify_count != 1 && !fixture.dir.empty()) {
+        std::ifstream log(fixture.dir + "/proxysql.log");
+        std::string line;
+        while (std::getline(log, line)) diag("fixture log: %s", line.c_str());
+    }
+    if (verify) mysql_close(verify);
     s = prepare(c, "SELECT * FROM read_parquet('/tmp/duckdb_prepared_forbidden.parquet')");
-    ok(!s && (last_error.find("prepared SQL is not an allowed read-only SELECT") !=
-                  std::string::npos ||
-              last_error.find("external access") != std::string::npos),
-       "external file access refused: %s", last_error.c_str());
+    ok(!s && (last_error.find("external access") != std::string::npos ||
+        last_error.find("file system operations are disabled") != std::string::npos),
+       "prepared external file access respects database policy: %s", last_error.c_str());
     if (s)
         mysql_stmt_close(s);
     ok(!mysql_query(c, "BEGIN"), "begin explicit transaction");
-    ok(!mysql_query(c, ("INSERT INTO " + table + " (v) VALUES (3)").c_str()),
-       "insert inside transaction");
-    s = prepare(c, "SELECT 1");
-    ok(!s && last_errno == 1105 &&
-           last_error.find("prepared execution requires an idle autocommit session") !=
-               std::string::npos,
-       "prepare refused in explicit transaction: %s", last_error.c_str());
-    if (s)
-        mysql_stmt_close(s);
+    ok(write("INSERT INTO " + table + " (v) VALUES (?)", 3, 1),
+       "bound INSERT executes in explicit transaction");
+    ok(count() == 2, "ordinary SELECT sees prepared transaction write");
     ok(!mysql_query(c, "ROLLBACK"), "rollback transaction");
-    ok(count() == 1, "rollback preserves initial row and removes transaction insert");
+    ok(count() == 1, "rollback removes prepared transaction write");
     ok(mysql_autocommit(c, 0) && mysql_errno(c) == 1235 && !strcmp(mysql_sqlstate(c), "0A000"),
        "unsupported implicit transaction mode is refused without state change");
     s = prepare(c, "SELECT 1");
@@ -307,6 +359,38 @@ int main() {
     }
     if (created)
         ok(!mysql_query(c, ("DROP TABLE " + table).c_str()), "drop owned table");
-    mysql_close(c);
+    const std::string readonly_table = table + "_ro";
+    if (!fixture.dir.empty()) {
+        bool seeded = !mysql_query(c, ("CREATE TABLE " + readonly_table + " (v INTEGER)").c_str()) &&
+                      !mysql_query(c, ("INSERT INTO " + readonly_table + " VALUES (1)").c_str());
+        ok(seeded, "seed read-only database fixture");
+        mysql_close(c);
+        c = nullptr;
+        bool reopened = seeded && fixture.reopen_read_only();
+        ok(reopened, "reopen DuckDB read-only");
+        if (reopened) {
+            c = mysql_init(nullptr);
+            bool connected_ro = c && mysql_real_connect(c, host, user, pass, nullptr, atoi(port), nullptr, 0);
+            ok(connected_ro, "connect to read-only DuckDB");
+            if (connected_ro) {
+                ok(!mysql_query(c, ("SELECT * FROM " + readonly_table).c_str()), "ordinary read works in read-only database");
+                MYSQL_RES *rows = mysql_store_result(c);
+                if (rows) mysql_free_result(rows);
+                ok(mysql_query(c, ("INSERT INTO " + readonly_table + " VALUES (2)").c_str()) != 0,
+                   "ordinary write is refused by read-only database");
+                mysql_set_character_set(c, "utf8mb4", 45);
+                MYSQL_STMT *ro = prepare(c, ("INSERT INTO " + readonly_table + " VALUES (?)").c_str());
+                bool denied = !ro;
+                if (ro) {
+                    int value = 2; MYSQL_BIND bind[1] = {};
+                    bind[0].buffer_type = MYSQL_TYPE_LONG; bind[0].buffer = &value;
+                    denied = !mysql_stmt_bind_param(ro, bind) && mysql_stmt_execute(ro) != 0;
+                    mysql_stmt_close(ro);
+                }
+                ok(denied, "prepared write is refused by read-only database");
+            }
+        }
+    }
+    if (c) mysql_close(c);
     return exit_status();
 }

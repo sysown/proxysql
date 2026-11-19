@@ -1,10 +1,13 @@
 #pragma once
 #include "ProxySQL_EmbeddedExecution.h"
-#include "duckdb_prepared_policy.h"
+
+#include "duckdb_prepared_adapter.h"
 #include <duckdb.h>
 #include <functional>
 #include <memory>
 #include <string>
+
+namespace embedded { enum class DuckDBSourceDialect { mysql, postgresql }; }
 
 // Per-connection native callback owner. Must outlive every registered session.
 class DuckDBPreparedProvider {
@@ -24,6 +27,8 @@ class DuckDBPreparedProvider {
     // session thread and must reflect the namespace validated by USE.
     // Without it, relative names keep resolving in DuckDB's current schema.
     void set_mysql_namespace(std::function<std::string()> current_database);
+    void set_config_policy(embedded::DuckDBAdapter::BeforePrepare, embedded::DuckDBAdapter::AfterPrepare);
+    void set_transaction_outcome(std::function<void(const std::string&, bool)>);
     const ProxySQL_Embedded_EngineV1 *engine() const noexcept;
     const ProxySQL_Embedded_PolicyV1 *policy() const noexcept;
 

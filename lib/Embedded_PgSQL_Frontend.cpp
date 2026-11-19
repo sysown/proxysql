@@ -209,7 +209,14 @@ void execute(Batch &b, const PgSQLExecution &result) {
     if (result.suspended)
         b.empty('s');
     else {
-        auto tag = std::string("SELECT ") + std::to_string(result.row_count);
+        const char *prefix = "SELECT ";
+        switch (result.command) {
+        case Command::insert: prefix = "INSERT 0 "; break;
+        case Command::update: prefix = "UPDATE "; break;
+        case Command::delete_: prefix = "DELETE "; break;
+        default: break;
+        }
+        auto tag = std::string(prefix) + std::to_string(result.row_count);
         b.add('C', tag.size() + 1, [&](PG_pkt &p) { p.put_string(tag.c_str()); });
     }
 }
