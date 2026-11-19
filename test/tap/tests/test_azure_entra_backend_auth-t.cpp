@@ -27,7 +27,7 @@ using std::string;
 // A new name per run: the pool keeps connections of a deleted user.
 static const std::string kUserName = "tap_entra_" + std::to_string(getpid());
 static const char *const kUser = kUserName.c_str();
-static constexpr const char *kPassword = "Entr4-fr0nt3nd-and-b4ckend!";
+static constexpr const char *kPassword = "Entr4-fr0nt3nd-and-b4ckend!"; // NOSONAR(cpp:S2068): test credential, the test creates and drops the user.
 static const uint32_t kHostgroup = get_env_int("TAP_MYSQL8_BACKEND_HG", 30);
 
 static bool run(MYSQL *m, const string& q) {

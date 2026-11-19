@@ -38,7 +38,7 @@ void test_missing_environment_fails_init() {
 }
 
 void test_valid_environment_installs_source() {
-	char token_file[] = "/tmp/azure_entra_tokenXXXXXX";
+	char token_file[] = "/tmp/azure_entra_tokenXXXXXX"; // NOSONAR(cpp:S5443): mkstemp() makes a new file with mode 0600.
 	const int fd = mkstemp(token_file);
 	if (fd >= 0) {
 		(void)!write(fd, "federated-token\n", 16);

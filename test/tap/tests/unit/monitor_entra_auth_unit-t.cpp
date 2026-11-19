@@ -17,10 +17,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <cstdio>
 #include <string>
-#include <functional>
 
-#include <fcntl.h>
 #include <unistd.h>
 
 using Clock = std::chrono::steady_clock;
@@ -29,22 +28,21 @@ namespace {
 
 constexpr const char *kEndpoint = "app.mysql.database.azure.com";
 
-std::string capture_stderr(const std::function<void()>& action) {
-	char path[] = "/tmp/monitor_entra_stderr_XXXXXX";
-	const int fd = mkstemp(path);
+template <typename Action> std::string capture_stderr(Action action) {
+	FILE *captured = tmpfile();
+	if (captured == nullptr) BAIL_OUT("tmpfile() failed");
 	fflush(stderr);
 	const int saved = dup(STDERR_FILENO);
-	dup2(fd, STDERR_FILENO);
+	if (saved < 0 || dup2(fileno(captured), STDERR_FILENO) < 0) BAIL_OUT("stderr redirect failed");
 	action();
 	fflush(stderr);
 	dup2(saved, STDERR_FILENO);
 	close(saved);
 	std::string out;
 	char buf[4096];
-	lseek(fd, 0, SEEK_SET);
-	for (ssize_t n; (n = read(fd, buf, sizeof(buf))) > 0;) out.append(buf, static_cast<size_t>(n));
-	close(fd);
-	unlink(path);
+	rewind(captured);
+	while (fgets(buf, sizeof(buf), captured) != nullptr) out += buf;
+	fclose(captured);
 	return out;
 }
 
@@ -111,7 +109,7 @@ void test_helper(FakeSource& source) {
 	mysql = mysql_init(nullptr);
 	const int calls = source.calls;
 	MonitorTokenAuth socket;
-	ok(!prepare_monitor_token_auth(mysql, "/tmp/mysql.sock", 0, true, nullptr, "monitor",
+	ok(!prepare_monitor_token_auth(mysql, "/var/run/mysqld/mysqld.sock", 0, true, nullptr, "monitor",
 		1000, socket) &&
 		socket.failure_code == "unix_socket_not_allowed" && source.calls == calls,
 		"monitor_helper_unix_socket_fails before any token request");

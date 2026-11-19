@@ -55,7 +55,7 @@ void test_config() {
 		"config_missing_token_file_fails");
 
 	env = base_env();
-	env["AZURE_AUTHORITY_HOST"] = "http://login.microsoftonline.com/";
+	env["AZURE_AUTHORITY_HOST"] = "http://login.microsoftonline.com/"; // NOSONAR(cpp:S5332): the test checks that plain http is refused.
 	ok(!load_entra_config(env_of(env), cfg, error) && error.find("AZURE_AUTHORITY_HOST") != std::string::npos,
 		"config_http_authority_rejected");
 

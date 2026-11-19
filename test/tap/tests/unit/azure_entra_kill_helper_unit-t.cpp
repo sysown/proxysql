@@ -46,13 +46,6 @@ unsigned int secure_token_cleanse_calls = 0;
 size_t secure_token_cleanse_size = 0;
 bool secure_token_was_zeroed = false;
 
-using CStrDeleter = void (*)(void *);
-using OwnedCStr = std::unique_ptr<char, CStrDeleter>;
-
-OwnedCStr make_owned_cstr(const char *str) {
-	return OwnedCStr { str != nullptr ? strdup(str) : nullptr, std::free };
-}
-
 bool all_zero(const void *ptr, size_t size) {
 	const auto *bytes = static_cast<const unsigned char *>(ptr);
 	for (size_t i = 0; i < size; ++i) {
@@ -163,17 +156,16 @@ void reset_observations(const char *expected_password) {
 constexpr const char *kEntraEndpoint = "app.mysql.database.azure.com";
 
 OwnedKillArgs entra_args(const char *password) {
-	auto username = make_owned_cstr(kDatabaseUser);
-	OwnedCStr pw = password != nullptr ? make_owned_cstr(password) : OwnedCStr(nullptr, std::free);
-	auto endpoint = make_owned_cstr(kEntraEndpoint);
-	auto transport = make_owned_cstr(kTransportIp);
-	auto args = OwnedKillArgs(new KillArgs(
-		username.get(), pw.get(),
-		endpoint.get(), 3306, kHostgroup, 555, KILL_QUERY, 1,
-		nullptr, transport.get(), MySQLBackendAuthType::AZURE_ENTRA,
+	// KillArgs copies its strings.
+	std::string username = kDatabaseUser;
+	std::string pw = password != nullptr ? password : "";
+	std::string endpoint = kEntraEndpoint;
+	std::string transport = kTransportIp;
+	return OwnedKillArgs(new KillArgs(
+		&username[0], password != nullptr ? &pw[0] : nullptr,
+		&endpoint[0], 3306, kHostgroup, 555, KILL_QUERY, 1,
+		nullptr, &transport[0], MySQLBackendAuthType::AZURE_ENTRA,
 		kEntraEndpoint, "", kDatabaseUser, Clock::now() + std::chrono::seconds(2)));
-	// KillArgs copies its strings; the local copies are freed here.
-	return args;
 }
 
 void test_entra_kill_args_no_password() {

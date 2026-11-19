@@ -27,7 +27,10 @@ static std::string add_backend_user_log(const char *username, const char *passwo
 	if (captured == nullptr) return "<tmpfile failed>";
 	fflush(stderr);
 	const int saved_stderr = dup(STDERR_FILENO);
-	dup2(fileno(captured), STDERR_FILENO);
+	if (saved_stderr < 0 || dup2(fileno(captured), STDERR_FILENO) < 0) {
+		fclose(captured);
+		return "<stderr redirect failed>";
+	}
 	GloMyAuth->add(&owned_username[0], &owned_password[0], USERNAME_BACKEND,
 		false, 0, &empty[0], false, false, false, 100, &owned_attributes[0], &empty[0]);
 	fflush(stderr);

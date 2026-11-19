@@ -39,7 +39,7 @@ public:
 	}
 	bool wait_for(size_t count, std::chrono::milliseconds timeout = 2000ms) {
 		std::unique_lock<std::mutex> lock(mutex);
-		return cv.wait_for(lock, timeout, [&] { return completions.size() >= count; });
+		return cv.wait_for(lock, timeout, [this, count] { return completions.size() >= count; });
 	}
 	size_t size() {
 		std::lock_guard<std::mutex> lock(mutex);
@@ -74,7 +74,7 @@ struct FakeEntra {
 	}
 	bool wait_posts(int n, std::chrono::milliseconds timeout = 2000ms) {
 		std::unique_lock<std::mutex> lock(mutex);
-		return cv.wait_for(lock, timeout, [&] { return posts >= n; });
+		return cv.wait_for(lock, timeout, [this, n] { return posts >= n; });
 	}
 	int count() {
 		std::lock_guard<std::mutex> lock(mutex);
@@ -214,7 +214,7 @@ void test_invalidate_keeps_shared_token() {
 
 void test_invalidate_rate_limited() {
 	Rig rig;
-	auto refreshes = [&] { return rig.source->snapshot().token_refresh_successes; };
+	auto refreshes = [&rig] { return rig.source->snapshot().token_refresh_successes; };
 	rig.request(1);
 	rig.sink->wait_for(1);
 	rig.source->invalidate(kKey, 1);
@@ -246,8 +246,8 @@ void test_failure_backoff() {
 
 void test_refresh_backoff_grows() {
 	Rig rig;
-	auto failures = [&] { return rig.source->snapshot().token_refresh_failures; };
-	auto step = [&](std::chrono::milliseconds d) { rig.clock.advance(d); rig.source->wake(); };
+	auto failures = [&rig] { return rig.source->snapshot().token_refresh_failures; };
+	auto step = [&rig](std::chrono::milliseconds d) { rig.clock.advance(d); rig.source->wake(); };
 	rig.request(1);
 	rig.sink->wait_for(1);
 	rig.http.set_reply(503, "{}");
@@ -264,7 +264,7 @@ void test_refresh_backoff_grows() {
 }
 
 void test_file_assertion_reader() {
-	char path[] = "/tmp/entra_assertion_XXXXXX";
+	char path[] = "/tmp/entra_assertion_XXXXXX"; // NOSONAR(cpp:S5443): mkstemp() makes a new file with mode 0600.
 	const int fd = mkstemp(path);
 	const std::string jwt = "hdr.payload.sig";
 	const bool written = fd >= 0 && write(fd, (jwt + "\n").data(), jwt.size() + 1) == (ssize_t)(jwt.size() + 1);
@@ -345,7 +345,7 @@ void test_curl_refuses_plain_http() {
 		bind(listener, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == 0 &&
 		listen(listener, 1) == 0 &&
 		getsockname(listener, reinterpret_cast<sockaddr *>(&addr), &len) == 0;
-	const std::string url = "http://127.0.0.1:" + std::to_string(ntohs(addr.sin_port)) + "/token";
+	const std::string url = "http://127.0.0.1:" + std::to_string(ntohs(addr.sin_port)) + "/token"; // NOSONAR(cpp:S5332): the test checks that plain http is refused.
 	const HttpResponse r = make_curl_post()(url, "a=b", 1000ms);
 	pollfd pending { listener, POLLIN, 0 };
 	const bool connected = poll(&pending, 1, 0) > 0;

@@ -111,7 +111,7 @@ public:
 			const bool shutdown_returned = invalidation_cv.wait_for(lock, 20ms,
 				[this] { return shutdown_completed; });
 			retirement_waited_for_invalidation = !shutdown_returned &&
-				!blocking_source_destroyed.load(std::memory_order_acquire);
+				!blocking_source_destroyed.load();
 		}
 		invalidated_keys.push_back(key);
 		invalidated_generations.push_back(generation);
@@ -261,7 +261,7 @@ MySQL_Connection *established_connection(MySrvC *server, const char *user,
 	return connection;
 }
 
-std::string capture_stderr(const std::function<void()>& action) {
+template <typename Action> std::string capture_stderr(Action action) {
 	FILE *captured = tmpfile();
 	if (captured == nullptr) BAIL_OUT("tmpfile() failed");
 	fflush(stderr);
@@ -384,7 +384,7 @@ void test_entra_1045_invalidates_once(MySQL_Thread& worker) {
 	client_error_code = 0;
 	SessionFixture fixture(worker, kEntraUser, kEntraHostgroup);
 	fixture.backend()->connect_retries_on_failure = 3;
-	const std::string log = capture_stderr([&] { start_iam_attempt(fixture, worker); fixture.run(); });
+	const std::string log = capture_stderr([&fixture, &worker] { start_iam_attempt(fixture, worker); fixture.run(); });
 	const size_t first = log.find("category='backend_auth_rejected'");
 	ok(azure.keys.size() == 1 && azure.invalidated_generations.size() == 1 && connector_calls == 1 &&
 		fixture.session->status == WAITING_CLIENT_DATA && client_error_code == 9002 &&
