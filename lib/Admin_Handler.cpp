@@ -3145,6 +3145,14 @@ void admin_session_handler(S* sess, void *_pa, PtrSize_t *pkt) {
 	bool transform_pg_attribute_result = false;
 
 	if constexpr (std::is_same_v<S,MySQL_Session>) {
+		// The packet must hold the command byte: 'query_length - 1' below underflowed
+		// for a packet with an empty payload (GHSA-w9p8-gf9c-hffr).
+		if (pkt->size < sizeof(mysql_hdr) + 1) {
+			proxy_warning("Malformed query packet: %u bytes\n", pkt->size);
+			SPA->send_error_msg_to_client(sess, "Malformed query packet");
+			run_query = false;
+			goto __run_query;
+		}
 		query_length = pkt->size - sizeof(mysql_hdr);
 		query = (char*)l_alloc(query_length);
 		memcpy(query, (char*)pkt->ptr + sizeof(mysql_hdr) + 1, query_length - 1);

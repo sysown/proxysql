@@ -5392,6 +5392,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 }
 
 
+bool mysql_multi_packet_append_ok(uint64_t accumulated_size, uint64_t pkt_size) {
+	if (pkt_size < sizeof(mysql_hdr)) {
+		return false;
+	}
+	return accumulated_size + (pkt_size - sizeof(mysql_hdr)) <= MYSQL_MAX_MULTI_PACKET_SIZE + sizeof(mysql_hdr);
+}
+
 // this function was inline inside MySQL_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
@@ -5699,8 +5706,8 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 	// If this is a 'fast_forward' session that hasn't yet received a backend connection, we don't
 	// forward 'COM_QUIT' packets, since this will make the act of obtaining a connection pointless.
 	// Instead, we intercept the 'COM_QUIT' packet and end the 'MySQL_Session'.
-	unsigned char command = *(static_cast<unsigned char*>(pkt.ptr)+sizeof(mysql_hdr));
-	if (command == _MYSQL_COM_QUIT) {
+	// A packet with an empty payload has no command byte; it is forwarded as is.
+	if (mysql_command_packet_size_ok(pkt.size) && *(static_cast<unsigned char*>(pkt.ptr)+sizeof(mysql_hdr)) == _MYSQL_COM_QUIT) {
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 		if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
 		l_free(pkt.size,pkt.ptr);
@@ -6129,6 +6136,21 @@ __get_pkts_from_client:
 				}
 				switch (client_myds->DSS) {
 					case STATE_SLEEP_MULTI_PACKET:
+						// Bound the reassembled message before growing it: no limit applied while
+						// continuation packets kept coming, and the 32-bit size wrapped after ~4GiB,
+						// so the next allocation was smaller than the copy into it (GHSA-w9p8-gf9c-hffr).
+						if (client_myds->multi_pkt.ptr != NULL &&
+							mysql_multi_packet_append_ok(client_myds->multi_pkt.size, pkt.size) == false) {
+							proxy_warning("Closing client connection from %s: multi-packet message larger than %llu bytes\n",
+								(client_myds->addr.addr ? client_myds->addr.addr : "unknown"),
+								(unsigned long long)MYSQL_MAX_MULTI_PACKET_SIZE);
+							l_free(pkt.size, pkt.ptr);
+							l_free(client_myds->multi_pkt.size, client_myds->multi_pkt.ptr);
+							client_myds->multi_pkt.ptr = NULL;
+							client_myds->multi_pkt.size = 0;
+							handler_ret = -1;
+							return handler_ret;
+						}
 						if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(pkt)) {
 							// if handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET
 							// returns true it meansa we need to reiterate
@@ -6155,6 +6177,16 @@ __get_pkts_from_client:
 
 						if (session_fast_forward) { // if it is fast forward
 							handler_ret = GPFC_WaitingClientData_FastForwardSession(pkt);
+							return handler_ret;
+						}
+						// A packet with an empty payload has no command byte: reading it went one
+						// byte past the allocation, and the stale byte picked the command handler,
+						// which could then underflow 'pkt.size - 5' (GHSA-w9p8-gf9c-hffr).
+						if (mysql_command_packet_size_ok(pkt.size) == false) {
+							proxy_warning("Closing client connection from %s: command packet without payload\n",
+								(client_myds->addr.addr ? client_myds->addr.addr : "unknown"));
+							l_free(pkt.size, pkt.ptr);
+							handler_ret = -1;
 							return handler_ret;
 						}
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
