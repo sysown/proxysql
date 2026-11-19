@@ -57,6 +57,11 @@ public:
 		last_deadline = deadline;
 		++calls;
 		AwsIamTokenResult r;
+		if (refuse) {
+			r.status = AwsIamStatus::PROVIDER_ERROR;
+			r.failure = { "provider_error", "unauthorized_client", "corr-1" };
+			return r;
+		}
 		r.status = AwsIamStatus::OK;
 		r.generation = 4;
 		r.token = SecureString("ENTRA_MONITOR_TOKEN");
@@ -70,6 +75,7 @@ public:
 	AwsIamTokenKey last_key;
 	Clock::time_point last_deadline;
 	int calls { 0 };
+	bool refuse { false };
 };
 
 void test_variable() {
@@ -139,10 +145,27 @@ void test_monitor_connect_failure_reported() {
 	mysql_thread___monitor_backend_auth = strdup("password");
 }
 
+void test_monitor_provider_failure_logged(FakeSource& source) {
+	source.refuse = true;
+	free(mysql_thread___monitor_backend_auth);
+	mysql_thread___monitor_backend_auth = strdup("azure_entra");
+	if (mysql_thread___monitor_username == nullptr) mysql_thread___monitor_username = strdup("monitor");
+	MySQL_Monitor_State_Data mmsd(MON_CONNECT, (char *)kEndpoint, 3306, true, 7);
+	const std::string log = capture_stderr([&mmsd] { mmsd.create_new_connection(); });
+	ok(mmsd.mysql == nullptr && mmsd.mysql_error_msg != nullptr &&
+		std::string(mmsd.mysql_error_msg) == "azure_entra: provider_error" &&
+		log.find("category='provider_error' code='unauthorized_client' request_id='corr-1'")
+			!= std::string::npos,
+		"monitor_entra_provider_failure_logged: the log line has the Entra error code and correlation id");
+	free(mysql_thread___monitor_backend_auth);
+	mysql_thread___monitor_backend_auth = strdup("password");
+	source.refuse = false;
+}
+
 } // namespace
 
 int main() {
-	plan(8);
+	plan(9);
 	if (test_init_minimal() != 0 || test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -155,6 +178,7 @@ int main() {
 		FakeSource source;
 		publish_global_backend_token_source(BackendTokenProvider::AZURE_ENTRA, &source);
 		test_helper(source);
+		test_monitor_provider_failure_logged(source);
 		publish_global_backend_token_source(BackendTokenProvider::AZURE_ENTRA, nullptr);
 	}
 	test_no_source();
