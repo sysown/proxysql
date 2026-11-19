@@ -6,7 +6,7 @@
 
 - Prevent replaying a MySQL multi-statement batch on another backend when its backend goes offline after an earlier result was returned to the client.
 - **Gated behind `PROXYSQL31` (v3.1.x and v4.0.x; v3.0.x is unaffected):** output queues no longer copy a packet that does not fit in the ring. The owned output ring stays fixed at 1 KiB, while the input ring stays at 32 KiB; when the ring is empty, an oversized packet is sent directly from its own allocation instead of being copied through it. Compressed MySQL connections raise the output ring back to 32 KiB on the first compressed frame, because every compressed frame is staged through it.
-- **Gated behind `PROXYSQL31`:** result frames (`RESULTSET_BUFLEN`, `PGSQL_RESULTSET_BUFLEN`) are 32 KiB, which stays in the jemalloc tcache.
+- **Gated behind `PROXYSQL31`:** result frames (`RESULTSET_BUFLEN`, `PGSQL_RESULTSET_BUFLEN`) are 32 KiB. With jemalloc enabled (the default), 32 KiB stays in the tcache; `NOJEMALLOC=1` builds use the system allocator instead.
 - **Gated behind `PROXYSQL31`:** the writeout loop drains while the client still has output pending, including a borrowed span or a partly staged packet, instead of waiting for a full 32 KiB ring. A retryable `send()` failure (`EAGAIN`/`EWOULDBLOCK`/`EINTR`) no longer closes a healthy client.
 - Building without `PROXYSQL31` keeps the original v3.0 code path unchanged: 32 KiB input and output rings, staged copies for oversized packets, the original `writeout()` drain condition and `send()` error handling, and the original result slab sizes (16300 bytes MySQL, 16 KiB PostgreSQL).
 

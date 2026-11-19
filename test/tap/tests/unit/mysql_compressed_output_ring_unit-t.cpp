@@ -109,7 +109,7 @@ int main() {
 int main() {
 	// The compressed output ring is a PROXYSQL31 feature; v3.0 keeps the staging path.
 	plan(1);
-	ok(1, "SKIP: PROXYSQL31 is not enabled");
+	skip(1, "PROXYSQL31 is not enabled");
 	return exit_status();
 }
 #endif // PROXYSQL31
