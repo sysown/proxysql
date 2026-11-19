@@ -442,14 +442,20 @@ int main(int argc, char** argv) {
 	}
 	bool ssl_restored = false;
 	{
-		bool refused = false;
+		// The refusal must come from ProxySQL closing the TLS attempt, not from a failed connect: the
+		// socket opened, and a plaintext startup is still answered with the same setting.
+		bool connected = false, refused = false, plaintext_ok = false;
 		if (set_pgsql_var(admin, "have_ssl", "false")) {
 			DirectTls d = direct_tls_connect(host, port, ALPN_PG);
+			connected = d.sock >= 0;
 			refused = d.tls == nullptr;
 			close_all(d.sock, d.tls, d.ctx);
+			plaintext_ok = still_serving();
 		}
 		ssl_restored = set_pgsql_var(admin, "have_ssl", "true");
-		ok(refused, "pgsql-have_ssl=false: direct TLS refused");
+		ok(connected && refused && plaintext_ok,
+			"pgsql-have_ssl=false: direct TLS refused, plaintext still served (connected %d, refused %d, plaintext %d)",
+			(int)connected, (int)refused, (int)plaintext_ok);
 	}
 	{
 		int sock = create_raw_connection(host, port);
@@ -458,7 +464,8 @@ int main(int argc, char** argv) {
 		ok(still_serving(), "connect and close without a byte: ProxySQL keeps serving");
 	}
 	{
-		// The peek must neither consume nor misread a lone 0x00 (the first length byte).
+		// The direct TLS check on the first read must not misread a 1-byte first segment (a lone 0x00, the
+		// first length byte).
 		int sock = create_raw_connection(host, port);
 		const std::vector<uint8_t> s = startup_packet(PG_PROTOCOL_30, frontend_user);
 		type = '?';

@@ -581,6 +581,8 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 				// Direct TLS (PostgreSQL 17+ sslnegotiation=direct): the client opens with a TLS handshake record
 				// (0x16) instead of a startup packet. Spotted in this read, so no extra syscall: as PostgreSQL's
 				// raw_buf, the bytes already read are replayed into OpenSSL. EOF and EAGAIN are left to the code below.
+				// The Unix socket refusal matches PostgreSQL; an SSLRequest on a Unix socket still gets 'S' here,
+				// where PostgreSQL answers 'N' (unchanged ProxySQL behaviour, outside direct TLS).
 				if (r > 0 && myds_type == MYDS_FRONTEND && !first_byte_checked) {
 					first_byte_checked = true;
 					const unsigned char* first = (const unsigned char*)queue_w_ptr(queueIN);
