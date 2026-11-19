@@ -703,6 +703,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
 	pgsql_reconcile_unit-t \
+	pgsql_sasl_initial_response_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
