@@ -7021,10 +7021,24 @@ void PgSQL_Session::Memory_Stats() {
 		internal += sizeof(PgSQL_Query_Processor_Output);
 	if (client_myds) {
 		internal += sizeof(PgSQL_Data_Stream);
+#ifdef PROXYSQL31
+		// Rings are fixed at creation: 32 KiB input, 1 KiB output. A packet
+		// removed from PSarrayOUT is owned by queueOUT.pkt, whether it is being
+		// borrowed as the send span or copied into the ring;
+		// PSarrayOUT->total_size() below no longer counts it, so account for any
+		// packet still owned here.
+		if (client_myds->queueIN.storage)
+			frontend += client_myds->queueIN.capacity;
+		if (client_myds->queueOUT.storage)
+			frontend += client_myds->queueOUT.capacity;
+		if (client_myds->queueOUT.pkt.ptr)
+			frontend += client_myds->queueOUT.pkt.size;
+#else
 		if (client_myds->queueIN.buffer)
 			frontend += QUEUE_T_DEFAULT_SIZE;
 		if (client_myds->queueOUT.buffer)
 			frontend += QUEUE_T_DEFAULT_SIZE;
+#endif
 		if (client_myds->myconn) {
 			internal += sizeof(PgSQL_Connection);
 		}
@@ -7045,10 +7059,21 @@ void PgSQL_Session::Memory_Stats() {
 		internal += sizeof(PgSQL_Backend);
 		if (_mybe->server_myds) {
 			internal += sizeof(PgSQL_Data_Stream);
+#ifdef PROXYSQL31
+			// Same accounting as the client stream above: fixed rings plus any
+			// output packet that PSarrayOUT no longer references.
+			if (_mybe->server_myds->queueIN.storage)
+				backend += _mybe->server_myds->queueIN.capacity;
+			if (_mybe->server_myds->queueOUT.storage)
+				backend += _mybe->server_myds->queueOUT.capacity;
+			if (_mybe->server_myds->queueOUT.pkt.ptr)
+				backend += _mybe->server_myds->queueOUT.pkt.size;
+#else
 			if (_mybe->server_myds->queueIN.buffer)
 				backend += QUEUE_T_DEFAULT_SIZE;
 			if (_mybe->server_myds->queueOUT.buffer)
 				backend += QUEUE_T_DEFAULT_SIZE;
+#endif
 			if (_mybe->server_myds->myconn) {
 				PgSQL_Connection* myconn = _mybe->server_myds->myconn;
 				internal += sizeof(PgSQL_Connection);
