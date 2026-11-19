@@ -1223,7 +1223,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
                 finish_consume();
                 return true;
             }
-            if (auto err = guard->finish()) {
+            if (auto err = guard ? guard->finish() : Status{}) {
                 clear_longdata();
                 send_err(session, rseq + 1, mysql_error_code(*err), err->sqlstate, err->message);
                 finish_consume();
@@ -1367,7 +1367,7 @@ bool handle_mysql_prepared(MySQL_Session& session, PtrSize_t& pkt) {
         }
 
         auto finalize_error = state->core.reset(st.core_id);
-        if (!finalize_error) finalize_error = guard->finish();
+        if (!finalize_error && guard) finalize_error = guard->finish();
         if (finalize_error) {
             const auto &err = *finalize_error;
             free_temp_packets(temp);
