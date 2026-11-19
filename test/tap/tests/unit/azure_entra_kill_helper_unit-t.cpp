@@ -172,10 +172,7 @@ OwnedKillArgs entra_args(const char *password) {
 		endpoint.get(), 3306, kHostgroup, 555, KILL_QUERY, 1,
 		nullptr, transport.get(), MySQLBackendAuthType::AZURE_ENTRA,
 		kEntraEndpoint, "", kDatabaseUser, Clock::now() + std::chrono::seconds(2)));
-	username.release();
-	pw.release();
-	endpoint.release();
-	transport.release();
+	// KillArgs copies its strings; the local copies are freed here.
 	return args;
 }
 
