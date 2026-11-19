@@ -25,6 +25,11 @@ Connect to the server as the Entra administrator and create one user for each
 managed identity. The MySQL user name is the name you give here:
 
 ```sql
+-- Microsoft's procedure for a managed identity sets this first, in the same
+-- session. It turns off the check of the ID against the tenant. Add it if the
+-- server refuses the CREATE AADUSER statement.
+-- SET aad_auth_validate_oids_in_tenant = OFF;
+
 CREATE AADUSER 'proxysql_app' IDENTIFIED BY '<client id of the managed identity>';
 GRANT SELECT, INSERT, UPDATE, DELETE ON app.* TO 'proxysql_app'@'%';
 
@@ -55,10 +60,20 @@ Optional environment variable: `PROXYSQL_AZURE_ENTRA_SCOPE` (default
 
 ## 3. Configure the users
 
-The backend row has an empty password and the policy attribute. The frontend
-row keeps the password that the application sends to ProxySQL:
+A user needs two rows. The frontend row keeps the password that the application
+sends to ProxySQL. The backend row has an empty password and the policy
+attribute:
 
 ```sql
+-- A user that has one row today (frontend=1, backend=1): make it the frontend row.
+UPDATE mysql_users SET backend=0
+WHERE username='proxysql_app' AND frontend=1 AND backend=1;
+
+-- A new user: add the frontend row.
+-- INSERT INTO mysql_users (username, password, frontend, backend)
+-- VALUES ('proxysql_app', '<application password>', 1, 0);
+
+-- The backend row.
 INSERT INTO mysql_users (username, password, frontend, backend, attributes)
 VALUES ('proxysql_app', '', 0, 1, '{"backend_auth":{"type":"azure_entra"}}');
 LOAD MYSQL USERS TO RUNTIME;
@@ -79,6 +94,10 @@ The default is `password`. The monitor then does not send
 `mysql-monitor_password` to the backends. Keep `mysql-monitor_password` set to
 a strong value: ProxySQL still accepts the monitor user with this password on
 the Admin and stats interfaces.
+
+A change of `mysql-monitor_backend_auth` at runtime also applies to the pooled
+monitor connections. The monitor closes each connection of the other mode when
+a check would reuse it.
 
 ## Behaviour
 
