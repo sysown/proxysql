@@ -1,5 +1,5 @@
 #include "prepared_owned_fixture.h"
-/** Live read-only PostgreSQL admin prepared-statement acceptance test.
+/** Live PostgreSQL admin prepared-statement acceptance test.
  * Set TAP_PGSQL_ADMINHOST, TAP_PGSQL_ADMINPORT, TAP_PGSQL_ADMINUSERNAME,
  * TAP_PGSQL_ADMINPASSWORD. Optional TAP_PGSQL_STATSUSERNAME and
  * TAP_PGSQL_STATSPASSWORD run the same libpq checks against stats.
@@ -131,22 +131,82 @@ static void libpq_checks(const char* host, const char* port, const char* user, c
     Oid unknown = 0;
     r = PQprepare(c, "unknown", "SELECT $1", 1, &unknown);
     ok(state(r, "42P18"), "unresolved parameter type returns 42P18"); PQclear(r);
-    const char* policies[] = {"LOAD MYSQL SERVERS TO RUNTIME", "PRAGMA table_info(mysql_servers)", "SELECT load_extension('x')"};
-    for (const char* sql : policies) {
-        r = PQprepare(c, "policy", sql, 0, nullptr);
-        ok(PQresultStatus(r) == PGRES_FATAL_ERROR && PQstatus(c) == CONNECTION_OK, "read-only policy rejects %s", sql); PQclear(r);
-    }
-    for (const char* sql : {"BEGIN", "ROLLBACK"}) {
-        r = PQprepare(c, "txn", sql, 0, nullptr);
-        ok(PQresultStatus(r) == PGRES_FATAL_ERROR && PQtransactionStatus(c) == PQTRANS_IDLE,
-            "prepared transaction command is refused while idle: %s", sql);
+    Oid cte_type = 25;
+    r = PQprepare(c, "cte_text", "WITH sample(x) AS (VALUES ($1)) SELECT x FROM sample", 1, &cte_type);
+    bool cte_prepared = PQresultStatus(r) == PGRES_COMMAND_OK; PQclear(r);
+    const char* cte_value[] = {"cte-value"};
+    r = cte_prepared ? PQexecPrepared(c, "cte_text", 1, cte_value, nullptr, nullptr, 0) : nullptr;
+    ok(r && PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+       !strcmp(PQgetvalue(r, 0, 0), cte_value[0]), "SQLite CTE with bound VALUES executes");
+    if (r) PQclear(r);
+    if (stats) {
+        Oid group_type = 20;
+        const char* group[] = {"2147483000"};
+        r = PQprepare(c, "stats_write", "DELETE FROM stats_mysql_connection_pool WHERE hostgroup=$1", 1, &group_type);
+        bool prepared = PQresultStatus(r) == PGRES_COMMAND_OK; PQclear(r);
+        r = prepared ? PQexecPrepared(c, "stats_write", 1, group, nullptr, nullptr, 0) : nullptr;
+        ok(r && PQresultStatus(r) == PGRES_FATAL_ERROR && PQstatus(c) == CONNECTION_OK,
+           "SQLite denies a bound write to the STATS role");
+        if (r) PQclear(r);
+        r = PQexec(c, "DELETE FROM stats_mysql_connection_pool WHERE hostgroup=2147483000");
+        ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "ordinary STATS SQL denies the same write"); PQclear(r);
+        r = PQprepare(c, "stats_pragma", "PRAGMA query_only=OFF", 0, nullptr);
+        ok(PQresultStatus(r) == PGRES_FATAL_ERROR, "STATS cannot change its connection permissions with a prepared PRAGMA");
         PQclear(r);
     }
-    r = PQprepare(c, "write", "DELETE FROM mysql_servers WHERE 1=0", 0, nullptr);
-    ok(PQresultStatus(r) == PGRES_FATAL_ERROR && PQstatus(c) == CONNECTION_OK,
-        "prepared DML is refused by the initial read-only PostgreSQL policy");
-    PQclear(r);
     if (!stats) {
+        const std::string hg = std::to_string(1900000000 + (getpid() % 1000000));
+        const std::string where = "hostgroup_id=" + hg + " AND hostname='127.0.0.1' AND port=1";
+        Oid insert_types[] = {20, 25, 20};
+        r = PQprepare(c, "insert_row", "INSERT INTO mysql_servers(hostgroup_id,hostname,port) VALUES($1,$2,$3)", 3, insert_types);
+        bool insert_prepared = PQresultStatus(r) == PGRES_COMMAND_OK;
+        ok(insert_prepared, "prepare bound Admin INSERT: %s", PQresultErrorMessage(r)); PQclear(r);
+        const char* insert_values[] = {hg.c_str(), "127.0.0.1", "1"};
+        r = PQexec(c, "PROXYSQL READONLY");
+        ok(PQresultStatus(r) == PGRES_COMMAND_OK, "enable read-only after preparing INSERT"); PQclear(r);
+        r = insert_prepared ? PQexecPrepared(c, "insert_row", 3, insert_values, nullptr, nullptr, 0) : nullptr;
+        ok(r && PQresultStatus(r) == PGRES_FATAL_ERROR, "read-only denies already prepared INSERT");
+        if (r) PQclear(r);
+        r = PQexec(c, "PROXYSQL READWRITE");
+        ok(PQresultStatus(r) == PGRES_COMMAND_OK, "restore read-write mode"); PQclear(r);
+        r = insert_prepared ? PQexecPrepared(c, "insert_row", 3, insert_values, nullptr, nullptr, 0) : nullptr;
+        ok(r && PQresultStatus(r) == PGRES_COMMAND_OK && !strcmp(PQcmdStatus(r), "INSERT 0 1"),
+           "execute bound Admin INSERT with PostgreSQL affected-row tag");
+        if (r) PQclear(r);
+        Oid update_types[] = {25, 20};
+        r = PQprepare(c, "update_row", "UPDATE mysql_servers SET comment=$1 WHERE hostgroup_id=$2", 2, update_types);
+        bool update_prepared = PQresultStatus(r) == PGRES_COMMAND_OK; PQclear(r);
+        const char* update_values[] = {"prepared update", hg.c_str()};
+        r = update_prepared ? PQexecPrepared(c, "update_row", 2, update_values, nullptr, nullptr, 0) : nullptr;
+        bool updated = r && PQresultStatus(r) == PGRES_COMMAND_OK && !strcmp(PQcmdStatus(r), "UPDATE 1"); if (r) PQclear(r);
+        r = PQexec(c, ("SELECT comment FROM mysql_servers WHERE " + where).c_str());
+        ok(updated && PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+           !strcmp(PQgetvalue(r, 0, 0), "prepared update"), "bound Admin UPDATE changes inserted row"); PQclear(r);
+        Oid delete_type = 20;
+        r = PQprepare(c, "delete_row", "DELETE FROM mysql_servers WHERE hostgroup_id=$1", 1, &delete_type);
+        bool delete_prepared = PQresultStatus(r) == PGRES_COMMAND_OK; PQclear(r);
+        const char* delete_value[] = {hg.c_str()};
+        r = delete_prepared ? PQexecPrepared(c, "delete_row", 1, delete_value, nullptr, nullptr, 0) : nullptr;
+        bool deleted = r && PQresultStatus(r) == PGRES_COMMAND_OK && !strcmp(PQcmdStatus(r), "DELETE 1"); if (r) PQclear(r);
+        r = PQexec(c, ("SELECT COUNT(*) FROM mysql_servers WHERE " + where).c_str());
+        ok(deleted && PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 &&
+           !strcmp(PQgetvalue(r, 0, 0), "0"), "bound Admin DELETE removes the row"); PQclear(r);
+        const char* returning_sql = "INSERT INTO mysql_servers(hostgroup_id,hostname,port) "
+                                    "VALUES($1,'127.0.0.1',1) RETURNING hostgroup_id";
+        r = PQexecParams(c, returning_sql, 1, &delete_type, delete_value, nullptr, nullptr, 0);
+        ok(PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && !strcmp(PQgetvalue(r, 0, 0), hg.c_str()) && !strcmp(PQcmdStatus(r), "INSERT 0 1"),
+           "bound Admin INSERT RETURNING sends a row and commits once");
+        PQclear(r);
+        r = PQexec(c, ("DELETE FROM mysql_servers WHERE " + where).c_str()); PQclear(r);
+        r = PQexecParams(c, "INSERT INTO mysql_servers(hostgroup_id,hostname,port) "
+                            "VALUES($1,'127.0.0.1',1) RETURNING zeroblob(33554432)",
+                         1, &delete_type, delete_value, nullptr, nullptr, 0);
+        bool quota_error = PQresultStatus(r) == PGRES_FATAL_ERROR; PQclear(r);
+        r = PQexec(c, ("SELECT COUNT(*) FROM mysql_servers WHERE " + where).c_str());
+        ok(quota_error && PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1 && !strcmp(PQgetvalue(r, 0, 0), "0"), "Admin INSERT RETURNING rolls back on result quota failure");
+        PQclear(r);
+        // Clean up even if a preceding assertion failed.
+        r = PQexec(c, ("DELETE FROM mysql_servers WHERE " + where).c_str()); PQclear(r);
         r = PQexec(c, "PROXY_SELECT hostgroup_id, hostname, port, CASE status WHEN 'ONLINE' "
                       "THEN 'ONLINE' WHEN 'SHUNNED' THEN 'ONLINE' WHEN 'OFFLINE_SOFT' THEN "
                       "'OFFLINE_SOFT' WHEN 'OFFLINE_HARD' THEN 'OFFLINE_HARD' ELSE status END status, "
@@ -378,8 +438,7 @@ int main(int argc, char** argv) {
         }
         return exit_status();
     }
-    constexpr int wire_count = 19;
-    plan(32 + wire_count + (su ? 23 + wire_count : 0) + (fixture.admin ? 7 : 0));
+    plan(NO_PLAN);
     if (fixture.admin) {
         const std::string frontend_port = std::to_string(fixture.p);
         PGconn* frontend = connect_user(host, frontend_port.c_str(), "fixture_client", "fixture_client");

@@ -38,12 +38,9 @@
 //    it requires the native column_decltype symbol only for this opt-in profile
 //    (an unavailable symbol makes strict prepare unsupported). Declared metadata
 //    does not carry nullability, so strict columns are reported nullable.
-//  * The supported result slice is a read-only result or a no-result DML/DDL
-//    statement. A write statement with result columns (for example DML
-//    RETURNING) is rejected before execution using native stmt_readonly plus
-//    column_count. This adapter has no statement-kind classifier or prepared
-//    transaction-control policy: admission of transaction control, PRAGMAs,
-//    and other no-result statement kinds belongs to the endpoint policy.
+//  * The endpoint owns permission and transaction handling. An endpoint
+//    supplying execution metadata also guards writes with result columns
+//    until the protocol controller has materialized the result.
 //
 // Binding:
 //  * Accepted values are NULL, bool (bound as native INTEGER 0/1), int64,
@@ -123,7 +120,8 @@ public:
     // The default profile keeps the existing MySQL dynamic result behavior.
     explicit SQLiteAdapter(
         sqlite3* connection,
-        ResultProfile profile = ResultProfile::dynamic) noexcept;
+        ResultProfile profile = ResultProfile::dynamic,
+        const Command* command = nullptr) noexcept;
     ~SQLiteAdapter() override;
 
     SQLiteAdapter(const SQLiteAdapter&) = delete;
@@ -155,6 +153,7 @@ private:
 
     sqlite3* connection_;
     ResultProfile profile_;
+    const Command* command_;
 };
 
 }  // namespace embedded

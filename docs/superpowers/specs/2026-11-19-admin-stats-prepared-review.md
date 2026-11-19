@@ -1,6 +1,6 @@
 # Admin and STATS prepared statements
 
-This review branch stacks on the DuckDB-only candidate through `4e73d96dd`. It uses the core prepared controllers and the native SQLite adapter. The DuckDB plugin is not required. Start with read-only PostgreSQL and MySQL. Limited MySQL Admin writes require a separate reviewed commit and explicit approval.
+This review branch stacks on the DuckDB-only candidate through `4e73d96dd`. It uses the core prepared controllers and the native SQLite adapter. The DuckDB plugin is not required. MySQL and PostgreSQL prepared statements use native SQLite and the ordinary Admin and STATS access rules.
 
 ## PR #6648 review checkpoints
 
@@ -36,7 +36,13 @@ PostgreSQL Admin assertions passed with DuckDB disabled.
 
 The existing Admin dispatcher owns simple SQL and Cluster commands, including `PROXY_SELECT`. PostgreSQL simple Query payloads are never parsed by the prepared integration. A session that has never created a prepared provider does not enter its registry on a simple Query. With an active provider, PostgreSQL may close unnamed statements and portals before passing the original packet to the existing dispatcher. During extended-query error recovery, the controller discards messages through Sync as the protocol requires.
 
-Create the native provider on the first supported prepared command. The role selects the existing Admin or STATS SQLite connection. Use the existing startup gate and Admin SQL mutex. Check native autocommit under that lock before preparing or executing, so a prepared operation cannot join a transaction opened elsewhere. Preserve the legacy simple-query result whether a transaction command is accepted or refused by the dispatcher. Recheck source policy and authorization immediately before execution, and use the native SQLite authorizer to cover views and native recompilation. The read-only provider does not change the shared connection's query_only setting. Any admitted statistics refresh uses existing code and only the relations proven by the prepared statement's AST.
+Create the provider on the first supported prepared command. The role selects
+the existing Admin or STATS SQLite connection. Use the existing startup gate
+and Admin SQL mutex. Refuse to join a transaction already open on that shared
+connection. SQLite prepares and binds the statement. The STATS role and live
+Admin read-only mode use SQLite `query_only` during user operations. Resolve
+statistics dependencies with the SQLite authorizer and refresh those relations
+before stepping the statement.
 
 ## Evidence required before requesting review
 
@@ -44,7 +50,7 @@ Create the native provider on the first supported prepared command. The role sel
 | --- | --- |
 | Legacy wire and Cluster | Run the unchanged Admin result protocol test against the DuckDB-only parent and candidate. Verify both `PROXY_SELECT ... CASE ... END` queries, tags, legacy SHOW/LOAD and error recovery. Repeat on the same PostgreSQL connection after successful prepared traffic and after Sync from a rejected prepare. |
 | Backward protocol behavior | Run the original #6345 rejection test on the parent. On the candidate, verify one ErrorResponse for an unsupported prepared command, silence through Sync except for the proper ReadyForQuery, and working legacy simple queries afterwards. Compare legacy transaction commands on parent and candidate. |
-| Read-only policy | Unit and live driver tests for separate Admin/STATS credentials, rejection of prepared writes, extension calls, unsupported syntax and stats-reset views. Test view dependencies, native recompilation, authorizer lifetime, and deliberate policy/state changes between prepare and execute. |
+| Permission parity | Live MySQL and PostgreSQL tests cover bound Admin DML, runtime Admin read-only changes, STATS reads and denied writes, and SQLite-native syntax. |
 | Values and lifecycle | Real MySQL and PostgreSQL drivers cover repeated types, NULL/empty/binary values, long data, named/unnamed statements and portals, Flush/Sync, schema drift, disconnect/reset, quotas, and stable result metadata. Verify that prepared failure leaves no effects and the next valid operation recovers. |
 | Locking and Cluster liveness | Two owned ProxySQL nodes synchronize configuration with their real Cluster credentials while MySQL and PostgreSQL prepared clients are active. Check both nodes converge, legacy commands stay responsive, and shutdown/disconnect complete with bounded waits. Include the Admin lock regression where infrastructure permits. |
 | CI | Run the relevant integration tiers and ASan/TSan. Record the exact candidate and comparison heads. Investigate any failure before treating it as a pre-existing issue. |
@@ -105,7 +111,6 @@ deadline on both nodes. A temporary control that used simple queries in
 place of prepared statements reproduced the two shutdown timeouts on
 both `663e84aa6` and `af040de87`. The control passed the other eight
 checks on both heads.
-Prepared MySQL writes require their own review.
 
 ## Authorization and packet regressions
 
@@ -189,33 +194,16 @@ All eight legacy-mode checks passed on the gated 3.0 build and on the
 checks. A `PROXYSQL40=1` debug build passed 42 MySQL Admin/STATS, 100
 PostgreSQL Admin/STATS, 10 two-node Cluster, and 325 DuckDB assertions.
 
-## Proposed MySQL prepared-write slice
+## Native prepared read and write coverage
 
-The proposed first write change covers parameterized SQLite-native
-`INSERT`, `UPDATE`, and `DELETE` on the MySQL Admin listener. For
-supported SQL, preparation and execution follow the same access rules
-as ordinary Admin SQL. The executing session's role and the current
-Admin read-only setting govern execution. `mysql_servers`, `mysql_users`,
-and `mysql_query_rules` are representative test targets.
-
-An ordinary-query baseline on v3.0 and the current Admin draft passed
-11 checks on each build. In both runs, Admin could create a private test
-table and use ordinary DML on it. Read-only mode rejected its update
-and preserved the original row. The STATS listener rejected an ordinary
-write against an existing statistics table.
-
-Review SQL syntax support separately from authorization parity.
-ProxySQL-specific commands such as `LOAD` and `SAVE` use the Admin
-dispatcher. They have their own execution and result semantics.
-The write change requires explicit approval.
-
-| Review requirement | Validation for the write slice |
-| --- | --- |
-| Role and targets | Compare ordinary and prepared DML on an isolated test table and representative built-in configuration tables. Verify affected rows and stored values. Use the ordinary dispatcher as the reference for role restrictions and for memory, runtime, and disk schema access. |
-| Read-only transition | Prepare an Admin write, switch a separate session to `PROXYSQL READONLY`, and verify execute fails with zero effects. Switch back and verify a retry can succeed. Check prepare is denied while read-only. |
-| Transaction and serialization | Keep the startup gate and Admin SQL lock across policy, native execution and result collection. Reject prepare and execute while another legacy session owns a native transaction. Check concurrent legacy readers and prepared writes observe consistent configuration. |
-| Native side effects | Authorize the actual SQLite targets again on execution and native recompilation. Test trigger and view dependencies, failed constraints, and lack of side effects after rejection. Verify the operation does not change the shared connection's `query_only` flag. |
-| Runtime and disk | Verify prepared edits affect only memory, then exercise the unchanged LOAD and SAVE commands. In the two-node fixture, verify the existing LOAD operation still determines when a rule update synchronizes. |
+The MySQL and PostgreSQL suites exercise bound `INSERT`, `UPDATE`, and
+`DELETE` in Admin, verify stored values with ordinary SQL, and verify that
+the same prepared write follows Admin read-only mode changes. The STATS
+suites exercise reads and verify write denial on an existing statistics
+table. The suites also exercise `INSERT ... RETURNING` and verify that
+an oversized result rolls back the insert. The result is collected under
+a SQLite savepoint before the write commits. ProxySQL commands such as
+`LOAD` and `SAVE` continue through the ordinary Admin dispatcher.
 
 ## Published PR checks
 

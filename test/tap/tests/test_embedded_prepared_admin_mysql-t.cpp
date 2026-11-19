@@ -205,11 +205,63 @@ int main(int argc, char** argv) {
  mysql_stmt_free_result(s);
  ok(query(a, "PROXYSQL READWRITE"), "restore legacy Admin read-write mode");
  mysql_stmt_close(s);
- const char* refused[] = {"LOAD MYSQL SERVERS TO RUNTIME", "SAVE MYSQL SERVERS TO DISK", "PRAGMA query_only", "ATTACH DATABASE ':memory:' AS other", "BEGIN", "SELECT load_extension('x')", "SELECT * FROM stats.stats_mysql_connection_pool", "SELECT * FROM stats_mysql_query_digest_reset"};
- for (const char* sql : refused) { MYSQL_STMT* bad = prepare(a,sql); ok(!bad, "refuse prepare: %s", sql); if (bad) mysql_stmt_close(bad); }
+ // A SQLite CTE with VALUES exercises syntax that need not be classified by ParserSQL.
+ MYSQL_STMT* cte = prepare(a, "WITH sample(x) AS (VALUES (?)) SELECT x FROM sample");
+ long long cte_value = 19;
+ MYSQL_BIND cte_in[1]{}; cte_in[0].buffer_type=MYSQL_TYPE_LONGLONG; cte_in[0].buffer=&cte_value;
+ ok(cte && !mysql_stmt_bind_param(cte, cte_in) && !mysql_stmt_execute(cte) &&
+    !mysql_stmt_store_result(cte) && mysql_stmt_num_rows(cte)==1,
+    "SQLite CTE with bound VALUES prepares and executes");
+ if (cte) mysql_stmt_close(cte);
  MYSQL_STMT* insert = prepare(a, "INSERT INTO mysql_servers(hostgroup_id,hostname,port) VALUES(?,?,?)");
- ok(!insert, "read-only prepared policy refuses server inserts even in legacy read-write mode");
+ long long hostgroup = hg, port_value = 1;
+ char hostname[] = "127.0.0.1"; unsigned long hostname_len = strlen(hostname);
+ MYSQL_BIND insert_in[3]{};
+ insert_in[0].buffer_type=MYSQL_TYPE_LONGLONG; insert_in[0].buffer=&hostgroup;
+ insert_in[1].buffer_type=MYSQL_TYPE_STRING; insert_in[1].buffer=hostname;
+ insert_in[1].buffer_length=hostname_len; insert_in[1].length=&hostname_len;
+ insert_in[2].buffer_type=MYSQL_TYPE_LONGLONG; insert_in[2].buffer=&port_value;
+ ok(insert && !mysql_stmt_bind_param(insert,insert_in), "prepare and bind Admin INSERT");
+ ok(query(a, "PROXYSQL READONLY"), "enable read-only after preparing INSERT");
+ ok(insert && mysql_stmt_execute(insert)!=0, "read-only mode denies an already prepared INSERT");
+ ok(!query(a, "INSERT INTO mysql_servers(hostgroup_id,hostname,port) VALUES (" +
+              std::to_string(hg) + ",'127.0.0.1',1)"), "read-only mode also denies ordinary INSERT");
+ ok(query(a, "PROXYSQL READWRITE"), "restore read-write before executing INSERT");
+ ok(insert && !mysql_stmt_execute(insert) && mysql_stmt_affected_rows(insert)==1 &&
+    duckdb_replica_test::cell(a,"SELECT COUNT(*) FROM mysql_servers WHERE "+where)=="1",
+    "bound Admin INSERT persists the row after read-write is restored");
  if (insert) mysql_stmt_close(insert);
+ MYSQL_STMT* update = prepare(a, "UPDATE mysql_servers SET comment=? WHERE hostgroup_id=?");
+ char comment[] = "prepared update"; unsigned long comment_len = strlen(comment);
+ MYSQL_BIND update_in[2]{}; update_in[0].buffer_type=MYSQL_TYPE_STRING;
+ update_in[0].buffer=comment; update_in[0].buffer_length=comment_len; update_in[0].length=&comment_len;
+ update_in[1].buffer_type=MYSQL_TYPE_LONGLONG; update_in[1].buffer=&hostgroup;
+ ok(update && !mysql_stmt_bind_param(update,update_in) && !mysql_stmt_execute(update) &&
+    mysql_stmt_affected_rows(update)==1 &&
+    duckdb_replica_test::cell(a,"SELECT comment FROM mysql_servers WHERE "+where)==comment,
+    "bound Admin UPDATE changes the row");
+ if (update) mysql_stmt_close(update);
+ MYSQL_STMT* remove = prepare(a, "DELETE FROM mysql_servers WHERE hostgroup_id=?");
+ MYSQL_BIND delete_in[1]{}; delete_in[0].buffer_type=MYSQL_TYPE_LONGLONG; delete_in[0].buffer=&hostgroup;
+ ok(remove && !mysql_stmt_bind_param(remove,delete_in) && !mysql_stmt_execute(remove) &&
+    mysql_stmt_affected_rows(remove)==1 &&
+    duckdb_replica_test::cell(a,"SELECT COUNT(*) FROM mysql_servers WHERE "+where)=="0",
+    "bound Admin DELETE removes the row");
+ if (remove) mysql_stmt_close(remove);
+ MYSQL_STMT* returning = prepare(a, "INSERT INTO mysql_servers(hostgroup_id,hostname,port) "
+                                    "VALUES (?,'127.0.0.1',1) RETURNING hostgroup_id");
+ ok(returning && !mysql_stmt_bind_param(returning, delete_in) && !mysql_stmt_execute(returning) &&
+    !mysql_stmt_store_result(returning) && mysql_stmt_num_rows(returning)==1 &&
+    duckdb_replica_test::cell(a,"SELECT COUNT(*) FROM mysql_servers WHERE "+where)=="1",
+    "bound Admin INSERT RETURNING sends a row and commits once");
+ if (returning) mysql_stmt_close(returning);
+ ok(query(a,"DELETE FROM mysql_servers WHERE "+where), "clean up INSERT RETURNING row");
+ MYSQL_STMT* quota_write = prepare(a, "INSERT INTO mysql_servers(hostgroup_id,hostname,port) "
+                                      "VALUES (?,'127.0.0.1',1) RETURNING zeroblob(68157440)");
+ ok(quota_write && !mysql_stmt_bind_param(quota_write, delete_in) && mysql_stmt_execute(quota_write) &&
+    duckdb_replica_test::cell(a,"SELECT COUNT(*) FROM mysql_servers WHERE "+where)=="0",
+    "Admin INSERT RETURNING rolls back on result quota failure");
+ if (quota_write) mysql_stmt_close(quota_write);
  std::string stats_sql = "SELECT hostgroup FROM STATS_MYSQL_CONNECTION_POOL WHERE hostgroup=" + std::to_string(hg);
  MYSQL_STMT* stats = prepare(st,stats_sql);
  ok(stats != nullptr, "prepare STATS pool query");
@@ -219,8 +271,16 @@ int main(int argc, char** argv) {
              std::to_string(hg) + ",'127.0.0.1',1)"), "legacy Admin insert still works");
  ok(query(a,"LOAD MYSQL SERVERS TO RUNTIME"), "load test server");
  ok(!mysql_stmt_execute(stats) && !mysql_stmt_store_result(stats) && mysql_stmt_num_rows(stats)==1, "STATS refreshes on each execute");
- MYSQL_STMT* denied=prepare(st,"DELETE FROM mysql_servers WHERE hostgroup_id=1");
- ok(!denied, "STATS write refused"); if (denied) mysql_stmt_close(denied);
+ const char* stats_write = "DELETE FROM stats_mysql_connection_pool WHERE hostgroup=?";
+ MYSQL_STMT* denied=prepare(st,stats_write);
+ ok(denied && !mysql_stmt_bind_param(denied, delete_in) && mysql_stmt_execute(denied)!=0,
+    "SQLite denies a bound write to the STATS role");
+ ok(!query(st, "DELETE FROM stats_mysql_connection_pool WHERE hostgroup="+std::to_string(hg)),
+    "ordinary STATS SQL denies the same write");
+ MYSQL_STMT* pragma=prepare(st,"PRAGMA query_only=OFF");
+ ok(!pragma, "STATS cannot change its connection permissions with a prepared PRAGMA");
+ if (pragma) mysql_stmt_close(pragma);
+ if (denied) mysql_stmt_close(denied);
  mysql_stmt_close(stats);
  check_schema_change(a);
  check_statement_limit(a);

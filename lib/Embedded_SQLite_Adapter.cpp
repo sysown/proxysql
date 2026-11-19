@@ -152,8 +152,9 @@ struct SQLiteAdapter::StatementState final : Statement {
     bool pending_step_error_reported = false;
 };
 
-SQLiteAdapter::SQLiteAdapter(sqlite3* connection, ResultProfile profile) noexcept
-    : connection_(connection), profile_(profile) {}
+SQLiteAdapter::SQLiteAdapter(sqlite3* connection, ResultProfile profile,
+                             const Command* command) noexcept
+    : connection_(connection), profile_(profile), command_(command) {}
 
 SQLiteAdapter::~SQLiteAdapter() = default;
 
@@ -251,7 +252,7 @@ Status SQLiteAdapter::prepare(const std::string& sql, std::unique_ptr<Statement>
 
     const int readonly = proxy_sqlite3_stmt_readonly(native);
     const int columns = proxy_sqlite3_column_count(native);
-    if (!readonly && columns > 0) {
+    if (!command_ && !readonly && columns > 0) {
         return make_error(ErrorKind::unsupported, 0,
                           "write statements with result columns are not supported");
     }
@@ -418,6 +419,7 @@ Status SQLiteAdapter::bind(Statement& statement, const std::vector<Value>& value
 
 Status SQLiteAdapter::execute(Statement& statement, ExecInfo& info) {
     info = {};
+    if (command_) info.command = *command_;
     StatementState* state = checked(statement);
     if (state == nullptr) return affinity_error();
     if (proxy_sqlite3_step == nullptr)

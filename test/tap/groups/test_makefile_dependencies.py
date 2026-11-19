@@ -342,8 +342,7 @@ class MakefileDependencyTest(unittest.TestCase):
     def test_parsersql_archive_rebuilds_its_direct_consumers(self):
         """ParserSQL ABI changes must invalidate each object which includes its headers."""
         cases = (
-            (ROOT / "lib", ".oo", (
-                "Query_Processor_ParserSQL", "Embedded_Admin_Statistics", "Embedded_SQLite_Policy")),
+            (ROOT / "lib", ".oo", ("Query_Processor_ParserSQL",)),
             (ROOT / "plugins/duckdb", ".o", (
                 "duckdb_mysql_set", "duckdb_mysql_select_compat")),
         )

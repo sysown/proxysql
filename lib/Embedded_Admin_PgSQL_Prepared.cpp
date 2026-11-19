@@ -69,28 +69,18 @@ struct Guard final : OperationGuard {
     std::unique_ptr<OperationGuard> lease;
     explicit Guard(Provider &p) : provider(p) {}
     ~Guard() override;
+    Status finish() override { return lease ? lease->finish() : Status{}; }
 };
 struct Provider {
     ProxySQL_Admin *admin;
     PgSQL_Session &session;
     bool is_admin;
     sqlite3 *db;
-    SQLiteAdapter adapter;
-    bool needs_vacuum = false;
     AdminSQLitePolicy policy;
+    SQLiteAdapter adapter;
     Provider(ProxySQL_Admin *a, PgSQL_Session &s, bool role, sqlite3 *d)
-        : admin(a), session(s), is_admin(role), db(d), adapter(d, ResultProfile::strict_declared),
-          policy(
-              d, [] { return true; }, [] { return proxysql_admin_global_sql_lock_depth() > 0; }, {},
-              [this](const std::string &refresh) -> Status {
-                  // This is a canonical request derived only from admitted relation ASTs.
-                  // Passing original SQL would mistake literals for destructive reset views.
-                  if (!refresh.empty())
-                      needs_vacuum = admin->GenericRefreshStatistics(
-                          refresh.data(), static_cast<unsigned int>(refresh.size()), is_admin);
-                  return {};
-              },
-              SQLSourceDialect::postgresql) {}
+        : admin(a), session(s), is_admin(role), db(d), policy(*a, d, role),
+          adapter(d, ResultProfile::strict_declared, &policy.command()) {}
     Status guard(const OperationContext &context, std::unique_ptr<OperationGuard> &out) {
         std::unique_ptr<Guard> g(new Guard(*this));
         bool cleanup = context.operation == Operation::reset ||
@@ -130,14 +120,6 @@ struct Provider {
 };
 Guard::~Guard() {
     lease.reset();
-    if (provider.needs_vacuum) {
-        provider.needs_vacuum = false;
-        try {
-            provider.admin->vacuum_stats(provider.is_admin);
-        } catch (...) {
-            std::terminate();
-        }
-    }
     if (locked)
         proxysql_admin_global_sql_unlock(provider.admin->sql_query_global_mutex);
 }
