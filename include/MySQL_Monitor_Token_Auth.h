@@ -38,6 +38,12 @@ bool prepare_monitor_token_auth(MYSQL *mysql, const char *hostname, uint16_t por
 /** @brief Drop the token copies left in the connector after mysql_real_connect(). */
 void cleanse_monitor_connector_password(MYSQL *mysql);
 
+/**
+ * @brief Call after mysql_real_connect() with a token: drop the token copies, and
+ *   start a token refresh when the server refused the token (1045).
+ */
+void finish_monitor_token_auth(MYSQL *mysql, bool connected, MonitorTokenAuth& auth);
+
 /** @brief True when mysql-monitor_backend_auth is 'azure_entra' in this thread. */
 bool monitor_backend_auth_is_entra();
 

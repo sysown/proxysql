@@ -13,6 +13,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 /**
  * @brief Token source for 'azure_entra' backends (#6649).
@@ -59,6 +61,11 @@ private:
 	bool refresh_due_locked(Clock::time_point now) const;
 	AwsIamTokenResult cached_result_locked() const;
 	AwsIamTokenResult failure_result_locked() const;
+	using Completions = std::vector<std::pair<std::weak_ptr<AwsIamCompletionSink>, AwsIamCompletion>>;
+	void apply_response_locked(EntraTokenResponse& response, Clock::time_point now);
+	/** @brief Take every queued waiter and give each one a result from make_result(). */
+	template <typename MakeResult> Completions take_waiters_locked(MakeResult make_result);
+	static void post_completions(Completions& out);
 	void run();
 
 	const EntraConfig cfg_;

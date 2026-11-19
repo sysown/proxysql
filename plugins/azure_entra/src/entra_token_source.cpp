@@ -173,76 +173,82 @@ void AzureEntraTokenSource::wake() {
 	cv_.notify_all();
 }
 
-void AzureEntraTokenSource::run() {
-	using Out = std::pair<std::weak_ptr<AwsIamCompletionSink>, AwsIamCompletion>;
-	std::unique_lock<std::mutex> lock(mutex_);
-	while (!stopping_) {
-		// Re-check every second: the refresh time is a deadline on the injected clock.
-		cv_.wait_for(lock, 1s, [this] { return stopping_ || fetch_requested_ || refresh_due_locked(now_()); });
-		if (stopping_) break;
-		if (!fetch_requested_ && !refresh_due_locked(now_())) continue;
-
-		fetching_ = true;
-		fetch_requested_ = false;
-		lock.unlock();
-		EntraTokenResponse response = exchange_workload_identity(cfg_, read_assertion_, post_);
-		lock.lock();
-		fetching_ = false;
-		++fetches_done_;
-		if (stopping_) break;
-
-		const Clock::time_point now = now_();
-		if (response.ok) {
-			token_ = std::move(response.access_token);
-			++generation_;
-			expires_at_ = now + response.expires_in;
-			refresh_at_ = expires_at_ - refresh_lead(response.expires_in);
-			backoff_until_ = {};
-			failed_refreshes_ = 0;
-			++stats_.token_refresh_successes;
-		} else {
-			// A failed refresh keeps a still-valid token (usable_locked decides).
-			last_failure_ = response.failure;
-			// While a usable token is held, double the wait (2 s up to 60 s) so an
-			// Entra outage or throttling does not get a request every 2 s.
-			backoff_until_ = now + (usable_locked(now)
-				? std::min(kFailureBackoff * (1u << std::min(failed_refreshes_, 5u)), kMaxRefreshBackoff)
-				: kFailureBackoff);
-			++failed_refreshes_;
-			++stats_.token_refresh_failures;
-			if (last_failure_.category == "credential_provider_error") ++stats_.credential_provider_failures;
-		}
-
-		// Every waiter queued until now gets this fetch's outcome.
-		std::vector<Out> out;
-		for (Waiter& w : waiters_) {
-			AwsIamCompletion c;
-			c.opaque_id = w.opaque_id;
-			c.result = response.ok ? cached_result_locked() : failure_result_locked();
-			out.emplace_back(std::move(w.sink), std::move(c));
-		}
-		waiters_.clear();
-		fetch_requested_ = false;
-		cv_.notify_all();
-		lock.unlock();
-		for (Out& o : out) {
-			if (auto target = o.first.lock()) target->post(std::move(o.second));
-		}
-		lock.lock();
+void AzureEntraTokenSource::apply_response_locked(EntraTokenResponse& response, Clock::time_point now) {
+	if (response.ok) {
+		token_ = std::move(response.access_token);
+		++generation_;
+		expires_at_ = now + response.expires_in;
+		refresh_at_ = expires_at_ - refresh_lead(response.expires_in);
+		backoff_until_ = {};
+		failed_refreshes_ = 0;
+		++stats_.token_refresh_successes;
+		return;
 	}
-	std::vector<Out> out;
+	// A failed refresh keeps a still-valid token (usable_locked decides).
+	last_failure_ = response.failure;
+	// While a usable token is held, double the wait (2 s up to 60 s) so an
+	// Entra outage or throttling does not get a request every 2 s.
+	backoff_until_ = now + (usable_locked(now)
+		? std::min(kFailureBackoff * (1u << std::min(failed_refreshes_, 5u)), kMaxRefreshBackoff)
+		: kFailureBackoff);
+	++failed_refreshes_;
+	++stats_.token_refresh_failures;
+	if (last_failure_.category == "credential_provider_error") ++stats_.credential_provider_failures;
+}
+
+template <typename MakeResult>
+AzureEntraTokenSource::Completions AzureEntraTokenSource::take_waiters_locked(MakeResult make_result) {
+	Completions out;
 	for (Waiter& w : waiters_) {
 		AwsIamCompletion c;
 		c.opaque_id = w.opaque_id;
-		c.result = status_only(AwsIamStatus::SHUTDOWN);
+		c.result = make_result();
 		out.emplace_back(std::move(w.sink), std::move(c));
 	}
 	waiters_.clear();
-	cv_.notify_all();
-	lock.unlock();
-	for (Out& o : out) {
+	return out;
+}
+
+void AzureEntraTokenSource::post_completions(Completions& out) {
+	for (auto& o : out) {
 		if (auto target = o.first.lock()) target->post(std::move(o.second));
 	}
+}
+
+void AzureEntraTokenSource::run() {
+	Completions out;
+	{
+		std::unique_lock<std::mutex> lock(mutex_);
+		while (!stopping_) {
+			// Re-check every second: the refresh time is a deadline on the injected clock.
+			cv_.wait_for(lock, 1s, [this] { return stopping_ || fetch_requested_ || refresh_due_locked(now_()); });
+			if (stopping_) break;
+			if (!fetch_requested_ && !refresh_due_locked(now_())) continue;
+
+			fetching_ = true;
+			fetch_requested_ = false;
+			lock.unlock();
+			EntraTokenResponse response = exchange_workload_identity(cfg_, read_assertion_, post_);
+			lock.lock();
+			fetching_ = false;
+			++fetches_done_;
+			if (stopping_) break;
+
+			apply_response_locked(response, now_());
+			// Every waiter queued until now gets this fetch's outcome.
+			out = take_waiters_locked([this, &response] {
+				return response.ok ? cached_result_locked() : failure_result_locked();
+			});
+			fetch_requested_ = false;
+			cv_.notify_all();
+			lock.unlock();
+			post_completions(out);
+			lock.lock();
+		}
+		out = take_waiters_locked([] { return status_only(AwsIamStatus::SHUTDOWN); });
+		cv_.notify_all();
+	}
+	post_completions(out);
 }
 
 std::function<bool(std::string&)> file_assertion_reader(std::string path) {

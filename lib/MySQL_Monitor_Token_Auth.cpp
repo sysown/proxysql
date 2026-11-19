@@ -6,6 +6,7 @@
 #include "cpp.h"
 #include "MySQL_Backend_Auth.h"
 #include "Servers_SslParams.h"
+#include "mysqld_error.h"
 
 #include <openssl/crypto.h>
 
@@ -64,9 +65,18 @@ bool prepare_monitor_token_auth(MYSQL *mysql, const char *hostname, uint16_t por
 
 void cleanse_monitor_connector_password(MYSQL *mysql) {
 	if (mysql == nullptr || mysql->passwd == nullptr) return;
-	OPENSSL_cleanse(mysql->passwd, strlen(mysql->passwd));
-	free(mysql->passwd);
+	OPENSSL_cleanse(mysql->passwd, strlen(mysql->passwd)); // NOSONAR(cpp:S5813): the connector made this copy with strdup().
+	free(mysql->passwd); // NOSONAR(cpp:S1231): the connector allocated it with strdup().
 	mysql->passwd = nullptr;
+}
+
+void finish_monitor_token_auth(MYSQL *mysql, bool connected, MonitorTokenAuth& auth) {
+	cleanse_monitor_connector_password(mysql);
+	if (!connected && mysql_errno(mysql) == ER_ACCESS_DENIED_ERROR) {
+		AwsIamTokenSourceLease source = acquire_backend_token_source(BackendTokenProvider::AZURE_ENTRA);
+		if (source) source->invalidate(auth.key, auth.generation);
+	}
+	auth.token.clear();
 }
 
 bool monitor_backend_auth_is_entra() {

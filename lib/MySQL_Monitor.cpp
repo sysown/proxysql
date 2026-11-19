@@ -1718,14 +1718,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		myrc=mysql_real_connect(mysql, "localhost", mysql_thread___monitor_username, monitor_password, NULL, 0, hostname, 0);
 	}
 #ifdef PROXYSQL40
-	if (entra) {
-		cleanse_monitor_connector_password(mysql);
-		if (myrc == NULL && mysql_errno(mysql) == ER_ACCESS_DENIED_ERROR) {
-			AwsIamTokenSourceLease source = acquire_backend_token_source(BackendTokenProvider::AZURE_ENTRA);
-			if (source) source->invalidate(token_auth.key, token_auth.generation);
-		}
-		token_auth.token.clear();
-	}
+	if (entra) finish_monitor_token_auth(mysql, myrc != NULL, token_auth);
 #endif // PROXYSQL40
 	if (myrc==NULL) {
 		mysql_error_msg=strdup(mysql_error(mysql));

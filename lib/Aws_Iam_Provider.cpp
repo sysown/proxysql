@@ -246,7 +246,8 @@ private:
 
 AwsIamNamedStats backend_token_stats_mysql_global_rows(BackendTokenProvider provider,
 	const AwsIamStatsSnapshot& stats) {
-	static const char *const names[2][12] = {
+	using Names = std::array<const char *, 12>;
+	static const std::array<Names, 2> names {{
 		{ "AwsIam_Token_requests", "AwsIam_Token_cache_hits", "AwsIam_Token_refresh_successes",
 		  "AwsIam_Token_refresh_failures", "AwsIam_Credential_provider_failures", "AwsIam_Queue_rejections",
 		  "AwsIam_Backend_connection_successes", "AwsIam_Backend_connection_failures",
@@ -257,8 +258,8 @@ AwsIamNamedStats backend_token_stats_mysql_global_rows(BackendTokenProvider prov
 		  "AzureEntra_Queue_rejections", "AzureEntra_Backend_connection_successes",
 		  "AzureEntra_Backend_connection_failures", "AzureEntra_Token_cache_entries",
 		  "AzureEntra_In_flight_generations", "AzureEntra_Queued_generations", "AzureEntra_Waiting_sessions" },
-	};
-	const char *const *n = names[static_cast<size_t>(provider)];
+	}};
+	const Names& n = names[static_cast<size_t>(provider)];
 	return {{
 		{ n[0], stats.token_requests },
 		{ n[1], stats.token_cache_hits },

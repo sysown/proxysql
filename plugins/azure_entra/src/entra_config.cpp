@@ -1,6 +1,6 @@
 #include "entra_config.h"
 
-#include <cctype>
+#include <locale>
 
 namespace {
 
@@ -8,7 +8,7 @@ bool is_guid(const std::string& value) {
 	if (value.size() != 36) return false;
 	for (size_t i = 0; i < value.size(); ++i) {
 		const bool dash_position = i == 8 || i == 13 || i == 18 || i == 23;
-		if (dash_position ? value[i] != '-' : !std::isxdigit(static_cast<unsigned char>(value[i]))) {
+		if (dash_position ? value[i] != '-' : !std::isxdigit(value[i], std::locale::classic())) {
 			return false;
 		}
 	}
