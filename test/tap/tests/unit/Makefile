@@ -605,6 +605,9 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	backend_unplug_unit-t \
 	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
+	mysql_compressed_output_ring_unit-t \
+	mysql_output_span_unit-t \
+	pgsql_output_span_unit-t \
 	pgsql_stable_io_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	str_ends_with_unit-t \
