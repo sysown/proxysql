@@ -5873,6 +5873,15 @@ void PgSQL_Connection::ProcessQueryAndSetStatusFlags(const char* query_digest_te
 		if (!strncasecmp(query_digest_text, "CREATE TEMPORARY TABLE ", strlen("CREATE TEMPORARY TABLE ")) || 
 			!strncasecmp(query_digest_text, "CREATE TEMP TABLE ", strlen("CREATE TEMP TABLE "))) {
 			set_status(true, STATUS_PGSQL_CONNECTION_TEMPORARY_TABLE);
+
+			if (myds && myds->sess && myds->sess->locked_on_hostgroup == -1) {
+				myds->sess->locked_on_hostgroup = myds->sess->current_hostgroup;
+
+				auto client_myds = &this->myds->sess->client_myds->addr;
+
+				proxy_info("Received CREATE TEMP TABLE from client %s:%d. Setting locked_on_hostgroup to %d.",
+					client_myds->addr, client_myds->port, myds->sess->current_hostgroup);
+			}
 		}
 	} else { // we search for temporary if not already set
 		if (!strncasecmp(query_digest_text, "DISCARD TEMP", strlen("DISCARD TEMP"))) {
