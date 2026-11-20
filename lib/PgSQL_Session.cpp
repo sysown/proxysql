@@ -2095,10 +2095,15 @@ int PgSQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 		// leaves (a Query there is a protocol error, which PostgreSQL refuses). The fast forward read limit
 		// counts only what is queued for the backend: data held here is buffered without it, as messages
 		// pipelined behind a query are in normal mode.
+		// Only a well-formed Flush (no body, 5 bytes) is relayed. One with a body, sent after CopyDone,
+		// reaches a backend that has ended the COPY: it refuses it and then ignores everything until a Sync,
+		// with no ReadyForQuery, on a backend that may already be back in the pool. Held, normal mode
+		// takes it as a Flush and the backend never sees it.
 		bool copy_hold = false;
 		if (session_fast_forward == SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT) {
-			const char t = *static_cast<const char*>(client_myds->PSarrayIN->index(0)->ptr);
-			copy_hold = t != 'd' && t != 'c' && t != 'f' && t != 'H';
+			const PtrSize_t* nxt = client_myds->PSarrayIN->index(0);
+			const char t = *static_cast<const char*>(nxt->ptr);
+			copy_hold = t != 'd' && t != 'c' && t != 'f' && (t != 'H' || nxt->size != 5);
 		}
 
 		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE || copy_hold) {

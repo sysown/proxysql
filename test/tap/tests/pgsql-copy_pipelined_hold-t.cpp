@@ -64,9 +64,9 @@ static const int BACKLOG_ROWS = 9000;
 // Twice the fast forward read limit (4 x pgsql-threshold_resultset_size, 16 MB by default): a read
 // limit on what waits behind a held message would stop reading the client before this.
 static const long long VANISH_BYTES = 32LL << 20;
-// Per round: 10 pipelined-query cases with 4 checks each, two_copies 2, set_leak 2, begin_leak 2,
+// Per round: 11 pipelined-query cases with 4 checks each, two_copies 2, set_leak 2, begin_leak 2,
 // terminate 2, held_vanish 1.
-static const int CHECKS_PER_ROUND = 10 * 4 + 2 + 2 + 2 + 2 + 1;
+static const int CHECKS_PER_ROUND = 11 * 4 + 2 + 2 + 2 + 2 + 1;
 
 static PGConnPtr open_admin_conn() {
 	std::stringstream ss;
@@ -432,6 +432,10 @@ int main(int argc, char** argv) {
 				[](const Group& g) { return has_tag(g, "COPY 1"); });
 			query_case(protocol + " CopyDone+Flush+Query", r, copy_in, 'G', COPY_ROW + COPY_DONE + msg('H') + marker, false,
 				[](const Group& g) { return has_tag(g, "COPY 1"); });
+			// A Flush with a body after CopyDone: relayed, the backend refuses it once the COPY is over and then
+			// ignores everything until a Sync.
+			query_case(protocol + " CopyDone+bad Flush+Query", r, copy_in, 'G', COPY_ROW + COPY_DONE + msg('H', "x") + marker,
+				false, [](const Group& g) { return has_tag(g, "COPY 1"); });
 			// PostgreSQL ignores a Flush during a COPY FROM: the rows and the CopyDone behind it still end the COPY.
 			query_case(protocol + " Flush+CopyData+CopyDone+Query", r, copy_in, 'G',
 				COPY_ROW + msg('H') + COPY_ROW + COPY_DONE + marker, false, [](const Group& g) { return has_tag(g, "COPY 2"); });
