@@ -14,9 +14,15 @@
 #include "test_init.h"
 #include "proxysql.h"
 #include "PgSQL_Error_Helper.h"
+#include <libpq-fe.h>
 
 #include <cstring>
 #include <string>
+
+// libpq's own ErrorResponse parser uses this internal function to populate a
+// PGresult. Use the same vendored helper to construct deterministic results,
+// independent of which message locales are installed on the test host.
+extern "C" void pqSaveMessageField(PGresult* result, char code, const char* value);
 
 // ============================================================
 // get_error_code() — constexpr SQLSTATE string lookup
@@ -446,6 +452,38 @@ static void test_fill_severity_variations() {
 	   "fill severity: unknown string = ERRSEVERITY_UNKNOWN_SEVERITY");
 }
 
+static void test_libpq_result_severity() {
+	struct severity_case {
+		const char* localized;
+		const char* nonlocalized;
+		PGSQL_ERROR_SEVERITY expected;
+		const char* label;
+	};
+	const severity_case cases[] = {
+		{"FEHLER", "ERROR", PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR, "localized error with V"},
+		{"SCHWERWIEGEND", "FATAL", PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL, "localized fatal with V"},
+		{"ERROR", nullptr, PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR, "English error without V"},
+		{"FATAL", nullptr, PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL, "English fatal without V"},
+	};
+	for (const severity_case& tc : cases) {
+		PGresult* result = PQmakeEmptyPGresult(nullptr, PGRES_FATAL_ERROR);
+		if (result == nullptr) BAIL_OUT("PQmakeEmptyPGresult failed");
+		pqSaveMessageField(result, PG_DIAG_SEVERITY, tc.localized);
+		if (tc.nonlocalized) pqSaveMessageField(result, PG_DIAG_SEVERITY_NONLOCALIZED, tc.nonlocalized);
+		pqSaveMessageField(result, PG_DIAG_SQLSTATE, "22012");
+		pqSaveMessageField(result, PG_DIAG_MESSAGE_PRIMARY, "division by zero");
+		PgSQL_ErrorInfo info;
+		PgSQL_Error_Helper::fill_error_info(info, result, PGSQL_ERROR_FIELD_TEXT);
+		ok(info.severity == tc.expected, "libpq result: %s main severity", tc.label);
+		ok(info.ext_info && info.ext_info->text == tc.expected, "libpq result: %s extended severity", tc.label);
+		ok(strcmp(PQresultErrorField(result, PG_DIAG_SEVERITY), tc.localized) == 0 &&
+		   strcmp(info.sqlstate, "22012") == 0 && info.message == "division by zero",
+		   "libpq result: %s preserves localized severity, SQLSTATE and message", tc.label);
+		reset_error_info(info, true);
+		PQclear(result);
+	}
+}
+
 // ============================================================
 // fill_error_info with PGSQL_ERROR_CODES enum overload
 // ============================================================
@@ -549,7 +587,7 @@ static void test_ext_info_reset() {
 }
 
 int main() {
-	plan(139);
+	plan(151);
 	test_init_minimal();
 
 	test_get_error_code();                  // 8
@@ -561,6 +599,7 @@ int main() {
 	test_fill_error_info_internal_error();  // 4
 	test_fill_error_class_branches();       // 54
 	test_fill_severity_variations();        // 9
+	test_libpq_result_severity();           // 12
 	test_fill_error_info_enum_overload();   // 5
 	test_fill_unknown_sqlstate();           // 4
 	test_reset_error_info();               // 7
