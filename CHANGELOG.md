@@ -4,6 +4,17 @@
 
 ### Unreleased
 
+- PostgreSQL: collect query digest statistics in a local batch inside each
+  worker thread instead of taking the shared digest lock on every query. The
+  batch is merged into the shared digest maps when it reaches 256 entries, on
+  the worker's periodic stats update, on thread exit, and before every
+  operation that needs a global view (digest dumps, resets, purges, top-k,
+  size accounting), so `stats_pgsql_query_digest` reads stay exact and
+  complete. This removes the contention of PostgreSQL digest accounting on
+  `digest_rwlock` from the query path. New variable
+  `pgsql-query_digests_local_batch` (bool, default `true`) restores the
+  direct shared-map accounting per query.
+
 - Prevent replaying a MySQL multi-statement batch on another backend when its backend goes offline after an earlier result was returned to the client.
 - **Gated behind `PROXYSQL31` (v3.1.x and v4.0.x; v3.0.x is unaffected):** output queues no longer copy a packet that does not fit in the ring. The owned output ring stays fixed at 1 KiB, while the input ring stays at 32 KiB; when the ring is empty, an oversized packet is sent directly from its own allocation instead of being copied through it. Compressed MySQL connections raise the output ring back to 32 KiB on the first compressed frame, because every compressed frame is staged through it.
 - **Gated behind `PROXYSQL31`:** result frames (`RESULTSET_BUFLEN`, `PGSQL_RESULTSET_BUFLEN`) are 32 KiB. With jemalloc enabled (the default), 32 KiB stays in the tcache; `NOJEMALLOC=1` builds use the system allocator instead.

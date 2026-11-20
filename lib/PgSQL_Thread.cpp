@@ -446,6 +446,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"query_digests_normalize_digest_text",
 	(char*)"query_digests_track_hostname",
 	(char*)"query_digests_keep_comment",
+	(char*)"query_digests_local_batch",
 	(char*)"parse_failure_logs_digest",
 	(char*)"servers_stats",
 	(char*)"default_reconnect",
@@ -1205,6 +1206,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.query_digests_normalize_digest_text = false;
 	variables.query_digests_track_hostname = false;
 	variables.query_digests_keep_comment = false;
+	variables.query_digests_local_batch = true; // worker-local digest batching enabled
 	variables.parse_failure_logs_digest = false;
 	variables.min_num_servers_lantency_awareness = 1000;
 	variables.aurora_max_lag_ms_only_read_from_replicas = 2;
@@ -2303,6 +2305,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["query_digests_normalize_digest_text"] = make_tuple(&variables.query_digests_normalize_digest_text, false);
 		VariablesPointers_bool["query_digests_track_hostname"] = make_tuple(&variables.query_digests_track_hostname, false);
 		VariablesPointers_bool["query_digests_keep_comment"] = make_tuple(&variables.query_digests_keep_comment, false);
+		VariablesPointers_bool["query_digests_local_batch"] = make_tuple(&variables.query_digests_local_batch, false);
 		VariablesPointers_bool["parse_failure_logs_digest"] = make_tuple(&variables.parse_failure_logs_digest, false);
 		VariablesPointers_bool["servers_stats"] = make_tuple(&variables.servers_stats, false);
 		VariablesPointers_bool["sessions_sort"] = make_tuple(&variables.sessions_sort, false);
@@ -4706,6 +4709,7 @@ void PgSQL_Thread::refresh_variables() {
 	pgsql_thread___query_digests_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_grouping_limit");
 	pgsql_thread___query_digests_groups_grouping_limit = (int)GloPTH->get_variable_int((char*)"query_digests_groups_grouping_limit");
 	pgsql_thread___query_digests_keep_comment = (bool)GloPTH->get_variable_int((char*)"query_digests_keep_comment");
+	pgsql_thread___query_digests_local_batch = (bool)GloPTH->get_variable_int((char*)"query_digests_local_batch");
 
 	variables.query_cache_stores_empty_result = (bool)GloPTH->get_variable_int((char*)"query_cache_stores_empty_result");
 

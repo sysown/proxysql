@@ -1049,6 +1049,7 @@ public:
 		bool query_digests_normalize_digest_text;
 		bool query_digests_track_hostname;
 		bool query_digests_keep_comment;
+		bool query_digests_local_batch; // accumulate PgSQL query digest stats in worker-local batches
 		int query_digests_grouping_limit;
 		int query_digests_groups_grouping_limit;
 		bool parse_failure_logs_digest;
