@@ -1363,7 +1363,10 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				// client error, serious
 				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting INIT CONNECT", myconn);
 				if (rc != -2) {
-					if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
+					// init_connect runs before any client statement on this connection, so only a
+					// known transaction blocks the retry. IsActiveTransaction() also counts the
+					// unknown state a broken libpq connection always reports, and would never retry.
+					if ((myds->myconn->reusable == true) && myds->myconn->IsKnownActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
 						myds->myconn->is_pipeline_active() == false) {
 						retry_conn = true;
 					}
