@@ -523,3 +523,33 @@ bool DNS_Cache::empty() const {
 
 	return result;
 }
+
+/**
+ * @brief Check if a hostname's cached IPs include the given IP.
+ * @param hostname The hostname to look up in the cache.
+ * @param ip The IP address to search for.
+ * @return true if found, cache disabled, or hostname not cached. false only
+ *         when hostname IS cached and ip is NOT among its resolved addresses.
+ */
+bool DNS_Cache::contains_ip(const std::string& hostname, const std::string& ip) const {
+	if (!enabled) return true;
+
+	int rc = pthread_rwlock_rdlock(&rwlock_);
+	assert(rc == 0);
+
+	bool found = true;
+	auto itr = records.find(hostname);
+	if (itr != records.end()) {
+		const unsigned long long now = monotonic_time();
+		const bool pin_active = !itr->second.pinned_ip.empty()
+								&& (itr->second.pinned_until == 0 || now <= itr->second.pinned_until);
+		// A pinned host is served its pinned IP, so that is the only expected peer.
+		found = pin_active
+			? ip == itr->second.pinned_ip
+			: std::find(itr->second.ips.begin(), itr->second.ips.end(), ip) != itr->second.ips.end();
+	}
+
+	rc = pthread_rwlock_unlock(&rwlock_);
+	assert(rc == 0);
+	return found;
+}
