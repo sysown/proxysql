@@ -14,6 +14,11 @@
  * starts while a transaction is already open and any COMMIT that runs with no
  * transaction open. Both engines must produce neither, leave the connection in
  * autocommit mode, and refresh the runtime projection + checksum.
+ *
+ * With PROXYSQL40, the MySQL projection must also set the AWS locality
+ * manager's switch from mysql-aws_locality_awareness, as 'LOAD MYSQL
+ * VARIABLES TO RUNTIME' does: the managed path once left it off, so the
+ * locality multipliers never applied.
  */
 
 #include "tap.h"
@@ -26,6 +31,10 @@
 #include "ProxySQL_Statistics.hpp"
 #include "ProxySQL_Admin_Tables_Definitions.h"
 #include "sqlite3db.h"
+#ifdef PROXYSQL40
+#include "MySQL_HostGroups_Manager.h"
+#include "Aws_Locality_Manager.h"
+#endif
 
 #include <cstring>
 #include <string>
@@ -33,6 +42,9 @@
 extern ProxySQL_Admin* GloAdmin;
 extern ProxySQL_Statistics* GloProxyStats;
 extern PgSQL_Threads_Handler* GloPTH;
+#ifdef PROXYSQL40
+extern MySQL_HostGroups_Manager* MyHGM;
+#endif
 
 namespace {
 
@@ -109,10 +121,31 @@ void check_engine(bool pgsql) {
 	   "%s variables checksum was recomputed", engine);
 }
 
+#ifdef PROXYSQL40
+// The locality manager's switch follows the committed variable, both ways.
+void check_aws_locality_switch() {
+	for (const bool on : {true, false}) {
+		GloMTH->wrlock();
+		GloMTH->set_variable("aws_locality_awareness", on ? "true" : "false");
+		GloMTH->commit();
+		GloMTH->wrunlock();
+		GloAdmin->commit_managed_engine_variables_projection(false);
+		const auto snapshot = MyHGM->aws_locality_manager()->snapshot();
+		ok(snapshot != nullptr && snapshot->enabled == on,
+		   "mysql projection turns the AWS locality manager %s, as "
+		   "LOAD MYSQL VARIABLES TO RUNTIME does", on ? "on" : "off");
+	}
+}
+#endif
+
 } // namespace
 
 int main() {
+#ifdef PROXYSQL40
+	plan(14);
+#else
 	plan(12);
+#endif
 	test_init_minimal();
 	// Creates GloMTH/GloPTH with their default variables.
 	test_init_query_processor();
@@ -128,6 +161,10 @@ int main() {
 
 	check_engine(true);
 	check_engine(false);
+#ifdef PROXYSQL40
+	test_init_hostgroups();
+	check_aws_locality_switch();
+#endif
 
 	return exit_status();
 }
