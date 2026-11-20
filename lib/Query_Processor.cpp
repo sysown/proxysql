@@ -2248,13 +2248,24 @@ unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size(uns
 	pthread_mutex_lock(&digest_size_cache_mutex);
 	pthread_rwlock_rdlock(&digest_rwlock);
 
+	auto& c = digest_size_cache;
+	// get_query_digests_v2() has moved the live entries out: the maps are partial. Return the last value
+	// computed on the complete maps, unless entries were removed since then.
+	const bool detached = digest_maps_detached > 0;
+	if (detached && c.has_total && c.total_epoch == digest_maps_epoch) {
+		ret = c.total;
+		pthread_rwlock_unlock(&digest_rwlock);
+		pthread_mutex_unlock(&digest_size_cache_mutex);
+		return ret;
+	}
+
 	const size_t map_size = digest_umap.size();
 	const size_t text_map_size = digest_text_umap.size();
 	ret += sizeof(QP_query_digest_stats) * map_size;
 
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		auto& c = digest_size_cache;
 		const bool refresh =
+			detached ||
 			refresh_pct == 0 ||
 			c.valid == false ||
 			c.epoch != digest_maps_epoch ||
@@ -2290,13 +2301,15 @@ unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size(uns
 				umap_bytes += args[i].umap_bytes;
 				text_umap_bytes += args[i].text_umap_bytes;
 			}
-			c.valid = true;
-			c.epoch = digest_maps_epoch;
-			c.umap_size = map_size;
-			c.text_umap_size = text_map_size;
-			c.umap_bytes = umap_bytes;
-			c.text_umap_bytes = text_umap_bytes;
 			c.scans++;
+			if (!detached) {
+				c.valid = true;
+				c.epoch = digest_maps_epoch;
+				c.umap_size = map_size;
+				c.text_umap_size = text_map_size;
+				c.umap_bytes = umap_bytes;
+				c.text_umap_bytes = text_umap_bytes;
+			}
 			ret += umap_bytes + text_umap_bytes;
 		} else {
 			ret += digest_scale_bytes(c.umap_bytes, map_size, c.umap_size);
@@ -2305,7 +2318,9 @@ unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size(uns
 	} else {
 		// Below the threshold the string bytes are not accounted (unchanged behaviour); drop the sample so
 		// that crossing the threshold again always starts with a scan.
-		digest_size_cache.valid = false;
+		if (!detached) {
+			c.valid = false;
+		}
 	}
 #if !defined(__FreeBSD__) && !defined(__APPLE__)
 	ret += ((sizeof(uint64_t) + sizeof(void *) + sizeof(std::_Rb_tree_node_base)) * map_size );
@@ -2314,6 +2329,12 @@ unsigned long long Query_Processor<QP_DERIVED>::get_query_digests_total_size(uns
 	ret += ((sizeof(uint64_t) + sizeof(void *) + 32) * map_size );
 	ret += ((sizeof(uint64_t) + sizeof(void *) + 32) * text_map_size );
 #endif
+
+	if (!detached) {
+		c.has_total = true;
+		c.total_epoch = digest_maps_epoch;
+		c.total = ret;
+	}
 
 	pthread_rwlock_unlock(&digest_rwlock);
 	pthread_mutex_unlock(&digest_size_cache_mutex);
@@ -2388,7 +2409,8 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 	umap_query_digest_text digest_text_umap_aux, digest_text_umap_aux_2;
 	pthread_rwlock_wrlock(&digest_rwlock);
 	// No digest_maps_changed(): this snapshot moves the entries out and merges them back without
-	// removing any. The size cache detects the temporary shrink through the entry counts.
+	// removing any. Until they are back, get_query_digests_total_size() returns its last complete value.
+	digest_maps_detach();
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
@@ -2524,6 +2546,7 @@ std::pair<SQLite3_result *, int> Query_Processor<QP_DERIVED>::get_query_digests_
 	// content of the auxiliary maps.
 	pthread_rwlock_wrlock(&digest_rwlock);
 	digest_umap_aux.swap(digest_umap);
+	digest_maps_reattach();
 	for (const auto& element : digest_umap_aux) {
 		uint64_t digest = element.first;
 		QP_query_digest_stats *qds = (QP_query_digest_stats *)element.second;

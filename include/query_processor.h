@@ -546,12 +546,20 @@ public:
 	 * @brief Returns an estimate of the memory used by the query digest maps (#6673).
 	 * @details The expensive part of the estimate, the bytes of the strings owned by the digest entries,
 	 *   is only computed with a full scan of the maps when the cached sample is missing or stale:
-	 *   - no sample was taken yet, or the map is below 'DIGEST_STATS_FAST_MINSIZE';
-	 *   - entries were removed or the maps replaced (purge, reset, stats swap) since the sample;
+	 *   - no sample was taken yet;
+	 *   - entries were removed or the maps replaced (purge, reset) since the sample;
 	 *   - the entry count of either map shrank, or grew by more than 'refresh_pct' percent since the sample.
 	 *   Otherwise the cached string bytes are scaled linearly with the current entry counts. 'refresh_pct'
 	 *   is a refresh policy, not an accuracy bound on the returned value. With 'refresh_pct == 0' every
 	 *   call above the threshold scans, as before.
+	 *
+	 *   Below 'DIGEST_STATS_FAST_MINSIZE' entries nothing is scanned and the string bytes are not counted
+	 *   (unchanged behaviour); the sample is dropped, so crossing the threshold again starts with a scan.
+	 *
+	 *   While get_query_digests_v2() has moved the live maps out (a stats_*_query_digest read), the maps
+	 *   hold only the digests seen during that window. The last value computed on the complete maps is
+	 *   returned instead, and nothing is sampled or cached. Only if no such value exists is the estimate
+	 *   computed from the partial maps, still without caching it.
 	 *
 	 *   Concurrent collectors (SQL stats, Prometheus) are serialized on 'digest_size_cache_mutex', so only
 	 *   one of them scans and the others reuse its sample. That mutex is never taken by query workers.
@@ -649,6 +657,12 @@ private:
 	 *   Inserting a new digest does not increment it: growth is tracked by the entry counts.
 	 */
 	uint64_t digest_maps_epoch = 0;
+	/**
+	 * @brief Number of get_query_digests_v2() calls that currently hold the live digest entries in their
+	 *   own maps. Changed with 'digest_rwlock' held for writing. While it is non-zero the live maps are
+	 *   partial and get_query_digests_total_size() returns its last complete value.
+	 */
+	unsigned int digest_maps_detached = 0;
 	/** @brief Serializes get_query_digests_total_size() callers and protects 'digest_size_cache'. */
 	pthread_mutex_t digest_size_cache_mutex;
 	struct {
@@ -659,12 +673,27 @@ private:
 		unsigned long long umap_bytes = 0;      ///< string bytes owned by digest_umap entries
 		unsigned long long text_umap_bytes = 0; ///< string bytes owned by digest_text_umap entries
 		unsigned long long scans = 0;    ///< full scans performed
+		bool has_total = false;          ///< 'total' holds a value computed on the complete maps
+		uint64_t total_epoch = 0;        ///< 'digest_maps_epoch' when 'total' was computed
+		unsigned long long total = 0;    ///< last value returned with the complete maps
 	} digest_size_cache;
 #endif
 	/** @brief Invalidates the cached digest size estimate. Caller holds 'digest_rwlock' for writing. */
 	inline void digest_maps_changed() {
 #ifdef PROXYSQL31
 		digest_maps_epoch++;
+#endif
+	}
+	/** @brief The live digest entries were moved out of the maps. Caller holds 'digest_rwlock' for writing. */
+	inline void digest_maps_detach() {
+#ifdef PROXYSQL31
+		digest_maps_detached++;
+#endif
+	}
+	/** @brief The live digest entries were moved back. Caller holds 'digest_rwlock' for writing. */
+	inline void digest_maps_reattach() {
+#ifdef PROXYSQL31
+		digest_maps_detached--;
 #endif
 	}
 	pthread_rwlock_t rwlock;

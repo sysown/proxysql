@@ -13,7 +13,10 @@
  *   - growth below the refresh threshold reuses (and scales) the sample, growth
  *     above it triggers a scan;
  *   - purge and reset invalidate the sample, so a value from a replaced
- *     population cannot persist;
+ *     population cannot persist, and concurrent collectors on an invalidated
+ *     sample scan only once;
+ *   - while a stats_mysql_query_digest read has moved the live maps out, the
+ *     last complete value is returned and nothing is scanned;
  *   - refresh_pct = 0 scans on every call.
  */
 #include "tap.h"
@@ -55,16 +58,28 @@ static unsigned long long expected_size(const umap_query_digest& gu, const umap_
 		for (const auto& e : gu) ret += owned_strings(static_cast<const QP_query_digest_stats*>(e.second));
 		for (const auto& e : gtu) if (e.second) ret += strlen(e.second) + 1;
 	}
-	ret += (sizeof(uint64_t) + sizeof(void*) + sizeof(std::_Rb_tree_node_base)) * gu.size();
-	ret += (sizeof(uint64_t) + sizeof(void*) + sizeof(std::_Rb_tree_node_base)) * gtu.size();
+	// Same per-node overhead as the production estimator
+#if !defined(__FreeBSD__) && !defined(__APPLE__)
+	const size_t node_overhead = sizeof(uint64_t) + sizeof(void*) + sizeof(std::_Rb_tree_node_base);
+#else
+	const size_t node_overhead = sizeof(uint64_t) + sizeof(void*) + 32;
+#endif
+	ret += node_overhead * gu.size();
+	ret += node_overhead * gtu.size();
 	return ret;
 }
 
 /**
  * @brief Builds 'n' digest entries with keys starting at 'first_key'. The user and schema names are long
- *   enough to be heap allocated, 'pad' changes the length of the digest text.
+ *   enough to be heap allocated, 'pad' changes the length of the digest text. 'text_n' digest texts are
+ *   stored in 'gtu' (default: one entry out of four).
  */
-static void build_maps(umap_query_digest& gu, umap_query_digest_text& gtu, uint64_t first_key, int n, int pad) {
+static void build_maps(
+	umap_query_digest& gu, umap_query_digest_text& gtu, uint64_t first_key, int n, int pad, int text_n = -1
+) {
+	if (text_n < 0) {
+		text_n = (n + 3) / 4;
+	}
 	const std::string padding(pad, 'x');
 	for (int i = 0; i < n; i++) {
 		const uint64_t key = first_key + i;
@@ -74,7 +89,7 @@ static void build_maps(umap_query_digest& gu, umap_query_digest_text& gtu, uint6
 			key, text.c_str(), 0, "10.0.0.1", 2048);
 		qds->add_time(1, 1, 0, 0);
 		gu.emplace(key, qds);
-		if (i % 4 == 0) {
+		if (i < text_n) {
 			gtu.emplace(key, strdup(text.c_str()));
 		}
 	}
@@ -108,7 +123,7 @@ static void insert_through_workers(uint64_t first_key, int n) {
 }
 
 int main() {
-	plan(22);
+	plan(25);
 
 	test_init_minimal();
 	test_init_query_processor();
@@ -180,20 +195,60 @@ int main() {
 	ok(GloMyQPro->get_query_digests_total_size_scans() == scans_before_growth + 3, "refresh_pct=0 scans on every call");
 	ok(s7 == s6 && s8 == s6, "a fresh scan at stable cardinality matches the sample");
 
+	// --- Stats read window: the live maps are moved out, the last complete value is returned ---------
+	{
+		const unsigned long long scans_before_dump = GloMyQPro->get_query_digests_total_size_scans();
+		std::atomic<bool> dumping {true};
+		std::atomic<int> mismatches {0};
+		std::thread dumper([&]() {
+			for (int i = 0; i < 3; i++) {
+				std::pair<SQLite3_result*, int> res = GloMyQPro->get_query_digests_v2(true);
+				delete res.first;
+			}
+			dumping = false;
+		});
+		while (dumping) {
+			if (GloMyQPro->get_query_digests_total_size(5) != s6) mismatches++;
+		}
+		dumper.join();
+		ok(mismatches == 0, "during stats_mysql_query_digest reads the last complete value is returned");
+		ok(GloMyQPro->get_query_digests_total_size_scans() == scans_before_dump,
+			"stats_mysql_query_digest reads do not trigger a scan");
+		ok(GloMyQPro->get_query_digests_total_size(5) == s6 &&
+			GloMyQPro->get_query_digests_total_size_scans() == scans_before_dump,
+			"after the read the cached sample is still used");
+	}
+
 	// --- Reset with a different population of the same size: the sample is invalidated -------------
+	// Both maps keep their entry counts, so only the invalidation by the reset can trigger the scan.
 	free_maps(gu, gtu);
 	umap_query_digest cur_gu;
 	umap_query_digest_text cur_gtu;
 	swap_in(cur_gu, cur_gtu); // take the current maps out
 	const size_t cur_entries = cur_gu.size();
+	const size_t cur_text_entries = cur_gtu.size();
 	free_maps(cur_gu, cur_gtu);
-	build_maps(gu, gtu, 1, (int)cur_entries, 200); // same count, much longer digest texts
+	build_maps(gu, gtu, 1, (int)cur_entries, 200, (int)cur_text_entries); // same counts, longer texts
 	const unsigned long long expected_long = expected_size(gu, gtu);
 	swap_in(gu, gtu);
 	const unsigned long long scans_before_reset = GloMyQPro->get_query_digests_total_size_scans();
-	const unsigned long long s9 = GloMyQPro->get_query_digests_total_size(5);
-	ok(GloMyQPro->get_query_digests_total_size_scans() == scans_before_reset + 1, "replaced maps of equal size are rescanned");
-	ok(s9 == expected_long, "the value reflects the new population (got %llu, expected %llu)", s9, expected_long);
+	// Concurrent collectors on an invalidated sample: exactly one of them scans
+	{
+		std::atomic<bool> go {false};
+		std::atomic<int> mismatches {0};
+		std::vector<std::thread> collectors;
+		for (int t = 0; t < 8; t++) {
+			collectors.emplace_back([&]() {
+				while (!go) {}
+				if (GloMyQPro->get_query_digests_total_size(5) != expected_long) mismatches++;
+			});
+		}
+		go = true;
+		for (auto& t : collectors) t.join();
+		ok(GloMyQPro->get_query_digests_total_size_scans() == scans_before_reset + 1,
+			"replaced maps of equal size are rescanned once by concurrent collectors");
+		ok(mismatches == 0, "every collector gets the value of the new population (expected %llu)", expected_long);
+	}
 
 	// --- Purge: the sample is dropped below the threshold ------------------------------------------
 	GloMyQPro->purge_query_digests(false, false);
