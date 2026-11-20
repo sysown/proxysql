@@ -25,6 +25,7 @@ dbdeployer deploy replication "${MYSQL_VERSION}" \
     -c log-slave-updates \
     -c binlog_format=ROW \
     -c max_connections=500 \
+    -c innodb_use_native_aio=0 \
     -c innodb_buffer_pool_size=128M \
     -c innodb_log_file_size=32M \
     -c innodb_flush_log_at_trx_commit=2 \
@@ -129,7 +130,7 @@ FLUSH PRIVILEGES;
 SQL
 done
 
-# Set read_only=1 on replicas (ports 3307, 3308) to match infra-mysql57-binlog behavior
+# Set read_only=1 on replicas (ports 3307, 3308) as the test groups expect
 echo "Setting read_only on replicas..."
 for PORT in 3307 3308; do
     mysql -h127.0.0.1 -uroot -p"${ROOT_PASSWORD}" -P${PORT} -e "SET GLOBAL read_only=1; SET GLOBAL super_read_only=1;"
