@@ -1350,7 +1350,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				myconn->is_error_present() ? std::string(myconn->get_counter_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
+				myconn->get_simple_command_error_code_str(rc)
 			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
@@ -1480,7 +1480,7 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				error_present ? std::string(myconn->get_counter_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
+				myconn->get_simple_command_error_code_str(rc)
 			);
 			if (error_present == false || (error_present == true && myconn->is_connection_in_reusable_state() == false)) {
 				bool retry_conn = false;

@@ -511,6 +511,16 @@ public:
 		return get_counter_error_code_str();
 	}
 
+	// The same for a failed async_send_simple_command(). Only -1 without an error is an offline server
+	// (the command never ran); -2 is a resultset the backend answered with, which leaves no error either,
+	// and the connection is then destroyed: 08006.
+	inline
+	std::string get_simple_command_error_code_str(int rc) const {
+		if (rc == -1 && is_error_present() == false)
+			return std::to_string(ER_PROXYSQL_OFFLINE_SRV);
+		return get_counter_error_code_str();
+	}
+
 	// PostgreSQL refused a kept statement because its result columns changed since it was prepared
 	// ("cached plan must not change result type"). Only the routine tells it from any other 0A000.
 	inline

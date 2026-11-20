@@ -582,6 +582,21 @@ static void check_counter_error_labels() {
 	ok(unique == "23505", "counter label: a backend SQLSTATE is kept (got '%s')", unique.c_str());
 }
 
+// The label of a failed async_send_simple_command() (init_connect, SET). Only -1 without an error is
+// an offline server; -2, a resultset the backend answered with, leaves no error but is not one. 3 checks.
+static void check_simple_command_error_labels() {
+	Conn* c = new Conn(false);
+	const std::string offline = c->get_simple_command_error_code_str(-1);
+	const std::string resultset = c->get_simple_command_error_code_str(-2);
+	c->set_error(PGSQL_ERROR_CODES::ERRCODE_UNDEFINED_OBJECT, "unrecognized configuration parameter", false);
+	const std::string backend = c->get_simple_command_error_code_str(-1);
+	delete c;
+	const std::string offline_code = std::to_string(ER_PROXYSQL_OFFLINE_SRV);
+	ok(offline == offline_code, "simple command label: -1 without an error is an offline server (got '%s')", offline.c_str());
+	ok(resultset == "08006", "simple command label: a resultset (-2) is 08006, not an offline server (got '%s')", resultset.c_str());
+	ok(backend == "42704", "simple command label: a backend SQLSTATE is kept (got '%s')", backend.c_str());
+}
+
 // --- monitor pings ---------------------------------------------------------------------------
 
 bool server_responds_to_ping(SQLite3DB& db, const char* addr, int port, int max_fails);
@@ -666,7 +681,7 @@ int main() {
 
 	const int ncases = sizeof(CASES) / sizeof(CASES[0]);
 	const int npings = sizeof(PINGS) / sizeof(PINGS[0]);
-	plan(2 * ncases * CHECKS_PER_CASE + 2 * 2 + 1 + 2 + 1 + 2 + 2 * 2 * 2 + 1 + 4 + 2 + npings);
+	plan(2 * ncases * CHECKS_PER_CASE + 2 * 2 + 1 + 2 + 1 + 2 + 2 * 2 * 2 + 1 + 4 + 3 + 2 + npings);
 
 	int hid = 9600;
 	for (bool native : { true, false }) {
@@ -690,6 +705,7 @@ int main() {
 	}
 	check_connect_failure_without_error();
 	check_counter_error_labels();
+	check_simple_command_error_labels();
 	check_error_counter_labels(hid++);
 	check_monitor_pings();
 
