@@ -182,6 +182,7 @@ void PgSQL_Data_Stream::queue_encrypted_bytes(const char* buf, size_t len) {
 	//proxy_info("New ssl_write_len size: %u\n", ssl_write_len);
 }
 
+#ifdef PROXYSQL31
 // Best effort: the stream is about to be shut down, so push any pending alert
 // to the client now instead of leaving it in the queue.
 void PgSQL_Data_Stream::flush_tls_output_on_failure() {
@@ -196,6 +197,7 @@ void PgSQL_Data_Stream::flush_tls_output_on_failure() {
 		if (send(fd, buf, n, MSG_NOSIGNAL | MSG_DONTWAIT) != n) return;
 	}
 }
+#endif // PROXYSQL31
 
 enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 	char buf[MY_SSL_BUFFER];
@@ -284,9 +286,11 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 			}
 		} while (n > 0);
 	}
+#ifdef PROXYSQL31
 	else if (status == PGSQL_SSLSTATUS_FAIL && myds_type == MYDS_FRONTEND) {
 		flush_tls_output_on_failure();
 	}
+#endif
 	return status;
 }
 
@@ -1855,6 +1859,7 @@ int PgSQL_Data_Stream::buffer2array() {
 	return ret;
 }
 
+#ifdef PROXYSQL31
 bool PgSQL_Data_Stream::start_client_tls() {
 	rbio_ssl = BIO_new(BIO_s_mem());
 	wbio_ssl = BIO_new(BIO_s_mem());
@@ -1896,13 +1901,7 @@ int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* out
 	static const unsigned char pg_alpn[] = { 10, 'p','o','s','t','g','r','e','s','q','l' };
 	if (SSL_select_next_proto(const_cast<unsigned char**>(out), outlen, pg_alpn, sizeof(pg_alpn), in, inlen)
 		!= OPENSSL_NPN_NEGOTIATED) {
-#ifdef PROXYSQL31
 		return SSL_TLSEXT_ERR_ALERT_FATAL;
-#else
-		// The Stable tier keeps accepting a client that offers only other protocols, as before ALPN
-		// support: refusing it, as PostgreSQL 17+ does, is a client-visible change (v3.1+ only).
-		return SSL_TLSEXT_ERR_NOACK;
-#endif
 	}
 	return SSL_TLSEXT_ERR_OK;
 }
@@ -1910,3 +1909,4 @@ int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* out
 void pgsql_install_alpn(SSL_CTX* ctx) {
 	if (ctx) SSL_CTX_set_alpn_select_cb(ctx, pgsql_alpn_select_cb, nullptr);
 }
+#endif // PROXYSQL31

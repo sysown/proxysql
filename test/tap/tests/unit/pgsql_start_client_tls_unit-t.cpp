@@ -17,6 +17,7 @@
 
 #include <openssl/ssl.h>
 
+#ifdef PROXYSQL31 // start_client_tls() is v3.1+ only
 int main() {
 	plan(7);
 	test_init_minimal();
@@ -46,3 +47,10 @@ int main() {
 	test_cleanup_minimal();
 	return exit_status();
 }
+#else
+int main() {
+	plan(1);
+	ok(1, "skipped: v3.1+ only");
+	return exit_status();
+}
+#endif // PROXYSQL31

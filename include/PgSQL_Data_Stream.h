@@ -129,11 +129,13 @@ private:
 	int array2buffer();
 	int buffer2array();
 	enum pgsql_sslstatus do_ssl_handshake();
+#ifdef PROXYSQL31
 	/**
 	 * @brief Best-effort send of any pending TLS output (e.g. a failure alert) to the client.
 	 * Call only right before shutting the stream down: its TLS output state is dead afterwards.
 	 */
 	void flush_tls_output_on_failure();
+#endif
 	void queue_encrypted_bytes(const char* buf, size_t len);
 public:
 	void* operator new(size_t);
@@ -206,6 +208,7 @@ public:
 	AUTHENTICATION_METHOD auth_method = AUTHENTICATION_METHOD::NO_PASSWORD;
 	uint32_t auth_next_pkt_type = 0;
 	bool auth_received_startup = false;
+#ifdef PROXYSQL31
 	// An SSLRequest and a GSSENCRequest are each honoured once per connection (see PgSQL_Protocol).
 	bool startup_ssl_done = false;
 	bool startup_gss_done = false;
@@ -213,6 +216,7 @@ public:
 	bool first_byte_checked = false;
 	// TLS started on a ClientHello with no SSLRequest first; ALPN postgresql is then required.
 	bool direct_tls = false;
+#endif
 	unsigned char tmp_login_salt[4];
 	ScramState* scram_state;
 	// The stored secret of a login still in progress. SCRAM takes two packets and the credential is
@@ -270,6 +274,7 @@ public:
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(PgSQL_DS_type, PgSQL_Session*, int); // initialize with arguments
+#ifdef PROXYSQL31
 	/**
 	 * @brief Begins the server-side TLS handshake on this client stream.
 	 * Needs a valid fd and no SSL object or BIOs yet; call it at most once per stream
@@ -278,6 +283,7 @@ public:
 	 * holds no SSL object or BIOs and is not marked encrypted, and the caller must close it.
 	 */
 	bool start_client_tls();
+#endif
 	void shut_soft();
 	void shut_hard();
 #ifdef PROXYSQL31
@@ -375,6 +381,7 @@ public:
 	void reset_connection();
 };
 
+#ifdef PROXYSQL31
 /**
  * @brief Index of the SSL ex_data slot that marks a TLS object as a PgSQL client (owner: its PgSQL_Data_Stream).
  * @return The ex_data index.
@@ -398,4 +405,5 @@ int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* out
  * @param ctx Context to install it on.
  */
 void pgsql_install_alpn(SSL_CTX* ctx);
+#endif // PROXYSQL31
 #endif /* PROXYSQL_PGSQL_DATA_STREAM_H */

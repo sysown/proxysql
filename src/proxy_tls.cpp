@@ -380,7 +380,9 @@ int ssl_mkit(X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, boo
 		SSL_METHOD *ssl_method;
 		ssl_method = (SSL_METHOD *)TLS_server_method();
 		GloVars.global.tmp_ssl_ctx = SSL_CTX_new(ssl_method);
+#ifdef PROXYSQL31
 		pgsql_install_alpn(GloVars.global.tmp_ssl_ctx);
+#endif
 
 		if (SSL_CTX_set_dh_auto(GloVars.global.ssl_ctx, 1) == 0) {
 			proxy_error("Error in SSL while initializing DH: %s . Shutting down.\n",ERR_error_string(ERR_get_error(), NULL));

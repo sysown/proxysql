@@ -425,7 +425,9 @@ void ProxySQL_Main_init_SSL_module() {
 		proxy_error("Unable to initialize SSL. SSL_set_min_proto_version failed. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
+#ifdef PROXYSQL31
 	pgsql_install_alpn(GloVars.global.ssl_ctx);
+#endif
 	//SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_SSLv3); // no necessary, because of previous SSL_CTX_set_min_proto_version
 #ifdef DEBUG
 #if 0
