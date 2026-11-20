@@ -558,8 +558,9 @@ public:
 	 *
 	 *   While get_query_digests_v2() has moved the live maps out (a stats_*_query_digest read), the maps
 	 *   hold only the digests seen during that window. The last value computed on the complete maps is
-	 *   returned instead, and nothing is sampled or cached. Only if no such value exists is the estimate
-	 *   computed from the partial maps, still without caching it.
+	 *   returned instead, and nothing is sampled or cached. If no such value exists, or entries were removed
+	 *   since it was computed (the epoch changed), the estimate is computed from the partial maps, still
+	 *   without caching it.
 	 *
 	 *   Concurrent collectors (SQL stats, Prometheus) are serialized on 'digest_size_cache_mutex', so only
 	 *   one of them scans and the others reuse its sample. That mutex is never taken by query workers.
