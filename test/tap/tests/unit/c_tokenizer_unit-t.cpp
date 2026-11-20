@@ -587,7 +587,7 @@ int main() {
 	// Set thread-local variables for functions that read them
 	setup_digest_defaults();
 
-	// tokenizer tests (19 tests)
+	// tokenizer tests (18 tests)
 	test_tokenizer_basic();            // 4
 	test_tokenizer_empties_ok();       // 4
 	test_tokenizer_no_empties();       // 3
