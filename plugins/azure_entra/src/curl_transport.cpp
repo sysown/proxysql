@@ -28,7 +28,7 @@ HttpPostFn make_curl_post() {
 		CURL *h = curl.get();
 		curl_easy_setopt(h, CURLOPT_URL, url.c_str());
 		curl_easy_setopt(h, CURLOPT_PROTOCOLS_STR, "https");
-		curl_easy_setopt(h, CURLOPT_SSLVERSION, static_cast<long>(CURL_SSLVERSION_TLSv1_2));
+		curl_easy_setopt(h, CURLOPT_SSLVERSION, static_cast<long>(CURL_SSLVERSION_TLSv1_2)); // NOSONAR(cpp:S4423): TLS 1.2 is the minimum here; the rule flags every CURLOPT_SSLVERSION line.
 		curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
 		curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 1L);
 		curl_easy_setopt(h, CURLOPT_SSL_VERIFYHOST, 2L);
