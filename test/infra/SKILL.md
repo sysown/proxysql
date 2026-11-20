@@ -43,15 +43,12 @@ source test/infra/common/env.sh
 ### Step 2: Start Infrastructure
 
 ```bash
-# Option A: Use the helper (recommended)
 ./test/infra/control/ensure-infras.bash
-
-# Option B: Manual per-infrastructure startup
-cd test/infra/infra-dbdeployer-mysql57-binlog
-export INFRA_ID="dev-$USER"
-./docker-compose-init.bash
-cd ../../../
 ```
+
+Do not run an infra's `docker-compose-init.bash` directly: it ends by configuring
+ProxySQL through `bin/docker-proxy-post.bash`, which needs the ProxySQL container
+that `ensure-infras.bash` starts.
 
 ### Step 3: Start ProxySQL
 
@@ -101,12 +98,12 @@ export TEST_PY_TAP_INCL="test_binlog.*"
 
 **Solution:**
 ```bash
-# Destroy existing infrastructure first
-cd test/infra/infra-dbdeployer-mysql57-binlog
+# Destroy existing infrastructure first (from the repository root)
 export INFRA_ID="dev-$USER"
-./docker-compose-destroy.bash
-sudo rm -rf ./logs/infra-dbdeployer-mysql57-binlog-${INFRA_ID}
-sudo rm -rf ../../ci_infra_logs/${INFRA_ID}
+export TAP_GROUP="basictests-g1"  # the group whose infras you started (uses infra-mysql57)
+./test/infra/control/destroy-infras.bash
+# ProxySQL/test logs, plus the data directory of each plain Docker infra of the group
+sudo rm -rf ci_infra_logs/${INFRA_ID} ci_infra_logs/infra-mysql57-${INFRA_ID}
 ```
 
 ### Issue: "Access denied for user 'root'"
@@ -232,12 +229,11 @@ docker rm -f test-runner.${INFRA_ID}
 # Stop ProxySQL
 ./test/infra/control/stop-proxysql-isolated.bash
 
-# Destroy infrastructure
-cd test/infra/infra-dbdeployer-mysql57-binlog
-export INFRA_ID="dev-$USER"
-./docker-compose-destroy.bash
+# Destroy infrastructure (uses TAP_GROUP to find the group's infras)
+./test/infra/control/destroy-infras.bash
 
-# Clean up logs (optional)
+# Clean up logs (optional): ProxySQL/test logs, plus ci_infra_logs/<infra>-${INFRA_ID}
+# for each plain Docker infra the group used (dbdeployer infras keep theirs in the container)
 sudo rm -rf ci_infra_logs/${INFRA_ID}
 ```
 
