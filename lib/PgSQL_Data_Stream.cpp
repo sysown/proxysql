@@ -261,8 +261,6 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 				return PGSQL_SSLSTATUS_FAIL;
 			}
 		}
-#endif // PROXYSQL31
-#ifdef PROXYSQL31
 		// Publish the fast path only after the certificate checks above.
 		tls13_handshake_complete = myds_type == MYDS_FRONTEND &&
 			SSL_version(ssl) == TLS1_3_VERSION;
