@@ -19,7 +19,7 @@
 CommandLine cl;
 
 static constexpr int kPerMode = 16;       // v3.1 cases run once per backend mode
-static constexpr int kStableCases = 0;    // v3.0 cases
+static constexpr int kStableCases = 2;    // v3.0 cases
 
 // Two statements and one Sync in libpq pipeline mode; the first opens a new connection.
 static bool pipeline_sees(PGconn* c, const char* expected) {
@@ -171,6 +171,15 @@ static void run_mode(PGconn* admin, bool native) {
 	   native, before.c_str(), held.c_str(), fresh.c_str());
 }
 
+// v3.0 ignores init_connect (with a warning) instead of stalling every new connection.
+static void run_stable(PGconn* admin) {
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	PGConnPtr c = ic_connect_client(cl);
+	const IcResult r = ic_query(c.get(), IC_MARKER);
+	ok(!r.timed_out && r.ok, "v3.0: query is not blocked by init_connect");
+	ok(r.value.empty(), "v3.0: init_connect is not applied (got '%s')", r.value.c_str());
+}
+
 int main(int, char**) {
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -188,7 +197,9 @@ int main(int, char**) {
 
 	if (!v31) {
 		skip(2 * kPerMode, "init_connect needs ProxySQL v3.1+");
+		run_stable(admin);
 	} else {
+		skip(kStableCases, "v3.0 only");
 		const std::string orig_native = ic_admin_value(admin,
 			"SELECT variable_value FROM global_variables WHERE variable_name='pgsql-use_native_backend_protocol'");
 		for (bool native : {true, false}) {

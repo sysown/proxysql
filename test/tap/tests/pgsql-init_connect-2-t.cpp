@@ -22,7 +22,7 @@
 CommandLine cl;
 
 static constexpr int kV31Cases = 10;
-static constexpr int kStableCases = 0;    // v3.0 cases
+static constexpr int kStableCases = 2;    // v3.0 cases
 
 static std::vector<std::pair<std::string, std::string>> existing_rows;   // hostgroup_id, init_connect
 static std::vector<std::string> added_rows;                              // hostgroup_id
@@ -115,6 +115,15 @@ static void run_v31(PGconn* admin) {
 	ok(!r.timed_out && r.ok && r.value == "hg", "back to a valid hostgroup value (got '%s')", r.value.c_str());
 }
 
+// v3.0 ignores init_connect (with a warning) instead of stalling every new connection.
+static void run_stable(PGconn* admin) {
+	ic_set_hostgroups(admin, "SET ic.marker TO 'hg'");
+	PGConnPtr c = ic_connect_client(cl);
+	const IcResult r = ic_query(c.get(), IC_MARKER);
+	ok(!r.timed_out && r.ok, "v3.0: query is not blocked by hostgroup init_connect");
+	ok(r.value.empty(), "v3.0: hostgroup init_connect is not applied (got '%s')", r.value.c_str());
+}
+
 int main(int, char**) {
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -134,7 +143,9 @@ int main(int, char**) {
 
 	if (!v31) {
 		skip(kV31Cases, "init_connect needs ProxySQL v3.1+");
+		run_stable(admin);
 	} else {
+		skip(kStableCases, "v3.0 only");
 		run_v31(admin);
 	}
 

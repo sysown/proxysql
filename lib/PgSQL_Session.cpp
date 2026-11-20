@@ -1289,6 +1289,7 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 			// pgsql_hostgroup_attributes takes priority
 			tmp_init_connect = hg_strings->init_connect.c_str();
 		}
+#ifdef PROXYSQL31
 		// Tracked parameters (search_path, TimeZone, ...) set here are not recorded in this
 		// connection's variable state, so the client's value may or may not be re-applied.
 		if (tmp_init_connect) {
@@ -1298,6 +1299,15 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
+#else
+		// v3.0 has no SETTING_INIT_CONNECT handler: sending it would stall the session.
+		if (tmp_init_connect && tmp_init_connect[0]) {
+			static std::atomic<bool> warned{false};
+			if (!warned.exchange(true)) {
+				proxy_warning("PostgreSQL init_connect is ignored: it requires ProxySQL v3.1 or later\n");
+			}
+		}
+#endif // PROXYSQL31
 	}
 	return false;
 }
