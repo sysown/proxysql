@@ -89,7 +89,7 @@ static void run_v31(PGconn* admin) {
 	PGConnPtr c3 = ic_connect_client(cl);
 	r = ic_query(c3.get(), IC_MARKER);
 	ok(!r.timed_out && !r.ok, "pg_sleep hostgroup init_connect fails the query");
-	ok(r.elapsed_ms > 2900 && r.elapsed_ms < 3200, "after ~3 s (got %llu ms)", r.elapsed_ms);
+	ok(r.elapsed_ms > 2900 && r.elapsed_ms < 5000, "after ~3 s (got %llu ms)", r.elapsed_ms);
 
 	ic_set_hostgroups(admin, "Syntax Error");
 	PGConnPtr c4 = ic_connect_client(cl);

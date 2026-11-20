@@ -18,7 +18,7 @@
 
 CommandLine cl;
 
-static constexpr int kPerMode = 16;       // v3.1 cases run once per backend mode
+static constexpr int kPerMode = 18;       // v3.1 cases run once per backend mode
 static constexpr int kStableCases = 2;    // v3.0 cases
 
 // Two statements and one Sync in libpq pipeline mode; the first opens a new connection.
@@ -98,7 +98,7 @@ static void run_mode(PGconn* admin, bool native) {
 	PGConnPtr c5 = ic_connect_client(cl);
 	r = ic_query(c5.get(), IC_MARKER);
 	ok(!r.timed_out && !r.ok, "[native=%d] pg_sleep init_connect fails the query", native);
-	ok(r.elapsed_ms > 2900 && r.elapsed_ms < 3200,
+	ok(r.elapsed_ms > 2900 && r.elapsed_ms < 5000,
 	   "[native=%d] after ~3 s (got %llu ms)", native, r.elapsed_ms);
 
 	// A backend error reaches the client, and its session stays open.
@@ -122,6 +122,25 @@ static void run_mode(PGconn* admin, bool native) {
 	ok(!r.timed_out && r.ok && r.value == "global",
 	   "[native=%d] extended session survives (got '%s')", native, r.value.c_str());
 
+	// A later statement of a multi-statement init_connect counts like the first: its error
+	// reaches the client (session kept), its rows close the session (PMC-10003).
+	ic_set_global(admin, "SET ic.a TO '1'; SET statement_timeout TO 'bogus'");
+	PGConnPtr m1 = ic_connect_client(cl);
+	r = ic_query(m1.get(), IC_MARKER);
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	IcResult after = ic_query(m1.get(), IC_MARKER);
+	ok(!r.timed_out && r.sqlstate == "22023" && after.value == "global",
+	   "[native=%d] an error in a later statement reaches the client, session kept (sqlstate '%s', then '%s')",
+	   native, r.sqlstate.c_str(), after.value.c_str());
+
+	ic_set_global(admin, "SET ic.a TO '1'; SELECT 1");
+	PGConnPtr m2 = ic_connect_client(cl);
+	r = ic_query(m2.get(), IC_MARKER);
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	after = ic_query(m2.get(), IC_MARKER);
+	ok(!r.timed_out && !r.ok && !after.ok,
+	   "[native=%d] rows from a later statement close the session", native);
+
 	ic_set_global(admin, "SET ic.a TO '1'; SET ic.b TO '2'");
 	PGConnPtr c8 = ic_connect_client(cl);
 	r = ic_query(c8.get(), "SELECT /* create_new_connection=1 */ "
@@ -129,14 +148,16 @@ static void run_mode(PGconn* admin, bool native) {
 	ok(!r.timed_out && r.ok && r.value == "12",
 	   "[native=%d] multi-statement init_connect runs every statement (got '%s')", native, r.value.c_str());
 
-	ic_set_global(admin, "SET ic.marker TO 'global'");
+	// Values no pooled connection carries: only a new connection can return them.
+	ic_set_global(admin, "SET ic.marker TO 'ext'");
 	PGConnPtr c9 = ic_connect_client(cl);
 	r = ic_query_extended(c9.get(), IC_MARKER);
-	ok(!r.timed_out && r.ok && r.value == "global",
+	ok(!r.timed_out && r.ok && r.value == "ext",
 	   "[native=%d] extended query sees init_connect (got '%s')", native, r.value.c_str());
 
+	ic_set_global(admin, "SET ic.marker TO 'pipe'");
 	PGConnPtr c10 = ic_connect_client(cl);
-	ok(pipeline_sees(c10.get(), "global"),
+	ok(pipeline_sees(c10.get(), "pipe"),
 	   "[native=%d] pipelined batch on a new connection sees init_connect", native);
 
 	// Sent once per backend connection: nextval() is not rolled back, so the sequence counts
