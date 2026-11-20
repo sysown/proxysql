@@ -26,10 +26,12 @@ class RunnerSelectionTests(unittest.TestCase):
         routes = {RUNS: runs if runs is not None else [{"workflow_runs": [{"id": n} for n in jobs]}]}
         routes.update({f"{RUNS}/{n}/jobs": pages for n, pages in jobs.items()})
         unexpected = []
+        self.requests = requests = []
 
         class Api(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 url = urllib.parse.urlsplit(self.path)
+                requests.append(url.path)
                 page = int(urllib.parse.parse_qs(url.query).get("page", ["1"])[0])
                 pages = routes.get(url.path, [])
                 if page < 1 or page > len(pages):
@@ -143,6 +145,26 @@ class RunnerSelectionTests(unittest.TestCase):
     def test_sanitizer_lookup_failure_uses_its_hosted_policy(self):
         choice, _ = self.select({}, runs=[500], hosted='ubuntu-24.04', hosted_on_error=True)
         self.assertEqual(choice, 'ubuntu-24.04')
+
+    def test_many_runs_read_at_most_twenty_job_lists(self):
+        jobs = {n: [{"jobs": []}] for n in range(1, 61)}
+        choice, output = self.select(jobs, runs=[{"workflow_runs": [{"id": n} for n in range(1, 61)]}])
+        self.assertEqual(choice, ["self-hosted", "proxysql-ci"])
+        self.assertEqual(sum(path.endswith('/jobs') for path in self.requests), 20)
+        self.assertIn("sampled 20/60 in-progress runs", output)
+
+    def test_sampled_demand_is_scaled_to_all_runs(self):
+        # Every third run is read; two of them hold a pool job: 2 * 60 / 20 = 6.
+        jobs = {n: [{"jobs": [POOL_JOB] if n in (1, 31) else []}] for n in range(1, 61)}
+        choice, output = self.select(jobs, runs=[{"workflow_runs": [{"id": n} for n in range(1, 61)]}])
+        self.assertEqual(choice, "ubuntu-22.04")
+        self.assertIn("demand=6/6", output)
+
+    def test_few_runs_are_all_read(self):
+        jobs = {n: [{"jobs": []}] for n in range(1, 21)}
+        _, output = self.select(jobs, runs=[{"workflow_runs": [{"id": n} for n in range(1, 21)]}])
+        self.assertEqual(sum(path.endswith('/jobs') for path in self.requests), 20)
+        self.assertNotIn("sampled", output)
 
     def test_hosted_distribution_is_preserved_for_ineligible_actor(self):
         choice, _ = self.select({}, runs=[], eligible=False, hosted='ubuntu-24.04')
