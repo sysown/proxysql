@@ -18,7 +18,7 @@
 
 CommandLine cl;
 
-static constexpr int kPerMode = 7;        // v3.1 cases run once per backend mode
+static constexpr int kPerMode = 11;       // v3.1 cases run once per backend mode
 static constexpr int kStableCases = 0;    // v3.0 cases
 
 // A fresh client per case: a timed-out query leaves its connection busy.
@@ -55,6 +55,27 @@ static void run_mode(PGconn* admin, bool native) {
 	ok(!r.timed_out && !r.ok, "[native=%d] pg_sleep init_connect fails the query", native);
 	ok(r.elapsed_ms > 2900 && r.elapsed_ms < 3200,
 	   "[native=%d] after ~3 s (got %llu ms)", native, r.elapsed_ms);
+
+	// A backend error reaches the client, and its session stays open.
+	ic_set_global(admin, "Syntax Error");
+	PGConnPtr c6 = ic_connect_client(cl);
+	r = ic_query(c6.get(), IC_MARKER);
+	ok(!r.timed_out && r.sqlstate == "42601",
+	   "[native=%d] syntax error reaches the client (sqlstate '%s')", native, r.sqlstate.c_str());
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	r = ic_query(c6.get(), IC_MARKER);
+	ok(!r.timed_out && r.ok && r.value == "global",
+	   "[native=%d] same session works once init_connect is valid (got '%s')", native, r.value.c_str());
+
+	ic_set_global(admin, "Syntax Error");
+	PGConnPtr c7 = ic_connect_client(cl);
+	r = ic_query_extended(c7.get(), IC_MARKER);
+	ok(!r.timed_out && r.sqlstate == "42601",
+	   "[native=%d] extended query gets the syntax error (sqlstate '%s')", native, r.sqlstate.c_str());
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	r = ic_query_extended(c7.get(), IC_MARKER);
+	ok(!r.timed_out && r.ok && r.value == "global",
+	   "[native=%d] extended session survives (got '%s')", native, r.value.c_str());
 }
 
 int main(int, char**) {

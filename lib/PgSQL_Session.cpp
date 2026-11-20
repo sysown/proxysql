@@ -1348,20 +1348,21 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 	else {
 		if (rc == -1 || rc == -2) {
 			// the command failed
-			int myerr = 0; // TODO: fix this mysql_errno(myconn->pgsql);
+			const bool error_present = myconn->is_error_present();
 			PgHGM->p_update_pgsql_error_counter(
 				p_pgsql_error_type::pgsql,
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV)
+				(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
 			);
-			if (myerr >= 2000 || myerr == 0) {
+			// rc == -2 is PMC-10003: init_connect returned rows. Retrying only repeats the
+			// same reply, so the session is terminated.
+			if (rc == -2 || error_present == false || myconn->is_connection_in_reusable_state() == false) {
 				bool retry_conn = false;
 				// client error, serious
 				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting INIT CONNECT", myconn);
-				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-				if (rc != -2) { // see PMC-10003
+				if (rc != -2) {
 					if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
 						myds->myconn->is_pipeline_active() == false) {
 						retry_conn = true;
@@ -1369,31 +1370,29 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				}
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd = 0;
-				if (rc == -2) {
-					// Here we handle PMC-10003
-					// and we terminate the session
-					retry_conn = false;
-				}
 				if (retry_conn) {
 					myds->DSS = STATE_NOT_INITIALIZED;
-					//previous_status.push(PROCESSING_QUERY);
 					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 				}
 				*_rc = -1;	// an error happened, we should destroy the Session
 				return ret;
 			}
 			else {
-				proxy_warning("Error while setting INIT CONNECT on %s:%d hg %d : %d, %d\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, 9999);
+				// The backend rejected init_connect and the connection is still usable:
+				// a new connection would fail the same way, so report the error instead.
+				proxy_warning("Error while setting INIT CONNECT on %s:%d hg %d: %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myconn->get_error_code_with_message().c_str());
 				// we won't go back to PROCESSING_QUERY
-				st = previous_status.top();
 				previous_status.pop();
-				char sqlstate[10];
-				snprintf(sqlstate, sizeof(sqlstate), "%s", ""/* TODO: fix this mysql_sqlstate(myconn->pgsql)*/);
-				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 9999 /* TODO: fix this mysql_errno(myconn->pgsql)*/, sqlstate, "" /* TODO: fix this mysql_error(myconn->pgsql)*/);
+				// The connection is dropped below, and any transaction with it.
+				client_myds->myprot.generate_error_packet(true, true, myconn->get_error_message().c_str(), myconn->get_error_code(), false,
+					false, NULL, txn_state_for_local_error(true));
+				// The rest of an extended-query unit goes too: left queued, it would run ahead of
+				// the client's next unit and fail it (as give_up_waiting() does).
+				reset_extended_query_frame();
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd = 0;
-				status = WAITING_CLIENT_DATA;
-				client_myds->DSS = STATE_SLEEP;
+				RequestEnd(myds, true);
+				ret = true;
 			}
 		}
 		else {
