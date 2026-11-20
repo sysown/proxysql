@@ -72,17 +72,25 @@ class CheckTests(unittest.TestCase):
   from unittest.mock import patch
   from ci_tier_artifacts import GitHubAPI
   plan={'repository':'sysown/proxysql','checks':[dict(key='a',check_id=9,name='test')],'execution_id':'run','build_id':3,'summary_check_id':10}
-  replies=[subprocess.CompletedProcess([],0,b'{"run_attempt":1}',b''),
+  replies=[subprocess.CompletedProcess([],0,b'{"run_attempt":2}',b''),
            subprocess.CompletedProcess([],0,b'{"id":9}',b''),
            subprocess.CompletedProcess([],1,b'',b'HTTP 503 upstream unavailable'),
-           subprocess.CompletedProcess([],0,b'{"run_attempt":1}',b''),
+           subprocess.CompletedProcess([],0,b'{"run_attempt":2}',b''),
            subprocess.CompletedProcess([],0,b'{"id":10}',b'')]
   with patch('ci_tier_artifacts.subprocess.run',side_effect=replies) as run,patch('ci_tier_artifacts.time.sleep'):
-   publish_result(plan,'a','in_progress',GitHubAPI('sysown/proxysql'),7,1)
+   publish_result(plan,'a','in_progress',GitHubAPI('sysown/proxysql'),7,2)
    writes=[c for c in run.call_args_list if c.args[0][c.args[0].index('--method')+1]=='PATCH']
    self.assertEqual([c.args[0][2] for c in writes],['repos/sysown/proxysql/check-runs/9','repos/sysown/proxysql/check-runs/10','repos/sysown/proxysql/check-runs/10'])
    self.assertEqual(writes[1].kwargs['input'],writes[2].kwargs['input'])
    self.assertEqual(json.loads(writes[2].kwargs['input'])['status'],'in_progress')
+
+ def test_first_attempt_start_leaves_the_summary_alone(self):
+  from unittest.mock import Mock
+  api=Mock();api.request.return_value={'run_attempt':1}
+  plan={'repository':'sysown/proxysql','checks':[dict(key='a',check_id=9,name='test')],'execution_id':'run','build_id':3,'summary_check_id':10}
+  publish_result(plan,'a','in_progress',api,7,1)
+  patched=[c.args[0] for c in api.request.call_args_list if len(c.args)>1 and c.args[1]=='PATCH']
+  self.assertEqual(patched,['repos/sysown/proxysql/check-runs/9'])
 
  def test_partial_rerun_preserves_jobs_not_rerun(self):
   import json

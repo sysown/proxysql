@@ -55,7 +55,9 @@ def publish_result(plan,key,status,api,run_id,attempt,run_repository=None):
         output={'title':check['name'],'summary':status,'text':json.dumps(meta)})
     if status!='in_progress':payload['conclusion']=status
     api.request(path,'PATCH',payload,retry_safe=True,before_retry=verify_attempt)
-    if status=='in_progress':
+    # Only a rerun can find the summary completed: on a first attempt this
+    # check is still queued, so the summary already counts it as pending.
+    if status=='in_progress' and int(attempt)>1:
         api.request(f"repos/{reporting_repository(plan)}/check-runs/{plan['summary_check_id']}",'PATCH',
                     {'status':'in_progress','output':{'title':'Selected product tiers','summary':'Execution in progress'}},
                     retry_safe=True,before_retry=verify_attempt)

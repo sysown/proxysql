@@ -108,6 +108,8 @@ def consumer_matrix(plan, workflow, job, instance=None):
     validate_manifest(plan)
     return [dict(c['cell'],tier=c['tier'],mode=c['mode'],coverage=next(l['coverage'] for l in plan['legs'] if l['tier']==c['tier']),
                  check_key=c['key'],check_name=c['name'],check_id=c.get('check_id',0),
+                 summary_check_id=plan.get('summary_check_id',0),
+                 reporting_repository=plan.get('reporting',{}).get('repository',plan['repository']),
                  execution_id=plan['execution_id'],build_id=plan['build_id'],build_attempt=plan['build_attempt'],
                  artifact_name=next(l['artifact_name'] for l in plan['legs'] if l['tier']==c['tier']),
                  unit_artifact_name=next((l.get('unit_artifact_name') for l in plan['legs'] if l['tier']==c['tier']),None),

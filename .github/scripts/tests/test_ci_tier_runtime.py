@@ -431,4 +431,30 @@ class ConsumerRerunTests(unittest.TestCase):
   with self.fixture(workflow='CI-new'):
    with self.assertRaisesRegex(ValueError,'rerun has no original consumer manifest'):runtime.consumer()
 
+class MatrixReportingTests(unittest.TestCase):
+ def leg(self,**changes):
+  return dict(dict(check_key='k',check_id=9,check_name='CI-x / tests (v40)',summary_check_id=10,
+                   reporting_repository='sysown/proxysql',execution_id='t1-a1-b2-a1',build_id=2),**changes)
+
+ def run_result(self,leg,status='success'):
+  gh={'run_id':7,'run_attempt':1,'repository':'sysown/proxysql'}
+  env={'CHECK_KEY':'k','CHECK_STATUS':status,'GITHUB_JSON':json.dumps(gh),'CI_LEG':json.dumps(leg)}
+  with patch.dict(os.environ,env), \
+       patch.object(runtime,'bound_manifest',side_effect=AssertionError('manifest loaded')), \
+       patch.object(runtime,'publish_result') as publish,patch.object(runtime,'reporting_api'):
+   os.environ.pop('CI_PLAN',None)
+   runtime.result()
+  return publish.call_args.args[0]
+
+ def test_result_reports_from_the_matrix_cell_without_the_manifest(self):
+  plan=self.run_result(self.leg())
+  self.assertEqual(plan['checks'],[dict(key='k',check_id=9,name='CI-x / tests (v40)')])
+  self.assertEqual(plan['summary_check_id'],10)
+  self.assertEqual(plan['reporting'],{'repository':'sysown/proxysql'})
+
+ def test_incomplete_or_foreign_cells_fall_back_to_the_manifest(self):
+  for leg in (self.leg(check_key='other'),self.leg(summary_check_id=0),{k:v for k,v in self.leg().items() if k!='reporting_repository'}):
+   with self.subTest(leg=leg),patch.dict(os.environ,{'CI_LEG':json.dumps(leg)}):
+    self.assertIsNone(runtime.matrix_reporting('k'))
+
 if __name__=='__main__':unittest.main()

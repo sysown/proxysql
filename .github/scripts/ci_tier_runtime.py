@@ -284,9 +284,26 @@ def load_bound(binding):
 def bound_manifest():
     return load_bound(json.loads(os.environ['CI_BINDING']))
 
+def matrix_reporting(key):
+    """The reporting fields of this job's check, from its matrix cell.
+
+    The context job derived the cell from the verified manifest, and the
+    workflow passes it as CI_LEG, so a result step does not need to list and
+    download the manifest again. Cells from older control code lack the fields.
+    """
+    try:leg=json.loads(os.environ.get('CI_LEG') or '{}')
+    except ValueError:return None
+    if not isinstance(leg,dict) or leg.get('check_key')!=key:return None
+    if not all(leg.get(field) for field in ('check_id','summary_check_id','reporting_repository','check_name','execution_id','build_id')):
+        return None
+    repository=leg['reporting_repository']
+    return dict(repository=repository,reporting={'repository':repository},execution_id=leg['execution_id'],
+                build_id=leg['build_id'],summary_check_id=leg['summary_check_id'],
+                checks=[dict(key=key,check_id=leg['check_id'],name=leg['check_name'])])
+
 def result():
-    plan=read_plan() if os.environ.get('CI_PLAN') else bound_manifest()
     key=os.environ['CHECK_KEY'];gh=json.loads(os.environ['GITHUB_JSON'])
+    plan=read_plan() if os.environ.get('CI_PLAN') else (matrix_reporting(key) or bound_manifest())
     publish_result(plan,key,os.environ['CHECK_STATUS'],reporting_api(plan),gh['run_id'],gh['run_attempt'],run_repository=gh['repository'])
 
 def restore():

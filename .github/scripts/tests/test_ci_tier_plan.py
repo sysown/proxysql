@@ -98,6 +98,12 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(all(leg['coverage'] for leg in p['legs']))
         self.assertTrue(all(cell['coverage'] for cell in consumer_matrix(p,'CI-example','tests')))
         self.assertNotEqual(p['legs'][0]['artifact_name'],p['legs'][1]['artifact_name'])
+        # A result step reports from its cell without loading the manifest again.
+        for index,check in enumerate(c for c in p['checks'] if c['workflow']=='CI-example'):check['check_id']=100+index
+        p['summary_check_id']=99
+        for cell in consumer_matrix(p,'CI-example','tests'):
+            check=next(c for c in p['checks'] if c['key']==cell['check_key'])
+            self.assertEqual((cell['check_id'],cell['summary_check_id'],cell['reporting_repository']),(check['check_id'],99,p['repository']))
         validate_manifest(p)
         p['schema']=900
         with self.assertRaises(ValueError):validate_manifest(p)
