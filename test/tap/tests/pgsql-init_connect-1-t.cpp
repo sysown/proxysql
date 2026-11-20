@@ -18,7 +18,7 @@
 
 CommandLine cl;
 
-static constexpr int kPerMode = 2;        // v3.1 cases run once per backend mode
+static constexpr int kPerMode = 7;        // v3.1 cases run once per backend mode
 static constexpr int kStableCases = 0;    // v3.0 cases
 
 // A fresh client per case: a timed-out query leaves its connection busy.
@@ -34,6 +34,27 @@ static void run_mode(PGconn* admin, bool native) {
 	r = ic_query(c2.get(), IC_MARKER);
 	ok(!r.timed_out && r.ok && r.value == "it's",
 	   "[native=%d] quoted value survives admin storage (got '%s')", native, r.value.c_str());
+
+	// PMC-10003: init_connect must not return rows; the session is closed.
+	ic_set_global(admin, "SELECT 1");
+	PGConnPtr c3 = ic_connect_client(cl);
+	r = ic_query(c3.get(), IC_MARKER);
+	ok(!r.timed_out && !r.ok, "[native=%d] SELECT 1 init_connect fails the query", native);
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	// With a valid init_connect again, only a closed session can still fail.
+	r = ic_query(c3.get(), IC_MARKER);
+	ok(!r.timed_out && !r.ok, "[native=%d] and closes the session", native);
+	PGConnPtr c4 = ic_connect_client(cl);
+	r = ic_query(c4.get(), IC_MARKER);
+	ok(!ic_admin_value(admin, "SELECT 1").empty() && r.ok && r.value == "global",
+	   "[native=%d] ProxySQL still serves admin and new clients after PMC-10003", native);
+
+	ic_set_global(admin, "SELECT pg_sleep(3)");
+	PGConnPtr c5 = ic_connect_client(cl);
+	r = ic_query(c5.get(), IC_MARKER);
+	ok(!r.timed_out && !r.ok, "[native=%d] pg_sleep init_connect fails the query", native);
+	ok(r.elapsed_ms > 2900 && r.elapsed_ms < 3200,
+	   "[native=%d] after ~3 s (got %llu ms)", native, r.elapsed_ms);
 }
 
 int main(int, char**) {
