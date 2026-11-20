@@ -81,11 +81,11 @@ Once a run finishes (passed or failed), everything it produced lives under
 
 ```text
 ci_infra_logs/${INFRA_ID}/
-├── infra-mysql57/                      # per-backend logs (mysql, mariadb, pgsql, ...)
+├── infra-dbdeployer-mysql57/           # per-backend logs (mysql, mariadb, pgsql, ...)
 │   └── mysql1/
 │       ├── error.log
 │       └── general.log
-├── infra-mariadb10/
+├── infra-dbdeployer-mariadb10/
 │   └── ...
 ├── proxysql/                           # ProxySQL side
 │   ├── proxysql.log

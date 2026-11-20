@@ -15,7 +15,7 @@ Before running tests, ensure:
 # 1. Set required environment variables
 export INFRA_ID="dev-$USER"
 export TAP_GROUP="legacy-binlog-g1"  # or your target group
-export INFRA_TYPE="infra-mysql57-binlog"  # optional, inferred from group
+export INFRA_TYPE="infra-dbdeployer-mysql57-binlog"  # optional, inferred from group
 
 # 2. Run the full pipeline (starts infra + runs tests)
 ./test/infra/control/ensure-infras.bash
@@ -47,7 +47,7 @@ source test/infra/common/env.sh
 ./test/infra/control/ensure-infras.bash
 
 # Option B: Manual per-infrastructure startup
-cd test/infra/infra-mysql57-binlog
+cd test/infra/infra-dbdeployer-mysql57-binlog
 export INFRA_ID="dev-$USER"
 ./docker-compose-init.bash
 cd ../../../
@@ -68,7 +68,7 @@ docker logs proxysql.${INFRA_ID}
 ### Step 4: Configure ProxySQL Backend
 
 ```bash
-cd test/infra/infra-mysql57-binlog
+cd test/infra/infra-dbdeployer-mysql57-binlog
 export INFRA_ID="dev-$USER"
 ./bin/docker-proxy-post.bash
 ```
@@ -102,10 +102,10 @@ export TEST_PY_TAP_INCL="test_binlog.*"
 **Solution:**
 ```bash
 # Destroy existing infrastructure first
-cd test/infra/infra-mysql57-binlog
+cd test/infra/infra-dbdeployer-mysql57-binlog
 export INFRA_ID="dev-$USER"
 ./docker-compose-destroy.bash
-sudo rm -rf ./logs/infra-mysql57-binlog-${INFRA_ID}
+sudo rm -rf ./logs/infra-dbdeployer-mysql57-binlog-${INFRA_ID}
 sudo rm -rf ../../ci_infra_logs/${INFRA_ID}
 ```
 
@@ -128,7 +128,7 @@ sudo rm -rf ../../ci_infra_logs/${INFRA_ID}
 **Solution:**
 ```bash
 # Check container status
-docker ps --format "table {{.Names}}\t{{.Status}}" | grep infra-mysql57-binlog
+docker ps --format "table {{.Names}}\t{{.Status}}" | grep infra-dbdeployer-mysql57-binlog
 
 # Check network aliases
 docker network inspect ${INFRA_ID}_backend
@@ -192,10 +192,10 @@ zcat ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/test_name-t.log.gz
 ```bash
 # From ProxySQL container, test MySQL connection
 docker exec -it proxysql.${INFRA_ID} bash
-mysql -h mysql1.infra-mysql57-binlog -P 3306 -u root -p
+mysql -h dbdeployer1.infra-dbdeployer-mysql57-binlog -P 3306 -u root -p
 
 # Test reader connection
-telnet mysql1.infra-mysql57-binlog 6020
+telnet dbdeployer1.infra-dbdeployer-mysql57-binlog 6020
 ```
 
 ### 2. Monitor ProxySQL Runtime
@@ -233,7 +233,7 @@ docker rm -f test-runner.${INFRA_ID}
 ./test/infra/control/stop-proxysql-isolated.bash
 
 # Destroy infrastructure
-cd test/infra/infra-mysql57-binlog
+cd test/infra/infra-dbdeployer-mysql57-binlog
 export INFRA_ID="dev-$USER"
 ./docker-compose-destroy.bash
 
