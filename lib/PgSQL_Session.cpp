@@ -1289,6 +1289,8 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 			// pgsql_hostgroup_attributes takes priority
 			tmp_init_connect = hg_strings->init_connect.c_str();
 		}
+		// Tracked parameters (search_path, TimeZone, ...) set here are not recorded in this
+		// connection's variable state, so the client's value may or may not be re-applied.
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
 			mybe->server_myds->myconn->options.init_connect = strdup(tmp_init_connect);
@@ -1323,6 +1325,7 @@ bool PgSQL_Session::handler_again___verify_backend_user_db() {
 	return false;
 }
 
+#ifdef PROXYSQL31
 bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 	bool ret = false;
 	assert(mybe->server_myds->myconn);
@@ -1399,6 +1402,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 	}
 	return ret;
 }
+#endif // PROXYSQL31
 
 bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, 
 	bool no_quote, bool set_transaction) {
@@ -4548,10 +4552,11 @@ bool PgSQL_Session::handler_again___multiple_statuses(int* rc) {
 	case RESETTING_CONNECTION_V2:
 		ret = handler_again___status_RESETTING_CONNECTION(rc);
 		break;
-	// TODO: fix this
-	//case SETTING_INIT_CONNECT:
-	//	ret = handler_again___status_SETTING_INIT_CONNECT(rc);
+#ifdef PROXYSQL31
+	case SETTING_INIT_CONNECT:
+		ret = handler_again___status_SETTING_INIT_CONNECT(rc);
 		break;
+#endif // PROXYSQL31
 	default:
 		break;
 	}

@@ -555,7 +555,9 @@ private:
 
 	bool handler_again___verify_init_connect();
 	bool handler_again___verify_backend_user_db();
+#ifdef PROXYSQL31
 	bool handler_again___status_SETTING_INIT_CONNECT(int*);
+#endif // PROXYSQL31
 	bool handler_again___status_CONNECTING_SERVER(int*);
 	bool handler_again___status_RESETTING_CONNECTION(int*);
 	//bool handler_again___status_CHANGING_AUTOCOMMIT(int*);
