@@ -223,6 +223,8 @@ static char * main_check_latest_version() {
 	// Set timeout and connect timeout for the HTTP request
 	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 10);
 	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
+	// Do not wait for a DNS lookup that is still running: shutdown joins this thread.
+	curl_easy_setopt(curl_handle, CURLOPT_QUICK_EXIT, 1L);
 
 	// Perform the HTTP request
 	res = curl_easy_perform(curl_handle);
@@ -2888,7 +2890,7 @@ void watchdog_main_loop() {
 		const unsigned long long curtime = monotonic_time();
 
 		// Version check handling
-		if (GloVars.global.version_check && curtime > time_next_version_check) {
+		if (GloVars.global.version_check && curtime > time_next_version_check && glovars.shutdown == 0) {
 			if (version_check_started) {
 				pthread_join(version_check_thr, NULL); // started 24h ago, long finished
 			}
