@@ -18,8 +18,53 @@
 
 CommandLine cl;
 
-static constexpr int kPerMode = 11;       // v3.1 cases run once per backend mode
+static constexpr int kPerMode = 16;       // v3.1 cases run once per backend mode
 static constexpr int kStableCases = 0;    // v3.0 cases
+
+// Two statements and one Sync in libpq pipeline mode; the first opens a new connection.
+static bool pipeline_sees(PGconn* c, const char* expected) {
+	if (!PQenterPipelineMode(c) ||
+		!PQsendQueryParams(c, IC_MARKER, 0, NULL, NULL, NULL, NULL, 0) ||
+		!PQsendQueryParams(c, "SELECT current_setting('ic.marker', true)", 0, NULL, NULL, NULL, NULL, 0) ||
+		!PQpipelineSync(c)) {
+		diag("pipeline send failed: %s", PQerrorMessage(c));
+		return false;
+	}
+	int matched = 0;
+	const unsigned long long deadline = monotonic_time() + 10000000ULL;
+	while (monotonic_time() < deadline) {
+		if (PQisBusy(c)) {
+			struct pollfd pfd = { PQsocket(c), POLLIN, 0 };
+			poll(&pfd, 1, 100);
+			if (!PQconsumeInput(c)) break;
+			continue;
+		}
+		PGresult* r = PQgetResult(c);
+		if (r == NULL) continue;   // end of one statement's results
+		const ExecStatusType st = PQresultStatus(r);
+		if (st == PGRES_TUPLES_OK && PQntuples(r) == 1 && strcmp(PQgetvalue(r, 0, 0), expected) == 0) {
+			matched++;
+		} else if (st != PGRES_PIPELINE_SYNC) {
+			diag("pipeline result %s: %s", PQresStatus(st), PQresultErrorMessage(r));
+		}
+		PQclear(r);
+		if (st == PGRES_PIPELINE_SYNC) {
+			PQexitPipelineMode(c);
+			return matched == 2;
+		}
+	}
+	diag("pipeline timed out or lost its connection: %s", PQerrorMessage(c));
+	return false;
+}
+
+static long long seq_value(PGconn* c) {
+	const IcResult r = ic_query(c, "SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM ic_seq");
+	return r.ok ? atoll(r.value.c_str()) : -1;
+}
+
+static long long conn_ok(PGconn* admin) {
+	return atoll(ic_admin_value(admin, "SELECT SUM(ConnOK) FROM stats_pgsql_connection_pool").c_str());
+}
 
 // A fresh client per case: a timed-out query leaves its connection busy.
 static void run_mode(PGconn* admin, bool native) {
@@ -76,6 +121,54 @@ static void run_mode(PGconn* admin, bool native) {
 	r = ic_query_extended(c7.get(), IC_MARKER);
 	ok(!r.timed_out && r.ok && r.value == "global",
 	   "[native=%d] extended session survives (got '%s')", native, r.value.c_str());
+
+	ic_set_global(admin, "SET ic.a TO '1'; SET ic.b TO '2'");
+	PGConnPtr c8 = ic_connect_client(cl);
+	r = ic_query(c8.get(), "SELECT /* create_new_connection=1 */ "
+		"current_setting('ic.a', true) || current_setting('ic.b', true)");
+	ok(!r.timed_out && r.ok && r.value == "12",
+	   "[native=%d] multi-statement init_connect runs every statement (got '%s')", native, r.value.c_str());
+
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	PGConnPtr c9 = ic_connect_client(cl);
+	r = ic_query_extended(c9.get(), IC_MARKER);
+	ok(!r.timed_out && r.ok && r.value == "global",
+	   "[native=%d] extended query sees init_connect (got '%s')", native, r.value.c_str());
+
+	PGConnPtr c10 = ic_connect_client(cl);
+	ok(pipeline_sees(c10.get(), "global"),
+	   "[native=%d] pipelined batch on a new connection sees init_connect", native);
+
+	// Sent once per backend connection: nextval() is not rolled back, so the sequence counts
+	// init_connect runs, and ConnOK counts backend connections opened meanwhile. Each pair is
+	// read sequence first, so a connection opened by the read itself lands in both.
+	// The DDL client may stay attached to its backend, so the counted queries use another.
+	PGConnPtr c11 = ic_connect_client(cl);
+	ic_query(c11.get(), "CREATE SEQUENCE IF NOT EXISTS ic_seq");
+	ic_set_global(admin, "DO $$BEGIN PERFORM nextval('ic_seq'); END$$");
+	const long long seq0 = seq_value(c11.get()), conn0 = conn_ok(admin);
+	PGConnPtr work = ic_connect_client(cl);
+	ic_query(work.get(), IC_MARKER);
+	for (int i = 0; i < 4; i++) ic_query(work.get(), "SELECT 1");
+	const long long seq1 = seq_value(c11.get()), conn1 = conn_ok(admin);
+	ok(seq1 - seq0 == conn1 - conn0 && conn1 - conn0 >= 1 && conn1 - conn0 < 5,
+	   "[native=%d] sent once per backend connection (runs %lld-%lld, connections %lld-%lld)",
+	   native, seq1, seq0, conn1, conn0);
+	ic_set_global(admin, "");
+	ic_query(c11.get(), "DROP SEQUENCE IF EXISTS ic_seq");
+
+	// A connection held by a transaction keeps the init_connect it was opened with.
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	PGConnPtr c12 = ic_connect_client(cl);
+	ic_query(c12.get(), "/* create_new_connection=1 */ BEGIN");
+	const std::string before = ic_query(c12.get(), "SELECT current_setting('ic.marker', true)").value;
+	ic_set_global(admin, "SET ic.marker TO 'next'");
+	const std::string held = ic_query(c12.get(), "SELECT current_setting('ic.marker', true)").value;
+	ic_query(c12.get(), "COMMIT");
+	const std::string fresh = ic_query(c12.get(), IC_MARKER).value;
+	ok(before == "global" && held == "global" && fresh == "next",
+	   "[native=%d] runtime change reaches only new connections (before '%s', held '%s', new '%s')",
+	   native, before.c_str(), held.c_str(), fresh.c_str());
 }
 
 int main(int, char**) {

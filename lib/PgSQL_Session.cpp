@@ -1395,8 +1395,22 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				ret = true;
 			}
 		}
+		else if (rc == 2) {
+			// One statement of a multi-statement init_connect is done (libpq only: native
+			// collects every result through ReadyForQuery). Discard its result, as
+			// async_send_simple_command() does at the end; the next one needs a fresh one.
+			if (myconn->query_result) {
+				if (myconn->query_result_reuse) {
+					delete myconn->query_result_reuse;
+				}
+				myconn->query_result->clear();
+				myconn->query_result_reuse = myconn->query_result;
+				myconn->query_result = NULL;
+			}
+			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
+		}
 		else {
-			// rc==1 , nothing to do for now
+			// rc==1 or rc==3 , nothing to do for now
 		}
 	}
 	return ret;
