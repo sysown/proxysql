@@ -1324,6 +1324,7 @@ __thread bool mysql_thread___passthrough_auth_unknown_users;
 __thread bool mysql_thread___passthrough_auth_require_tls;
 #ifdef PROXYSQL40
 __thread bool mysql_thread___aws_locality_awareness;
+__thread char * mysql_thread___monitor_backend_auth;
 #endif
 __thread int mysql_thread___passthrough_default_hg;
 __thread int mysql_thread___passthrough_auth_cache_ttl_s;
@@ -1685,6 +1686,7 @@ extern __thread bool mysql_thread___passthrough_auth_unknown_users;
 extern __thread bool mysql_thread___passthrough_auth_require_tls;
 #ifdef PROXYSQL40
 extern __thread bool mysql_thread___aws_locality_awareness;
+extern __thread char * mysql_thread___monitor_backend_auth;
 #endif
 extern __thread int mysql_thread___passthrough_default_hg;
 extern __thread int mysql_thread___passthrough_auth_cache_ttl_s;

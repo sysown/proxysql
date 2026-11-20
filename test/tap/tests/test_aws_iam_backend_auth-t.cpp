@@ -49,6 +49,8 @@ using Clock = std::chrono::steady_clock;
 constexpr const char *kEndpoint = "db.cluster-test.us-east-1.rds.amazonaws.com";
 constexpr const char *kWrongEndpoint = "wrong.cluster-test.us-east-1.rds.amazonaws.com";
 constexpr const char *kUsername = "iam_protocol_user";
+// #6649: an Azure Entra backend on an Azure Database for MySQL host name.
+constexpr const char *kEntraEndpoint = "app-test.mysql.database.azure.com";
 
 struct ChildServer {
 	pid_t pid { -1 };
@@ -91,7 +93,9 @@ struct CertificateFixture {
 			"ca.key", "ca.pem", "ca.srl", "untrusted-ca.key", "untrusted-ca.pem",
 			"untrusted-ca.srl", "valid.key", "valid.csr", "valid.pem", "valid.ext",
 			"wrong.key", "wrong.csr", "wrong.pem", "wrong.ext",
-			"untrusted.key", "untrusted.csr", "untrusted.pem", "untrusted.ext"
+			"untrusted.key", "untrusted.csr", "untrusted.pem", "untrusted.ext",
+		"entra.key", "entra.csr", "entra.pem", "entra.ext",
+		"entra-untrusted.key", "entra-untrusted.csr", "entra-untrusted.pem", "entra-untrusted.ext"
 		};
 		for (const char *file : files) unlink((directory + "/" + file).c_str());
 		rmdir(directory.c_str());
@@ -179,7 +183,9 @@ CertificateFixture create_certificates() {
 	fixture.ready = roots &&
 		make_leaf(fixture, "valid", kEndpoint, fixture.ca, ca_key, 820001) &&
 		make_leaf(fixture, "wrong", kWrongEndpoint, fixture.ca, ca_key, 820002) &&
-		make_leaf(fixture, "untrusted", kEndpoint, fixture.untrusted_ca, untrusted_ca_key, 820003);
+		make_leaf(fixture, "untrusted", kEndpoint, fixture.untrusted_ca, untrusted_ca_key, 820003) &&
+		make_leaf(fixture, "entra", kEntraEndpoint, fixture.ca, ca_key, 820004) &&
+		make_leaf(fixture, "entra-untrusted", kEntraEndpoint, fixture.untrusted_ca, untrusted_ca_key, 820005);
 	return fixture;
 }
 
@@ -544,16 +550,60 @@ void run_pre_auth_abort_cases(MySQL_Thread& worker, const CertificateFixture& ce
 	}
 }
 
+// #6649: the same handshake for an Azure Entra connection: the token is sent
+// once over verified TLS with the Azure host name as server name.
+AwsIamTokenKey entra_key(unsigned int port) {
+	return { kEntraEndpoint, static_cast<uint16_t>(port), "", kUsername };
+}
+
+void run_entra_cases(MySQL_Thread& worker, const CertificateFixture& certificates) {
+	const std::string dir = certificates.directory;
+	const std::string token = "ENTRA_ACCESS_TOKEN." + std::string(1500, 'e');
+	ChildServer server = start_server("success", dir + "/entra.pem", dir + "/entra.key");
+	if (server.port == 0) BAIL_OUT("controlled Entra server did not become ready");
+	MySrvC *backend = create_server(1111, kEntraEndpoint, server.port, true);
+	{
+		ConnectionFixture fixture(worker, backend);
+		fixture.connection->set_backend_auth_type(MySQLBackendAuthType::AZURE_ENTRA);
+		fixture.connection->attach_aws_iam_token(entra_key(server.port), token_result(token));
+		const MDB_ASYNC_ST status = drive(worker, fixture.connection);
+		finish_server(server);
+		ok(status == ASYNC_CONNECT_SUCCESSFUL && field(server.result, "tls") == "1" &&
+			field(server.result, "pre_tls") == "0",
+			"entra_connect_ok: an Entra token authenticates with mysql_clear_password after TLS");
+		ok(field(server.result, "username_hex") == hex(kUsername) &&
+			field(server.result, "token_sha256") == sha256(token) &&
+			field(server.result, "sni_hex") == hex(kEntraEndpoint) &&
+			!fixture.connection->has_aws_iam_handshake_secret(),
+			"entra_connect_ok: the token arrives byte-for-byte with the Azure host name as SNI, then is cleansed");
+	}
+
+	ChildServer untrusted = start_server("untrusted_ca", dir + "/entra-untrusted.pem",
+		dir + "/entra-untrusted.key");
+	if (untrusted.port == 0) BAIL_OUT("controlled untrusted Entra server did not become ready");
+	MySrvC *untrusted_backend = create_server(1112, kEntraEndpoint, untrusted.port, true);
+	{
+		ConnectionFixture fixture(worker, untrusted_backend);
+		fixture.connection->set_backend_auth_type(MySQLBackendAuthType::AZURE_ENTRA);
+		fixture.connection->attach_aws_iam_token(entra_key(untrusted.port), token_result(token));
+		const MDB_ASYNC_ST status = drive(worker, fixture.connection);
+		finish_server(untrusted);
+		ok(status == ASYNC_CONNECT_FAILED && field(untrusted.result, "token_len") == "0",
+			"entra_untrusted_ca_fails: an untrusted certificate fails before the Entra token is sent");
+	}
+}
+
 } // namespace
 
 int main() {
-	plan(17);
+	plan(20);
 	diag("SDK-independent controlled TLS/protocol coverage; no SDK-on provider/signing verification is claimed");
 	if (test_init_minimal() != 0 || test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) BAIL_OUT("failed to initialize component globals");
 	GloMyLogger = new MySQL_Logger();
 	GloMyMon = new MySQL_Monitor();
 	GloMyMon->dns_cache->pin(kEndpoint, "127.0.0.1");
+	GloMyMon->dns_cache->pin(kEntraEndpoint, "127.0.0.1");
 
 	CertificateFixture certificates = create_certificates();
 	ok(certificates.ready, "temporary CA and SAN server certificates were generated");
@@ -571,6 +621,8 @@ int main() {
 		run_certificate_failure(worker, certificates, "untrusted_ca",
 			certificates.untrusted_cert, certificates.untrusted_key, 1103, "untrusted CA");
 		run_pre_auth_abort_cases(worker, certificates, token);
+		// AWS and Entra connections in the same process (aws_and_entra_side_by_side).
+		run_entra_cases(worker, certificates);
 
 		ChildServer denied = start_server("access_denied", certificates.valid_cert, certificates.valid_key);
 		if (denied.port == 0) BAIL_OUT("controlled access-denied server did not become ready");

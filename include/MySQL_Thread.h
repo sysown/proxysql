@@ -732,6 +732,8 @@ class MySQL_Threads_Handler
 		bool passthrough_auth_require_tls;
 #ifdef PROXYSQL40
 		bool aws_locality_awareness;
+		// #6649: "password" or "azure_entra".
+		char *monitor_backend_auth;
 #endif
 		int passthrough_default_hg;
 		int passthrough_auth_cache_ttl_s;

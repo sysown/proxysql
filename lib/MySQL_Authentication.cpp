@@ -407,6 +407,7 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 	}
 #ifdef PROXYSQL40
 	bool warn_for_iam_password = false;
+	MySQLBackendAuthType token_type = MySQLBackendAuthType::PASSWORD;
 	std::string invalid_policy_code {};
 	if (usertype == USERNAME_BACKEND) {
 		const MySQLBackendAuthPolicy policy = mysql_backend_auth_policy_for_account(
@@ -415,7 +416,8 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 			ad->rejected_attributes,
 			ad->password != nullptr && ad->password[0] != '\0');
 		warn_for_iam_password =
-			policy.type == MySQLBackendAuthType::AWS_IAM && policy.ignored_password;
+			mysql_backend_auth_uses_token(policy.type) && policy.ignored_password;
+		token_type = policy.type;
 		if (policy.type == MySQLBackendAuthType::INVALID) invalid_policy_code = policy.failure_code;
 		if (policy.type != MySQLBackendAuthType::PASSWORD) {
 			non_password_backend_auth_.store(true, std::memory_order_release);
@@ -430,9 +432,9 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 #ifdef PROXYSQL40
 	if (warn_for_iam_password) {
 		proxy_warning(
-			"mysql_users backend entry for '%s' uses aws_iam authentication; "
+			"mysql_users backend entry for '%s' uses %s authentication; "
 			"clear the unused backend password\n",
-			username);
+			username, mysql_backend_auth_type_name(token_type));
 	}
 	if (!invalid_policy_code.empty()) {
 		// The row is loaded, but its malformed 'backend_auth' fails closed

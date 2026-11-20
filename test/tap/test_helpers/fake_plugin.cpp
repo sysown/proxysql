@@ -1,5 +1,10 @@
 #include "ProxySQL_Plugin.h"
 #include "sqlite3db.h"
+#ifdef PROXYSQL40
+#include "Aws_Iam_Provider.h"
+#include <chrono>
+#include <memory>
+#endif /* PROXYSQL40 */
 
 #include <cstdio>
 #include <atomic>
@@ -327,12 +332,49 @@ ProxySQL_PluginEarlyActionResult fake_early_action(
 }
 #endif /* PROXYSQL40 */
 
+#ifdef PROXYSQL40
+// #6649: an ABI-17 plugin installs an Azure Entra token source.
+class FakeEntraSource final : public AwsIamTokenSource {
+public:
+	AwsIamRequestHandle request(const AwsIamTokenKey&, uint64_t,
+		std::weak_ptr<AwsIamCompletionSink>) override { return { 1 }; }
+	AwsIamTokenResult request_blocking(const AwsIamTokenKey&,
+		std::chrono::steady_clock::time_point) override { return {}; }
+	void cancel(AwsIamRequestHandle) override {}
+	void invalidate(const AwsIamTokenKey&, uint64_t) override {}
+	void record_backend_connection(bool) override {}
+	void record_waiting_session(bool) override {}
+	AwsIamStatsSnapshot snapshot() const override { return {}; }
+};
+
+void destroy_fake_entra_source(AwsIamTokenSource *source) { delete source; }
+
+bool fake_install_entra_source(ProxySQL_PluginServices *services) {
+	if (services == nullptr || services->install_azure_entra_token_source == nullptr) return false;
+	void *handle = retain_fake_module();
+	auto *source = new FakeEntraSource();
+	if (handle == nullptr ||
+		!services->install_azure_entra_token_source(source, destroy_fake_entra_source, handle)) {
+		delete source;
+		if (handle != nullptr) dlclose(handle);
+		return false;
+	}
+	fake_log_event("install_entra_source");
+	return true;
+}
+#endif /* PROXYSQL40 */
+
 bool fake_init(ProxySQL_PluginServices *services) {
 	fake_services = services;
 	if (env("INIT_FAIL") != nullptr) {
 		fake_log_event("init_fail");
 		return false;
 	}
+#ifdef PROXYSQL40
+	if (env("INSTALL_ENTRA_SOURCE") != nullptr && !fake_install_entra_source(services)) {
+		return false;
+	}
+#endif /* PROXYSQL40 */
 	if (env("REGISTER_INVALID_TABLE") != nullptr &&
 	    services != nullptr &&
 	    services->register_table != nullptr) {
@@ -715,7 +757,9 @@ extern "C" const ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
 	if (env("ENABLE_RUNTIME_READY") != nullptr) {
 		return &fake_descriptor_with_runtime_ready;
 	}
-	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr) {
+	// Both services need a descriptor with the current ABI layout.
+	if (env("INSTALL_SERVER_DISCOVERY_CONTROLLER") != nullptr ||
+		env("INSTALL_ENTRA_SOURCE") != nullptr) {
 		return &fake_descriptor_with_server_discovery;
 	}
 	if (env("ENABLE_PHASE_B") != nullptr) {

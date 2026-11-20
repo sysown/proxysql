@@ -27,8 +27,8 @@ struct ABI14Descriptor {
 }
 int main() {
  plan(10); test_init_minimal();
- ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 16u, "abi16_debug_prefix_compatible: layout is ABI16");
- ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 16u,
+ ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 17u, "abi16_debug_prefix_compatible: layout is ABI17");
+ ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 17u,
     "ABI16 retains independent DEBUG tagging");
  ok(offsetof(ProxySQL_PluginDescriptor, managed_configuration_service) == sizeof(ABI14Descriptor),
     "ABI14 descriptor prefix remains byte-compatible");
