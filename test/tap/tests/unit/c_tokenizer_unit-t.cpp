@@ -530,6 +530,14 @@ static void test_digest_savepoint_names() {
 	ok(d("ROLLBACK TO x") == "ROLLBACK TO ?", "savepoint: ROLLBACK TO name replaced");
 	ok(d("ROLLBACK WORK TO SAVEPOINT x") == "ROLLBACK WORK TO SAVEPOINT ?",
 		"savepoint: ROLLBACK WORK TO SAVEPOINT name replaced");
+	// A quoted name can follow the keyword without whitespace
+	ok(d("SAVEPOINT`before_edit`") == "SAVEPOINT ?", "savepoint: quoted name adjacent to SAVEPOINT replaced");
+	ok(d("RELEASE SAVEPOINT`sp 1`") == "RELEASE SAVEPOINT ?",
+		"savepoint: quoted name adjacent to RELEASE SAVEPOINT replaced");
+	ok(d("ROLLBACK TO SAVEPOINT`x`") == "ROLLBACK TO SAVEPOINT ?",
+		"savepoint: quoted name adjacent to ROLLBACK TO SAVEPOINT replaced");
+	ok(d("ROLLBACK TO`x`") == "ROLLBACK TO ?", "savepoint: quoted name adjacent to ROLLBACK TO replaced");
+	ok(d("SAVEPOINTx") == "SAVEPOINTx", "savepoint: keyword glued to an unquoted word unchanged");
 	ok(d("SAVEPOINT x") != d("RELEASE SAVEPOINT x") && d("SAVEPOINT x") != d("ROLLBACK TO SAVEPOINT x"),
 		"savepoint: distinct operations keep distinct digests");
 
@@ -572,7 +580,7 @@ static void test_digest_in_clause_grouping() {
 // ============================================================================
 
 int main() {
-	plan(77);
+	plan(82);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
@@ -636,16 +644,16 @@ int main() {
 	test_strip_comments_inline();      // 2
 	// subtotal: 5
 
-	// edge cases (7 tests)
+	// edge cases (30 tests)
 	test_digest_empty_query();          // 1
 	test_digest_whitespace_only();      // 1
 	test_digest_multiple_spaces();      // 1
 	test_digest_backtick_identifiers(); // 1
-	test_digest_savepoint_names();      // 18
+	test_digest_savepoint_names();      // 23
 	test_digest_scientific_notation();  // 1
 	test_digest_in_clause();            // 1
 	test_digest_in_clause_grouping();   // 1
-	// Total: 1 + 18 + 8 + 9 + 5 + 2 + 1 + 2 + 1 + 5 + 7 = 59
+	// Total: 1 + 18 + 8 + 9 + 5 + 2 + 1 + 2 + 1 + 5 + 30 = 82
 
 	test_cleanup_minimal();
 	return exit_status();

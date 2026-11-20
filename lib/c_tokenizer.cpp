@@ -1946,6 +1946,23 @@ static inline const char* skip_digest_keyword(const char* p, const char* kw, siz
 }
 
 /**
+ * @brief Like skip_digest_keyword(), for the keyword that precedes the savepoint name.
+ * @details MySQL also accepts a backtick-quoted name right after the keyword, without whitespace, as in
+ *   'SAVEPOINT`sp`'. In that case the returned position is the opening backtick.
+ */
+static inline const char* skip_digest_keyword_before_name(const char* p, const char* kw, size_t kw_len) {
+	if (strncasecmp(p, kw, kw_len) == 0) {
+		if (p[kw_len] == ' ') {
+			return p + kw_len + 1;
+		}
+		if (p[kw_len] == '`') {
+			return p + kw_len;
+		}
+	}
+	return NULL;
+}
+
+/**
  * @brief Returns true if [p, end) is a single savepoint identifier as it appears in a digest.
  * @details Accepted forms are:
  *   - A backtick-quoted identifier (doubled backticks are escapes) spanning the whole range.
@@ -1988,7 +2005,9 @@ static inline bool is_digest_savepoint_ident(const char* p, const char* end) {
  *   - RELEASE SAVEPOINT ident
  *   - ROLLBACK [WORK] TO [SAVEPOINT] ident
  *
- *   Leading comments kept by 'query_digests_keep_comment' are skipped. Only the name is replaced; the keywords are kept as written, so different statements still produce
+ *   Leading comments kept by 'query_digests_keep_comment' are skipped. A backtick-quoted name can follow
+ *   the last keyword without whitespace ('SAVEPOINT`sp`'); the digest then gets the usual space. Only the name is replaced; the keywords are
+ *   kept as written, so different statements still produce
  *   different digests and the command type derived from the digest text is unchanged. The digest is only
  *   modified when, after the keywords, the rest of the digest is exactly one identifier.
  *
@@ -2020,11 +2039,11 @@ static inline char* normalize_savepoint_name(char* res, char* end) {
 
 	const char* name = NULL;
 	if (f == 'S' || f == 's') {
-		name = skip_digest_keyword(stmt, "SAVEPOINT", 9);
+		name = skip_digest_keyword_before_name(stmt, "SAVEPOINT", 9);
 	} else {
 		const char* p = skip_digest_keyword(stmt, "RELEASE", 7);
 		if (p) {
-			name = skip_digest_keyword(p, "SAVEPOINT", 9);
+			name = skip_digest_keyword_before_name(p, "SAVEPOINT", 9);
 		} else {
 			p = skip_digest_keyword(stmt, "ROLLBACK", 8);
 			if (p) {
@@ -2032,9 +2051,9 @@ static inline char* normalize_savepoint_name(char* res, char* end) {
 				if (w) {
 					p = w;
 				}
-				p = skip_digest_keyword(p, "TO", 2);
+				p = skip_digest_keyword_before_name(p, "TO", 2);
 				if (p) {
-					const char* s = skip_digest_keyword(p, "SAVEPOINT", 9);
+					const char* s = skip_digest_keyword_before_name(p, "SAVEPOINT", 9);
 					if (s) {
 						name = s;
 					} else if (strcasecmp(p, "SAVEPOINT") != 0) {
@@ -2051,6 +2070,11 @@ static inline char* normalize_savepoint_name(char* res, char* end) {
 	}
 
 	char* name_pos = res + (name - res);
+	if (name_pos[-1] != ' ') {
+		// Quoted name adjacent to the keyword: write the space too, so that 'SAVEPOINT`sp`' and
+		// 'SAVEPOINT `sp`' share a digest. A quoted name has at least 3 characters, so this still fits.
+		*name_pos++ = ' ';
+	}
 	name_pos[0] = '?';
 	name_pos[1] = '\0';
 	return name_pos + 1;
