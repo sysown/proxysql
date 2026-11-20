@@ -340,5 +340,7 @@ def producer_lookup():
     raise RuntimeError('timed out waiting for producer completion')
 
 if __name__=='__main__':
+    # Each command is one process: reuse its artifact listings (see GitHubAPI).
+    GitHubAPI.listing_cache={}
     commands={'selection':standalone_selection,'artifact-status':artifact_status,'plan':plan_command,'stamp':stamp,'finalize':finalize,'consumer':consumer,'result':result,'restore':restore,'restore-unit':restore_unit,'summary':summary,'wait-build':producer_lookup}
     commands[sys.argv[1]]()

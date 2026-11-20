@@ -203,6 +203,12 @@ def download_parts(url,token,target,size,workers,deadline,locations=None):
 
 
 class GitHubAPI:
+    # Artifact listings shared by every instance in this process, keyed by
+    # repository, credentials and run. The CLI enables it (a dict): one command
+    # lists the same finished run several times (manifest, handoff, unit
+    # binaries) through separate instances. It lives only in memory, so files
+    # left on the runner by product code cannot feed it.
+    listing_cache=None
     def __init__(self, repository, token=None, *, cache_dir=None):
         self.repository=repository
         self.token=token
@@ -248,7 +254,12 @@ class GitHubAPI:
             if len(batch)<100:return records
         raise RuntimeError('GitHub pagination limit exceeded')
     def artifacts(self,run_id):
-        return self.pages(f'repos/{self.repository}/actions/runs/{int(run_id)}/artifacts','artifacts')
+        key=(self.repository,self.token,int(run_id))
+        cache=GitHubAPI.listing_cache
+        if cache is not None and key in cache:return [dict(record) for record in cache[key]]
+        records=self.pages(f'repos/{self.repository}/actions/runs/{int(run_id)}/artifacts','artifacts')
+        if cache is not None:cache[key]=[dict(record) for record in records]
+        return records
     def json_artifact(self,run_id,name,filename):
         # The runner cache is writable by product code. Authenticate its bytes
         # against a fresh GitHub artifact digest before parsing any metadata.

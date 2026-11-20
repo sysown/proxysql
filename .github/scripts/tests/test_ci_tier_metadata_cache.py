@@ -50,6 +50,23 @@ class MetadataCacheTests(unittest.TestCase):
             self.assertEqual(len(self.requests), 3)
             self.assertEqual(sum(path.endswith('/zip') for path in self.requests), 1)
 
+    def test_process_listing_cache_lists_each_run_once(self):
+        with patch.object(GitHubAPI, 'request', side_effect=self.request), \
+                patch.object(GitHubAPI, 'listing_cache', {}):
+            first = GitHubAPI('owner/repo').artifacts(2)
+            first[0]['name'] = 'caller mutation'
+            self.assertEqual(GitHubAPI('owner/repo').artifacts(2)[0]['name'], self.name)
+            GitHubAPI('owner/repo', token='other').artifacts(2)
+            GitHubAPI('other/repo').artifacts(2)
+            GitHubAPI('owner/repo').artifacts(3)
+            self.assertEqual(len(self.requests), 4)
+
+    def test_listing_cache_is_off_unless_enabled(self):
+        with patch.object(GitHubAPI, 'request', side_effect=self.request):
+            GitHubAPI('owner/repo').artifacts(2)
+            GitHubAPI('owner/repo').artifacts(2)
+            self.assertEqual(len(self.requests), 2)
+
     def test_repository_run_attempt_and_filename_do_not_share_entries(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(GitHubAPI, 'request', side_effect=self.request):
             for repo, run, name, filename in [('a/repo', 2, self.name, 'manifest.json'),
