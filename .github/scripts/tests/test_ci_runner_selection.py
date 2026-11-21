@@ -70,7 +70,8 @@ class RunnerSelectionTests(unittest.TestCase):
             step = next(item for item in yaml.safe_load(
                 (ROOT / '.github/workflows/ci-tier-context.yml').read_text()
             )['jobs']['context']['steps'] if item.get('id') == 'pick')
-            bindings = {'github.token': 'fixture-only', 'github.repository': 'example/project',
+            bindings = {'github.token': 'fixture-only',
+                        'steps.ci-read-token.outputs.token || github.token': 'fixture-only', 'github.repository': 'example/project',
                         "vars.SELFHOSTED_POOL_SIZE || '6'": '6',
                         'inputs.runner_eligible': str(eligible).lower(),
                         'inputs.hosted_runner': hosted,

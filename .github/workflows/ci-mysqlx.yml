@@ -96,11 +96,24 @@ jobs:
         ref: ${{ env.SHA }}
         path: 'proxysql'
 
+    - name: Mint read-only artifact token
+      # The app installation has its own rate limit, apart from the GITHUB_TOKEN
+      # pool every job shares. Artifact reads fall back to GH_TOKEN without it.
+      id: ci-read-token
+      if: ${{ github.repository == 'sysown/proxysql' }}
+      continue-on-error: true
+      timeout-minutes: 2
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        app-id: ${{ secrets.CI_APP_ID }}
+        private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+        permission-actions: read
     - name: Restore selected product handoff
       timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
+        CI_READ_TOKEN: ${{ steps.ci-read-token.outputs.token }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Restore plugin .so files from _runtime_libs
@@ -427,11 +440,24 @@ jobs:
         proxysql/test/infra/docker-base/test-connector-version-pins.bash
 
 
+    - name: Mint read-only artifact token
+      # The app installation has its own rate limit, apart from the GITHUB_TOKEN
+      # pool every job shares. Artifact reads fall back to GH_TOKEN without it.
+      id: ci-read-token
+      if: ${{ github.repository == 'sysown/proxysql' }}
+      continue-on-error: true
+      timeout-minutes: 2
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      with:
+        app-id: ${{ secrets.CI_APP_ID }}
+        private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+        permission-actions: read
     - name: Restore selected product handoff
       timeout-minutes: 30
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
+        CI_READ_TOKEN: ${{ steps.ci-read-token.outputs.token }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Restore plugin .so files from _runtime_libs

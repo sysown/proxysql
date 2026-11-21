@@ -13,6 +13,7 @@ import posixpath
 import shutil
 from pathlib import Path, PurePosixPath
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -217,12 +218,40 @@ class GitHubAPI:
         return github_request(path,method,payload,raw,token=self.token,
             retry_safe=retry_safe,before_retry=before_retry)
 
+    def read_token(self):
+        """Optional read-only app token for this repository's artifacts.
+
+        It draws on the app installation's own rate limit instead of the
+        GITHUB_TOKEN pool shared by every job. Explicit tokens take precedence.
+        """
+        token=os.environ.get('CI_READ_TOKEN')
+        if token and self.token is None and self.repository==os.environ.get('GITHUB_REPOSITORY'):
+            return token
+        return None
+
+    def read(self,path,raw=False):
+        token=self.read_token()
+        if token:
+            try:return github_request(path,'GET',None,raw,token=token)
+            except RuntimeError as error:
+                print(f'{error}; retrying with the job token',file=sys.stderr,flush=True)
+        return self.request(path,raw=raw)
+
     def download(self,path,destination,size,digest=None,verify=True):
         """Download up to eight resumable ranges directly into one archive."""
         if size<=0:raise ValueError('invalid artifact size')
         if digest and not re.fullmatch(r'sha256:[0-9a-fA-F]{64}',digest):
             raise ValueError('unsupported artifact checksum')
+        read_token=self.read_token()
+        if read_token:
+            try:return self._download(path,destination,size,digest,verify,read_token)
+            except (OSError,RuntimeError,http.client.HTTPException) as error:
+                print(f'Artifact download with the read token failed ({type(error).__name__}); retrying with the job token',
+                      file=sys.stderr,flush=True)
         token=self.token or os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
+        return self._download(path,destination,size,digest,verify,token)
+
+    def _download(self,path,destination,size,digest,verify,token):
         if not token:
             auth=subprocess.run(['gh','auth','token'],capture_output=True,text=True,timeout=60)
             if auth.returncode:raise RuntimeError('Cannot obtain artifact download credentials')
@@ -245,10 +274,10 @@ class GitHubAPI:
                     raise ValueError('artifact checksum mismatch')
             assembled.replace(destination)
 
-    def pages(self,path,key):
-        records=[]
+    def pages(self,path,key,get=None):
+        records=[];get=get or self.request
         for page in range(1,1001):
-            data=self.request(path+('&' if '?' in path else '?')+f'per_page=100&page={page}')
+            data=get(path+('&' if '?' in path else '?')+f'per_page=100&page={page}')
             batch=data[key] if key else data
             records.extend(batch)
             if len(batch)<100:return records
@@ -257,7 +286,7 @@ class GitHubAPI:
         key=(self.repository,self.token,int(run_id))
         cache=GitHubAPI.listing_cache
         if cache is not None and key in cache:return [dict(record) for record in cache[key]]
-        records=self.pages(f'repos/{self.repository}/actions/runs/{int(run_id)}/artifacts','artifacts')
+        records=self.pages(f'repos/{self.repository}/actions/runs/{int(run_id)}/artifacts','artifacts',self.read)
         if cache is not None:cache[key]=[dict(record) for record in records]
         return records
     def json_artifact(self,run_id,name,filename):
@@ -272,7 +301,7 @@ class GitHubAPI:
             key=hashlib.sha256(json.dumps(identity).encode()).hexdigest()
             cache=self.cache_dir/(key+'.zip')
         cached=cache is not None and cache.exists()
-        raw=cache.read_bytes() if cached else self.request(
+        raw=cache.read_bytes() if cached else self.read(
             f"repos/{self.repository}/actions/artifacts/{artifact['id']}/zip",raw=True)
         if cache is not None and 'sha256:'+hashlib.sha256(raw).hexdigest()!=digest.lower():
             raise ValueError('metadata artifact checksum mismatch')
