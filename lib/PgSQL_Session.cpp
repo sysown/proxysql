@@ -2085,7 +2085,27 @@ int PgSQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 			break;
 		}
 
-		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
+		// A simple-query COPY takes CopyData, CopyDone and CopyFail from the client, and PostgreSQL ignores a
+		// Flush during it. None of them gets a reply of its own once the COPY is over, so they are relayed.
+		// Anything else waits here like a query pipelined behind any other: its reply would come after the
+		// COPY's ReadyForQuery, which ends fast forward and can give the backend to the pool. That includes a
+		// Sync, which PostgreSQL ignores during a COPY FROM but answers once the COPY is over. Sent before
+		// CopyDone, a held message holds the COPY data behind it too, so that COPY ends only when the client
+		// leaves (a Query there is a protocol error, which PostgreSQL refuses). The fast forward read limit
+		// counts only what is queued for the backend: data held here is buffered without it, as messages
+		// pipelined behind a query are in normal mode.
+		// Only a well-formed Flush (no body, 5 bytes) is relayed. One with a body, sent after CopyDone,
+		// reaches a backend that has ended the COPY: it refuses it and then ignores everything until a Sync,
+		// with no ReadyForQuery, on a backend that may already be back in the pool. Held, normal mode
+		// takes it as a Flush and the backend never sees it.
+		bool copy_hold = false;
+		if (session_fast_forward == SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT) {
+			const PtrSize_t* nxt = client_myds->PSarrayIN->index(0);
+			const char t = *static_cast<const char*>(nxt->ptr);
+			copy_hold = t != 'd' && t != 'c' && t != 'f' && (t != 'H' || nxt->size != 5);
+		}
+
+		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE || copy_hold) {
 			// If the client sends a new packet while a query is still executing,
 			// we no longer treat this as an error. Previously, such packets were
 			// considered unexpected and the session was terminated.
@@ -3628,15 +3648,15 @@ handler_again:
 			}
 		}
 		if (is_copy_ready_packet) {
-			// The backend has ended the COPY, so it ignores any client COPY message still queued for
-			// it, such as a CopyDone that arrived with its error. Sent after the TLS is given back,
-			// that message goes out unencrypted and the backend drops the connection. Discard them,
-			// as normal mode discards the ones that arrive later.
+			// The backend has ended the COPY, so it ignores any client COPY message or Flush still
+			// queued for it, such as a CopyDone that arrived with its error. Sent after the TLS is
+			// given back, that message goes out unencrypted and the backend drops the connection.
+			// Discard them, as normal mode discards the ones that arrive later.
 			PtrSizeArray* out = mybe->server_myds->PSarrayOUT;
 			unsigned int n = 0;
 			for (; n < out->len; n++) {
 				const char type = *(const char*)out->index(n)->ptr;
-				if (type != 'd' && type != 'c' && type != 'f') break;
+				if (type != 'd' && type != 'c' && type != 'f' && type != 'H') break;
 				l_free(out->index(n)->size, out->index(n)->ptr);
 			}
 			out->remove_index_range(0, n);
