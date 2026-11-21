@@ -422,6 +422,7 @@ build_src_default: build_lib_default
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysql_router && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysql_router plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),$(if $(filter Linux,$(UNAME_S)),cd plugins/tcp_proxy && OPTZ="${O2} -ggdb" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] tcp_proxy plugin (non-Linux host)"),@echo "[skip] tcp_proxy plugin (PROXYSQL40 not set)")
 
 .PHONY: build_src_debug_default
 build_src_debug_default: build_lib_debug_default
@@ -430,6 +431,7 @@ build_src_debug_default: build_lib_debug_default
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/duckdb && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] duckdb plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/genai && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] genai plugin (PROXYSQL40 not set)")
 	$(if $(filter 1,$(PROXYSQL40)),cd plugins/mysql_router && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] mysql_router plugin (PROXYSQL40 not set)")
+	$(if $(filter 1,$(PROXYSQL40)),$(if $(filter Linux,$(UNAME_S)),cd plugins/tcp_proxy && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQL40=$(PROXYSQL40) PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) PROXYSQLTSDB=$(PROXYSQLTSDB) CC=${CC} CXX=${CXX} ${MAKE},@echo "[skip] tcp_proxy plugin (non-Linux host)"),@echo "[skip] tcp_proxy plugin (PROXYSQL40 not set)")
 
 
 ### packaging targets
@@ -538,6 +540,7 @@ clean:
 	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 	cd plugins/mysql_router && ${MAKE} clean
+	cd plugins/tcp_proxy && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	rm -f pkgroot || true
 
@@ -550,6 +553,7 @@ cleandeps:
 	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 	cd plugins/mysql_router && ${MAKE} clean
+	cd plugins/tcp_proxy && ${MAKE} clean
 
 .PHONY: cleandev
 cleandev:
@@ -559,6 +563,7 @@ cleandev:
 	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 	cd plugins/mysql_router && ${MAKE} clean
+	cd plugins/tcp_proxy && ${MAKE} clean
 
 .PHONY: cleantest
 cleantest:
@@ -574,6 +579,7 @@ cleanall:
 	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 	cd plugins/mysql_router && ${MAKE} clean
+	cd plugins/tcp_proxy && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 	cd test/deps && ${MAKE} cleanall
 	rm -f binaries/* || true
@@ -588,6 +594,7 @@ cleanbuild:
 	cd plugins/duckdb && ${MAKE} clean
 	cd plugins/genai && ${MAKE} clean
 	cd plugins/mysql_router && ${MAKE} clean
+	cd plugins/tcp_proxy && ${MAKE} clean
 	rm -rf pkgroot || true
 
 
@@ -609,6 +616,10 @@ install: src/proxysql
 	if [ -f plugins/mysql_router/proxysql_mysql_router.so ]; then \
 		install -d /usr/lib/proxysql/plugins ; \
 		install -m 0755 plugins/mysql_router/proxysql_mysql_router.so /usr/lib/proxysql/plugins/ ; \
+	fi
+	if [ -f plugins/tcp_proxy/proxysql_tcp_proxy.so ]; then \
+		install -d /usr/lib/proxysql/plugins ; \
+		install -m 0755 plugins/tcp_proxy/proxysql_tcp_proxy.so /usr/lib/proxysql/plugins/ ; \
 	fi
 	if [ -f plugins/duckdb/ProxySQL_DuckDB_Plugin.so ]; then \
 		install -d /usr/lib/proxysql/plugins ; \
@@ -655,6 +666,7 @@ uninstall:
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_MySQLX_Plugin.so ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_GenAI_Plugin.so ; fi
 	if [ -f /usr/lib/proxysql/plugins/proxysql_mysql_router.so ]; then rm /usr/lib/proxysql/plugins/proxysql_mysql_router.so ; fi
+	if [ -f /usr/lib/proxysql/plugins/proxysql_tcp_proxy.so ]; then rm /usr/lib/proxysql/plugins/proxysql_tcp_proxy.so ; fi
 	if [ -f /usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so ]; then rm /usr/lib/proxysql/plugins/ProxySQL_DuckDB_Plugin.so ; fi
 	if [ -d /usr/lib/proxysql/plugins ]; then rmdir /usr/lib/proxysql/plugins 2>/dev/null || true ; fi
 	if [ -d /usr/lib/proxysql ]; then rmdir /usr/lib/proxysql 2>/dev/null || true ; fi

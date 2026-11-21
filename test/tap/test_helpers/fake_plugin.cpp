@@ -238,6 +238,33 @@ bool fake_register_schemas(ProxySQL_PluginServices *services) {
 			}
 		}
 	}
+	if (env("PHASE_B_CHECK_LISTENER_RESERVATIONS") != nullptr && services != nullptr) {
+		// Phase B must expose a rejecting stub, never the live core snapshot
+		// validator, and must explain that the service is unavailable.
+		const auto callback = services->validate_listener_interfaces;
+		std::string error = "stale";
+		const bool accepted = callback != nullptr &&
+			callback(FAKE_PLUGIN_NAME, "127.0.0.1:6033", error);
+		if (callback == nullptr) {
+			fake_log_event("phase_b_listener_unavailable_null");
+		} else if (!accepted && error.find("unavailable") != std::string::npos) {
+			fake_log_event("phase_b_listener_unavailable");
+		} else {
+			fake_log_event("phase_b_listener_unexpected");
+		}
+	}
+	if (env("PHASE_B_CHECK_RAW_BACKEND") != nullptr && services != nullptr) {
+		// Phase B must expose the getter slot but no process-resident service.
+		const auto callback = services->get_raw_backend_service;
+		const auto* raw_service = callback != nullptr ? callback() : nullptr;
+		if (callback == nullptr) {
+			fake_log_event("phase_b_raw_backend_missing_callback");
+		} else if (raw_service == nullptr) {
+			fake_log_event("phase_b_raw_backend_null");
+		} else {
+			fake_log_event("phase_b_raw_backend_unexpected");
+		}
+	}
 	if (env("PHASE_B_TEST_SECRETS") != nullptr && services != nullptr) {
 		std::vector<uint8_t> output { 0x7f };
 		const uint8_t byte = 0x42;
@@ -350,6 +377,36 @@ bool fake_init(ProxySQL_PluginServices *services) {
 		services->register_command(sql != nullptr ? sql : "PLUGIN FAKE NOOP", &fake_command);
 	}
 #ifdef PROXYSQL40
+	if (env("CHECK_LISTENER_RESERVATIONS_INIT") != nullptr && services != nullptr) {
+		const auto callback = services->validate_listener_interfaces;
+		std::string reject_error = "stale";
+		std::string accept_error = "stale";
+		const bool rejected = callback != nullptr &&
+			!callback(FAKE_PLUGIN_NAME, "127.0.0.1:6033", reject_error) &&
+			reject_error.find("conflict") != std::string::npos;
+		const bool accepted = callback != nullptr &&
+			callback(FAKE_PLUGIN_NAME, "127.0.0.1:6034", accept_error) &&
+			accept_error.empty();
+		if (callback == nullptr) {
+			fake_log_event("init_listener_unavailable_null");
+		} else if (rejected && accepted) {
+			fake_log_event("init_listener_conflict_rejected_and_distinct_accepted");
+		} else {
+			fake_log_event("init_listener_unexpected");
+		}
+	}
+	if (env("CHECK_RAW_BACKEND_INIT") != nullptr && services != nullptr) {
+		const auto callback = services->get_raw_backend_service;
+		const auto* raw_service = callback != nullptr ? callback() : nullptr;
+		if (callback == nullptr || raw_service == nullptr || raw_service->version != 2 ||
+			raw_service->acquire == nullptr || raw_service->connect_result == nullptr ||
+			raw_service->account_io == nullptr || raw_service->offline_hard == nullptr ||
+			raw_service->destroy == nullptr) {
+			fake_log_event("init_raw_backend_unexpected");
+		} else {
+			fake_log_event("init_raw_backend_live");
+		}
+	}
 	if (env("CHECK_SERVER_DISCOVERY_INIT") != nullptr && services != nullptr) {
 		if (services->register_server_module != nullptr &&
 			services->install_server_discovery_controller != nullptr &&

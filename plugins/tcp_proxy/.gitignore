@@ -1,0 +1,3 @@
+/tests/engine_unit
+/tests/engine_unit-asan
+/tests/engine_harness

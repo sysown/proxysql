@@ -44,17 +44,20 @@ class ClickHouseBuild(unittest.TestCase):
                             "--eval=export CORE_ROOT")
                         calls = [json.loads(line) for line in output.splitlines()
                                  if line.startswith('{')]
-                        self.assertEqual(
-                            [c['directory'] for c in calls],
-                            ['deps', 'lib', 'src', 'plugins/mysqlx', 'plugins/duckdb',
-                             'plugins/genai', 'plugins/mysql_router'])
+                        expected = [
+                            'deps', 'lib', 'src', 'plugins/mysqlx', 'plugins/duckdb',
+                            'plugins/genai', 'plugins/mysql_router']
+                        if platform == "Linux":
+                            expected.append('plugins/tcp_proxy')
+                        self.assertEqual([c['directory'] for c in calls], expected)
                         for call in calls:
                             self.assertEqual(call['clickhouse'], '1', call)
 
     def test_core_and_plugins_use_same_default_layout(self):
         for directory, variable in (("lib", "MYCXXFLAGS"), ("src", "MYCXXFLAGS"),
                                     ("plugins/genai", "CXXFLAGS"), ("plugins/mysqlx", "CXXFLAGS"),
-                                    ("plugins/duckdb", "CXXFLAGS"), ("plugins/mysql_router", "CXXFLAGS")):
+                                    ("plugins/duckdb", "CXXFLAGS"), ("plugins/mysql_router", "CXXFLAGS"),
+                                    ("plugins/tcp_proxy", "CXXFLAGS")):
             for platform in ("Darwin", "Linux", "FreeBSD"):
                 with self.subTest(directory=directory, platform=platform):
                     output = run_make(directory, "-s", "-f", "Makefile", "-f", "-",
