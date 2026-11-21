@@ -902,6 +902,17 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	unsigned int copy_hostgroup_strings(HostgroupStringsMap& out);
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);
+	/**
+	 * @brief Brings a server the monitor shunned back ONLINE after a successful ping.
+	 * @details Only rows SHUNNED automatically are changed, in every hostgroup, and
+	 *   only when can_unshun_server() allows it: the same recovery time and connection
+	 *   drain rules a query applies in get_random_MySrvC(). Unlike a query's unshun with
+	 *   pgsql-unshun_algorithm=0, every hostgroup's row of the server comes back: the ping
+	 *   checks the server, not one hostgroup. Rows shunned for replication lag (a
+	 *   different status) or set OFFLINE by an admin are never changed.
+	 * @return true if at least one row was brought back ONLINE.
+	 */
+	bool unshun_on_monitor_success(char *hostname, int port);
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
 

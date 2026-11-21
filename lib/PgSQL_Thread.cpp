@@ -372,6 +372,7 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_wait_timeout",
 */
 	(char*)"monitor_writer_is_also_reader",
+	(char*)"monitor_unshun_on_ping_success",
 	(char*)"max_allowed_packet",
 	(char*)"tcp_keepalive_time",
 	(char*)"use_tcp_keepalive",
@@ -1115,6 +1116,7 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.monitor_replication_lag_use_percona_heartbeat = strdup((char*)"");
 	variables.monitor_wait_timeout = true;
 	variables.monitor_writer_is_also_reader = true;
+	variables.monitor_unshun_on_ping_success = false;
 	variables.max_allowed_packet = 64 * 1024 * 1024;
 	variables.automatic_detect_sqli = false;
 	variables.firewall_whitelist_enabled = false;
@@ -2293,6 +2295,7 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"] = make_tuple(&variables.monitor_wait_timeout, false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"] = make_tuple(&variables.monitor_writer_is_also_reader, false);
+		VariablesPointers_bool["monitor_unshun_on_ping_success"] = make_tuple(&variables.monitor_unshun_on_ping_success, false);
 		VariablesPointers_bool["multiplexing"] = make_tuple(&variables.multiplexing, false);
 		VariablesPointers_bool["preserve_client_on_broken_backend_in_tx"] = make_tuple(&variables.preserve_client_on_broken_backend_in_tx, false);
 		VariablesPointers_bool["query_cache_stores_empty_result"] = make_tuple(&variables.query_cache_stores_empty_result, false);
@@ -4558,6 +4561,7 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_wait_timeout = (bool)GloPTH->get_variable_int((char*)"monitor_wait_timeout");
 	*/
 	pgsql_thread___monitor_writer_is_also_reader = (bool)GloPTH->get_variable_int((char*)"monitor_writer_is_also_reader");
+	pgsql_thread___monitor_unshun_on_ping_success = (bool)GloPTH->get_variable_int((char*)"monitor_unshun_on_ping_success");
 	pgsql_thread___monitor_enabled = (bool)GloPTH->get_variable_int((char*)"monitor_enabled");
 	pgsql_thread___monitor_history = GloPTH->get_variable_int((char*)"monitor_history");
 	pgsql_thread___monitor_connect_interval = GloPTH->get_variable_int((char*)"monitor_connect_interval");

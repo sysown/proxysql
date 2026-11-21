@@ -981,6 +981,7 @@ public:
 		//! ProxySQL session wait timeout. Unit: 'ms'.
 		bool monitor_wait_timeout;
 		bool monitor_writer_is_also_reader;
+		bool monitor_unshun_on_ping_success;
 		bool monitor_replication_lag_group_by_host;
 		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;

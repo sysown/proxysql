@@ -1856,6 +1856,17 @@ void perf_ping_actions(SQLite3DB* db, state_t& state) {
 
 	// Update 'current_lantency_ms'
 	update_srv_latency(db, state);
+
+	// Bring back a host shunned for errors once it answers pings again. Without this, a
+	// shunned host returns only when a query selects its hostgroup, so a hostgroup with
+	// no traffic (for example readers behind a dedicated read-only port) keeps it
+	// SHUNNED indefinitely after the host recovered.
+	if (pgsql_thread___monitor_unshun_on_ping_success && is_task_success(state.conn, state.task)) {
+		const mon_srv_t& srv { state.task.op_st.srv_info };
+		if (PgHGM->unshun_on_monitor_success(const_cast<char*>(srv.addr.c_str()), srv.port)) {
+			proxy_info("Monitor: server %s:%d answers pings again; no longer SHUNNED\n", srv.addr.c_str(), srv.port);
+		}
+	}
 	/////////////////////////////////////////////////////////////////////////////////////
 }
 

@@ -5,6 +5,7 @@ using json = nlohmann::json;
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "ConnectionPoolDecision.h"
+#include "MonitorHealthDecision.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -3974,6 +3975,41 @@ bool PgSQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 					mysrvc->time_last_detected_error = t;
 				}
 			}
+		}
+	}
+	wrunlock();
+	return ret;
+}
+
+bool PgSQL_HostGroups_Manager::unshun_on_monitor_success(char *hostname, int port) {
+	const time_t t = time(NULL);
+	bool ret = false;
+	wrlock();
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
+		const unsigned int l=myhgc->mysrvs->cnt();
+		for (unsigned int j=0; j<l; j++) {
+			PgSQL_SrvC *mysrvc=myhgc->mysrvs->idx(j);
+			if (mysrvc->port!=port || strcmp(mysrvc->address,hostname)!=0) {
+				continue;
+			}
+			if (mysrvc->status!=MYSQL_SERVER_STATUS_SHUNNED || mysrvc->shunned_automatic==false) {
+				continue;
+			}
+			if (!can_unshun_server(
+				mysrvc->time_last_detected_error, t,
+				pgsql_thread___shun_recovery_time_sec, pgsql_thread___connect_timeout_server_max,
+				mysrvc->shunned_and_kill_all_connections,
+				mysrvc->ConnectionsUsed->conns_length(), mysrvc->ConnectionsFree->conns_length()
+			)) {
+				continue;
+			}
+			mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+			mysrvc->shunned_automatic=false;
+			mysrvc->shunned_and_kill_all_connections=false;
+			mysrvc->connect_ERR_at_time_last_detected_error=0;
+			mysrvc->time_last_detected_error=0;
+			ret = true;
 		}
 	}
 	wrunlock();
