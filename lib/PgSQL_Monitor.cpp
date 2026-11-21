@@ -8,6 +8,7 @@
 
 #include <pthread.h>
 #include <poll.h>
+#include <fnmatch.h>
 
 #include <cassert>
 #include <cstdlib>
@@ -61,47 +62,6 @@ void append(std::vector<T>& dest, std::vector<T>&& src) {
 		std::make_move_iterator(src.begin()),
 		std::make_move_iterator(src.end())
 	);
-}
-
-/**
- * @brief Only responsive servers are eligible for monitoring actions.
- * @details Non-suitable is determined by 'ping_max_failures'.
- */
-const char RESP_SERVERS_QUERY_T[] {
-	"SELECT 1 FROM ("
-		"SELECT hostname,port,ping_error FROM pgsql_server_ping_log"
-			" WHERE hostname='%s' AND port=%d"
-			" ORDER BY time_start_us DESC LIMIT %d"
-	") a WHERE"
-		" ping_error IS NOT NULL"
-		" AND ping_error NOT LIKE '%%password authentication failed for user%%'"
-	" GROUP BY hostname,port HAVING COUNT(*)=%d"
-};
-
-/**
- * @brief Checks if a server is responsive (suitable for other monitoring ops).
- * @param db The monitor DB against to perform the query.
- * @param addr The server address.
- * @param port The server port.
- * @param max_fails Maximum number of failures to consider the server non-suitable.
- * @return True if the server is suitable, false otherwise.
- */
-bool server_responds_to_ping(SQLite3DB& db, const char* addr, int port, int max_fails) {
-	cfmt_t q_fmt { cstr_format(RESP_SERVERS_QUERY_T, addr, port, max_fails, max_fails) };
-
-	char* err { nullptr };
-	unique_ptr<SQLite3_result> result { db.execute_statement(q_fmt.str.c_str(), &err) };
-
-	if (err || result == nullptr) {
-		proxy_error(
-			"Internal error querying 'pgsql_server_ping_log'. Aborting   query=%s error='%s'\n",
-			q_fmt.str.c_str(), err
-		);
-		free(err);
-		assert(0);
-	} else {
-		return !result->rows_count;
-	}
 }
 
 /**
@@ -646,6 +606,14 @@ mf_unique_ptr<char> strdup_no_lf(const char* input) {
 	return mf_unique_ptr<char>(res);
 }
 
+static bool is_refused_monitor_login(const char* err);
+
+// Appended to a failed monitor connect whose login was refused (see REFUSED_MONITOR_LOGIN): its pings do not
+// count against the server, and every check fails until the monitor's credentials or access are fixed.
+static const char* refused_login_note(const char* err) {
+	return is_refused_monitor_login(err) ? " (the login of the monitoring user is refused)" : "";
+}
+
 void set_failed_st(state_t& st, ASYNC_ST new_st, mf_unique_ptr<char> err) {
 	st.conn.state = new_st;
 	st.conn.err = std::move(err);
@@ -801,8 +769,8 @@ pair<short,bool> handle_async_connect_cont(state_t& st, short revent) {
 			auto err { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
 
 			proxy_error(
-				"Monitor connect failed   addr='%s:%d' error='%s'\n",
-				srv.addr.c_str(), srv.port, err.get()
+				"Monitor connect failed   addr='%s:%d' error='%s'%s\n",
+				srv.addr.c_str(), srv.port, err.get(), refused_login_note(err.get())
 			);
 			set_failed_st(st, ASYNC_CONNECT_FAILED, std::move(err));
 			break;
@@ -1140,8 +1108,8 @@ pgsql_conn_t create_new_conn(task_st_t& task_st) {
 		if (pgconn.conn) {
 			auto error { strdup_no_lf(PQerrorMessage(pgconn.conn)) };
 			proxy_error(
-				"Monitor connect failed   addr='%s:%d' error='%s'\n",
-				srv.addr.c_str(), srv.port, error.get()
+				"Monitor connect failed   addr='%s:%d' error='%s'%s\n",
+				srv.addr.c_str(), srv.port, error.get(), refused_login_note(error.get())
 			);
 
 			pgconn.err = std::move(error);
@@ -1505,6 +1473,71 @@ bool is_task_finish(pgsql_conn_t& c, task_st_t& st) {
 		|| (c.state == ASYNC_ST::ASYNC_QUERY_END && st.type == task_type_t::repl_lag);
 }
 
+/**
+ * @brief Ping and connect errors where PostgreSQL answered and refused the monitor's login: bad
+ *  credentials, pg_hba.conf, client certificate, unknown role or database, no CONNECT privilege, the
+ *  role's or the database's connection limit, a database that takes no connections or is invalid.
+ *  They are not missed heartbeats, as MySQL_Monitor leaves out 'Access denied'. GLOB patterns: the
+ *  shunning query matches them with GLOB, the connect check with fnmatch(), which reads them alike.
+ * @details shortcut: matches PostgreSQL's English messages only (lc_messages); upgrade by recording
+ *  the check's SQLSTATE in the monitor tables and matching on that.
+ */
+static const char* const REFUSED_MONITOR_LOGIN[] {
+	"*authentication failed for user*",
+	"*no pg_hba.conf entry for*",
+	"*pg_hba.conf rejects connection*",
+	"*connection requires a valid client certificate*",
+	"*role \"*\" does not exist*",
+	"*role \"*\" is not permitted to log in*",
+	"*database \"*\" does not exist*",
+	"*permission denied for database*",
+	"*too many connections for role*",
+	"*too many connections for database*",
+	"*is not currently accepting connections*",
+	"*cannot connect to invalid database*",
+	// libpq's own refusal to log in without a password (an empty pgsql-monitor_password), no SQLSTATE
+	"*no password supplied*",
+};
+
+static bool is_refused_monitor_login(const char* err) {
+	for (const char* pattern : REFUSED_MONITOR_LOGIN) {
+		if (fnmatch(pattern, err, 0) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * @brief A server whose last 'ping_max_failures' pings all failed, not counting refused logins: it is
+ *  shunned, and it gets no other monitoring ops.
+ */
+static const std::string& check_host_err_limit_query() {
+	static const std::string query = [] {
+		std::string q {
+			"SELECT 1"
+			" FROM"
+				" ("
+					" SELECT hostname, port, ping_error"
+					" FROM pgsql_server_ping_log"
+					" WHERE hostname = ? AND port = ?"
+					" ORDER BY time_start_us DESC"
+					" LIMIT ?"
+				" ) a"
+			" WHERE"
+				" ping_error IS NOT NULL"
+		};
+		for (const char* pattern : REFUSED_MONITOR_LOGIN) {
+			q += " AND ping_error NOT GLOB '";
+			q += pattern;
+			q += "'";
+		}
+		q += " GROUP BY hostname, port HAVING COUNT(*) = ?";
+		return q;
+	}();
+	return query;
+}
+
 void update_connect_table(SQLite3DB* db, state_t& state) {
 	auto [rc, stmt_unique] = db->prepare_v2(
 		"INSERT OR REPLACE INTO pgsql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)"
@@ -1707,24 +1740,28 @@ void update_repl_lag_table(SQLite3DB* db, state_t& state) {
 	}
 }
 
-const char CHECK_HOST_ERR_LIMIT_QUERY[] {
-	"SELECT 1"
-	" FROM"
-		" ("
-			" SELECT hostname, port, ping_error"
-			" FROM pgsql_server_ping_log"
-			" WHERE hostname = ? AND port = ?"
-			" ORDER BY time_start_us DESC"
-			" LIMIT ?"
-		" ) a"
-	" WHERE"
-		" ping_error IS NOT NULL"
-			" AND ping_error NOT LIKE '%password authentication failed for user%'"
-	" GROUP BY"
-		" hostname, port"
-	" HAVING"
-		" COUNT(*) = ?"
-};
+/**
+ * @brief Checks if a server is responsive (suitable for other monitoring ops).
+ * @param db The monitor DB against to perform the query.
+ * @param addr The server address.
+ * @param port The server port.
+ * @param max_fails Maximum number of failures to consider the server non-suitable.
+ * @return True if the server is suitable, false otherwise.
+ */
+bool server_responds_to_ping(SQLite3DB& db, const char* addr, int port, int max_fails) {
+	auto [rc, stmt_unique] = db.prepare_v2(check_host_err_limit_query().c_str());
+	ASSERT_SQLITE_OK(rc, (&db));
+	sqlite3_stmt* stmt = stmt_unique.get();
+
+	sqlite_bind_text(stmt, 1, addr);
+	sqlite_bind_int(stmt, 2, port);
+	sqlite_bind_int(stmt, 3, max_fails);
+	sqlite_bind_int(stmt, 4, max_fails);
+
+	unique_ptr<SQLite3_result> limit_set { sqlite_fetch_and_clear(stmt) };
+
+	return !(limit_set && limit_set->rows_count);
+}
 
 thread_local stmt_unique_ptr CHECK_HOST_ERR_LIMIT_STMT {};
 
@@ -1737,7 +1774,7 @@ void shunn_non_resp_srv(SQLite3DB* db, state_t& state) {
 	int32_t max_fails { params->max_failures };
 
 	if (!CHECK_HOST_ERR_LIMIT_STMT) {
-		auto [rc, stmt_unique] = db->prepare_v2(CHECK_HOST_ERR_LIMIT_QUERY);
+		auto [rc, stmt_unique] = db->prepare_v2(check_host_err_limit_query().c_str());
 		ASSERT_SQLITE_OK(rc, db);
 		CHECK_HOST_ERR_LIMIT_STMT = std::move(stmt_unique);
 	}

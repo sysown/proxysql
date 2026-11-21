@@ -39,6 +39,12 @@ static void test_get_error_code() {
 	   "get_error_code: ERRCODE_INTERNAL_ERROR = XX000");
 	ok(strcmp(PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION), "08P01") == 0,
 	   "get_error_code: ERRCODE_PROTOCOL_VIOLATION = 08P01");
+	// PL/pgSQL's codes (PostgreSQL errcodes.txt): P0002 is no_data_found, not assert_failure.
+	ok(strcmp(PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_ASSERT_FAILURE), "P0004") == 0,
+	   "get_error_code: ERRCODE_ASSERT_FAILURE = P0004");
+	ok(strcmp(PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_NO_DATA_FOUND), "P0002") == 0 &&
+	   strcmp(PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_TOO_MANY_ROWS), "P0003") == 0,
+	   "get_error_code: ERRCODE_NO_DATA_FOUND = P0002, ERRCODE_TOO_MANY_ROWS = P0003");
 }
 
 // ============================================================
@@ -549,10 +555,10 @@ static void test_ext_info_reset() {
 }
 
 int main() {
-	plan(139);
+	plan(141);
 	test_init_minimal();
 
-	test_get_error_code();                  // 8
+	test_get_error_code();                  // 10
 	test_get_severity();                    // 9
 	test_fill_error_info_syntax_error();    // 6
 	test_fill_error_info_connection_exception(); // 4
