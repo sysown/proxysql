@@ -23,6 +23,7 @@ dbdeployer deploy replication "${MYSQL_VERSION}" \
     --base-port=3305 \
     -c log-slave-updates \
     -c max_connections=500 \
+    -c innodb_use_native_aio=0 \
     -c max_binlog_size=100M \
     -c plugin_load_add=ha_blackhole
 
@@ -128,7 +129,7 @@ FLUSH PRIVILEGES;
 SQL
 done
 
-# Set read_only=1 on replicas (ports 3307, 3308) to match infra-mariadb10 behavior
+# Set read_only=1 on replicas (ports 3307, 3308) as the test groups expect
 # MariaDB doesn't have super_read_only
 echo "Setting read_only on replicas..."
 for PORT in 3307 3308; do

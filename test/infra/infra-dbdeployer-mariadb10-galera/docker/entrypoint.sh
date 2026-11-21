@@ -23,6 +23,7 @@ dbdeployer deploy replication "${MYSQL_VERSION}" \
     --bind-address=0.0.0.0 \
     --base-port=3305 \
     -c max_connections=500 \
+    -c innodb_use_native_aio=0 \
     -c max_binlog_size=100M \
     -c wsrep_sst_method=mariabackup
 
