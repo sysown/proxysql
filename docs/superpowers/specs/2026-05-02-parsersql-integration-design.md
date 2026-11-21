@@ -1,5 +1,12 @@
 # ParserSQL Static Library Integration
 
+> Historical integration proposal. Its claim that query-processor parser 1
+> overrides the MySQL SET selector does not describe the implemented precedence
+> confirmed by the maintainer on 2026-10-18. See the current
+> [MySQL SET parser selection reference](../../../doc/mysql-set-parser-selection.md).
+> Other later changes are described in the
+> [behavior history](../../../doc/internal/set-behavior-history-evidence.md).
+
 ## Summary
 
 Integrate the standalone ParserSQL library (`ProxySQL/ParserSQL`) into ProxySQL as a vendored static library, exposing it through two runtime-selectable modes:
