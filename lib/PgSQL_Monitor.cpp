@@ -1857,6 +1857,7 @@ void perf_ping_actions(SQLite3DB* db, state_t& state) {
 	// Update 'current_lantency_ms'
 	update_srv_latency(db, state);
 
+#ifdef PROXYSQL31
 	// Bring back a host shunned for errors once it answers pings again. Without this, a
 	// shunned host returns only when a query selects its hostgroup, so a hostgroup with
 	// no traffic (for example readers behind a dedicated read-only port) keeps it
@@ -1867,6 +1868,7 @@ void perf_ping_actions(SQLite3DB* db, state_t& state) {
 			proxy_info("Monitor: server %s:%d answers pings again; no longer SHUNNED\n", srv.addr.c_str(), srv.port);
 		}
 	}
+#endif
 	/////////////////////////////////////////////////////////////////////////////////////
 }
 

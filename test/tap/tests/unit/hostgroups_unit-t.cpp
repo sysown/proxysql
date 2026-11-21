@@ -68,6 +68,7 @@ static int remove_mysql_server(int hg, const char *addr, int port) {
 	return rc;
 }
 
+#ifdef PROXYSQL31
 static int add_pgsql_server(int hg, const char *addr, int port,
 	int64_t weight, int64_t max_conns)
 {
@@ -87,21 +88,6 @@ static int add_pgsql_server(int hg, const char *addr, int port,
 	return rc;
 }
 
-static PgSQL_SrvC *find_pgsql_server(int hg, const char *addr) {
-	PgSQL_HGC *hgc = PgHGM->MyHGC_find(hg);
-	if (hgc == nullptr) {
-		return nullptr;
-	}
-	for (unsigned int i = 0; i < hgc->mysrvs->cnt(); i++) {
-		PgSQL_SrvC *server = hgc->mysrvs->idx(i);
-		if (strcmp(server->address, addr) == 0) {
-			return server;
-		}
-	}
-	return nullptr;
-}
-
-#ifdef PROXYSQL31
 static MySrvC *find_mysql_server(int hg, const char *addr) {
 	MyHGC *hgc = MyHGM->MyHGC_find(hg);
 	if (hgc == nullptr) {
@@ -109,6 +95,20 @@ static MySrvC *find_mysql_server(int hg, const char *addr) {
 	}
 	for (unsigned int i = 0; i < hgc->mysrvs->cnt(); i++) {
 		MySrvC *server = hgc->mysrvs->idx(i);
+		if (strcmp(server->address, addr) == 0) {
+			return server;
+		}
+	}
+	return nullptr;
+}
+
+static PgSQL_SrvC *find_pgsql_server(int hg, const char *addr) {
+	PgSQL_HGC *hgc = PgHGM->MyHGC_find(hg);
+	if (hgc == nullptr) {
+		return nullptr;
+	}
+	for (unsigned int i = 0; i < hgc->mysrvs->cnt(); i++) {
+		PgSQL_SrvC *server = hgc->mysrvs->idx(i);
 		if (strcmp(server->address, addr) == 0) {
 			return server;
 		}
@@ -569,6 +569,7 @@ static void test_hostgroup_pool_stats(HGM *hgm, unsigned int hid, const char *pr
 }
 #endif
 
+#ifdef PROXYSQL31
 // pgsql-monitor_unshun_on_ping_success: a successful ping brings back a server
 // the monitor shunned, in every hostgroup, under the same rules a query uses.
 // 9 tests.
@@ -641,15 +642,89 @@ static void test_pgsql_unshun_on_monitor_success() {
 	pgsql_thread___connect_timeout_server_max = old_connect_timeout_server_max;
 }
 
+// mysql-monitor_unshun_on_ping_success: a successful ping brings back a server
+// the monitor shunned, in every hostgroup, under the same rules a query uses.
+// 9 tests.
+static void test_mysql_unshun_on_monitor_success() {
+	const char *addr = "my-monitor-unshun";
+	const int port = 13400;
+	const int rc_a = add_mysql_server(9112, addr, port, 1, 10);
+	const int rc_b = add_mysql_server(9113, addr, port, 1, 10);
+	MySrvC *a = find_mysql_server(9112, addr);
+	MySrvC *b = find_mysql_server(9113, addr);
+	ok(rc_a == 0 && rc_b == 0 && a != nullptr && b != nullptr,
+		"MySQL HGM: monitor-unshun fixtures exist in two hostgroups");
+	if (a == nullptr || b == nullptr) {
+		return;
+	}
+	const bool old_monitor_enabled = mysql_thread___monitor_enabled;
+	const int old_shun_recovery_time_sec = mysql_thread___shun_recovery_time_sec;
+	const int old_connect_timeout_server_max = mysql_thread___connect_timeout_server_max;
+	mysql_thread___monitor_enabled = false;
+	mysql_thread___shun_recovery_time_sec = 10;
+	mysql_thread___connect_timeout_server_max = 10000;
+	const auto set = [&](MySrvC *s, MySerStatus status, bool automatic, time_t age) {
+		s->set_status(status);
+		s->shunned_automatic = automatic;
+		s->shunned_and_kill_all_connections = automatic;
+		s->time_last_detected_error = time(nullptr) - age;
+	};
+	const auto unshun = [&] {
+		return MyHGM->unshun_on_monitor_success(const_cast<char *>(addr), port);
+	};
+
+	MyHGM->shun_and_killall(const_cast<char *>(addr), port);
+	ok(!unshun() && (MySerStatus)a->get_status() == MYSQL_SERVER_STATUS_SHUNNED && (MySerStatus)b->get_status() == MYSQL_SERVER_STATUS_SHUNNED,
+		"MySQL HGM: no unshun right after the shun (within shun_recovery_time_sec)");
+
+	set(a, MYSQL_SERVER_STATUS_SHUNNED, true, 50);
+	set(b, MYSQL_SERVER_STATUS_SHUNNED, true, 50);
+	ok(unshun() && (MySerStatus)a->get_status() == MYSQL_SERVER_STATUS_ONLINE && (MySerStatus)b->get_status() == MYSQL_SERVER_STATUS_ONLINE,
+		"MySQL HGM: after shun_recovery_time_sec, both hostgroups' rows are ONLINE again");
+	ok(!a->shunned_automatic && !a->shunned_and_kill_all_connections && a->time_last_detected_error == 0,
+		"MySQL HGM: the unshun clears the shun state as a query's unshun does");
+
+	ok(!unshun() && (MySerStatus)a->get_status() == MYSQL_SERVER_STATUS_ONLINE,
+		"MySQL HGM: an ONLINE server is left alone and nothing is reported");
+
+	set(a, MYSQL_SERVER_STATUS_SHUNNED, false, 50);
+	set(b, MYSQL_SERVER_STATUS_SHUNNED, false, 50);
+	ok(!unshun() && (MySerStatus)a->get_status() == MYSQL_SERVER_STATUS_SHUNNED,
+		"MySQL HGM: a server not shunned automatically stays SHUNNED");
+
+	set(a, MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG, true, 50);
+	set(b, MYSQL_SERVER_STATUS_OFFLINE_SOFT, true, 50);
+	ok(!unshun() && (MySerStatus)a->get_status() == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG &&
+		(MySerStatus)b->get_status() == MYSQL_SERVER_STATUS_OFFLINE_SOFT,
+		"MySQL HGM: replication-lag SHUNNED and OFFLINE_SOFT rows are never changed");
+
+	set(a, MYSQL_SERVER_STATUS_SHUNNED, true, 50);
+	set(b, MYSQL_SERVER_STATUS_SHUNNED, true, 50);
+	mysql_thread___shun_recovery_time_sec = 0;
+	ok(!unshun() && (MySerStatus)a->get_status() == MYSQL_SERVER_STATUS_SHUNNED,
+		"MySQL HGM: shun_recovery_time_sec 0 (recovery off) keeps it SHUNNED");
+	mysql_thread___shun_recovery_time_sec = 10;
+
+	ok(!MyHGM->unshun_on_monitor_success(const_cast<char *>(addr), port + 1) &&
+		(MySerStatus)a->get_status() == MYSQL_SERVER_STATUS_SHUNNED,
+		"MySQL HGM: another port of the same host is a different server");
+
+	mysql_thread___monitor_enabled = old_monitor_enabled;
+	mysql_thread___shun_recovery_time_sec = old_shun_recovery_time_sec;
+	mysql_thread___connect_timeout_server_max = old_connect_timeout_server_max;
+}
+
+#endif
+
 // ============================================================================
 // Main
 // ============================================================================
 
 int main() {
 #ifdef PROXYSQL31
-	plan(54);
+	plan(63);
 #else
-	plan(26);
+	plan(17);
 #endif
 
 	int rc = test_init_minimal();
@@ -674,20 +749,17 @@ int main() {
 	// PgSQL tests
 	test_pgsql_create_and_remove();      // 3 tests
 	test_pgsql_shun();                   // 1 test
-	test_pgsql_unshun_on_monitor_success(); // 9 tests
 #ifdef PROXYSQL31
 	test_pgsql_post_unshun_respects_threshold();
 	test_pgsql_primary_presence_weight_overflow();
 	test_pgsql_parser_defaults();
+	test_pgsql_unshun_on_monitor_success(); // 9 tests
+	test_mysql_unshun_on_monitor_success(); // 9 tests
 	test_hostgroup_pool_stats(MyHGM, 10, "MySQL"); // 5 tests
 	test_hostgroup_pool_stats(PgHGM, 100, "PgSQL"); // 5 tests
 	test_unknown_hostgroup_stats_lookup(MyHGM, "MySQL"); // 1 test
 	test_unknown_hostgroup_stats_lookup(PgHGM, "PgSQL"); // 1 test
 #endif
-	// Total: 1+1+3+2+2+1+2+1+3+1 = 17... let me recount
-	// init: 2, create: 3, remove: 2, status: 2, latency: 1,
-	// independence: 2, duplicate: 1, pgsql_create: 3, pgsql_shun: 1
-	// = 17. Fix plan.
 
 	test_cleanup_hostgroups();
 	test_cleanup_minimal();

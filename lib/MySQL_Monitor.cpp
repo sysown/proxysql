@@ -3467,6 +3467,33 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 
 			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time_us) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time_us,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
 			for (j=0;j<i;j++) {
+#ifdef PROXYSQL31
+				// Bring back a host shunned for errors once its latest ping succeeded. Without
+				// this, a shunned host returns only when a query selects its hostgroup, so a
+				// hostgroup with no traffic keeps it SHUNNED indefinitely after it recovered.
+				if (mysql_thread___monitor_unshun_on_ping_success) {
+					const char *last_ping_query = "SELECT 1 FROM (SELECT ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT 1) a WHERE ping_error IS NULL";
+					char *last_ping_buff = (char *)malloc(strlen(last_ping_query)+strlen(addresses[j])+strlen(ports[j])+1);
+					sprintf(last_ping_buff, last_ping_query, addresses[j], ports[j]);
+					char *last_ping_error = NULL;
+					int last_ping_cols = 0;
+					int last_ping_affected = 0;
+					SQLite3_result *last_ping = NULL;
+					monitordb->execute_statement(last_ping_buff, &last_ping_error, &last_ping_cols, &last_ping_affected, &last_ping);
+					if (last_ping_error) {
+						proxy_error("Error on %s : %s\n", last_ping_buff, last_ping_error);
+						free(last_ping_error);
+					} else if (last_ping && last_ping->rows_count) {
+						if (MyHGM->unshun_on_monitor_success(addresses[j], atoi(ports[j]))) {
+							proxy_info("Monitor: server %s:%s answers pings again; no longer SHUNNED\n", addresses[j], ports[j]);
+						}
+					}
+					if (last_ping) {
+						delete last_ping;
+					}
+					free(last_ping_buff);
+				}
+#endif
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				sprintf(buff,new_query,addresses[j],ports[j]);
 				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);

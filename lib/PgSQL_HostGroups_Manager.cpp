@@ -5,7 +5,9 @@ using json = nlohmann::json;
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "ConnectionPoolDecision.h"
+#ifdef PROXYSQL31
 #include "MonitorHealthDecision.h"
+#endif
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -3981,6 +3983,7 @@ bool PgSQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 	return ret;
 }
 
+#ifdef PROXYSQL31
 bool PgSQL_HostGroups_Manager::unshun_on_monitor_success(char *hostname, int port) {
 	const time_t t = time(NULL);
 	bool ret = false;
@@ -4016,6 +4019,7 @@ bool PgSQL_HostGroups_Manager::unshun_on_monitor_success(char *hostname, int por
 	return ret;
 }
 
+#endif
 // set_server_current_latency_us
 // this function is called only from MySQL_Monitor::monitor_ping()
 // it set the average latency for a host in the last 3 pings

@@ -902,6 +902,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	unsigned int copy_hostgroup_strings(HostgroupStringsMap& out);
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);
+#ifdef PROXYSQL31
 	/**
 	 * @brief Brings a server the monitor shunned back ONLINE after a successful ping.
 	 * @details Only rows SHUNNED automatically are changed, in every hostgroup, and
@@ -913,6 +914,7 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 * @return true if at least one row was brought back ONLINE.
 	 */
 	bool unshun_on_monitor_success(char *hostname, int port);
+#endif
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
 
