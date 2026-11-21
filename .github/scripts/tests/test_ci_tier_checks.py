@@ -84,6 +84,16 @@ class CheckTests(unittest.TestCase):
    self.assertEqual(writes[1].kwargs['input'],writes[2].kwargs['input'])
    self.assertEqual(json.loads(writes[2].kwargs['input'])['status'],'in_progress')
 
+ def test_first_attempt_start_reopens_the_summary(self):
+  # A first-attempt consumer can start a check a retained execution already
+  # completed, so the summary must be reopened on every start.
+  from unittest.mock import Mock
+  api=Mock();api.request.return_value={'run_attempt':1}
+  plan={'repository':'sysown/proxysql','checks':[dict(key='a',check_id=9,name='test')],'execution_id':'run','build_id':3,'summary_check_id':10}
+  publish_result(plan,'a','in_progress',api,7,1)
+  patched=[c.args[0] for c in api.request.call_args_list if len(c.args)>1 and c.args[1]=='PATCH']
+  self.assertEqual(patched,['repos/sysown/proxysql/check-runs/9','repos/sysown/proxysql/check-runs/10'])
+
  def test_partial_rerun_preserves_jobs_not_rerun(self):
   import json
   from unittest.mock import Mock
