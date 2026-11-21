@@ -724,6 +724,7 @@ UNIT_TESTS += worker_scheduler_cost_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
+UNIT_TESTS += digest_memory_size_unit-t
 endif
 
 ifeq ($(PROXYSQLED25519),1)
