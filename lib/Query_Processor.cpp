@@ -147,8 +147,9 @@ static constexpr uint32_t PCRE2_RULE_MATCH_LIMIT = 10000000u;
 static constexpr size_t PCRE2_RULE_HEAPFRAMES_RELEASE_THRESHOLD = (1u << 20);
 
 // A limit hit means "an input too big for a query rule": the rule neither
-// matches nor fails to match, so it is not applied, negated or not
-// (rule_matches_regex()). It is logged rate-limited so admins can find rules
+// matches nor fails to match, so rule_matches_regex() returns false, negated
+// or not, and reports the failure so process_query() rejects the request
+// (#6510). It is logged rate-limited so admins can find rules
 // like '(.|\n)*' that should be rewritten to '[\s\S]*'.
 static void pcre2_rule_match_context_create(pcre2_match_data* match_data,
                                             pcre2_match_context** out_mctx) {
@@ -403,8 +404,9 @@ typedef struct __RE2_objects_t re2_t;
 // constant depth (2-4 levels on a 1 MB query); only a repeated group whose
 // iterations must be resumed, e.g. '(.|\n)*' or '(\d+,?)+', costs 2-4 levels
 // per iteration. Such a rule on a query longer than a few hundred
-// iterations is not applied to that query (logged, rate-limited) instead of
-// crashing; a larger stacksize allows deeper matches.
+// iterations makes that request be rejected with an error (logged,
+// rate-limited) instead of crashing (#6510); a larger stacksize allows deeper
+// matches.
 //
 // match_limit is the PCRE default (10,000,000), set explicitly so that it
 // cannot be raised by a different build configuration; it bounds CPU time,
@@ -1180,7 +1182,8 @@ static bool rule_matches_regex(
 	void* regex_engine,
 	int regex_index,
 	const char* subject,
-	int query_processor_regex
+	int query_processor_regex,
+	QP_regex_failure* regex_failure
 ) {
 	if (subject == NULL) return false;
 
@@ -1192,7 +1195,8 @@ static bool rule_matches_regex(
 		compiled_regex = temporary_regex;
 	}
 
-	// 'regex_is_valid' false means the rule is not applied, negated or not.
+	// 'regex_is_valid' false means the rule does not match, negated or not.
+	// A runtime failure (not an invalid regex) is also reported to the caller.
 	// Engines 1 (PCRE) and 2 (RE2) keep the v3.0.11 semantics of an invalid
 	// regex: it never matches, so a negated rule matches every query (#6411).
 	// Engine 3 (PCRE2) fails closed on an invalid regex.
@@ -1213,29 +1217,41 @@ static bool rule_matches_regex(
 			// "no match": a negated rule must not match because of it (#6411).
 			regex_is_valid = match_rc >= 0 || match_rc == PCRE2_ERROR_NOMATCH;
 			if (!regex_is_valid) {
+				// A runtime failure, not a no-match: the caller rejects the request (#6510).
+				if (regex_failure) {
+					regex_failure->regex_index = regex_index;
+					regex_failure->resource_limit = (match_rc == PCRE2_ERROR_HEAPLIMIT ||
+						match_rc == PCRE2_ERROR_DEPTHLIMIT || match_rc == PCRE2_ERROR_MATCHLIMIT);
+				}
 				static std::atomic<time_t> pcre2_match_error_log_ts{0};
 				const time_t now = time(NULL);
 				time_t prev = pcre2_match_error_log_ts.load(std::memory_order_relaxed);
 				if (now - prev >= 10 && pcre2_match_error_log_ts.compare_exchange_strong(prev, now,
 					std::memory_order_relaxed)) {
-					proxy_warning("Query rule %d: %s matching stopped with PCRE2 error %d (heap/depth/match limit or other error), the rule is not applied to this query; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+					proxy_warning("Query rule %d: %s matching stopped with PCRE2 error %d (heap/depth/match limit or other error), the request is rejected; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
 						qr->rule_id, (regex_index==1 ? "match_digest" : "match_pattern"), match_rc);
 				}
 			}
 		} else if (compiled_regex->re1) {
 			// Same result as re1->PartialMatch(subject), which v3.0.11 used,
 			// except that a recursion/match limit hit is not a "no match":
-			// the rule is not applied, negated or not, as on engine 3 (#6466).
+			// the rule does not match, negated or not, as on engine 3 (#6466).
+			// The caller rejects the request (#6510).
 			int match_rc = PCRE_ERROR_NOMATCH;
 			rc = pcre1_partial_match(compiled_regex, subject, strlen(subject), &match_rc);
 			regex_is_valid = !pcre1_is_limit_error(match_rc);
 			if (!regex_is_valid) {
+				// A runtime failure, not a no-match: the caller rejects the request (#6510).
+				if (regex_failure) {
+					regex_failure->regex_index = regex_index;
+					regex_failure->resource_limit = true; // only limit errors reach here
+				}
 				static std::atomic<time_t> pcre1_match_limit_log_ts{0};
 				const time_t now = time(NULL);
 				time_t prev = pcre1_match_limit_log_ts.load(std::memory_order_relaxed);
 				if (now - prev >= 10 && pcre1_match_limit_log_ts.compare_exchange_strong(prev, now,
 					std::memory_order_relaxed)) {
-					proxy_warning("Query rule %d: %s matching stopped with PCRE error %d (%s limit %lu reached), the rule is not applied to this query; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+					proxy_warning("Query rule %d: %s matching stopped with PCRE error %d (%s limit %lu reached), the request is rejected; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
 						qr->rule_id, (regex_index==1 ? "match_digest" : "match_pattern"), match_rc,
 						(match_rc == PCRE_ERROR_RECURSIONLIMIT ? "recursion" : "match"),
 						(match_rc == PCRE_ERROR_RECURSIONLIMIT ? compiled_regex->pcre1_extra.match_limit_recursion :
@@ -1264,7 +1280,8 @@ bool rule_matches_query(
 	const char* digest_text,
 	const char* query_text,
 	const char* rewritten_query,
-	int query_processor_regex
+	int query_processor_regex,
+	QP_regex_failure* regex_failure
 ) {
 	if (qr == NULL) return false;
 
@@ -1314,14 +1331,14 @@ bool rule_matches_query(
 	}
 
 	if (qr->match_digest && digest_text) {
-		if (rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex) == false) {
+		if (rule_matches_regex(qr, qr->regex_engine1, 1, digest_text, query_processor_regex, regex_failure) == false) {
 			return false;
 		}
 	}
 
 	if (qr->match_pattern) {
 		const char* match_query = (rewritten_query ? rewritten_query : query_text);
-		if (rule_matches_regex(qr, qr->regex_engine2, 2, match_query, query_processor_regex) == false) {
+		if (rule_matches_regex(qr, qr->regex_engine2, 2, match_query, query_processor_regex, regex_failure) == false) {
 			return false;
 		}
 	}
@@ -3212,10 +3229,27 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		}
 	}
 
+	// A regex runtime failure (resource limit or another error) while
+	// evaluating a rule must not let the request continue through other rules
+	// or the default route: it is rejected with an explicit error (#6510).
+	// A completed no-match is not a failure.
+	bool rule_eval_error = false;
+	auto reject_on_rule_failure = [&](const QP_rule_t* failed_rule, const char* operation, bool resource_limit) {
+		char emsg[192];
+		snprintf(emsg, sizeof(emsg), "Query rule %d: %s could not be evaluated (%s), request rejected",
+			failed_rule->rule_id, operation, (resource_limit ? "regex resource limit reached" : "regex error"));
+		if (ret->error_msg) { free(ret->error_msg); ret->error_msg = NULL; }
+		// OK_msg is answered before error_msg: drop one set by an earlier rule.
+		if (ret->OK_msg) { free(ret->OK_msg); ret->OK_msg = NULL; }
+		ret->error_msg = strdup(emsg);
+		rule_eval_error = true;
+		iterate_rules = false;
+	};
 	while (iterate_rules) {
 		iterate_rules = false;
 		for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
 			qr=*it;
+			QP_regex_failure regex_failure;
 			if (rule_matches_query(
 				qr,
 				flagIN,
@@ -3230,8 +3264,15 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 				(qp ? qp->digest_text : NULL),
 				query,
 				((ret && ret->new_query) ? ret->new_query->c_str() : NULL),
-				GET_THREAD_VARIABLE(query_processor_regex)
+				GET_THREAD_VARIABLE(query_processor_regex),
+				&regex_failure
 			) == false) {
+				// Evaluation failure: reject instead of skipping the rule (#6510).
+				if (regex_failure.regex_index != 0) {
+					reject_on_rule_failure(qr, (regex_failure.regex_index == 1 ? "match_digest" : "match_pattern"),
+						regex_failure.resource_limit);
+					break;
+				}
 				// Reset qr so a non-matching rule does not leak into the
 				// fast-routing check. That check reads qr->apply to decide
 				// whether a rule was already applied.
@@ -3375,12 +3416,13 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 						if (pcre1_rule_replace(re2p, qr->replace_pattern,
 								(qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL,
 								ret->new_query, &limit_rc) == false) {
+							reject_on_rule_failure(qr, "replace_pattern", true);
 							static std::atomic<time_t> pcre1_replace_limit_log_ts{0};
 							const time_t now = time(NULL);
 							time_t prev = pcre1_replace_limit_log_ts.load(std::memory_order_relaxed);
 							if (now - prev >= 10 && pcre1_replace_limit_log_ts.compare_exchange_strong(prev, now,
 								std::memory_order_relaxed)) {
-								proxy_warning("Query rule %d: replace_pattern stopped with PCRE error %d (%s limit %lu reached), the query is not rewritten; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
+								proxy_warning("Query rule %d: replace_pattern stopped with PCRE error %d (%s limit %lu reached), the request is rejected; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*'\n",
 									qr->rule_id, limit_rc,
 									(limit_rc == PCRE_ERROR_RECURSIONLIMIT ? "recursion" : "match"),
 									(limit_rc == PCRE_ERROR_RECURSIONLIMIT ? re2p->pcre1_extra.match_limit_recursion :
@@ -3402,16 +3444,19 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 						// A rewrite that hit a limit must not pin frames either.
 						pcre2_rule_release_pinned_heapframes(&re2p->pcre2_md, re2p->pcre2);
 						if (replaced == false) {
+							reject_on_rule_failure(qr, "replace_pattern",
+								(substitute_rc == PCRE2_ERROR_HEAPLIMIT || substitute_rc == PCRE2_ERROR_DEPTHLIMIT ||
+								 substitute_rc == PCRE2_ERROR_MATCHLIMIT));
 							static std::atomic<time_t> pcre2_limit_log_ts{0};
 							const time_t limit_log_now = time(NULL);
 							if (limit_log_now - pcre2_limit_log_ts.load(std::memory_order_relaxed) >= 10) {
 								pcre2_limit_log_ts.store(limit_log_now, std::memory_order_relaxed);
 								if (substitute_rc == PCRE2_ERROR_HEAPLIMIT || substitute_rc == PCRE2_ERROR_DEPTHLIMIT ||
 									substitute_rc == PCRE2_ERROR_MATCHLIMIT) {
-									proxy_warning("Query rule %d: replace_pattern stopped because the PCRE2 heap/depth/match limit was reached; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*' (issue #6423)\n",
+									proxy_warning("Query rule %d: replace_pattern stopped because the PCRE2 heap/depth/match limit was reached, the request is rejected; consider '[\\s\\S]*' or '(?s).*' instead of '(.|\\n)*' (issue #6423)\n",
 										qr->rule_id);
 								} else {
-									proxy_warning("Query rule %d: replace_pattern failed with PCRE2 error %d\n",
+									proxy_warning("Query rule %d: replace_pattern failed with PCRE2 error %d, the request is rejected\n",
 										qr->rule_id, substitute_rc);
 								}
 							}
@@ -3420,6 +3465,7 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 				}
 			}
 
+			if (rule_eval_error) break; // rewrite failure: reject, do not apply further rules (#6510)
 			if (qr->apply==true) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d is the last one to apply: exit!\n", qr->rule_id);
 				iterate_rules = false;
@@ -3435,7 +3481,7 @@ Query_Processor_Output* Query_Processor<QP_DERIVED>::process_query(TypeSession* 
 		}
 	}
 
-	if (qr == NULL || qr->apply == false) {
+	if (rule_eval_error == false && (qr == NULL || qr->apply == false)) {
 		// Skip fast routing for mirror sessions - they already have their destination
 		if (sess->mirror == false) {
 			// now it is time to check mysql_query_rules_fast_routing
