@@ -59,15 +59,15 @@ The plugin uses ProxySQL's existing frontend authentication and protocol
 implementation, but it does not route queries to a backend server. After
 authentication, supported text queries go directly to DuckDB. Results pass
 through ProxySQL's existing SQLite-compatible result container and are exposed
-using text transfer with numeric, boolean and binary metadata on both protocols,
+for text queries using text transfer with numeric, boolean and binary metadata on both protocols,
 plus core temporal metadata on MySQL.
 
 ## Important initial limitations
 
-- Client-visible prepared statements and PostgreSQL extended-query execution
-  are not supported. Use simple text-query APIs.
+- Native prepared SELECT is available only in implicit autocommit cycles, with
+  restricted types and SQL; see [protocol compatibility](protocol-compatibility.md#prepared-queries).
 - One request may contain only one SQL statement.
-- Unsupported types use text fallback; see the protocol type mapping.
+- Unsupported text-query types use text fallback; prepared types outside the supported subset are refused.
 - There is no plugin query timeout; a runaway DuckDB query is not interrupted.
 - Users authenticated through either endpoint share the same DuckDB database
   and have no separate per-table DuckDB authorization layer.

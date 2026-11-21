@@ -1,6 +1,8 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include <string_view>
+#include <limits>
+#include <algorithm>
 
 #ifndef SPOOKYV2
 #include "SpookyV2.h"
@@ -94,31 +96,54 @@ StmtLongDataHandler::~StmtLongDataHandler() {
 	delete long_datas;
 }
 
-bool StmtLongDataHandler::add(uint32_t _stmt_id, uint16_t _param_id,
-                              void *_data, unsigned long _size) {
-	stmt_long_data_t *sld = NULL;
-	unsigned int i;
-	for (i = 0; i < long_datas->len; i++) {
-		sld = (stmt_long_data_t *)long_datas->index(i);
-		if (sld->stmt_id == _stmt_id && sld->param_id == _param_id) {
-			// we found it!
-			unsigned long _new_size = sld->size + _size;
-			sld->data = realloc(sld->data, _new_size);
-			memcpy((unsigned char *)sld->data + sld->size, _data, _size);
-			sld->size = _new_size;
-			return true;
-		}
-	}
-	// if we reached here, we didn't find it
-	sld = (stmt_long_data_t *)malloc(sizeof(stmt_long_data_t));
-	sld->stmt_id = _stmt_id;
-	sld->param_id = _param_id;
-	sld->size = _size;
-	sld->data = malloc(_size);
-	sld->is_null = 0; // because the client is sending data, the field cannot be NULL
-	memcpy(sld->data, _data, _size);
-	long_datas->add(sld);
-	return false;  // a new entry was created
+bool StmtLongDataHandler::add(uint32_t stmt_id, uint16_t param_id,
+                              void *data, unsigned long size) {
+ bool appended = false;
+ return add_checked(stmt_id, param_id, data, size, &appended) && appended;
+}
+
+bool StmtLongDataHandler::add_checked(uint32_t stmt_id, uint16_t param_id,
+                                     const void *data, unsigned long size,
+                                     bool *appended) {
+ if (appended) *appended = false;
+ if (size && !data) return false;
+ for (unsigned int i = 0; i < long_datas->len; ++i) {
+  auto *entry = static_cast<stmt_long_data_t *>(long_datas->index(i));
+  if (entry->stmt_id != stmt_id || entry->param_id != param_id) continue;
+  if (size > std::numeric_limits<unsigned long>::max() - entry->size) return false;
+  const unsigned long total = entry->size + size;
+  void *replacement = realloc(entry->data, total ? total : 1);
+  if (!replacement) return false;
+  if (size) memcpy(static_cast<unsigned char *>(replacement) + entry->size, data, size);
+  entry->data = replacement;
+  entry->size = total;
+  if (appended) *appended = true;
+  return true;
+ }
+ // Reserve the pointer array with checked allocation rather than PtrArray::add,
+ // whose legacy expansion assumes allocation succeeds.
+ if (long_datas->len == long_datas->size) {
+  if (long_datas->len == std::numeric_limits<unsigned int>::max()) return false;
+  const size_t needed = static_cast<size_t>(long_datas->len) + 1;
+  const size_t capacity = std::min<size_t>(std::numeric_limits<unsigned int>::max(),
+      std::max<size_t>(4, needed > std::numeric_limits<size_t>::max() / 2 ? needed : needed * 2));
+  if (capacity > std::numeric_limits<size_t>::max() / sizeof(void *)) return false;
+  void *replacement = realloc(long_datas->pdata, capacity * sizeof(void *));
+  if (!replacement) return false;
+  long_datas->pdata = static_cast<void **>(replacement);
+  long_datas->size = static_cast<unsigned int>(capacity);
+ }
+ auto *entry = static_cast<stmt_long_data_t *>(malloc(sizeof(stmt_long_data_t)));
+ if (!entry) return false;
+ entry->data = malloc(size ? size : 1);
+ if (!entry->data) { free(entry); return false; }
+ entry->stmt_id = stmt_id;
+ entry->param_id = param_id;
+ entry->size = size;
+ entry->is_null = 0;
+ if (size) memcpy(entry->data, data, size);
+ long_datas->pdata[long_datas->len++] = entry;
+ return true;
 }
 
 #ifdef PROXYSQL31

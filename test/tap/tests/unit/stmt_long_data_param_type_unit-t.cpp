@@ -12,6 +12,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 namespace {
 
@@ -87,7 +88,7 @@ void test_empty_long_data(MySQL_STMT_Global_info* info, bool cached) {
 } // namespace
 
 int main() {
-	plan(8);
+	plan(13);
 	test_init_minimal();
 	MYSQL* mysql = mysql_init(nullptr);
 	MYSQL_STMT* stmt = mysql ? mysql_stmt_init(mysql) : nullptr;
@@ -100,6 +101,18 @@ int main() {
 		test_empty_long_data(&info, true);
 		mysql_stmt_close(stmt);
 	}
+ {
+  StmtLongDataHandler data;
+  bool appended = true;
+  ok(data.add_checked(7, 0, nullptr, 0, &appended) && !appended, "checked empty chunk creates a non-null entry");
+  const char bytes[] = {'a', 0, 'b'};
+  ok(data.add_checked(7, 0, bytes, sizeof(bytes), &appended) && appended, "checked append preserves binary bytes");
+  ok(!data.add_checked(7, 0, bytes, std::numeric_limits<unsigned long>::max()), "overflowing append is refused");
+  unsigned long *length = nullptr; my_bool *is_null = nullptr;
+  void *stored = data.get(7, 0, &length, &is_null);
+  ok(stored && length && *length == sizeof(bytes) && !memcmp(stored, bytes, sizeof(bytes)), "failed append leaves original value intact");
+  ok(!data.add_checked(7, 1, nullptr, 1), "nonempty null input is refused");
+ }
 	if (mysql) mysql_close(mysql);
 	test_cleanup_minimal();
 	return exit_status();

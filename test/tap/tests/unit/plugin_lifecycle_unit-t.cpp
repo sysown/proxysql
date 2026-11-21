@@ -129,6 +129,7 @@ SQLite3DB* proxysql_plugin_get_statsdb()  { return reinterpret_cast<SQLite3DB*>(
 // that lets plugins count on admin module materialization between them).
 static void test_phase_b_and_init_both_fire() {
 	setenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_PROBE_EMBEDDED_SERVICE", "1", 1);
 	clear_log();
 
 	std::unique_ptr<ProxySQL_PluginManager> mgr;
@@ -144,9 +145,14 @@ static void test_phase_b_and_init_both_fire() {
 	   "init callback fired (log contains init marker)");
 	ok(contains_in_order(log, "fake_plugin:phase_b", "fake_plugin:init"),
 	   "register_schemas ran strictly before init");
+	ok(log.find("fake_plugin:phase_b_embedded_null") != std::string::npos,
+	   "phase B embedded service getter returns null");
+	ok(log.find("fake_plugin:init_embedded_v1") != std::string::npos,
+	   "init discovers the versioned embedded service");
 
 	(void)proxysql_stop_configured_plugins(mgr, err);
 	unsetenv("PROXYSQL_FAKE_PLUGIN_ENABLE_PHASE_B");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_PROBE_EMBEDDED_SERVICE");
 }
 
 static void test_duplicate_descriptor_names_are_rejected() {
@@ -899,7 +905,7 @@ static void test_debug_abi_mismatch_rejected() {
 }
 
 int main() {
-	plan(98);
+	plan(100);
 
 	ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) <=
 		PROXYSQL_PLUGIN_ABI_VERSION_MAX,

@@ -116,5 +116,16 @@ static_assert(offsetof(ProxySQL_PluginServices, post_server_desired_set) ==
 	offsetof(DiscoveryAbi14, post_server_desired_set), "ABI-14 post_server_desired_set slot moved");
 static_assert(offsetof(ProxySQL_PluginServices, lock_configuration) == sizeof(DiscoveryAbi14),
 	"managed-configuration ABI-15 must follow the complete ABI-14 prefix");
+struct ManagedAbi16 {
+    DiscoveryAbi14 discovery;
+    decltype(ProxySQL_PluginServices::lock_configuration) lock_configuration;
+    decltype(ProxySQL_PluginServices::unlock_configuration) unlock_configuration;
+    decltype(ProxySQL_PluginServices::configdb_locked) configdb_locked;
+    decltype(ProxySQL_PluginServices::prepare_managed_runtime_locked) prepare_managed_runtime_locked;
+    decltype(ProxySQL_PluginServices::activate_managed_runtime_locked) activate_managed_runtime_locked;
+    decltype(ProxySQL_PluginServices::destroy_managed_prepared_runtime) destroy_managed_prepared_runtime;
+};
+static_assert(offsetof(ProxySQL_PluginServices, get_embedded_execution_service) ==
+              sizeof(ManagedAbi16), "ABI-17 must follow the complete ABI-16 prefix");
 } // namespace plugin_services_abi_layout_test
 #endif

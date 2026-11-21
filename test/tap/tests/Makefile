@@ -290,6 +290,22 @@ sh-%:
 # The lifecycle regression includes the real fixture implementation.
 kill_connection2_fixture-t: kill_connection2_fixture-t.cpp kill_connection2-t.cpp
 
+# The embedded acceptance client only needs TAP and the native client library.
+# Reuse the unit TAP objects without the broader integration helper dependencies.
+unit/obj/tap.o unit/obj/tap_noise_stubs.o:
+	$(MAKE) -C unit $(patsubst unit/%,%,$@)
+
+test_embedded_prepared_schema_mysql-t: %: %.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(MARIADB_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) \
+		$(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
+
+# Standalone native DuckDB prepared-statement protocol clients.
+test_duckdb_prepared_mysql-t: %: %.cpp prepared_owned_fixture.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(MARIADB_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
+
+test_duckdb_prepared_pgsql-t: %: %.cpp prepared_owned_fixture.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
+
 # Owns an isolated ProxySQL child for real SIGKILL recovery testing.
 test_duckdb_replica_recovery-t test_duckdb_replica_bench-t test_duckdb_mysql_types-t: %: %.cpp duckdb_replica_test_utils.h $(TAP_LDIR)/libtap$(SHLIB_EXT) $(POSTGRESQL_STATIC_LIBS)
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) \
@@ -685,3 +701,25 @@ parsersql_digest_test-t: parsersql_digest_test
 
 # These tests query the target server capability or active backend mode.
 pgsql-backend_protocol_tier-t pgsql-discard_all_txn_block-t pgsql-local_error_txn_state-t pgsql-unix_socket-t pgsql-backend_death_query_retry-t pgsql-listen_notify_contract-t pgsql-reg_test_6375_offline_retry-t pgsql-extended_query_protocol_test-t pgsql-unsupported_feature_test-t pgsql-idle_ping_dead_conns-t pgsql-stale_connect_deadline-t: pgsql_native_tier.h
+
+test_duckdb_prepared_pgsql_extended-t: test_duckdb_prepared_pgsql_extended-t.cpp pg_lite_client.cpp pg_lite_client.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< pg_lite_client.cpp unit/obj/tap.o unit/obj/tap_noise_stubs.o -I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) -I$(LIBSCRAM_IDIR) -I$(LIBUSUAL_IDIR) -I$(SSL_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) $(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
+
+# Owned analytical mode acceptance through direct and ordinary routed listeners.
+test_duckdb_mysql_analytical-t: test_duckdb_mysql_analytical-t.cpp prepared_owned_fixture.h duckdb_replica_test_utils.h unit/obj/tap.o unit/obj/tap_noise_stubs.o $(POSTGRESQL_STATIC_LIBS) $(MARIADB_LDIR)/libmariadbclient.a $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+	$(CXX) -I$(MARIADB_IDIR) -I$(PROXYSQL_PATH)/test/tap/tap -DPROXYSQL_TEST_BINARY='"$(PROXYSQL_PATH)/src/proxysql"' -DDUCKDB_TEST_PLUGIN='"$(PROXYSQL_PATH)/plugins/duckdb/ProxySQL_DuckDB_Plugin.so"' $< unit/obj/tap.o unit/obj/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(POSTGRESQL_IDIR) $(STDCPP) -O0 -ggdb $(WGCOV) $(WASAN) \
+		$(POSTGRESQL_STATIC_LIBS) $(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a $(MARIADB_LDIR)/libmariadbclient.a $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a -lz -ldl -lpthread -lm $(LWGCOV) -o $@
+
+# Prepared acceptance clients use the same owned child and tier-4 plugin.
+test_duckdb_prepared_mysql-t test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_schema_mysql-t: prepared_owned_fixture.h duckdb_replica_test_utils.h
+
+# CI tier 4 acceptance tests launch their own plugin-enabled ProxySQL.
+ifeq ($(PROXYSQL40),1)
+.PHONY: prepared-duckdb-plugin
+prepared-duckdb-plugin:
+	$(MAKE) -C unit duckdb_plugin_build
+test_duckdb_mysql_analytical-t test_duckdb_prepared_mysql-t test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t test_embedded_prepared_schema_mysql-t: | prepared-duckdb-plugin
+endif
+
+test_duckdb_prepared_pgsql-t test_duckdb_prepared_pgsql_extended-t: $(MARIADB_LDIR)/libmariadbclient.a

@@ -79,9 +79,14 @@ std::string duckdb_replica_map_column(const std::string& name,
                                       const std::string& charset,
                                       const std::string& column_key,
                                       bool nullable,
-                                      DuckDBReplicaMappedColumn& out) {
+                                      DuckDBReplicaMappedColumn& out,
+                                      const std::string& collation) {
 	out = DuckDBReplicaMappedColumn {};
 	out.name = name;
+	out.mysql_data_type = lower_copy(data_type);
+	out.mysql_column_type = column_type;
+	out.charset = charset;
+	out.collation = collation;
 	if (name.empty()) return "snapshot column has an empty name";
 	const std::string type = lower_copy(data_type);
 	const bool uns = is_unsigned(column_type);

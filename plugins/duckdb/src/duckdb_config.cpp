@@ -32,6 +32,7 @@ const bool        kDefaultReadOnly       = false;
 // `duckdb-enable_external_access` in global_variables. See the Security section of
 // plugins/duckdb/README.md.
 const bool        kDefaultEnableExternalAccess = false;
+const char* const kDefaultMysqlDialect   = "native";
 const char* const kDefaultMysqlIfaces    = "0.0.0.0:6031";
 // 6032 is ProxySQL's own Admin interface (admin_variables.mysql_ifaces,
 // etc/proxysql.cnf). Since duckdb_listener.cpp binds with SO_REUSEPORT,
@@ -149,6 +150,7 @@ bool duckdb_parse_ifaces(const std::string& spec,
 DuckDBConfigStore::DuckDBConfigStore() {
 	values_ = {
 		{ "mysql_ifaces",    kDefaultMysqlIfaces },
+		{ "mysql_dialect",   kDefaultMysqlDialect },
 		{ "pgsql_ifaces",    kDefaultPgsqlIfaces },
 		{ "database_path",   kDefaultDatabasePath },
 		{ "memory_limit",    kDefaultMemoryLimit },
@@ -178,6 +180,11 @@ bool DuckDBConfigStore::set(const std::string& name, const std::string& value, s
 		long v = 0;
 		if (!parse_int(value, v) || v < 1 || v > INT_MAX) {
 			err = "invalid value for '" + name + "': expected an integer between 1 and INT_MAX";
+			return false;
+		}
+	} else if (name == "mysql_dialect") {
+		if (value != "native" && value != "mysql_analytical") {
+			err = "invalid value for 'mysql_dialect': expected native or mysql_analytical";
 			return false;
 		}
 	} else if (name == "read_only") {
@@ -269,6 +276,11 @@ bool DuckDBConfigStore::validate(std::string& err) const {
 	}
 
 	return true;
+}
+
+std::string DuckDBConfigStore::mysql_dialect() const {
+	std::lock_guard<std::mutex> lock(mutex_);
+	return get_locked("mysql_dialect");
 }
 
 std::string DuckDBConfigStore::database_path() const {

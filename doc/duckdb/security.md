@@ -104,11 +104,11 @@ The plugin rejects multiple statements in one request, closing a statement
 smuggling path where earlier side effects could be hidden by the final result.
 That is not a substitute for normal SQL-injection defenses.
 
-Use parameterization only with APIs the plugin supports. Because prepared
-statement protocols are not currently supported, do not fall back to unsafe
-string concatenation for untrusted values. Validate and quote data in a trusted
-application layer, or avoid exposing such query construction until an
-appropriate supported interface exists.
+Bind untrusted values as native prepared statement parameters. The DuckDB
+access mode and external-access setting apply to both prepared and ordinary
+SQL. Translated analytical SELECT operations use a private read-only transaction.
+These engine controls do not provide an operating-system sandbox. See the
+[prepared-query restrictions](protocol-compatibility.md#prepared-queries).
 
 ## Operational checklist
 
