@@ -3295,6 +3295,32 @@ __sleep_monitor_connect_loop:
 	return NULL;
 }
 
+#ifdef PROXYSQL31
+/**
+ * @brief Whether the latest ping of hostname:port in 'mysql_server_ping_log' succeeded.
+ * @details A prepared statement with bound parameters; any SQLite failure answers false,
+ *   so the caller leaves the server as it is until the next ping cycle.
+ */
+static bool mysql_latest_ping_succeeded(SQLite3DB *db, const char *hostname, int port) {
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"SELECT 1 FROM (SELECT ping_error FROM mysql_server_ping_log WHERE hostname=?1 AND port=?2"
+		" ORDER BY time_start_us DESC LIMIT 1) a WHERE ping_error IS NULL"
+	);
+	if (rc != SQLITE_OK) {
+		proxy_error("Monitor: cannot prepare the latest ping query, rc=%d\n", rc);
+		return false;
+	}
+	sqlite3_stmt *statement = stmt_unique.get();
+	if ((*proxy_sqlite3_bind_text)(statement, 1, hostname, -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+		return false;
+	}
+	if ((*proxy_sqlite3_bind_int)(statement, 2, port) != SQLITE_OK) {
+		return false;
+	}
+	return (*proxy_sqlite3_step)(statement) == SQLITE_ROW;
+}
+#endif
+
 void * MySQL_Monitor::monitor_ping() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -3471,27 +3497,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				// Bring back a host shunned for errors once its latest ping succeeded. Without
 				// this, a shunned host returns only when a query selects its hostgroup, so a
 				// hostgroup with no traffic keeps it SHUNNED indefinitely after it recovered.
-				if (mysql_thread___monitor_unshun_on_ping_success) {
-					const char *last_ping_query = "SELECT 1 FROM (SELECT ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT 1) a WHERE ping_error IS NULL";
-					char *last_ping_buff = (char *)malloc(strlen(last_ping_query)+strlen(addresses[j])+strlen(ports[j])+1);
-					sprintf(last_ping_buff, last_ping_query, addresses[j], ports[j]);
-					char *last_ping_error = NULL;
-					int last_ping_cols = 0;
-					int last_ping_affected = 0;
-					SQLite3_result *last_ping = NULL;
-					monitordb->execute_statement(last_ping_buff, &last_ping_error, &last_ping_cols, &last_ping_affected, &last_ping);
-					if (last_ping_error) {
-						proxy_error("Error on %s : %s\n", last_ping_buff, last_ping_error);
-						free(last_ping_error);
-					} else if (last_ping && last_ping->rows_count) {
-						if (MyHGM->unshun_on_monitor_success(addresses[j], atoi(ports[j]))) {
-							proxy_info("Monitor: server %s:%s answers pings again; no longer SHUNNED\n", addresses[j], ports[j]);
-						}
-					}
-					if (last_ping) {
-						delete last_ping;
-					}
-					free(last_ping_buff);
+				if (mysql_thread___monitor_unshun_on_ping_success &&
+					mysql_latest_ping_succeeded(monitordb, addresses[j], atoi(ports[j])) &&
+					MyHGM->unshun_on_monitor_success(addresses[j], atoi(ports[j]))) {
+					proxy_info("Monitor: server %s:%s answers pings again; no longer SHUNNED\n", addresses[j], ports[j]);
 				}
 #endif
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
