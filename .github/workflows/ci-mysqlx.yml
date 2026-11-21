@@ -73,6 +73,15 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Mint read-only artifact token
+      # Callers fall back to GITHUB_TOKEN when this step fails or is skipped.
+      id: ci-read-token
+      continue-on-error: true
+      timeout-minutes: 2
+      uses: ./ci-control/.github/actions/ci-read-token
+      with:
+        app-id: ${{ secrets.CI_APP_ID }}
+        private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
     - name: Install infrastructure diagnostic hook
       timeout-minutes: 1
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
@@ -84,6 +93,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
+        CI_READ_TOKEN: ${{ steps.ci-read-token.outputs.token }}
         CHECK_KEY: ${{ matrix.check_key }}
         CHECK_STATUS: in_progress
       run: |
@@ -101,6 +111,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
+        CI_READ_TOKEN: ${{ steps.ci-read-token.outputs.token }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Restore plugin .so files from _runtime_libs
@@ -355,6 +366,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
+        CI_READ_TOKEN: ${{ steps.ci-read-token.outputs.token }}
         CHECK_KEY: ${{ matrix.check_key }}
         CHECK_STATUS: ${{ job.status }}
       run: |
@@ -398,6 +410,15 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Mint read-only artifact token
+      # Callers fall back to GITHUB_TOKEN when this step fails or is skipped.
+      id: ci-read-token
+      continue-on-error: true
+      timeout-minutes: 2
+      uses: ./ci-control/.github/actions/ci-read-token
+      with:
+        app-id: ${{ secrets.CI_APP_ID }}
+        private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
     - name: Install infrastructure diagnostic hook
       timeout-minutes: 1
       uses: ./ci-control/.github/actions/infrastructure-diagnostics
@@ -409,6 +430,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
+        CI_READ_TOKEN: ${{ steps.ci-read-token.outputs.token }}
         CHECK_KEY: ${{ matrix.check_key }}
         CHECK_STATUS: in_progress
       run: |
@@ -432,6 +454,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
+        CI_READ_TOKEN: ${{ steps.ci-read-token.outputs.token }}
       run: |
         python3 ci-control/.github/scripts/ci_tier_runtime.py restore
     - name: Restore plugin .so files from _runtime_libs
@@ -559,6 +582,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
+        CI_READ_TOKEN: ${{ steps.ci-read-token.outputs.token }}
         CHECK_KEY: ${{ matrix.check_key }}
         CHECK_STATUS: ${{ job.status }}
       run: |

@@ -4,6 +4,10 @@ on:
     secrets:
       PROXYSQL_ARTIFACTS_TOKEN:
         required: false
+      CI_APP_ID:
+        required: false
+      CI_APP_PRIVATE_KEY:
+        required: false
     inputs:
       trigger:
         type: string
@@ -77,11 +81,21 @@ jobs:
         path: ci-control
         persist-credentials: false
         sparse-checkout: .github
+    - name: Mint read-only artifact token
+      # Callers fall back to GITHUB_TOKEN when this step fails or is skipped.
+      id: ci-read-token
+      continue-on-error: true
+      timeout-minutes: 2
+      uses: ./ci-control/.github/actions/ci-read-token
+      with:
+        app-id: ${{ secrets.CI_APP_ID }}
+        private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
     - name: Bind this workflow to its producer
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SOURCE_ARTIFACTS_TOKEN: ${{ secrets.PROXYSQL_ARTIFACTS_TOKEN }}
         GITHUB_JSON: ${{ toJson(github) }}
+        CI_READ_TOKEN: ${{ steps.ci-read-token.outputs.token }}
         TRIGGER_JSON: ${{ inputs.trigger }}
         CONSUMER_INSTANCE: ${{ inputs.consumer_id }}
         PRODUCER_RUN_ID: ${{ inputs.producer_run_id }}
@@ -99,7 +113,9 @@ jobs:
       if: ${{ inputs.pick_runner }}
       id: pick
       env:
-        GH_TOKEN: ${{ github.token }}
+        # Only lists runs and jobs: read-only, and the app's own rate limit.
+        GH_TOKEN: ${{ steps.ci-read-token.outputs.token || github.token }}
+        FALLBACK_TOKEN: ${{ github.token }}
         REPO: ${{ github.repository }}
         POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
         ELIGIBLE: ${{ inputs.runner_eligible }}

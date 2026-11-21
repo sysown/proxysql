@@ -22,16 +22,23 @@ POOL_JOB = {"status": "in_progress", "labels": ["self-hosted", "proxysql-ci"]}
 
 @unittest.skipUnless(GH, "runner-selection tests require the GitHub CLI")
 class RunnerSelectionTests(unittest.TestCase):
-    def select(self, jobs, *, runs=None, eligible=True, hosted='ubuntu-22.04', hosted_on_error=False):
+    def select(self, jobs, *, runs=None, eligible=True, hosted='ubuntu-22.04', hosted_on_error=False,
+               read_token='fixture-only'):
         routes = {RUNS: runs if runs is not None else [{"workflow_runs": [{"id": n} for n in jobs]}]}
         routes.update({f"{RUNS}/{n}/jobs": pages for n, pages in jobs.items()})
         unexpected = []
         self.requests = requests = []
+        self.tokens = tokens = []
 
         class Api(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 url = urllib.parse.urlsplit(self.path)
                 requests.append(url.path)
+                token = self.headers.get('Authorization', '').split()[-1]
+                tokens.append(token)
+                if token == 'expired':
+                    self.send_error(401, 'fixture expired token')
+                    return
                 page = int(urllib.parse.parse_qs(url.query).get("page", ["1"])[0])
                 pages = routes.get(url.path, [])
                 if page < 1 or page > len(pages):
@@ -63,6 +70,8 @@ class RunnerSelectionTests(unittest.TestCase):
             wrapper = root / "gh"
             wrapper.write_text(f"#!{sys.executable}\n" +
                                "import os, sys\n" +
+                               # gh sends GH_ENTERPRISE_TOKEN to a non-github.com host.
+                               "os.environ['GH_ENTERPRISE_TOKEN'] = os.environ.get('GH_TOKEN', '')\n" +
                                f"base = 'http://127.0.0.1:{server.server_port}/'\n" +
                                "args = [base + a if a.startswith('repos/') else a for a in sys.argv[1:]]\n" +
                                f"os.execv({GH!r}, [{GH!r}] + args)\n")
@@ -70,7 +79,8 @@ class RunnerSelectionTests(unittest.TestCase):
             step = next(item for item in yaml.safe_load(
                 (ROOT / '.github/workflows/ci-tier-context.yml').read_text()
             )['jobs']['context']['steps'] if item.get('id') == 'pick')
-            bindings = {'github.token': 'fixture-only', 'github.repository': 'example/project',
+            bindings = {'github.token': 'fixture-only',
+                        'steps.ci-read-token.outputs.token || github.token': read_token, 'github.repository': 'example/project',
                         "vars.SELFHOSTED_POOL_SIZE || '6'": '6',
                         'inputs.runner_eligible': str(eligible).lower(),
                         'inputs.hosted_runner': hosted,
@@ -165,6 +175,20 @@ class RunnerSelectionTests(unittest.TestCase):
         _, output = self.select(jobs, runs=[{"workflow_runs": [{"id": n} for n in range(1, 21)]}])
         self.assertEqual(sum(path.endswith('/jobs') for path in self.requests), 20)
         self.assertNotIn("sampled", output)
+
+    def test_failed_read_token_falls_back_to_the_job_token(self):
+        jobs = {n: [{"jobs": [POOL_JOB] if n == 1 else []}] for n in (1, 2)}
+        choice, output = self.select(jobs, runs=[{"workflow_runs": [{"id": 1}, {"id": 2}]}],
+                                     read_token='expired')
+        self.assertEqual(choice, ["self-hosted", "proxysql-ci"])
+        self.assertIn("demand=1/6", output)
+        self.assertEqual(output.count("lookup with the read token failed"), 1)
+        # One rejected listing, then the job token for the retry and both job lists.
+        self.assertEqual(self.tokens, ['expired', 'fixture-only', 'fixture-only', 'fixture-only'])
+
+    def test_read_token_is_used_when_it_works(self):
+        self.select({11: [{"jobs": []}]}, read_token='app')
+        self.assertEqual(self.tokens, ['app', 'app'])
 
     def test_hosted_distribution_is_preserved_for_ineligible_actor(self):
         choice, _ = self.select({}, runs=[], eligible=False, hosted='ubuntu-24.04')
