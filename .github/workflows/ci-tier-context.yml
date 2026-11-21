@@ -82,17 +82,14 @@ jobs:
         persist-credentials: false
         sparse-checkout: .github
     - name: Mint read-only artifact token
-      # The app installation has its own rate limit, apart from the GITHUB_TOKEN
-      # pool every job shares. Reads fall back to GITHUB_TOKEN without it.
+      # Callers fall back to GITHUB_TOKEN when this step fails or is skipped.
       id: ci-read-token
-      if: ${{ github.repository == 'sysown/proxysql' }}
       continue-on-error: true
       timeout-minutes: 2
-      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      uses: ./ci-control/.github/actions/ci-read-token
       with:
         app-id: ${{ secrets.CI_APP_ID }}
         private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
-        permission-actions: read
     - name: Bind this workflow to its producer
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -118,6 +115,7 @@ jobs:
       env:
         # Only lists runs and jobs: read-only, and the app's own rate limit.
         GH_TOKEN: ${{ steps.ci-read-token.outputs.token || github.token }}
+        FALLBACK_TOKEN: ${{ github.token }}
         REPO: ${{ github.repository }}
         POOL_SIZE: ${{ vars.SELFHOSTED_POOL_SIZE || '6' }}
         ELIGIBLE: ${{ inputs.runner_eligible }}

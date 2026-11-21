@@ -218,6 +218,10 @@ class GitHubAPI:
         return github_request(path,method,payload,raw,token=self.token,
             retry_safe=retry_safe,before_retry=before_retry)
 
+    # Set after the first failure: an expired or rate-limited read token is
+    # not retried, so later reads do not wait through its backoff again.
+    read_token_failed=False
+
     def read_token(self):
         """Optional read-only app token for this repository's artifacts.
 
@@ -225,16 +229,20 @@ class GitHubAPI:
         GITHUB_TOKEN pool shared by every job. Explicit tokens take precedence.
         """
         token=os.environ.get('CI_READ_TOKEN')
-        if token and self.token is None and self.repository==os.environ.get('GITHUB_REPOSITORY'):
+        if (token and not GitHubAPI.read_token_failed and self.token is None
+                and self.repository==os.environ.get('GITHUB_REPOSITORY')):
             return token
         return None
+
+    def read_failed(self,reason):
+        GitHubAPI.read_token_failed=True
+        print(f'{reason}; using the job token from now on',file=sys.stderr,flush=True)
 
     def read(self,path,raw=False):
         token=self.read_token()
         if token:
             try:return github_request(path,'GET',None,raw,token=token)
-            except RuntimeError as error:
-                print(f'{error}; retrying with the job token',file=sys.stderr,flush=True)
+            except RuntimeError as error:self.read_failed(str(error))
         return self.request(path,raw=raw)
 
     def download(self,path,destination,size,digest=None,verify=True):
@@ -242,12 +250,13 @@ class GitHubAPI:
         if size<=0:raise ValueError('invalid artifact size')
         if digest and not re.fullmatch(r'sha256:[0-9a-fA-F]{64}',digest):
             raise ValueError('unsupported artifact checksum')
-        read_token=self.read_token()
+        # Only this repository's artifact archives may receive the read token.
+        read_token=self.read_token() if re.fullmatch(
+            rf'repos/{re.escape(self.repository)}/actions/artifacts/\d+/zip',path) else None
         if read_token:
             try:return self._download(path,destination,size,digest,verify,read_token)
             except (OSError,RuntimeError,http.client.HTTPException) as error:
-                print(f'Artifact download with the read token failed ({type(error).__name__}); retrying with the job token',
-                      file=sys.stderr,flush=True)
+                self.read_failed(f'Artifact download with the read token failed ({type(error).__name__})')
         token=self.token or os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
         return self._download(path,destination,size,digest,verify,token)
 

@@ -1,0 +1,27 @@
+name: CI read token
+description: >-
+  Mint a read-only (actions: read) installation token of the sysown1 app. Its
+  rate limit is separate from the GITHUB_TOKEN pool that every job shares.
+  Callers pass it as CI_READ_TOKEN, used only for this repository's artifact
+  reads, which fall back to the job token when the output is empty.
+inputs:
+  app-id:
+    description: sysown1 app id (secrets.CI_APP_ID)
+    required: false
+  private-key:
+    description: sysown1 app private key (secrets.CI_APP_PRIVATE_KEY)
+    required: false
+outputs:
+  token:
+    description: The token, or empty outside sysown/proxysql or without the secrets
+    value: ${{ steps.mint.outputs.token }}
+runs:
+  using: composite
+  steps:
+  - id: mint
+    if: ${{ github.repository == 'sysown/proxysql' && inputs.app-id != '' && inputs.private-key != '' }}
+    uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+    with:
+      app-id: ${{ inputs.app-id }}
+      private-key: ${{ inputs.private-key }}
+      permission-actions: read

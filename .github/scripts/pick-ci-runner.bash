@@ -2,13 +2,27 @@
 # Choose a pool; this observes demand and does not reserve a runner.
 set -uo pipefail
 diagnostic="$(mktemp)"
-trap 'rm -f "$diagnostic"' EXIT
+switched="$(mktemp -u)"
+trap 'rm -f "$diagnostic" "$switched"' EXIT
+exec 3>&1
+# GH_TOKEN can be the read-only app token, which has its own rate limit. After
+# its first failed lookup, use FALLBACK_TOKEN (the job token) for the rest.
+api() {
+  local out
+  if [ ! -e "$switched" ]; then
+    out=$(gh api "$@") && { printf '%s\n' "$out"; return 0; }
+    [ -n "${FALLBACK_TOKEN:-}" ] && [ "$FALLBACK_TOKEN" != "${GH_TOKEN:-}" ] || return 1
+    echo ">>> WARNING: lookup with the read token failed; using the job token" >&3
+    : > "$switched"
+  fi
+  out=$(GH_TOKEN="$FALLBACK_TOKEN" gh api "$@") && printf '%s\n' "$out"
+}
 hosted="${HOSTED_RUNNER:-ubuntu-22.04}"
 printf -v choice '"%s"' "$hosted"
 if [ "${ELIGIBLE:-}" = "true" ]; then
   POOL="${POOL_SIZE:-6}"
   demand=0; err=0
-  ids=$( gh api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>"$diagnostic" ) || err=1
+  ids=$( api --paginate "repos/${REPO}/actions/runs?status=in_progress&per_page=100" --jq '.workflow_runs[].id' 2>"$diagnostic" ) || err=1
   if [ "$err" = "0" ]; then
     # Listing the jobs of every in-progress run cost one API call per run, for
     # every context job: thousands of calls per hour while several pipelines run,
@@ -23,7 +37,7 @@ if [ "${ELIGIBLE:-}" = "true" ]; then
     for (( i = 0; i < total; i += stride )); do
       rid=${runs[$i]}
       [ "$demand" -ge "$POOL" ] && break
-      n=$(gh api --paginate "repos/${REPO}/actions/runs/${rid}/jobs?per_page=100" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null |
+      n=$(api --paginate "repos/${REPO}/actions/runs/${rid}/jobs?per_page=100" --jq '[.jobs[]|select(.status=="in_progress" and (([.labels[]]|index("proxysql-ci")) != null))]|length' 2>/dev/null |
         awk '{total += $1} END {print total+0}') || { echo ">>> WARNING: could not read jobs for run ${rid}; assuming pool is full"; n="${POOL}"; }
       demand=$(( demand + ${n:-0} ))
       scanned=$(( scanned + 1 ))
