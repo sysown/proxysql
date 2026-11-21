@@ -2,6 +2,12 @@ name: CI-AI-GCOV
 
 on:
   workflow_call:
+    secrets:
+      # read-only artifact token, see .github/actions/ci-read-token
+      CI_APP_ID:
+        required: false
+      CI_APP_PRIVATE_KEY:
+        required: false
     inputs:
       trigger:
         type: string

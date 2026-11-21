@@ -29,6 +29,10 @@ permissions:
 jobs:
   tests:
     uses: ./.github/workflows/ci-ai-gcov.yml
+    # Only the app secrets for the read-only artifact token.
+    secrets:
+      CI_APP_ID: ${{ secrets.CI_APP_ID }}
+      CI_APP_PRIVATE_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
     with:
       trigger: ${{ inputs.trigger }}
       tap_group: ai-g1
