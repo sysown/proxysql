@@ -453,8 +453,16 @@ class MatrixReportingTests(unittest.TestCase):
   self.assertEqual(plan['reporting'],{'repository':'sysown/proxysql'})
 
  def test_incomplete_or_foreign_cells_fall_back_to_the_manifest(self):
-  for leg in (self.leg(check_key='other'),self.leg(summary_check_id=0),{k:v for k,v in self.leg().items() if k!='reporting_repository'}):
-   with self.subTest(leg=leg),patch.dict(os.environ,{'CI_LEG':json.dumps(leg)}):
-    self.assertIsNone(runtime.matrix_reporting('k'))
+  manifest={'repository':'sysown/proxysql','checks':[]}
+  gh={'run_id':7,'run_attempt':1,'repository':'sysown/proxysql'}
+  for leg in (self.leg(check_key='other'),self.leg(summary_check_id=0),{k:v for k,v in self.leg().items() if k!='reporting_repository'},'not json'):
+   env={'CHECK_KEY':'k','CHECK_STATUS':'success','GITHUB_JSON':json.dumps(gh),'CI_LEG':leg if isinstance(leg,str) else json.dumps(leg)}
+   with self.subTest(leg=leg),patch.dict(os.environ,env), \
+        patch.object(runtime,'bound_manifest',return_value=manifest) as bound, \
+        patch.object(runtime,'publish_result') as publish,patch.object(runtime,'reporting_api'):
+    os.environ.pop('CI_PLAN',None)
+    runtime.result()
+    bound.assert_called_once_with()
+    self.assertIs(publish.call_args.args[0],manifest)
 
 if __name__=='__main__':unittest.main()
