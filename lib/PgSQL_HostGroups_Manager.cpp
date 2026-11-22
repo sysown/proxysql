@@ -5,6 +5,9 @@ using json = nlohmann::json;
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "ConnectionPoolDecision.h"
+#ifdef PROXYSQL31
+#include "MonitorHealthDecision.h"
+#endif
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -3980,6 +3983,43 @@ bool PgSQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 	return ret;
 }
 
+#ifdef PROXYSQL31
+bool PgSQL_HostGroups_Manager::unshun_on_monitor_success(char *hostname, int port) {
+	const time_t t = time(NULL);
+	bool ret = false;
+	wrlock();
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
+		const unsigned int l=myhgc->mysrvs->cnt();
+		for (unsigned int j=0; j<l; j++) {
+			PgSQL_SrvC *mysrvc=myhgc->mysrvs->idx(j);
+			if (mysrvc->port!=port || strcmp(mysrvc->address,hostname)!=0) {
+				continue;
+			}
+			if (mysrvc->status!=MYSQL_SERVER_STATUS_SHUNNED || mysrvc->shunned_automatic==false) {
+				continue;
+			}
+			if (!can_unshun_server(
+				mysrvc->time_last_detected_error, t,
+				pgsql_thread___shun_recovery_time_sec, pgsql_thread___connect_timeout_server_max,
+				mysrvc->shunned_and_kill_all_connections,
+				mysrvc->ConnectionsUsed->conns_length(), mysrvc->ConnectionsFree->conns_length()
+			)) {
+				continue;
+			}
+			mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+			mysrvc->shunned_automatic=false;
+			mysrvc->shunned_and_kill_all_connections=false;
+			mysrvc->connect_ERR_at_time_last_detected_error=0;
+			mysrvc->time_last_detected_error=0;
+			ret = true;
+		}
+	}
+	wrunlock();
+	return ret;
+}
+
+#endif
 // set_server_current_latency_us
 // this function is called only from MySQL_Monitor::monitor_ping()
 // it set the average latency for a host in the last 3 pings
@@ -4612,11 +4652,15 @@ int PgSQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& ad
 PgSQL_SrvC* PgSQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
 	PgSQL_SrvC* f_server = nullptr;
 
+	// Only a hostgroup whose id matches may be searched: when '_hid' does not
+	// exist yet, 'myhgc' must stay nullptr rather than pointing at whatever
+	// hostgroup the scan visited last.
 	PgSQL_HGC* myhgc = nullptr;
 	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
-		myhgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
+		PgSQL_HGC* hgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
 
-		if (myhgc->hid == _hid) {
+		if (hgc->hid == _hid) {
+			myhgc = hgc;
 			break;
 		}
 	}

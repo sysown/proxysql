@@ -3,6 +3,9 @@ using json = nlohmann::json;
 #define PROXYJSON
 
 #include "MySQL_HostGroups_Manager.h"
+#ifdef PROXYSQL31
+#include "MonitorHealthDecision.h"
+#endif
 #include "ProxySQL_ServerDiscovery.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -3365,12 +3368,22 @@ void MySQL_HostGroups_Manager::group_replication_lag_action_set_server_status(My
 			if (enable == true) {
 				if (mysrvc->get_status() == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG || mysrvc->get_status() == MYSQL_SERVER_STATUS_SHUNNED) {
 					mysrvc->set_status(MYSQL_SERVER_STATUS_ONLINE);
+#ifdef PROXYSQL31
+					// This monitor owns the status it sets: a stale automatic-shun flag (from an
+					// earlier ping shun) must not let a ping or a query undo it.
+					mysrvc->shunned_automatic=false;
+#endif
 					proxy_info("Re-enabling server %u:%s:%d from replication lag\n", myhgc->hid, address, port);
 				}
 			} else {
 				if (mysrvc->get_status()==MYSQL_SERVER_STATUS_ONLINE) {
 					proxy_warning("Shunning 'soft' server %u:%s:%d with replication lag, count number: %d\n", myhgc->hid, address, port, lag_count);
 					mysrvc->set_status(MYSQL_SERVER_STATUS_SHUNNED);
+#ifdef PROXYSQL31
+					// This monitor owns the status it sets: a stale automatic-shun flag (from an
+					// earlier ping shun) must not let a ping or a query undo it.
+					mysrvc->shunned_automatic=false;
+#endif
 				} else {
 					if (mysrvc->get_status()==MYSQL_SERVER_STATUS_SHUNNED) {
 						if (lag_count >= ( mysql_thread___monitor_groupreplication_max_transactions_behind_count * 2 )) {
@@ -4436,6 +4449,44 @@ bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 	return ret;
 }
 
+#ifdef PROXYSQL31
+bool MySQL_HostGroups_Manager::unshun_on_monitor_success(char *hostname, int port) {
+	const time_t t = time(NULL);
+	bool ret = false;
+	wrlock();
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		const unsigned int l=myhgc->mysrvs->cnt();
+		for (unsigned int j=0; j<l; j++) {
+			MySrvC *mysrvc=myhgc->mysrvs->idx(j);
+			if (mysrvc->port!=port || strcmp(mysrvc->address,hostname)!=0) {
+				continue;
+			}
+			if ((MySerStatus)mysrvc->get_status()!=MYSQL_SERVER_STATUS_SHUNNED || mysrvc->shunned_automatic==false) {
+				continue;
+			}
+			if (!can_unshun_server(
+				mysrvc->time_last_detected_error, t,
+				mysql_thread___shun_recovery_time_sec, mysql_thread___connect_timeout_server_max,
+				mysrvc->shunned_and_kill_all_connections,
+				mysrvc->ConnectionsUsed->conns_length(), mysrvc->ConnectionsFree->conns_length()
+			)) {
+				continue;
+			}
+			mysrvc->set_status(MYSQL_SERVER_STATUS_ONLINE);
+			mysrvc->shunned_automatic=false;
+			mysrvc->shunned_and_kill_all_connections=false;
+			mysrvc->connect_ERR_at_time_last_detected_error=0;
+			mysrvc->time_last_detected_error=0;
+			ret = true;
+		}
+	}
+	wrunlock();
+	return ret;
+}
+
+#endif
+
 // set_server_current_latency_us
 // this function is called only from MySQL_Monitor::monitor_ping()
 // it set the average latency for a host in the last 3 pings
@@ -4487,6 +4538,11 @@ void MySQL_HostGroups_Manager::set_Readyset_status(char *hostname, int port, enu
 							proxy_warning("Changing Readyset status for server %s:%d from HG %u from %s to %s\n", hostname, port, myhgc->hid, src_status, dst_status);
 						}
 						mysrvc->set_status(status);
+#ifdef PROXYSQL31
+						// This monitor owns the status it sets: a stale automatic-shun flag (from an
+						// earlier ping shun) must not let a ping or a query undo it.
+						mysrvc->shunned_automatic=false;
+#endif
 					}
 				}
 			}
@@ -8448,11 +8504,15 @@ bool MySQL_HostGroups_Manager::add_aws_rds_bgd_hostgroup_entry(const std::string
 MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
 	MySrvC* f_server = nullptr;
 
+	// Only a hostgroup whose id matches may be searched: when '_hid' does not
+	// exist yet, 'myhgc' must stay nullptr rather than pointing at whatever
+	// hostgroup the scan visited last.
 	MyHGC* myhgc = nullptr;
 	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
-		myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+		MyHGC* hgc = static_cast<MyHGC*>(MyHostGroups->index(i));
 
-		if (myhgc->hid == _hid) {
+		if (hgc->hid == _hid) {
+			myhgc = hgc;
 			break;
 		}
 	}
