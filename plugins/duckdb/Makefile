@@ -46,13 +46,14 @@ OPTZ ?= -O2 -ggdb
 # plugin's static descriptor.
 #
 # Tier cascade (mirrors the top-level Makefile):
-#   PROXYSQL40=1 ⇒ PROXYSQL31=1 ⇒ PROXYSQLFFTO=1 + PROXYSQLTSDB=1
+#   PROXYSQL40=1 ⇒ PROXYSQL31=1 ⇒ PROXYSQLFFTO=1 + PROXYSQLTSDB=1 + PROXYSQLED25519=1
 ifeq ($(PROXYSQL40),1)
 	PROXYSQL31 := 1
 endif
 ifeq ($(PROXYSQL31),1)
 	PROXYSQLFFTO := 1
 	PROXYSQLTSDB := 1
+	PROXYSQLED25519 := 1
 endif
 
 PSQL40 :=
@@ -71,6 +72,14 @@ PSQLTSDB :=
 ifeq ($(PROXYSQLTSDB),1)
 	PSQLTSDB := -DPROXYSQLTSDB
 endif
+# The core defines PROXYSQLED25519 when PROXYSQL31 is set (see the top-level
+# Makefile). mysql_connection.h and MySQL_Protocol.h add members under that
+# macro, so a plugin compiled without it reads core structures such as
+# MySQL_Connection::userinfo at shifted offsets.
+PSQLED25519 :=
+ifeq ($(PROXYSQLED25519),1)
+	PSQLED25519 := -DPROXYSQLED25519
+endif
 
 # -fvisibility=hidden + -fvisibility-inlines-hidden hides every C++ symbol by
 # default; only the explicitly extern "C"-declared
@@ -79,7 +88,7 @@ endif
 # leaking template instantiations across the boundary.
 CXXFLAGS := $(STDCPP) -fPIC -fvisibility=hidden -fvisibility-inlines-hidden \
 	$(OPTZ) $(WGCOV) $(WASAN) -pthread \
-	$(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB)
+	$(PSQLCH) $(PSQL40) $(PSQL31) $(PSQLFFTO) $(PSQLTSDB) $(PSQLED25519)
 
 # Hardening flags. Skip _FORTIFY_SOURCE under ASAN (incompatible) and when
 # OPTZ contains -O0 (requires optimisation to take effect).
@@ -97,7 +106,7 @@ CXXFLAGS += -fstack-protector-strong
 DUCKDB_AR := $(DUCKDB_LDIR)/libduckdb_static.a
 DUCKDB_ARCHIVE_LISTER := $(PROXYSQL_PATH)/deps/duckdb/list-static-archives.sh
 
-SRCS := $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp $(PLUGIN_DIR)/src/duckdb_listener.cpp $(PLUGIN_DIR)/src/duckdb_replica.cpp $(PLUGIN_DIR)/src/duckdb_replica_types.cpp $(PLUGIN_DIR)/src/duckdb_replica_admin.cpp $(PLUGIN_DIR)/src/duckdb_replica_snapshot.cpp $(PLUGIN_DIR)/src/duckdb_replica_values.cpp $(PLUGIN_DIR)/src/duckdb_replica_binlog.cpp
+SRCS := $(PLUGIN_DIR)/src/duckdb_mysql_select_compat.cpp $(PLUGIN_DIR)/src/duckdb_mysql_select_context.cpp $(PLUGIN_DIR)/src/duckdb_mysql_select_metadata.cpp $(PLUGIN_DIR)/src/duckdb_prepared_adapter.cpp $(PLUGIN_DIR)/src/duckdb_prepared_provider.cpp $(PLUGIN_DIR)/src/duckdb_mysql_set.cpp $(PLUGIN_DIR)/src/duckdb_plugin.cpp $(PLUGIN_DIR)/src/duckdb_config.cpp $(PLUGIN_DIR)/src/duckdb_engine.cpp $(PLUGIN_DIR)/src/duckdb_result.cpp $(PLUGIN_DIR)/src/duckdb_admin_schema.cpp $(PLUGIN_DIR)/src/duckdb_session.cpp $(PLUGIN_DIR)/src/duckdb_listener.cpp $(PLUGIN_DIR)/src/duckdb_replica.cpp $(PLUGIN_DIR)/src/duckdb_replica_types.cpp $(PLUGIN_DIR)/src/duckdb_replica_admin.cpp $(PLUGIN_DIR)/src/duckdb_replica_snapshot.cpp $(PLUGIN_DIR)/src/duckdb_replica_values.cpp $(PLUGIN_DIR)/src/duckdb_replica_binlog.cpp
 HEADERS := $(wildcard $(PLUGIN_DIR)/include/*.h) $(PROXYSQL_PATH)/include/ProxySQL_Plugin.h
 OBJS := $(patsubst $(PLUGIN_DIR)/src/%.cpp,$(ODIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
@@ -149,6 +158,9 @@ $(BUILDFLAGS_STAMP): FORCE | $(ODIR)
 	@if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$(CXXFLAGS)" ]; then \
 		echo "$(CXXFLAGS)" > $@; \
 	fi
+
+# Recompile ParserSQL consumers when its headers and archive are rebuilt.
+$(addprefix $(ODIR)/,duckdb_mysql_set.o duckdb_mysql_select_compat.o): $(PARSERSQL_LDIR)/libsqlparser.a
 
 $(ODIR)/%.o: $(PLUGIN_DIR)/src/%.cpp $(HEADERS) $(DUCKDB_AR) $(BUILDFLAGS_STAMP) | $(ODIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(DEPFLAGS) $(IDIRS)

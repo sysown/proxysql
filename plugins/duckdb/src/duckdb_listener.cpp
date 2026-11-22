@@ -3,6 +3,12 @@
 #include "duckdb_config.h"
 #include "duckdb_engine.h"
 #include "duckdb_session.h"
+#include "duckdb_prepared_provider.h"
+#include "MySQL_Variables.h"
+#include "PgSQL_Variables.h"
+#include "proxysql_find_charset.h"
+#include <strings.h>
+#include <exception>
 
 #include "proxysql.h"
 #include "proxysql_utils.h"
@@ -22,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <functional>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -175,7 +182,7 @@ DuckDBListener::~DuckDBListener() {
 	pthread_mutex_destroy(&mutex_);
 }
 
-bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::string& err) {
+bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::string& err, const ProxySQL_Embedded_ServiceV1* service) {
 	if (running_.load()) {
 		err = "listener already running";
 		return false;
@@ -215,6 +222,8 @@ bool DuckDBListener::start(DuckDBConfigStore& cfg, DuckDBEngine& engine, std::st
 
 	listeners_ = std::move(bound);
 	engine_ = &engine;
+	mysql_analytical_ = cfg.mysql_dialect() == "mysql_analytical";
+	prepared_service_ = service;
 	shutdown_.store(false);
 	running_.store(true);
 	accept_thread_ = std::thread(&DuckDBListener::accept_loop, this);
@@ -441,24 +450,31 @@ void DuckDBListener::run_session(int client_fd) {
 	if (!engine_->connect(&st.conn, cerr)) { close(client_fd); return; }
 	st.engine = engine_;
 	st.pgsql_txn_status = 'I';
+	st.mysql_analytical = std::is_same_v<Thr, MySQL_Thread> && mysql_analytical_;
 	st.database_name = engine_->database_path();
 	if (st.database_name.empty() || st.database_name == ":memory:") {
 		st.database_name = "memory";
 	}
+	// Each connection starts with no selected database. The registered
+	// selector applies an explicit handshake database before the first query.
+	st.mysql_database.clear();
+	st.mysql_namespace_source.clear();
+	st.mysql_namespace_ready = false;
+	st.mysql_schema_applied = false;
 
 	Thr* thr = new Thr();
 	thr->curtime = monotonic_time();
 	// Required per-thread Query_Processor init. MySQL_Thread::init() /
 	// PgSQL_Thread::init() -- the canonical thread-startup path used by
 	// every other core accept loop, including src/SQLite3_Server.cpp's own
-	// child_mysql() for the same PROXYSQL_SESSION_SQLITE session type --
+	// child_mysql() for PROXYSQL_SESSION_SQLITE --
 	// always call GloMyQPro->init_thread() / GloPgQPro->init_thread()
 	// before refresh_variables(). This constructs `Thr` directly via
 	// `new Thr()` rather than through init(), so without this call the
 	// thread-local Query_Processor rule table (_thr_SQP_rules, a `__thread`
 	// pointer -- lib/Query_Processor.cpp) is left null for the life of the
 	// thread. MySQL_Session::handler()'s query-processing path is not
-	// skipped for PROXYSQL_SESSION_SQLITE (only the eventual backend-routing
+	// skipped for PROXYSQL_SESSION_DUCKDB (only the eventual backend-routing
 	// decision is, via the plugin's handler_function); left uninitialized,
 	// every query on this connection hung indefinitely with its
 	// connection thread spinning at ~100% CPU instead of returning a
@@ -484,17 +500,141 @@ void DuckDBListener::run_session(int client_fd) {
 	} else {
 		GloPgQPro->init_thread();
 	}
-	// Left null on purpose: core casts gen_args to SQLite3_Session* for
-	// PROXYSQL_SESSION_SQLITE and null-checks first. Anything else here
-	// would be type confusion.
 	thr->gen_args = nullptr;
 	thr->refresh_variables();
 
 	auto* sess = thr->template create_new_session_and_client_data_stream<Thr, Sess>(client_fd);
 	sess->thread = thr;
-	sess->session_type = PROXYSQL_SESSION_SQLITE;
+	sess->session_type = PROXYSQL_SESSION_DUCKDB;
 	sess->handler_function = duckdb_session_handler<typename std::remove_pointer<Sess>::type>;
 
+	// Registration is session-scoped and its callbacks borrow this provider.
+	std::unique_ptr<DuckDBPreparedProvider> provider;
+	bool prepared_registered = false;
+	struct PreparedStatus { Sess session; } prepared_status { sess };
+	auto pg_status = [](void*) noexcept -> uint8_t {
+		return static_cast<uint8_t>(duckdb_pgsql_transaction_status(duckdb_session_state().conn));
+	};
+	auto mysql_status = [](void* opaque) noexcept -> uint16_t {
+		if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+			auto* session = static_cast<PreparedStatus*>(opaque)->session;
+			return (session->autocommit ? SERVER_STATUS_AUTOCOMMIT : 0) |
+				(duckdb_pgsql_transaction_status(duckdb_session_state().conn) != 'I' ? SERVER_STATUS_IN_TRANS : 0);
+		} else return 0;
+	};
+	auto idle = [](void* opaque) noexcept -> uint8_t {
+		auto* session = static_cast<PreparedStatus*>(opaque)->session;
+		if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+			const char* value = mysql_variables.client_get_value(session, SQL_CHARACTER_SET_CLIENT);
+			if (!value || !*value) return 'E';
+			char* end = nullptr; unsigned long id = strtoul(value, &end, 10);
+			const auto* cs = end && !*end && id <= UINT32_MAX ? proxysql_find_charset_nr(id) : nullptr;
+			if (!cs || !cs->csname || (strcasecmp(cs->csname, "utf8") && strcasecmp(cs->csname, "utf8mb3") && strcasecmp(cs->csname, "utf8mb4"))) return 'E';
+		} else {
+			const char* value = pgsql_variables.client_get_value(session, PGSQL_CLIENT_ENCODING);
+			if (value && *value && strcasecmp(value, "UTF8") && strcasecmp(value, "UTF-8")) return 'E';
+		}
+		if (duckdb_pgsql_transaction_status(duckdb_session_state().conn) != 'I') return 'T';
+		if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+			if (!session->autocommit) return 'T';
+		}
+		return 'I';
+	};
+	if (prepared_service_) {
+		try {
+			auto failure = [](void* opaque) noexcept {
+				static_cast<PreparedStatus*>(opaque)->session->healthy = false;
+			};
+			constexpr auto dialect = std::is_same_v<Thr, MySQL_Thread>
+				? embedded::DuckDBSourceDialect::mysql : embedded::DuckDBSourceDialect::postgresql;
+			auto reset_client = [](void*, duckdb_connection* out) noexcept -> bool {
+				auto& state = duckdb_session_state();
+				if (!out || !state.engine) return false;
+				*out = nullptr;
+				state.engine->disconnect(&state.conn);
+				try {
+					std::string error;
+					if (!state.engine->connect(&state.conn, error)) return false;
+				} catch (...) { return false; }
+				state.pgsql_txn_status = 'I';
+				state.pgsql_extended_error = false;
+				// The replacement connection starts on DuckDB's default schema.
+				// MySQL keeps the current database across COM_RESET_CONNECTION,
+				// so the next namespace sync must re-select it; a vanished
+				// schema keeps the name but leaves the native schema unset, and
+				// the resolver then refuses instead of using another schema.
+				state.mysql_schema_applied = false;
+				*out = state.conn;
+				return true;
+			};
+			provider = std::make_unique<DuckDBPreparedProvider>(st.conn, idle, failure, reset_client, &prepared_status, dialect);
+			provider->set_mysql_analytical(st.mysql_analytical);
+			provider->set_config_policy(duckdb_client_config_before_prepare, duckdb_client_config_after_prepare);
+			provider->set_transaction_outcome(duckdb_prepared_transaction_outcome);
+			if constexpr (std::is_same_v<Thr, MySQL_Thread>) {
+				if (st.mysql_analytical) {
+					// Prepared statements need the session's current database
+					// at prepare time and must keep it at execute time. The
+					// callback also handles namespace recovery after a reset.
+					provider->set_mysql_namespace([sess]() -> std::string {
+						auto& state = duckdb_session_state();
+						const char* schemaname = nullptr;
+						if (sess->client_myds && sess->client_myds->myconn &&
+						    sess->client_myds->myconn->userinfo)
+							schemaname = sess->client_myds->myconn->userinfo->schemaname;
+						std::string error;
+						if (!duckdb_mysql_namespace_sync(state, state.conn, schemaname,
+						                                 sess->default_schema, error))
+							return std::string();
+						return state.mysql_database;
+					});
+				}
+			}
+			ProxySQL_Embedded_RequestV1 request{};
+			request.abi_version = ProxySQL_Embedded_ABI_V1; request.struct_size = sizeof(request);
+			request.engine = provider->engine(); request.policy = provider->policy();
+			request.flags = st.mysql_analytical ? ProxySQL_Embedded_REQUEST_READ_ONLY : 0;
+			request.mysql_status = mysql_status; request.status_context = &prepared_status;
+			request.pgsql_status = pg_status; request.pgsql_status_context = &prepared_status;
+			if (st.mysql_analytical) {
+				request.mysql_select_database = [](void*, ProxySQL_Embedded_BytesView name)
+				    noexcept -> uint16_t {
+					if (!name.data || !name.size || name.size > 64 ||
+					    std::memchr(name.data, 0, name.size))
+						return 1049;
+					try {
+						auto& state = duckdb_session_state();
+						DuckDBMySQLUseStatement use;
+						use.kind = DuckDBMySQLUseStatement::Kind::database;
+						use.database.assign(reinterpret_cast<const char*>(name.data),
+						                    name.size);
+						const auto result = duckdb_mysql_apply_use(state, state.conn, use);
+						return result.ok ? 0 : result.code;
+					} catch (...) {
+						return 1105;
+					}
+				};
+			}
+			ProxySQL_Embedded_Error error{};
+			int rc;
+			if constexpr (std::is_same_v<Thr, MySQL_Thread>) rc = prepared_service_->register_mysql(sess, &request, &error);
+			else { request.flags |= ProxySQL_Embedded_REQUEST_PG_IMPLICIT_CYCLES; rc = prepared_service_->register_pgsql(sess, &request, &error); }
+			prepared_registered = rc == ProxySQL_Embedded_SUCCESS;
+		} catch (...) { prepared_registered = false; }
+		if (!prepared_registered) {
+			proxy_error("DuckDB prepared service registration failed\n");
+			thr->gen_args = nullptr; delete thr; provider.reset(); engine_->disconnect(&st.conn); st.engine = nullptr; return;
+		}
+	}
+	auto unregister_prepared = [&]() {
+		if (!prepared_registered) return;
+		ProxySQL_Embedded_Error error{};
+		int rc;
+		if constexpr (std::is_same_v<Thr, MySQL_Thread>) rc = prepared_service_->unregister_mysql(sess, &error);
+		else rc = prepared_service_->unregister_pgsql(sess, &error);
+		if (rc != ProxySQL_Embedded_SUCCESS) std::terminate();
+		prepared_registered = false;
+	};
 	auto* myds = sess->client_myds;
 	fill_client_addr(myds, client_fd);
 
@@ -503,10 +643,12 @@ void DuckDBListener::run_session(int client_fd) {
 		// waiting on the client for anything.
 		if (myds->myprot.generate_pkt_initial_handshake(true, NULL, NULL,
 				&sess->thread_session_id, true) == false) {
-			engine_->disconnect(&st.conn);
-			st.engine = nullptr;
+			unregister_prepared();
 			thr->gen_args = nullptr;
 			delete thr;
+			provider.reset();
+			engine_->disconnect(&st.conn);
+			st.engine = nullptr;
 			return;
 		}
 	} else {
@@ -565,7 +707,7 @@ void DuckDBListener::run_session(int client_fd) {
 			if (myds->net_failure) break;
 		}
 		sess->to_process = 1;
-		if (sess->handler() == -1) break;
+		if (sess->handler() == -1 || !sess->healthy) break;
 		if (sess->status == CONNECTING_CLIENT && connect_timeout_ms > 0 &&
 			thr->curtime - handshake_start > connect_timeout_ms * 1000ULL) {
 			proxy_warning("Closing not established DuckDB client connection %s:%d after %llums\n",
@@ -575,8 +717,10 @@ void DuckDBListener::run_session(int client_fd) {
 		}
 	}
 
-	engine_->disconnect(&st.conn);
-	st.engine = nullptr;
+	unregister_prepared();
 	thr->gen_args = nullptr;
 	delete thr;
+	provider.reset();
+	engine_->disconnect(&st.conn);
+	st.engine = nullptr;
 }

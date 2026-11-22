@@ -136,6 +136,9 @@ class StmtLongDataHandler {
 	bool has_data(uint32_t stmt_id) const;
 #endif
 	bool add(uint32_t _stmt_id, uint16_t _param_id, void *_data, unsigned long _size);
+	// Reports allocation/overflow failure without altering an existing value.
+	// add() retains its historical created=false/appended=true result.
+	bool add_checked(uint32_t stmt_id, uint16_t param_id, const void *data, unsigned long size, bool *appended=nullptr);
 	void *get(uint32_t _stmt_id, uint16_t _param_id, unsigned long **_size, my_bool **_is_null);
 };
 

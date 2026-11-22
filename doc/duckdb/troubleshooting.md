@@ -92,11 +92,17 @@ objects, permissions, and unsupported wire behavior.
 
 ## Prepared statement or parameterized query fails
 
-Client-visible prepared statements are not supported. PostgreSQL extended
-query messages receive SQLSTATE `0A000` and resynchronize at `Sync`.
-
-Configure the driver for simple-query mode or use its non-prepared text-query
-API. Do not solve this by concatenating untrusted values into SQL.
+Check that the connection uses UTF-8 (MySQL handshake or a separate
+`SET NAMES utf8mb4`; PostgreSQL UTF8), is in autocommit with no explicit client
+transaction, and uses a supported native read-only SELECT. DuckDB must resolve
+output metadata at prepare time: an untyped selected parameter expression can
+fail even when a typed table column with a bound predicate works. PostgreSQL can
+use an explicit `CAST($1 AS BIGINT)` and parameter OID. Parser and type limits
+are listed in [protocol compatibility](protocol-compatibility.md#prepared-queries).
+On the MySQL listener, `SET autocommit=0` is refused because implicit transactions are not implemented;
+use explicit text `BEGIN`/`COMMIT`/`ROLLBACK` for text work and finish the
+transaction before prepared execution. Do not concatenate untrusted values
+into SQL as a workaround.
 
 ## Multiple SQL statements are rejected
 

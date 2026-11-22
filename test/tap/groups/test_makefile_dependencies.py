@@ -2,6 +2,7 @@
 """Regression contracts for TAP Makefile dependency boundaries."""
 
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -295,6 +296,139 @@ class MakefileDependencyTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertNotIn(f"TASK4_PROBE={probe}", result.stdout)
                 self.assertIn("startup_tls_ownership_unit-t.cpp", result.stdout)
+
+    def test_duckdb_legacy_units_link_their_own_sources_and_support(self):
+        """Direct listener and session builds must carry their implementation dependencies."""
+        mysql_set = "duckdb_mysql_set.cpp"
+        provider = (
+            "duckdb_prepared_adapter.cpp",
+            "duckdb_prepared_provider.cpp",
+        )
+        targets = {
+            "duckdb_listener_unit-t": ("duckdb_listener.cpp", "duckdb_session.cpp", mysql_set, *provider),
+            "duckdb_admin_schema_unit-t": ("duckdb_listener.cpp", "duckdb_session.cpp", mysql_set, *provider),
+            "duckdb_session_unit-t": ("duckdb_session.cpp", mysql_set),
+        }
+        for target, support_sources in targets.items():
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                (Path(tmp) / "libsqlparser.a").touch()
+                result = subprocess.run(
+                    [
+                        "make", "--no-print-directory", "-B", "-n", "-p",
+                        "-C", str(TAP_TESTS_DIR / "unit"), "MAKE=true",
+                        "PROXYSQL40=1", "CXX=duckdb-test-cxx", f"PARSERSQL_LDIR={tmp}", target,
+                    ],
+                    cwd=ROOT, text=True, capture_output=True, check=False, timeout=30,
+                )
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 0, output)
+                lines = result.stdout.replace("\\\n", " ").splitlines()
+                compile_line = self.required_output_line(
+                    lines, lambda line: line.startswith("duckdb-test-cxx ") and f"-o {target}" in line,
+                    f"compile command for {target}", output,
+                )
+                command = shlex.split(compile_line)
+                self.assertEqual(command[1], f"{target}.cpp", compile_line)
+                dependency_line = self.required_output_line(
+                    lines, lambda line: line.startswith(f"{target}: {target}.cpp "),
+                    f"prerequisites for {target}", output,
+                )
+                prerequisites = shlex.split(dependency_line.split(":", 1)[1])
+                for source in support_sources:
+                    with self.subTest(source=source):
+                        self.assertEqual(sum(Path(arg).name == source for arg in command), 1, compile_line)
+                        self.assertEqual(sum(Path(arg).name == source for arg in prerequisites), 1, dependency_line)
+
+    def test_parsersql_archive_rebuilds_its_direct_consumers(self):
+        """ParserSQL ABI changes must invalidate each object which includes its headers."""
+        cases = (
+            (ROOT / "lib", ".oo", (
+                "Query_Processor_ParserSQL",)),
+            (ROOT / "plugins/duckdb", ".o", (
+                "duckdb_mysql_set", "duckdb_mysql_select_compat")),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch = Path(tmp)
+            archive = scratch / "libsqlparser.a"
+            archive.touch()
+            duckdb_archive = scratch / "libduckdb_static.a"
+            duckdb_archive.touch()
+            stamp = scratch / "buildflags"
+            stamp.touch()
+            object_dir = scratch / "obj"
+            object_dir.mkdir()
+            plugin = scratch / "plugin"
+            (plugin / "src").mkdir(parents=True)
+            for name in cases[1][2]:
+                (plugin / "src" / f"{name}.cpp").touch()
+            for directory, suffix, names in cases:
+                with self.subTest(directory=directory):
+                    objects = [object_dir / f"{name}{suffix}" for name in names]
+                    for obj in objects:
+                        obj.touch()
+                    command = [
+                        "make", "--no-print-directory", "-n", "-C", str(directory),
+                        "MAKE=true", "CXX=parser-test-cxx", f"ODIR={object_dir}",
+                        f"PARSERSQL_LDIR={scratch}", "HEADERS=", f"BUILD_FLAGS_STAMP={stamp}",
+                        f"BUILDFLAGS_STAMP={stamp}", f"DUCKDB_AR={duckdb_archive}",
+                        f"PLUGIN_DIR={plugin}", "-o", str(stamp), "-o", str(duckdb_archive),
+                        "-W", str(archive), *(str(obj) for obj in objects),
+                    ]
+                    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True,
+                                            check=False, timeout=30)
+                    output = result.stdout + result.stderr
+                    self.assertEqual(result.returncode, 0, output)
+                    for obj in objects:
+                        line = self.required_output_line(
+                            result.stdout.splitlines(),
+                            lambda item: item.startswith("parser-test-cxx ") and
+                            f"-o {obj} " in item,
+                            f"recompile for {obj.name}", output,
+                        )
+                        self.assertIn(f"{obj.stem}.cpp", line, line)
+
+
+    def test_custom_prepared_clients_propagate_instrumentation_flags(self):
+        targets = (
+            "test_duckdb_mysql_analytical-t",
+            "test_embedded_prepared_schema_mysql-t",
+            "test_duckdb_prepared_mysql-t",
+            "test_duckdb_prepared_pgsql-t",
+            "test_duckdb_prepared_pgsql_extended-t",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            probe_makefile = Path(tmp) / "prerequisites.mk"
+            probe_makefile.write_text(
+                "$(POSTGRESQL_STATIC_LIBS) $(MARIADB_LDIR)/libmariadbclient.a "
+                "$(LIBSCRAM_LDIR)/libscram.a $(LIBUSUAL_LDIR)/libusual.a "
+                "$(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a:\n\t@:\n"
+            )
+            for target in targets:
+                with self.subTest(target=target):
+                    result = subprocess.run(
+                        [
+                            "make", "--no-print-directory", "-B", "-n",
+                            "-C", str(TAP_TESTS_DIR), "-f", "Makefile",
+                            "-f", str(probe_makefile), "MAKE=true",
+                            "CXX=instrument-test-cxx",
+                            "WGCOV=-fprofile-arcs -ftest-coverage",
+                            "LWGCOV=--coverage", "WASAN=-fsanitize=address", target,
+                        ],
+                        cwd=ROOT, text=True, capture_output=True, check=False, timeout=30,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(result.returncode, 0, output)
+                    lines = result.stdout.replace("\\\n", " ").splitlines()
+                    line = self.required_output_line(
+                        lines,
+                        lambda item: item.startswith("instrument-test-cxx ") and
+                        f"-o {target}" in item,
+                        f"compile and link command for {target}", output,
+                    )
+                    command = shlex.split(line)
+                    self.assertIn(f"{target}.cpp", command, line)
+                    for flag in ("-fprofile-arcs", "-ftest-coverage", "--coverage", "-fsanitize=address"):
+                        self.assertIn(flag, command, line)
 
     def test_mysqlx_bridge_targets_share_one_unit_submake(self):
         result = subprocess.run(

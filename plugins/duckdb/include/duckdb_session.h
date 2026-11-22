@@ -44,6 +44,11 @@ DuckDBIntercept duckdb_classify_query(const char* sql, size_t len);
 SQLite3_result* duckdb_build_intercept_result(DuckDBIntercept kind,
                                               const char* database_name = nullptr);
 
+// Analytical MySQL `SELECT DATABASE()`: SQL NULL until a schema is selected,
+// otherwise the selected database name. MySQL returns a NULL, not an empty
+// string, when the connection has no current database.
+SQLite3_result* duckdb_build_mysql_database_result(const std::string& database);
+
 // One DuckDB connection per connection thread. The listener creates the
 // connection after accept and destroys it before the thread exits, so
 // thread_local storage is exactly session-scoped here.
@@ -51,10 +56,76 @@ struct DuckDBSessionState {
 	duckdb_connection conn { nullptr };
 	DuckDBEngine* engine { nullptr };
 	bool pgsql_extended_error { false };
+	bool mysql_analytical { false };
 	char pgsql_txn_status { 'I' };
 	std::string database_name { "memory" };
+	// Analytical MySQL namespace. `mysql_database` is the validated native
+	// schema the session is bound to (empty when no database is selected);
+	// `mysql_namespace_source` is the raw core-owned spelling it was derived
+	// from, used to notice a COM_CHANGE_USER. `mysql_schema_applied` records
+	// whether the live DuckDB connection carries that schema, which a
+	// COM_RESET_CONNECTION replacement connection does not.
+	std::string mysql_database;
+	std::string mysql_namespace_source;
+	bool mysql_namespace_ready { false };
+	bool mysql_schema_applied { false };
 };
 DuckDBSessionState& duckdb_session_state();
+bool duckdb_client_config_before_prepare(const std::string&, std::string&, bool&, std::string&);
+bool duckdb_client_config_after_prepare(const std::string&, duckdb_statement_type, bool, std::string&);
+void duckdb_prepared_transaction_outcome(const std::string&, bool);
+
+// Result of parsing exactly one MySQL USE statement from the client's COM_QUERY.
+struct DuckDBMySQLUseStatement {
+	enum class Kind {
+		none,       // not a USE statement
+		database,   // a syntactically valid USE <identifier>
+		empty,      // USE ``, which MySQL answers with ER_NO_DB_ERROR
+		too_long,   // identifier over 64 bytes, MySQL ER_TOO_LONG_IDENT
+		invalid     // anything else MySQL rejects as a syntax error
+	};
+	Kind kind { Kind::none };
+	std::string database;
+};
+DuckDBMySQLUseStatement duckdb_parse_mysql_use(const std::string& sql);
+
+// Outcome of applying one parsed USE statement. The caller sends `code`,
+// `sqlstate` and `message` to the client; `ok` means the namespace switched.
+struct DuckDBMySQLUseResult {
+	bool ok { false };
+	uint16_t code { 0 };
+	const char* sqlstate { "42000" };
+	std::string message;
+};
+// Validates and selects the parsed database in `state` and on the native
+// connection. `state` is left unchanged on failure. Error numbers/SQLSTATEs
+// below follow the MySQL 8.0.46 oracle (see mysql-query-compatibility.md).
+DuckDBMySQLUseResult duckdb_mysql_apply_use(DuckDBSessionState& state, duckdb_connection conn,
+                                            const DuckDBMySQLUseStatement& use);
+
+// The database a freshly authenticated MySQL session starts in. Core stores
+// mysql-default_schema in userinfo->schemaname when the handshake carried no
+// database, so an exact match with `default_schema` means "none selected".
+// Returns an empty string for no database.
+std::string duckdb_mysql_handshake_database(const char* schemaname, const char* default_schema);
+
+// True when a schema with exactly this spelling exists in the current DuckDB
+// catalog. DuckDB folds identifier case, so this exact lookup is what keeps a
+// differently-cased name from being redirected to another database.
+bool duckdb_mysql_database_exists(duckdb_connection conn, const std::string& database);
+
+// Validates and selects `database` as the connection's native schema.
+// `reason` is a stable token: "reserved_database", "unknown_database"
+// (includes over-long names) or "engine_error". Never changes catalogs.
+bool duckdb_mysql_use_database(duckdb_connection conn, const std::string& database,
+                               std::string& reason);
+
+// Re-reads the core-owned schema spelling into `state` and keeps the native
+// connection on the validated schema. Returns false only when the native
+// connection cannot be switched for an engine reason.
+bool duckdb_mysql_namespace_sync(DuckDBSessionState& state, duckdb_connection conn,
+                                 const char* schemaname, const char* default_schema,
+                                 std::string& error);
 
 enum class DuckDBPgsqlAction {
 	process,
@@ -112,6 +183,17 @@ struct DuckDBExecOutcome {
 // selected prepared statement exactly once.
 DuckDBExecOutcome duckdb_execute_effective(duckdb_connection conn, const std::string& effective,
                                          DuckDBResultProtocol protocol = DuckDBResultProtocol::mysql);
+
+enum class DuckDBAnalyticalDecision { supported, unsupported, invalid };
+struct DuckDBAnalyticalOutcome {
+	DuckDBExecOutcome outcome;
+	DuckDBAnalyticalDecision decision { DuckDBAnalyticalDecision::unsupported };
+	bool healthy { true };
+};
+// Runs only admitted MySQL SELECTs within a private read-only transaction.
+// Callers retain ownership of any client transaction and of outcome.result.
+DuckDBAnalyticalOutcome duckdb_execute_mysql_analytical(duckdb_connection conn,
+    const std::string& sql, bool client_transaction);
 
 // Rejects client SET statements for Admin-managed engine-global settings.
 // Returns false with an error for a rejected statement; unhandled session SET

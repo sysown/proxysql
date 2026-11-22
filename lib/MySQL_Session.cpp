@@ -1,3 +1,4 @@
+#include "Embedded_Plugin_Service.h"
 #include "../deps/json/json.hpp"
 #include <atomic>
 using json = nlohmann::json;
@@ -18,6 +19,7 @@ using json = nlohmann::json;
 #include "MySQL_Query_Processor.h"
 #include "Query_Processor_ParserSQL.h"
 #include "MySQL_PreparedStatement.h"
+#include "Embedded_MySQL_Prepared.h"
 // GenAI_Thread.h, AI_Features_Manager.h, LLM_Bridge.h moved to
 // plugins/genai/include/ in Step 5.  Step 4.A removed all session-side
 // GENAI:/LLM: prefix dispatch, so MySQL_Session no longer references
@@ -1207,6 +1209,16 @@ MySQL_Session::MySQL_Session() {
  * @brief Resets the MySQL session to its initial state.
  */
 void MySQL_Session::reset() {
+	const bool was_healthy = healthy;
+	// Registered embedded endpoints own native statements outside proxy metadata.
+	if (session_type == PROXYSQL_SESSION_DUCKDB) {
+		if (auto error = embedded::reset_mysql_prepared(*this)) {
+			proxy_error("Embedded prepared reset failed: %s\n", error->message.c_str());
+			healthy = false;
+			return;
+		}
+	}
+	if (was_healthy && !healthy) return;
 #ifndef PROXYSQL31
 	pending_user_variable_set.reset();
 #endif
@@ -1283,7 +1295,7 @@ void MySQL_Session::reset() {
 	//gtid_trxid = 0;
 	gtid_hid = -1;
 	memset(gtid_buf,0,sizeof(gtid_buf));
-	if (session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_SQLITE && thread) {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)thread->gen_args;
 		if (sqlite_sess && sqlite_sess->sessdb) {
 			sqlite3 *db = sqlite_sess->sessdb->get_db();
@@ -1303,6 +1315,10 @@ void MySQL_Session::reset() {
  * @brief Destructor for the MySQL session.
  */
 MySQL_Session::~MySQL_Session() {
+	if (session_type == PROXYSQL_SESSION_DUCKDB) {
+		embedded::teardown_plugin_mysql(*this);
+		embedded::destroy_mysql_prepared(*this);
+	}
 #ifdef PROXYSQL31
 	if (thread) {
 		thread->cancel_session_continuation(this);
@@ -5306,6 +5322,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			handler_function(this, (void *)GloSQLite3Server, &pkt);
 			l_free(pkt.size,pkt.ptr);
 			break;
+		case PROXYSQL_SESSION_DUCKDB:
+			handler_function(this, nullptr, &pkt);
+			l_free(pkt.size,pkt.ptr);
+			break;
 #ifdef PROXYSQLCLICKHOUSE
 		case PROXYSQL_SESSION_CLICKHOUSE:
 			handler_function(this, (void *)GloClickHouseServer, &pkt);
@@ -5404,6 +5424,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PAC
 // here we only process the not so common ones
 // we return false if the enum_mysql_command is not found
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass) {
+	if (session_type == PROXYSQL_SESSION_DUCKDB && embedded::handle_mysql_prepared(*this, *pkt)) return true;
 	unsigned char c;
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	switch ((enum_mysql_command)c) {
@@ -5704,6 +5725,7 @@ int MySQL_Session::GPFC_WaitingClientData_FastForwardSession(PtrSize_t& pkt) {
 
 
 void MySQL_Session::GPFC_PreparedStatements(PtrSize_t& pkt, unsigned char c) {
+	if (session_type == PROXYSQL_SESSION_DUCKDB && embedded::handle_mysql_prepared(*this, pkt)) return;
 	switch ((enum_mysql_command)c) {
 		case _MYSQL_COM_STMT_PREPARE:
 			if (GloMyLdapAuth) {
@@ -8041,6 +8063,15 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE_
 	client_myds->DSS=STATE_SLEEP;
 }
 
+static void send_plugin_mysql_database_error(MySQL_Data_Stream* client, uint8_t sequence,
+                                             uint16_t code) {
+	client->setDSS_STATE_QUERY_SENT_NET();
+	client->myprot.generate_pkt_ERR(true, nullptr, nullptr, sequence, code,
+		code == 1049 ? "42000" : "HY000",
+		code == 1049 ? "Unknown database" : "Cannot select embedded database");
+	client->DSS = STATE_SLEEP;
+}
+
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
 	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
@@ -8086,9 +8117,11 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			(default_hostgroup == 0 && session_type == PROXYSQL_SESSION_CLICKHOUSE)
 			||
 			//(default_hostgroup>=0 && session_type == PROXYSQL_SESSION_MYSQL)
-			(default_hostgroup>=0 && ( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE ) )
+			(default_hostgroup>=0 && ( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB ) )
 			||
 			(
+				session_type != PROXYSQL_SESSION_DUCKDB
+				&&
 				client_myds->encrypted==false
 				&&
 				strncmp(client_myds->myconn->userinfo->username,mysql_thread___monitor_username,strlen(mysql_thread___monitor_username))==0
@@ -8102,6 +8135,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				}
 			}
 		}
+		const char* requested_database = client_myds->myconn->userinfo->schemaname;
 		l_free(pkt->size,pkt->ptr);
 		//if (client_myds->encrypted==false) {
 			if (client_myds->myconn->userinfo->schemaname==NULL) {
@@ -8124,12 +8158,13 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			if (
 				( max_connections_reached == false )
 				&&
-				( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE || session_type == PROXYSQL_SESSION_SQLITE)
+				( session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB)
 			) {
 			//if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 				client_authenticated=true;
 				switch (session_type) {
 					case PROXYSQL_SESSION_SQLITE:
+					case PROXYSQL_SESSION_DUCKDB:
 //#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 						free_users=1;
 						break;
@@ -8292,7 +8327,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					// connection, but as a consequence of a 'COM_USER_CHANGE' which
 					// requires an 'Auth Switch'. Thus, we impose a 'pid' of '3' for the
 					// response 'OK' packet. See #3504 for more context.
-					if (change_user_auth_switch) {
+					const bool switching_user = change_user_auth_switch;
+					if (switching_user) {
 						_pid = 3;
 						change_user_auth_switch = 0;
 					}
@@ -8310,6 +8346,18 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						free(_s);
 						__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 					} else {
+						if (session_type == PROXYSQL_SESSION_DUCKDB && !switching_user &&
+						    requested_database && *requested_database) {
+							const uint16_t code = embedded::plugin_mysql_select_database(
+								*this, requested_database, strlen(requested_database));
+							if (code) {
+								*wrong_pass = true;
+								send_plugin_mysql_database_error(client_myds, _pid, code);
+								GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL);
+								__sync_add_and_fetch(&MyHGM->status.client_connections_aborted, 1);
+								return;
+							}
+						}
 						// we are good!
 						//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
@@ -8426,6 +8474,23 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_INITDB, this, NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
+		constexpr size_t payload_offset = sizeof(mysql_hdr) + 1;
+		if (session_type == PROXYSQL_SESSION_DUCKDB && pkt->size >= payload_offset) {
+			const auto* database = static_cast<const char*>(pkt->ptr) + payload_offset;
+			const uint16_t code = embedded::plugin_mysql_select_database(
+				*this, database, pkt->size - payload_offset);
+			if (code) {
+				l_free(pkt->size, pkt->ptr);
+				send_plugin_mysql_database_error(client_myds, 1, code);
+				return;
+			}
+		}
+		if (session_type == PROXYSQL_SESSION_DUCKDB && client_myds && client_myds->myconn &&
+		    client_myds->myconn->userinfo && pkt->size > payload_offset) {
+			const char* charset = mysql_variables.client_get_value(this, SQL_CHARACTER_SET_CLIENT);
+			client_myds->myconn->userinfo->set_schemaname((char *)pkt->ptr+sizeof(mysql_hdr)+1,
+				pkt->size-sizeof(mysql_hdr)-1, charset && *charset ? strtoul(charset, nullptr, 10) : default_charset);
+		}
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		unsigned int nTrx=NumActiveTransactions();
@@ -10102,8 +10167,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_CHANGE_USER packet\n");
 	//if (session_type == PROXYSQL_SESSION_MYSQL) {
-	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE ||
+	    session_type == PROXYSQL_SESSION_DUCKDB) {
 		reset();
+		if (!healthy) { l_free(pkt->size, pkt->ptr); return; }
 		init();
 		if (client_authenticated) {
 			if (use_ldap_auth == false) {
@@ -10189,13 +10256,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got MYSQL_COM_RESET_CONNECTION packet\n");
 
-	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE ||
+	    session_type == PROXYSQL_SESSION_DUCKDB) {
 		// Backup the current relevant session values
 		int default_hostgroup = this->default_hostgroup;
 		bool transaction_persistent = this->transaction_persistent;
 
 		// Re-initialize the session
 		reset();
+		if (!healthy) { l_free(pkt->size, pkt->ptr); return; }
 		init();
 
 		// Recover the relevant session values
@@ -10845,7 +10914,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 			setStatus |= (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		} else {
 			// this is for SQLite3 Server
-			if (session_type == PROXYSQL_SESSION_SQLITE) {
+			if (session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) {
 				//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			} else {
 				// for sessions that are not SQLITE . Admin and Clickhouse .
@@ -10905,7 +10974,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			} else {
 				// this is for SQLite3 Server
-				if (session_type == PROXYSQL_SESSION_SQLITE) {
+				if (session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) {
 					//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 				} else {
 					// for sessions that are not SQLITE . Admin and Clickhouse .
@@ -11534,7 +11603,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	uint16_t stmt_param_id=0;
 	memcpy(&stmt_param_id,(char *)pkt.ptr+9,sizeof(uint16_t));
-	SLDH->add(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11);
+	bool long_data_appended = false;
+	if (!SLDH->add_checked(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11,&long_data_appended)) {
+		// COM_STMT_SEND_LONG_DATA has no response packet, so an allocation failure cannot be
+		// reported to the client. Keeping the earlier chunks would execute the statement with a
+		// truncated parameter; close the session instead of continuing with partial data.
+		proxy_error("Cannot buffer COM_STMT_SEND_LONG_DATA for statement %u parameter %u; closing session\n",
+			stmt_global_id, static_cast<unsigned>(stmt_param_id));
+		healthy = 0;
+	}
 	client_myds->DSS=STATE_SLEEP;
 	status=WAITING_CLIENT_DATA;
 	l_free(pkt.size,pkt.ptr);

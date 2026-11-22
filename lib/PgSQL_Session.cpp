@@ -1,3 +1,5 @@
+#include "Embedded_Plugin_Service.h"
+#include "Embedded_PgSQL_Frontend.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -470,6 +472,10 @@ PgSQL_Session::PgSQL_Session() {
 }
 
 void PgSQL_Session::reset() {
+	if (session_type == PROXYSQL_SESSION_DUCKDB) {
+		embedded::teardown_plugin_pgsql(*this);
+		embedded::unregister_pgsql_prepared(*this);
+	}
 	autocommit = true;
 	autocommit_handled = false;
 	sending_set_autocommit = false;
@@ -484,7 +490,7 @@ void PgSQL_Session::reset() {
 	}
 	mybe = NULL;
 
-	if (session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_SQLITE && thread) {
 		SQLite3_Session* sqlite_sess = (SQLite3_Session*)thread->gen_args;
 		if (sqlite_sess && sqlite_sess->sessdb) {
 			sqlite3* db = sqlite_sess->sessdb->get_db();
@@ -1939,6 +1945,10 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		handler_function(this, (void*)GloSQLite3Server, &pkt);
 		l_free(pkt.size, pkt.ptr);
 		break;
+	case PROXYSQL_SESSION_DUCKDB:
+		handler_function(this, nullptr, &pkt);
+		l_free(pkt.size, pkt.ptr);
+		break;
 #ifdef PROXYSQLCLICKHOUSE
 	case PROXYSQL_SESSION_CLICKHOUSE:
 		handler_function(this, (void*)GloClickHouseServer, &pkt);
@@ -2266,22 +2276,12 @@ __implicit_flush:
 				}
 				c = *((unsigned char*)pkt.ptr);
 				if (client_myds != NULL) {
-					// PROXYSQL_SESSION_SQLITE is included here alongside ADMIN/STATS
-					// because plugin session handlers that serve the PgSQL protocol
-					// (e.g. the duckdb plugin's DuckDBListener) use this session type
-					// for their own client-facing sessions -- there is no backend
-					// connection to route a query to, only the plugin's own
-					// handler_function. handler___status_WAITING_CLIENT_DATA___
-					// STATE_SLEEP___MYSQL_COM_QUERY___not_mysql() (below) already has
-					// an explicit `case PROXYSQL_SESSION_SQLITE:` arm that dispatches
-					// to GloSQLite3Server/the session's handler_function; without this
-					// session type in this gate, that arm was unreachable dead code --
-					// a 'Q' packet on such a session fell through untouched, leaking
-					// pkt.ptr and leaving the client waiting forever for a response
-					// that was never generated.
+					// Local listeners dispatch to their handler without a backend.
 					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
-						session_type == PROXYSQL_SESSION_SQLITE) {
+						session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) {
 						c = *((unsigned char*)pkt.ptr);
+						if (session_type == PROXYSQL_SESSION_DUCKDB &&
+						    embedded::handle_pgsql_prepared(*this, pkt)) continue;
 						// Recovery discards every message, including simple Query,
 						// until Sync. Terminate must still close the connection.
 						if (admin_extq_rejected && c != 'S' && c != 'X') {
@@ -2297,7 +2297,7 @@ __implicit_flush:
 							handler_ret = -1;
 							return handler_ret;
 						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' || c == 'H' || c == 'S') {
-							if (session_type == PROXYSQL_SESSION_SQLITE) {
+							if (session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) {
 								// Plugin-backed sessions get the message so the plugin can
 								// return its protocol-specific error and transaction state.
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
@@ -4678,9 +4678,11 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			(default_hostgroup == 0 && session_type == PROXYSQL_SESSION_CLICKHOUSE)
 			||
 			//(default_hostgroup>=0 && session_type == PROXYSQL_SESSION_PGSQL)
-			(default_hostgroup >= 0 && (session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_SQLITE))
+			(default_hostgroup >= 0 && (session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB))
 			||
 			(
+				session_type != PROXYSQL_SESSION_DUCKDB
+				&&
 				client_myds->encrypted == false
 				&&
 				strncmp(client_myds->myconn->userinfo->username, pgsql_thread___monitor_username, strlen(pgsql_thread___monitor_username)) == 0
@@ -4703,12 +4705,13 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		if (
 			(max_connections_reached == false)
 			&&
-			(session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE || session_type == PROXYSQL_SESSION_SQLITE)
+			(session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB)
 			) {
 			//if (session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 			client_authenticated = true;
 			switch (session_type) {
 			case PROXYSQL_SESSION_SQLITE:
+			case PROXYSQL_SESSION_DUCKDB:
 				//#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 				free_users = 1;
 				break;

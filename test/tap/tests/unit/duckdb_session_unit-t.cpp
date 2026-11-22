@@ -1,6 +1,7 @@
 #include "duckdb_session.h"
 #include "duckdb_config.h"
 #include "duckdb_engine.h"
+#include "duckdb_mysql_select_compat.h"
 #include "duckdb.h"
 #include "sqlite3db.h"
 #include "tap.h"
@@ -122,6 +123,94 @@ int main() {
 		   std::string(r->rows[0]->fields[0]) == "memory",
 		   "SELECT DATABASE() maps :memory: to memory");
 	}
+	{
+		std::unique_ptr<SQLite3_result> r(duckdb_build_mysql_database_result(""));
+		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] == nullptr,
+		   "analytical DATABASE() is SQL NULL before a database is selected");
+	}
+	{
+		std::unique_ptr<SQLite3_result> r(duckdb_build_mysql_database_result("sales"));
+		ok(r && r->rows_count == 1 && r->rows[0]->fields[0] != nullptr &&
+		   std::string(r->rows[0]->fields[0]) == "sales",
+		   "analytical DATABASE() reports the selected database");
+	}
+
+	// --- MySQL USE parsing ------------------------------------------------
+	{
+		auto use = duckdb_parse_mysql_use("USE sales");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::database && use.database == "sales",
+		   "USE parses the selected database");
+		use = duckdb_parse_mysql_use("  use   `Sales Data` ;  ");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::database &&
+		   use.database == "Sales Data",
+		   "USE accepts a delimited identifier, surrounding whitespace and a terminator");
+		use = duckdb_parse_mysql_use("USE `a``b`");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::database && use.database == "a`b",
+		   "USE unescapes a doubled backtick like MySQL");
+		use = duckdb_parse_mysql_use("USE sales -- trailing comment");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::database && use.database == "sales",
+		   "USE accepts a trailing line comment");
+		use = duckdb_parse_mysql_use("/* leading */ USE sales");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::database && use.database == "sales",
+		   "USE accepts a leading block comment");
+		use = duckdb_parse_mysql_use("USE /* inner */ sales");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::database && use.database == "sales",
+		   "USE accepts a comment between the keyword and the database");
+		use = duckdb_parse_mysql_use("USE ``");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::empty,
+		   "USE with an empty identifier is not a database selection");
+		use = duckdb_parse_mysql_use("USE");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::invalid, "bare USE is a syntax error");
+		use = duckdb_parse_mysql_use("USE;");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::invalid,
+		   "USE with only a terminator is a syntax error");
+		use = duckdb_parse_mysql_use("USE ''");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::invalid,
+		   "a string literal is not a database identifier");
+		use = duckdb_parse_mysql_use("USE sales.other");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::invalid,
+		   "USE does not accept a qualified name");
+		use = duckdb_parse_mysql_use("USE sales other");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::invalid,
+		   "USE rejects a second name");
+		use = duckdb_parse_mysql_use("USE order");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::invalid,
+		   "an unquoted reserved word is not a database identifier");
+		use = duckdb_parse_mysql_use("USE `order`");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::database && use.database == "order",
+		   "a delimited reserved word is a database identifier");
+		use = duckdb_parse_mysql_use("USE " + std::string(65, 'x'));
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::too_long,
+		   "a database name over 64 bytes is ER_TOO_LONG_IDENT");
+		use = duckdb_parse_mysql_use("USE " + std::string(64, 'x'));
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::database,
+		   "a 64-byte database name is accepted");
+		use = duckdb_parse_mysql_use("SELECT 1");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::none, "a SELECT is not a USE statement");
+		use = duckdb_parse_mysql_use("USE sales; SELECT 1");
+		ok(use.kind == DuckDBMySQLUseStatement::Kind::none,
+		   "a multi-statement request is not handled as USE");
+	}
+
+	// --- handshake database ----------------------------------------------
+	ok(duckdb_mysql_handshake_database(nullptr, "information_schema").empty(),
+	   "a connection without a handshake database selects nothing");
+	ok(duckdb_mysql_handshake_database("", "information_schema").empty(),
+	   "an empty handshake database selects nothing");
+	ok(duckdb_mysql_handshake_database("information_schema", "information_schema").empty(),
+	   "core's default schema is indistinguishable from no database and is not selected");
+	ok(duckdb_mysql_handshake_database("sales", "information_schema") == "sales",
+	   "a handshake database different from core's default is selected");
+	ok(duckdb_mysql_handshake_database("sales", nullptr) == "sales",
+	   "a handshake database is selected when core has no default schema");
+
+	// --- reserved native schemas -----------------------------------------
+	for (const char* reserved : { "proxysql_replica", "information_schema", "pg_catalog",
+	                              "system", "temp", "INFORMATION_SCHEMA" }) {
+		ok(duckdb_mysql_reserved_database(reserved), "%s is a reserved schema", reserved);
+	}
+	ok(!duckdb_mysql_reserved_database("sales") && !duckdb_mysql_reserved_database("main"),
+	   "ordinary schemas are not reserved");
 
 	ok(std::strcmp(duckdb_pgsql_sqlstate(DUCKDB_ERROR_PARSER, ""), "42601") == 0,
 	   "DuckDB parser errors map to PostgreSQL syntax_error");
@@ -191,6 +280,46 @@ int main() {
 		BAIL_OUT("could not open an in-memory duckdb");
 	}
 
+	{
+		auto result = duckdb_execute_mysql_analytical(conn, "SELECT 1", false);
+		ok(result.decision == DuckDBAnalyticalDecision::supported && result.outcome.ok && result.healthy,
+		   "analytical executor runs admitted SELECT in private transaction");
+		delete result.outcome.result;
+	}
+	{
+		duckdb_result setup {};
+		for (const char* q : {"CREATE TABLE \"odd`table\" (id BIGINT PRIMARY KEY, \"a`b\" BIGINT)",
+		                      "INSERT INTO \"odd`table\" VALUES (1, 10), (2, 20), (3, 30)",
+		                      "CREATE SEQUENCE analytical_seq", "CREATE VIEW analytical_view AS SELECT nextval('analytical_seq') AS v"}) {
+			if (duckdb_query(conn, q, &setup) != DuckDBSuccess) BAIL_OUT("analytical setup failed: %s", duckdb_result_error(&setup));
+			duckdb_destroy_result(&setup);
+		}
+		auto admitted = duckdb_execute_mysql_analytical(conn, "SELECT `a``b` FROM `odd``table` ORDER BY id LIMIT 1, 1", false);
+		ok(admitted.decision == DuckDBAnalyticalDecision::supported && admitted.outcome.ok && admitted.outcome.result &&
+		   admitted.outcome.result->rows.size() == 1 && std::string(admitted.outcome.result->rows[0]->fields[0]) == "20",
+		   "analytical execution translates escaped identifier and comma LIMIT");
+		delete admitted.outcome.result;
+		for (const char* q : {"DELETE FROM `odd``table`", "SELECT nextval('analytical_seq')", "SELECT @x", "SELECT 1 /*! + 1 */"}) {
+			auto refused = duckdb_execute_mysql_analytical(conn, q, false);
+			ok(!refused.outcome.ok && refused.decision != DuckDBAnalyticalDecision::supported && refused.healthy,
+			   "analytical executor refuses %s", q);
+		}
+		auto malformed = duckdb_execute_mysql_analytical(conn, "SELECT FROM", false);
+		ok(!malformed.outcome.ok && malformed.decision == DuckDBAnalyticalDecision::invalid && malformed.healthy,
+		   "invalid analytical SQL has a distinct parser decision");
+		auto hidden = duckdb_execute_mysql_analytical(conn, "SELECT v FROM analytical_view", false);
+		ok(!hidden.outcome.ok && hidden.healthy, "read-only transaction blocks a side effect hidden in a view");
+		ok(scalar_count(conn, "SELECT nextval('analytical_seq')") == 1, "blocked view did not advance its sequence");
+		auto after = duckdb_execute_mysql_analytical(conn, "SELECT 1", false);
+		ok(after.outcome.ok && after.healthy, "private transaction is cleaned up after failed execution");
+		delete after.outcome.result;
+		auto begin = duckdb_execute_effective(conn, "BEGIN");
+		auto client = duckdb_execute_mysql_analytical(conn, "SELECT 1", true);
+		ok(begin.ok && !client.outcome.ok && client.healthy && duckdb_pgsql_transaction_status(conn) == 'T',
+		   "explicit client transaction is refused and remains owned by client");
+		auto end = duckdb_execute_effective(conn, "ROLLBACK");
+		ok(end.ok, "client can roll back its own transaction");
+	}
 	{
 		auto native = duckdb_execute_effective(conn, "SELECT true,false,NULL::BOOLEAN,'true'", DuckDBResultProtocol::pgsql);
 		ok(native.ok && native.result && std::string(native.result->rows[0]->fields[0]) == "t" &&
@@ -428,6 +557,193 @@ int main() {
 		   r->rows[0]->fields[0] != nullptr &&
 		   std::string(r->rows[0]->fields[0]) == "42",
 		   "an ordinary renderable query with a trailing ';' is unaffected");
+	}
+
+	// --- MySQL database namespace (live connection) ---------------------
+	{
+		duckdb_result setup {};
+		for (const char* sql : { "CREATE SCHEMA ns_sales", "CREATE SCHEMA ns_support",
+		                         "CREATE TABLE ns_sales.t (id INTEGER PRIMARY KEY, v VARCHAR)",
+		                         "CREATE TABLE ns_support.t (id INTEGER PRIMARY KEY, v VARCHAR)",
+		                         "INSERT INTO ns_sales.t VALUES (1,'sale')",
+		                         "INSERT INTO ns_support.t VALUES (2,'help')" }) {
+			if (duckdb_query(conn, sql, &setup) != DuckDBSuccess)
+				BAIL_OUT("cannot create namespace fixture: %s", duckdb_result_error(&setup));
+			duckdb_destroy_result(&setup);
+		}
+		ok(duckdb_mysql_database_exists(conn, "ns_sales") &&
+		   duckdb_mysql_database_exists(conn, "ns_support"),
+		   "validated schemas exist in the current catalog");
+		ok(!duckdb_mysql_database_exists(conn, "NS_SALES"),
+		   "a differently-cased database does not exist");
+		ok(!duckdb_mysql_database_exists(conn, "ns_missing"),
+		   "an unknown database does not exist");
+
+		std::string reason;
+		ok(duckdb_mysql_use_database(conn, "ns_support", reason) &&
+		   scalar_text(conn, "SELECT current_schema()") == "ns_support",
+		   "USE switches the connection to the database's schema");
+		ok(!duckdb_mysql_use_database(conn, "ns_missing", reason) &&
+		   reason == "unknown_database",
+		   "an unknown database is refused with a stable reason");
+		ok(!duckdb_mysql_use_database(conn, "NS_SUPPORT", reason) &&
+		   reason == "unknown_database" &&
+		   scalar_text(conn, "SELECT current_schema()") == "ns_support",
+		   "a differently-cased database is not redirected and the selection is unchanged");
+		ok(!duckdb_mysql_use_database(conn, "information_schema", reason) &&
+		   reason == "reserved_database",
+		   "a reserved schema cannot be selected");
+		ok(!duckdb_mysql_use_database(conn, "proxysql_replica", reason) &&
+		   reason == "reserved_database",
+		   "the replica metadata schema cannot be selected");
+		// DuckDB cannot make a schema whose name contains a dot the current
+		// schema (it parses the name as catalog.schema), so USE refuses instead
+		// of reporting a selection the session does not have.
+		{
+			duckdb_result dotted {};
+			for (const char* sql : { "CREATE SCHEMA \"ns.dot\"",
+			                         "CREATE TABLE \"ns.dot\".t (id INTEGER PRIMARY KEY)" }) {
+				if (duckdb_query(conn, sql, &dotted) != DuckDBSuccess)
+					BAIL_OUT("cannot create dotted schema fixture: %s",
+					         duckdb_result_error(&dotted));
+				duckdb_destroy_result(&dotted);
+			}
+		}
+		ok(duckdb_mysql_database_exists(conn, "ns.dot"),
+		   "a database name containing a dot can exist as a native schema");
+		ok(!duckdb_mysql_use_database(conn, "ns.dot", reason) && reason == "engine_error" &&
+		   scalar_text(conn, "SELECT current_schema()") == "ns_support",
+		   "a database DuckDB cannot make current is refused and the schema is unchanged");
+		ok(duckdb_mysql_use_database(conn, "ns_sales", reason) &&
+		   scalar_text(conn, "SELECT COUNT(*)::VARCHAR FROM ns_sales.t") == "1",
+		   "USE can switch back and forth between databases");
+		{
+			DuckDBSessionState use_state;
+			auto apply = [&](const std::string& sql) {
+				return duckdb_mysql_apply_use(use_state, conn, duckdb_parse_mysql_use(sql));
+			};
+			auto applied = apply("USE ns_support");
+			ok(applied.ok && use_state.mysql_database == "ns_support" &&
+			   use_state.mysql_schema_applied,
+			   "USE applies the database and records the session namespace");
+			applied = apply("USE ns_missing");
+			ok(!applied.ok && applied.code == 1049 &&
+			   std::string(applied.sqlstate) == "42000" &&
+			   applied.message == "Unknown database 'ns_missing'" &&
+			   use_state.mysql_database == "ns_support",
+			   "an unknown USE keeps the previous database with ER_BAD_DB_ERROR");
+			applied = apply("USE pg_catalog");
+			ok(!applied.ok && applied.code == 1049 &&
+			   use_state.mysql_database == "ns_support",
+			   "a reserved USE is refused with ER_BAD_DB_ERROR");
+			applied = apply("USE ``");
+			ok(!applied.ok && applied.code == 1046 &&
+			   std::string(applied.sqlstate) == "3D000" &&
+			   use_state.mysql_database == "ns_support",
+			   "an empty USE identifier reports ER_NO_DB_ERROR");
+			applied = apply("USE " + std::string(65, 'x'));
+			ok(!applied.ok && applied.code == 1059 &&
+			   applied.message.find("is too long") != std::string::npos,
+			   "an over-long USE identifier reports ER_TOO_LONG_IDENT");
+			applied = apply("USE 'quoted string'");
+			ok(!applied.ok && applied.code == 1064 &&
+			   std::string(applied.sqlstate) == "42000",
+			   "a USE syntax error reports ER_PARSE_ERROR");
+		}
+
+		// The session state drives analytical translation.
+		DuckDBSessionState& state = duckdb_session_state();
+		state.mysql_analytical = true;
+		state.mysql_database = "ns_sales";
+		{
+			auto result = duckdb_execute_mysql_analytical(conn, "SELECT v FROM t", false);
+			ok(result.decision == DuckDBAnalyticalDecision::supported && result.outcome.ok &&
+			   result.outcome.result && result.outcome.result->rows.size() == 1 &&
+			   std::string(result.outcome.result->rows[0]->fields[0]) == "sale",
+			   "relative names resolve in the selected database");
+			delete result.outcome.result;
+		}
+		{
+			auto result = duckdb_execute_mysql_analytical(
+				conn, "SELECT v FROM ns_support.t", false);
+			ok(result.decision == DuckDBAnalyticalDecision::supported && result.outcome.ok &&
+			   result.outcome.result && result.outcome.result->rows.size() == 1 &&
+			   std::string(result.outcome.result->rows[0]->fields[0]) == "help",
+			   "a qualified database.table name works from another database");
+			delete result.outcome.result;
+		}
+		{
+			auto result = duckdb_execute_mysql_analytical(
+				conn, "SELECT v FROM NS_SUPPORT.t", false);
+			ok(!result.outcome.ok && result.decision != DuckDBAnalyticalDecision::supported &&
+			   result.outcome.error.find("unresolved_relation") != std::string::npos,
+			   "a differently-cased database in a qualified name is refused, not redirected");
+			delete result.outcome.result;
+		}
+		state.mysql_database.clear();
+		{
+			auto result = duckdb_execute_mysql_analytical(conn, "SELECT v FROM t", false);
+			ok(!result.outcome.ok && result.decision == DuckDBAnalyticalDecision::unsupported &&
+			   result.outcome.error.find("no_database_selected") != std::string::npos,
+			   "a relative name without a selected database is refused with ER_NO_DB_ERROR");
+			delete result.outcome.result;
+		}
+		{
+			auto result = duckdb_execute_mysql_analytical(
+				conn, "SELECT v FROM ns_sales.t", false);
+			ok(result.outcome.ok && result.decision == DuckDBAnalyticalDecision::supported,
+			   "a qualified name still works without a selected database");
+			delete result.outcome.result;
+		}
+		{
+			auto result = duckdb_execute_mysql_analytical(
+				conn, "SELECT v FROM information_schema.tables", false);
+			ok(!result.outcome.ok &&
+			   result.outcome.error.find("reserved_database") != std::string::npos,
+			   "a reserved schema is refused in a qualified name");
+			delete result.outcome.result;
+		}
+
+		// Handshake selection and COM_CHANGE_USER-style core updates.
+		state.mysql_analytical = false;
+		state.mysql_namespace_ready = false;
+		state.mysql_namespace_source.clear();
+		state.mysql_database.clear();
+		state.mysql_schema_applied = false;
+		std::string sync_error;
+		ok(duckdb_mysql_namespace_sync(state, conn, "ns_support", "information_schema",
+		                               sync_error) &&
+		   state.mysql_database == "ns_support" &&
+		   scalar_text(conn, "SELECT current_schema()") == "ns_support",
+		   "the handshake database selects the session schema");
+		ok(duckdb_mysql_namespace_sync(state, conn, "ns_sales", "information_schema",
+		                               sync_error) &&
+		   state.mysql_database == "ns_sales",
+		   "a core-driven schema change re-selects the database");
+		state.mysql_schema_applied = false;
+		ok(duckdb_mysql_namespace_sync(state, conn, "ns_sales", "information_schema",
+		                               sync_error) &&
+		   state.mysql_schema_applied &&
+		   scalar_text(conn, "SELECT current_schema()") == "ns_sales",
+		   "a replaced native connection re-applies the current database");
+		state.mysql_namespace_ready = false;
+		state.mysql_namespace_source.clear();
+		state.mysql_database.clear();
+		ok(duckdb_mysql_namespace_sync(state, conn, "no_such_database_xyz", "information_schema",
+		                               sync_error) &&
+		   state.mysql_database.empty(),
+		   "an unknown handshake database leaves no database selected");
+		state.mysql_namespace_ready = false;
+		state.mysql_namespace_source.clear();
+		state.mysql_database.clear();
+		ok(duckdb_mysql_namespace_sync(state, conn, "information_schema", "information_schema",
+		                               sync_error) &&
+		   state.mysql_database.empty(),
+		   "core's default schema is not selected as a database");
+		state.mysql_namespace_ready = false;
+		state.mysql_namespace_source.clear();
+		state.mysql_database.clear();
+		state.mysql_schema_applied = false;
 	}
 
 	duckdb_disconnect(&conn);

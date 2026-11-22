@@ -63,7 +63,7 @@ DuckDBReplicaStartRequest file_request() {
 } // namespace
 
 int main() {
-	plan(68);
+	plan(71);
 	const uint8_t full = 0xff, padded = 0x7f, partial = 0x3f;
 	ok(duckdb_replica_full_row_images(&full, &full, 7, true), "full UPDATE bitmaps are accepted");
 	ok(duckdb_replica_full_row_images(&padded, &full, 7, true), "unused bitmap padding bits are ignored");
@@ -192,6 +192,17 @@ int main() {
 	ok(duckdb_replica_map_column("name", "varchar", "varchar(64)", "utf8mb4", "", true, column).empty() &&
 	   column.kind == DuckDBReplicaTypeKind::varchar,
 	   "utf8mb4 varchar is accepted");
+	ok(duckdb_replica_map_column("name", "VARCHAR", "varchar(64)", "utf8mb4", "", true, column,
+	                             "utf8mb4_0900_bin").empty() &&
+	   column.mysql_data_type == "varchar" && column.mysql_column_type == "varchar(64)" &&
+	   column.charset == "utf8mb4" && column.collation == "utf8mb4_0900_bin",
+	   "mapping records the original MySQL type, charset and collation");
+	ok(duckdb_replica_map_column("ts", "TIMESTAMP", "timestamp(6)", "", "", true, column).empty() &&
+	   column.duckdb_type == "TIMESTAMP" && column.mysql_data_type == "timestamp" && column.collation.empty(),
+	   "TIMESTAMP and DATETIME share a native type but record different MySQL types");
+	ok(duckdb_replica_map_column("dt", "datetime", "datetime(6)", "", "", true, column).empty() &&
+	   column.duckdb_type == "TIMESTAMP" && column.mysql_data_type == "datetime",
+	   "DATETIME records its own MySQL type");
 	ok(duckdb_replica_map_column("name", "varchar", "varchar(64)", "latin1", "", true, column).find("latin1") != std::string::npos,
 	   "latin1 is rejected");
 	ok(duckdb_replica_map_column("payload", "blob", "blob", "binary", "", true, column).empty() &&
