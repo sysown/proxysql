@@ -4652,11 +4652,15 @@ int PgSQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& ad
 PgSQL_SrvC* PgSQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
 	PgSQL_SrvC* f_server = nullptr;
 
+	// Only a hostgroup whose id matches may be searched: when '_hid' does not
+	// exist yet, 'myhgc' must stay nullptr rather than pointing at whatever
+	// hostgroup the scan visited last.
 	PgSQL_HGC* myhgc = nullptr;
 	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
-		myhgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
+		PgSQL_HGC* hgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
 
-		if (myhgc->hid == _hid) {
+		if (hgc->hid == _hid) {
+			myhgc = hgc;
 			break;
 		}
 	}

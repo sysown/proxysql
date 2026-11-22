@@ -68,7 +68,6 @@ static int remove_mysql_server(int hg, const char *addr, int port) {
 	return rc;
 }
 
-#ifdef PROXYSQL31
 static int add_pgsql_server(int hg, const char *addr, int port,
 	int64_t weight, int64_t max_conns)
 {
@@ -87,6 +86,8 @@ static int add_pgsql_server(int hg, const char *addr, int port,
 	PgHGM->wrunlock();
 	return rc;
 }
+
+#ifdef PROXYSQL31
 
 static MySrvC *find_mysql_server(int hg, const char *addr) {
 	MyHGC *hgc = MyHGM->MyHGC_find(hg);
@@ -453,6 +454,28 @@ static void test_mysql_duplicate_server() {
 		"MySQL HGM: duplicate server add doesn't crash (rc=%d)", rc);
 }
 
+/**
+ * @brief The same address:port added to two hostgroups that do not exist yet.
+ *
+ * find_server_in_hg() used to search the last hostgroup it scanned when the
+ * requested one did not exist, so the second add found the first hostgroup's
+ * row and silently returned -1.  2 tests.
+ */
+static void test_mysql_same_server_new_hostgroups() {
+	const char *addr = "my-same-srv-new-hg";
+	const int port = 13500;
+	const int rc_a = add_mysql_server(9120, addr, port);
+	const int rc_b = add_mysql_server(9121, addr, port);
+	MyHGM->wrlock();
+	MySrvC *b = MyHGM->find_server_in_hg(9121, addr, port);
+	MySrvC *missing = MyHGM->find_server_in_hg(9122, addr, port);
+	MyHGM->wrunlock();
+	ok(rc_a == 0 && rc_b == 0 && b != nullptr && b->myhgc->hid == 9121,
+		"MySQL HGM: same server is added to a second, new hostgroup (rc_a=%d rc_b=%d)", rc_a, rc_b);
+	ok(missing == nullptr,
+		"MySQL HGM: find_server_in_hg() on a nonexistent hostgroup returns nullptr");
+}
+
 // ============================================================================
 // 6. PgSQL HostGroups Manager
 // ============================================================================
@@ -508,6 +531,24 @@ static void test_pgsql_shun() {
 		(char *)"pg-shun-server", 5432);
 	ok(shunned == true,
 		"PgSQL HGM: shun_and_killall() returns true");
+}
+
+/**
+ * @brief PgSQL twin of test_mysql_same_server_new_hostgroups().  2 tests.
+ */
+static void test_pgsql_same_server_new_hostgroups() {
+	const char *addr = "pg-same-srv-new-hg";
+	const int port = 15500;
+	const int rc_a = add_pgsql_server(9130, addr, port, 1, 10);
+	const int rc_b = add_pgsql_server(9131, addr, port, 1, 10);
+	PgHGM->wrlock();
+	PgSQL_SrvC *b = PgHGM->find_server_in_hg(9131, addr, port);
+	PgSQL_SrvC *missing = PgHGM->find_server_in_hg(9132, addr, port);
+	PgHGM->wrunlock();
+	ok(rc_a == 0 && rc_b == 0 && b != nullptr && b->myhgc->hid == 9131,
+		"PgSQL HGM: same server is added to a second, new hostgroup (rc_a=%d rc_b=%d)", rc_a, rc_b);
+	ok(missing == nullptr,
+		"PgSQL HGM: find_server_in_hg() on a nonexistent hostgroup returns nullptr");
 }
 
 #ifdef PROXYSQL31
@@ -664,7 +705,11 @@ static void test_mysql_unshun_on_monitor_success() {
 	mysql_thread___shun_recovery_time_sec = 10;
 	mysql_thread___connect_timeout_server_max = 10000;
 	const auto set = [&](MySrvC *s, MySerStatus status, bool automatic, time_t age) {
+		// set_status() refreshes the hostgroup's online count, which asserts
+		// (DEBUG) that the caller holds the HGM write lock.
+		MyHGM->wrlock();
 		s->set_status(status);
+		MyHGM->wrunlock();
 		s->shunned_automatic = automatic;
 		s->shunned_and_kill_all_connections = automatic;
 		s->time_last_detected_error = time(nullptr) - age;
@@ -722,9 +767,9 @@ static void test_mysql_unshun_on_monitor_success() {
 
 int main() {
 #ifdef PROXYSQL31
-	plan(63);
+	plan(67);
 #else
-	plan(17);
+	plan(21);
 #endif
 
 	int rc = test_init_minimal();
@@ -740,6 +785,7 @@ int main() {
 	test_mysql_latency();                // 1 test
 	test_mysql_hostgroup_independence(); // 2 tests
 	test_mysql_duplicate_server();       // 1 test
+	test_mysql_same_server_new_hostgroups(); // 2 tests
 #ifdef PROXYSQL31
 	test_mysql_post_unshun_respects_threshold();
 	test_mysql_primary_presence_weight_overflow();
@@ -749,6 +795,7 @@ int main() {
 	// PgSQL tests
 	test_pgsql_create_and_remove();      // 3 tests
 	test_pgsql_shun();                   // 1 test
+	test_pgsql_same_server_new_hostgroups(); // 2 tests
 #ifdef PROXYSQL31
 	test_pgsql_post_unshun_respects_threshold();
 	test_pgsql_primary_presence_weight_overflow();

@@ -8504,11 +8504,15 @@ bool MySQL_HostGroups_Manager::add_aws_rds_bgd_hostgroup_entry(const std::string
 MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
 	MySrvC* f_server = nullptr;
 
+	// Only a hostgroup whose id matches may be searched: when '_hid' does not
+	// exist yet, 'myhgc' must stay nullptr rather than pointing at whatever
+	// hostgroup the scan visited last.
 	MyHGC* myhgc = nullptr;
 	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
-		myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+		MyHGC* hgc = static_cast<MyHGC*>(MyHostGroups->index(i));
 
-		if (myhgc->hid == _hid) {
+		if (hgc->hid == _hid) {
+			myhgc = hgc;
 			break;
 		}
 	}
