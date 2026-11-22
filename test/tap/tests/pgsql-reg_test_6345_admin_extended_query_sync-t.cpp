@@ -38,7 +38,8 @@ CommandLine cl;
 
 // Time without traffic after which no further message is expected.
 static const int QUIET_TIMEOUT_MS = 1500;
-static const char* REJECTED_PREPARE = "PRAGMA query_only";
+// Extended Parse can contain only one statement, even when Admin supports it.
+static const char* REJECTED_PREPARE = "SELECT 1; SELECT 2";
 
 struct MsgCounts {
 	int errors = 0;
