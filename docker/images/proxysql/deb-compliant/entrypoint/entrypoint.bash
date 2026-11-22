@@ -105,6 +105,7 @@ add_plugin_to_pkg() {
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     add_plugin_to_pkg "../plugins/mysqlx/ProxySQL_MySQLX_Plugin.so" "ProxySQL_MySQLX_Plugin.so"
     add_plugin_to_pkg "../plugins/genai/ProxySQL_GenAI_Plugin.so" "ProxySQL_GenAI_Plugin.so"
+    add_plugin_to_pkg "../plugins/tcp_proxy/proxysql_tcp_proxy.so" "proxysql_tcp_proxy.so"
 fi
 
 # Replace the PKG_PLUGIN_FILES_PLACEHOLDER line with the assembled
@@ -156,7 +157,7 @@ cp tmp/proxysql.sha1 ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-ha
 # Verify plugin .so files are present in the package
 if [[ "${PROXYSQL40:-}" == "1" ]]; then
     echo "==> Verifying plugin .so files in package"
-    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
+    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so proxysql_tcp_proxy.so; do
         if dpkg -c "${PKG}" 2>/dev/null | grep -q "/usr/lib/proxysql/${plugin}"; then
             echo "  OK   ${plugin}"
         else
@@ -173,7 +174,7 @@ if [[ "${PROXYSQL40:-}" == "1" ]]; then
     SMOKE_DIR=$(mktemp -d)
     dpkg-deb -R "${PKG}" "${SMOKE_DIR}"
     ALL_OK=0
-    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so; do
+    for plugin in ProxySQL_MySQLX_Plugin.so ProxySQL_GenAI_Plugin.so proxysql_tcp_proxy.so; do
         plugin_path="${SMOKE_DIR}/usr/lib/proxysql/${plugin}"
         if [[ -f "${plugin_path}" ]]; then
             if file "${plugin_path}" | grep -q 'ELF 64-bit.*shared object'; then

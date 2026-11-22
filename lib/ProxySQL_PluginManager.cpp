@@ -8,6 +8,7 @@
 #include "ProxySQL_PluginSecrets.h"
 #include "ProxySQL_ConfigurationAccess.h"
 #include "ProxySQL_PluginListenerGate.h"
+#include "ProxySQL_PluginListenerReservations.h"
 #include "Aws_Iam_Provider.h"
 #include "Aws_Locality_Manager.h"
 #include "MySQL_HostGroups_Manager.h"
@@ -550,6 +551,12 @@ bool register_query_hook_phase_b_stub(ProxySQL_PluginProtocol,
 }
 
 prometheus::Registry* get_prometheus_registry_service() {
+	if (g_stop_callback_target.manager != nullptr) {
+		return g_stop_callback_target.manager->prometheus_registry();
+	}
+	if (g_registry_callback_target.manager != nullptr) {
+		return g_registry_callback_target.manager->prometheus_registry();
+	}
 	return GloVars.prometheus_registry.get();
 }
 #endif /* PROXYSQL40 */
@@ -631,6 +638,27 @@ bool set_listener_gate_not_available(const ProxySQL_PluginListenerGate&) {
 	return false;
 }
 
+bool validate_listener_interfaces_service(const char* owner, const char* interfaces,
+	std::string& error) {
+	return ProxySQL_PluginListenerReservations::validate_candidate(owner, interfaces, error);
+}
+
+bool validate_listener_interfaces_not_available(const char* owner, const char* interfaces,
+	std::string& error) {
+	(void)owner;
+	(void)interfaces;
+	error = "listener interface validation is unavailable during plugin schema registration";
+	return false;
+}
+
+const ProxySQL_RawBackendServiceV2* get_raw_backend_service_live() {
+	return proxysql_raw_backend_service();
+}
+
+const ProxySQL_RawBackendServiceV2* get_raw_backend_service_not_available() {
+	return nullptr;
+}
+
 ProxySQL_PluginMysqlConfigResult apply_mysql_config_not_available(
 	const ProxySQL_PluginMysqlConfigPlan&) {
 	return { false, 0, "MySQL configuration publication is not available", {} };
@@ -709,7 +737,8 @@ ProxySQL_ServerRuntimeManagerPin::~ProxySQL_ServerRuntimeManagerPin() = default;
 // null function pointer.
 static SQLite3_result* snapshot_stub() { return nullptr; }
 
-ProxySQL_PluginManager::ProxySQL_PluginManager() {
+ProxySQL_PluginManager::ProxySQL_PluginManager()
+	: prometheus_registry_(GloVars.prometheus_registry) {
 	std::memset(&services_, 0, sizeof(services_));
 	services_.register_table = &register_table_service;
 	services_.register_command = &register_command_service;
@@ -748,6 +777,8 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.prepare_managed_runtime_locked = &proxysql_prepare_managed_runtime_locked;
 	services_.activate_managed_runtime_locked = &proxysql_activate_managed_runtime_locked;
 	services_.destroy_managed_prepared_runtime = &proxysql_destroy_managed_prepared_runtime;
+	services_.validate_listener_interfaces = &validate_listener_interfaces_service;
+	services_.get_raw_backend_service = &get_raw_backend_service_live;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
@@ -783,6 +814,10 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_phase_b_.refresh_mysql_aws_locality_stats =
 		&refresh_mysql_aws_locality_stats_service;
 	services_phase_b_.register_server_module = &register_server_module_unsupported;
+	services_phase_b_.validate_listener_interfaces =
+		&validate_listener_interfaces_not_available;
+	services_phase_b_.get_raw_backend_service =
+		&get_raw_backend_service_not_available;
 #endif /* PROXYSQL40 */
 }
 
@@ -860,7 +895,7 @@ bool ProxySQL_PluginManager::load(const std::string &path, std::string &err) {
 	// safe via the tail-append pattern -- fields the plugin didn't define
 	// are never dereferenced (see handling of register_schemas below).
 	//
-	// abi_version carries the ABI 1..16 layout-version number in its low
+	// abi_version carries the ABI 1..18 layout-version number in its low
 	// bits and PROXYSQL_PLUGIN_ABI_DEBUG_BIT as a separate, independent
 	// tag (see the long comment on PROXYSQL_PLUGIN_ABI_DEBUG_BIT in
 	// ProxySQL_Plugin.h for the dump_pkt/DSS-offset-shift mechanism this
@@ -976,7 +1011,7 @@ bool ProxySQL_PluginManager::invoke_register_schemas_phase(std::string &err) {
 		//
 		// abi_version must be masked before this comparison: it carries
 		// PROXYSQL_PLUGIN_ABI_DEBUG_BIT in a high bit orthogonal to the
-		// ABI 1..16 layout-version number (see the contract comment next
+		// ABI 1..18 layout-version number (see the contract comment next
 		// to PROXYSQL_PLUGIN_ABI_DEBUG_BIT in ProxySQL_Plugin.h). A
 		// DEBUG-tagged ABI-1 descriptor has abi_version == 0x40000001,
 		// which satisfies a raw ">= 2u" and would wrongly dereference

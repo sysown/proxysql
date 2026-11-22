@@ -21,6 +21,7 @@
 #include "ProxySQL_ManagedConfiguration.h"
 #include "ProxySQL_ManagedRuntime.h"
 #include "ProxySQL_ConfigurationAccess.h"
+#include "ProxySQL_PluginRawBackend.h"
 
 class SQLite3DB;
 class SQLite3_result;
@@ -87,6 +88,13 @@ namespace prometheus { class Registry; }
 //          ABI 14 and 15 binaries cannot be converted safely and are rejected
 //          by an ABI-16 core. Generic layouts 1-10 and 13 retain compatible
 //          prefixes and remain loadable; reserved layouts 11 and 12 do not.
+//   ABI 17: appends the generic core listener reservation validation service.
+//          Generic layouts 1-10, 13, and 16 retain compatible prefixes and
+//          remain loadable; reserved layouts 11 and 12 and incompatible
+//          layouts 14 and 15 stay rejected.
+//   ABI 18: appends the raw TCP backend service getter after the ABI-17
+//          listener validator. Every ABI-17 service offset is unchanged, so
+//          generic layouts 1-10, 13, 16, and 17 remain loadable.
 //
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
@@ -105,8 +113,8 @@ namespace prometheus { class Registry; }
 // A plugin built without -DDEBUG, loaded into a core built with
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
-// under the plain ABI 1..16 scheme above (e.g. a release plugin's
-// abi_version=14 is <= a debug core's max=16, so the ordinary
+// under the plain ABI 1..18 scheme above (e.g. a release plugin's
+// abi_version=17 is <= a debug core's max=18, so the ordinary
 // forward-compatibility range check does not catch it).
 //
 // What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
@@ -148,23 +156,23 @@ namespace prometheus { class Registry; }
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
-// in a numeric space (bit 30) the plain layout-version numbers (1..16,
+// in a numeric space (bit 30) the plain layout-version numbers (1..18,
 // and unlikely to reach 2^30 for a long time) never touch, so a
 // DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
 // "compatible" via ordinary integer range comparison -- the loader
 // checks this bit for an EXACT match, as a step separate from (and in
-// addition to) the ABI 1..16 forward-compatibility range check below.
+// addition to) the ABI 1..18 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 16u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 16u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 18u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 18u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
 #endif
-// Layout-only ceiling used for the ABI 1..16 range check. Callers must mask
+// Layout-only ceiling used for the ABI 1..18 range check. Callers must mask
 // off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
 // against this constant -- see lib/ProxySQL_PluginManager.cpp.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
@@ -371,11 +379,12 @@ using proxysql_plugin_register_query_hook_cb =
 // plugins must be compiled in the ProxySQL build tree (or at least
 // against a matching prometheus-cpp version + matching libstdc++).
 //
-// Lifetime: GloVars and its prometheus registry are constructed
-// before any plugin is loaded, so the returned pointer is non-null
-// for every callback (init, start, admin command callback, query
-// hook).  Plugins may register metrics in init() if they want them
-// scraped immediately.
+// Lifetime: the registry is constructed before plugins are loaded. Each
+// plugin manager retains shared ownership through stop callbacks and dlclose,
+// including std::exit after the global owner has been destroyed. The borrowed
+// pointer remains valid for the plugin lifecycle; plugins must join all metric
+// users and remove owned metric objects before stop() returns. Plugins may
+// register metrics in init() if they want them scraped immediately.
 using proxysql_plugin_get_prometheus_registry_cb =
 	prometheus::Registry* (*)();
 
@@ -575,6 +584,19 @@ struct ProxySQL_PluginServices {
 		ManagedPreparedRuntime**, std::string&);
 	ManagedRuntimeResult (*activate_managed_runtime_locked)(ManagedPreparedRuntime&, uint64_t);
 	void (*destroy_managed_prepared_runtime)(ManagedPreparedRuntime*) noexcept;
+	// ABI 17: validate numeric candidate listener interfaces against the owned
+	// snapshot of enabled core listeners. `owner` is diagnostic only and never
+	// suppresses a conflict. Empty `interfaces` means zero listeners. Phase B
+	// gets a rejecting stub; normal init/start and Admin LOAD use the live
+	// callback. No SQL, DNS, or core listener mutation occurs in this service.
+	bool (*validate_listener_interfaces)(const char* owner, const char* interfaces,
+		std::string& error);
+	// ABI 18: borrow the frozen raw TCP backend V2 table. The getter itself is
+	// always callable when present; Phase B returns nullptr because the HGM and
+	// protocol handlers are not live yet. Normal init/start and later return a
+	// process-resident service whose handles must all be destroyed before the
+	// owning plugin's stop() returns.
+	const ProxySQL_RawBackendServiceV2* (*get_raw_backend_service)();
 #endif /* PROXYSQL40 */
 };
 
