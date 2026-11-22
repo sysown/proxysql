@@ -374,6 +374,7 @@
   "pgsql-reg_test_6389_monitor_lifecycle-t" : [ "legacy-g4" ],
   "pgsql-reg_test_6419_parsersql_first_comment-t" : [ "legacy-g1" ],
   "pgsql-reg_test_6429_monitor_interval_overflow-t" : [ "legacy-g4" ],
+  "pgsql-reg_test_6688_promotion_detection-t" : [ "legacy-g4" ],
   "pgsql-reg_test_6521_cancel_idle_session_busy_poll-t" : [ "legacy-g4" ],
   "pgsql-reg_test_6564_quoted_client_encoding-t" : [ "legacy-g4","set_parser_algorithm_3-g1" ],
   "pgsql-reg_test_6569_timezone_validation-t" : [ "legacy-g4","set_parser_algorithm_3-g1" ],
