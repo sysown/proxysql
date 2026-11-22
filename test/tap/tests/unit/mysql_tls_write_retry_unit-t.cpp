@@ -139,12 +139,31 @@ static void test_retry(SSL_CTX *server_ctx, int version, bool full_socket) {
 	}
 	std::string payload(16384, '\0');
 	for (size_t i = 0; i < payload.size(); ++i) payload[i] = static_cast<char>(i % 251);
+#ifdef PROXYSQL31
+	// Larger than the output ring. Hand a queue-owned packet to the span, as the
+	// borrow path does in production, so this also covers packet release while
+	// SSL_write retries ciphertext. `payload` stays the independent expectation.
+	void* owned = l_alloc(payload.size());
+	memcpy(owned, payload.data(), payload.size());
+	stream.queueOUT.buffer = owned;
+	stream.queueOUT.size = static_cast<unsigned int>(payload.size());
+	stream.queueOUT.head = static_cast<unsigned int>(payload.size());
+	stream.queueOUT.tail = 0;
+	stream.queueOUT.partial = 0;
+	stream.queueOUT.pkt.ptr = owned;
+	stream.queueOUT.pkt.size = payload.size();
+#else
 	require(payload.size() <= stream.queueOUT.size, "payload fits plaintext queue");
 	memcpy(stream.queueOUT.buffer, payload.data(), payload.size());
 	stream.queueOUT.head = payload.size();
+#endif
 	int rc = stream.write_to_net();
 	ok(rc == static_cast<int>(payload.size()), "report plaintext accepted by TLS despite backpressure");
 	ok(stream.queueOUT.head == 0 && stream.queueOUT.tail == 0, "consume accepted plaintext exactly once");
+#ifdef PROXYSQL31
+	ok(stream.queueOUT.buffer == stream.queueOUT.storage && stream.queueOUT.pkt.ptr == NULL,
+		"owned ring restored and packet released after the span was accepted");
+#endif
 	ok(stream.ssl_write_len > 0, "retain ciphertext that the socket could not accept");
 	ok(stream.active && !stream.net_failure, "backpressure keeps the stream healthy");
 	ok(stream.bytes_info.bytes_sent == payload.size(), "account accepted plaintext once");
@@ -176,7 +195,11 @@ static void test_retry(SSL_CTX *server_ctx, int version, bool full_socket) {
 }
 
 int main() {
+#ifdef PROXYSQL31
+	plan(37);
+#else
 	plan(33);
+#endif
 	ok(test_init_minimal() == 0, "initialize test globals");
 	SSL_CTX *ctx = server_context();
 	for (int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {

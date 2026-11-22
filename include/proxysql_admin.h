@@ -480,6 +480,13 @@ class ProxySQL_Admin {
 		int web_port;
 		int web_port_old;
 		int p_memory_metrics_interval;
+#ifdef PROXYSQL31
+		/**
+		 * @brief Entry count growth, in percent, of a query digest map that triggers a new scan when the
+		 *   digest memory metrics are collected (#6673). 0 scans on every collection.
+		 */
+		int stats_query_digest_memory_refresh_pct;
+#endif
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */

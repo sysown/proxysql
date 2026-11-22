@@ -32,8 +32,70 @@ typedef struct P_st_ma_pvio_tls {
 } P_MARIADB_TLS;
 
 
+#ifdef PROXYSQL31
+// Input ring. One per connection, paid by idle clients.
+#define QUEUE_IN_DEFAULT_SIZE	32768
+// Output ring. Packs only what is not sent as its own span.
+// 1 KiB holds protocol chatter; result slabs point at their own buffer.
+// The ring is not a fixed staging area for large packets: when it is empty and
+// the next packet is larger than this, the packet itself becomes the send span
+// (see queue_t). This is what keeps idle MySQL connections small.
+#define QUEUE_OUT_DEFAULT_SIZE	1024
+// Compressed connections stage every compressed frame through the ring, and
+// recompression already happened before the copy. Keep the historical 32 KiB
+// for them; the ring is raised once, on the first compressed frame.
+#define QUEUE_OUT_COMPRESSED_SIZE	32768
+// Bytes on the wire before writeout() looks at the client rate. Not a capacity.
+// The old code compared against QUEUE_T_DEFAULT_SIZE because the output ring was
+// always 32 KiB; the throttle is about wire bytes, so keep it as its own name.
+#define WRITEOUT_THROTTLE_BYTES	32768
+// Historical name for the input ring.
+#define QUEUE_T_DEFAULT_SIZE	QUEUE_IN_DEFAULT_SIZE
+
+/*
+ * A queue has two independent identities:
+ *
+ *   storage / capacity
+ *       The owned, contiguous ring. It is allocated by queue_init() and never
+ *       resized, with one exception: a compressed MySQL connection grows
+ *       queueOUT once, from QUEUE_OUT_DEFAULT_SIZE to QUEUE_OUT_COMPRESSED_SIZE,
+ *       because every compressed frame is staged through the ring.
+ *
+ *   buffer / size
+ *       The span the next send()/SSL_write() reads. It is normally storage, but
+ *       while a packet larger than the ring is being sent from an empty ring it
+ *       points directly at that packet ("borrowed span"). Borrowing avoids the
+ *       copy that the old staging path made for every large resultset slab.
+ *
+ * head / tail are offsets into buffer and queue_data(q) == head - tail is the
+ * number of queued bytes in the current span. For an owned ring, array2buffer()
+ * appends at head. For a borrowed span the whole packet is one span: head is
+ * its length and tail advances as the socket accepts bytes. Because a borrowed
+ * packet is not ring storage:
+ *
+ *   - a borrow may only start when the ring is empty (queue_data() == 0);
+ *   - array2buffer() must not append while a borrow is active;
+ *   - release_borrowed_out_span() restores storage only after the span drains;
+ *   - queue_zero(), which compacts in place, is used on queueIN only.
+ *
+ * partial is the number of bytes of pkt already copied into an owned ring. It
+ * is always 0 for a borrowed span. pkt owns the packet (from PSarrayOUT, or the
+ * compressed frame built by generate_compressed_packet()) and is freed by
+ * queue_destroy() if the stream dies mid-transfer.
+ */
+typedef struct _queue_t {
+	void *buffer;		// span send()/SSL_write() read; storage, or a borrowed packet
+	void *storage;		// owned ring. destroy() frees this, never buffer
+	unsigned int size;	// length of the current span (capacity for an owned ring)
+	unsigned int capacity;	// size of storage; set at init, raised once for compression
+	unsigned int head;	// end of queued data within buffer
+	unsigned int tail;	// start of unsent data within buffer
+	unsigned int partial;	// bytes of pkt already copied into an owned ring
+	PtrSize_t pkt;		// packet being staged, or the borrowed span
+	mysql_hdr hdr;
+} queue_t;
+#else
 #define QUEUE_T_DEFAULT_SIZE	32768
-#define MY_SSL_BUFFER	8192
 
 typedef struct _queue_t {
 	void *buffer;
@@ -44,6 +106,8 @@ typedef struct _queue_t {
 	PtrSize_t pkt;
 	mysql_hdr hdr;
 } queue_t;
+#endif // PROXYSQL31
+#define MY_SSL_BUFFER	8192
 
 
 // this class avoid copying data
@@ -208,6 +272,12 @@ class MySQL_Data_Stream
 	// during fast forward grace close, allowing buffers to drain.
 	bool defer_close_due_to_fast_forward;
 	bool net_failure;
+#ifdef PROXYSQL31
+	// Set once when growing queueOUT for a compressed connection fails. The
+	// growth is retried on later frames, but the failure is logged only once so
+	// a persistent allocation failure cannot flood the error log per frame.
+	bool queue_out_grow_failed;
+#endif // PROXYSQL31
 
 	uint8_t pkt_sid;
 

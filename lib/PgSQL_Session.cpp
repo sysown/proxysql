@@ -1089,9 +1089,8 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_PING_TIMEOUT);
 			}
 			else { // rc==-1
-				int myerr = 0; // TODO: fix this mysql_errno(myconn->pgsql);
 				detected_broken_connection(__FILE__, __LINE__, __func__, "during ping", myconn,  true);
-				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
+				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
@@ -1146,7 +1145,7 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 					myconn->parent->myhgc->hid,
 					myconn->parent->address,
 					myconn->parent->port,
-					(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
+					error_present ? std::string(myconn->get_counter_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
 				);
 				if (error_present) {
 					proxy_error("Detected an error during Reset Session on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myconn->get_error_code_with_message().c_str());
@@ -1198,7 +1197,7 @@ int PgSQL_Session::handler_again___status_RESYNCHRONIZING_CONNECTION() {
 			PgSQL_Result_to_PgSQL_wire(myconn, myds);
 			if (failed) {
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid,
-					myconn->parent->address, myconn->parent->port, 9999);
+					myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 				handler_minus1_LogErrorDuringQuery(myconn);
 				RequestEnd(myds, true);
 				handler_minus1_HandleBackendConnection(myds);
@@ -1228,7 +1227,7 @@ int PgSQL_Session::handler_again___status_RESYNCHRONIZING_CONNECTION() {
 			proxy_error("Detected an error during Resynchronization on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %s , %s\n", 
 				myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, code, msg);
 
-			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, 9999);
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
@@ -1366,7 +1365,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV)
+				myconn->get_simple_command_error_code_str(rc)
 			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn = false;
@@ -1496,7 +1495,7 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
+				myconn->get_simple_command_error_code_str(rc)
 			);
 			if (error_present == false || (error_present == true && myconn->is_connection_in_reusable_state() == false)) {
 				bool retry_conn = false;
@@ -1768,7 +1767,7 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 				p_pgsql_error_type::pgsql, 
 				myconn->parent->myhgc->hid, 
 				myconn->parent->address, 
-				myconn->parent->port, 9999 /* TODO: fix this mysql_errno(myconn->pgsql)*/);
+				myconn->parent->port, myconn->get_connect_error_code_str());
 
 			if (myds->connect_retries_on_failure > 0) {
 				myds->connect_retries_on_failure--;
@@ -1881,7 +1880,7 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
+				error_present ? std::string(myconn->get_counter_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
 			);
 			if (error_present == false || (error_present == true && myconn->is_connection_in_reusable_state() == false)) {
 				bool retry_conn = false;
@@ -2105,7 +2104,27 @@ int PgSQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 			break;
 		}
 
-		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
+		// A simple-query COPY takes CopyData, CopyDone and CopyFail from the client, and PostgreSQL ignores a
+		// Flush during it. None of them gets a reply of its own once the COPY is over, so they are relayed.
+		// Anything else waits here like a query pipelined behind any other: its reply would come after the
+		// COPY's ReadyForQuery, which ends fast forward and can give the backend to the pool. That includes a
+		// Sync, which PostgreSQL ignores during a COPY FROM but answers once the COPY is over. Sent before
+		// CopyDone, a held message holds the COPY data behind it too, so that COPY ends only when the client
+		// leaves (a Query there is a protocol error, which PostgreSQL refuses). The fast forward read limit
+		// counts only what is queued for the backend: data held here is buffered without it, as messages
+		// pipelined behind a query are in normal mode.
+		// Only a well-formed Flush (no body, 5 bytes) is relayed. One with a body, sent after CopyDone,
+		// reaches a backend that has ended the COPY: it refuses it and then ignores everything until a Sync,
+		// with no ReadyForQuery, on a backend that may already be back in the pool. Held, normal mode
+		// takes it as a Flush and the backend never sees it.
+		bool copy_hold = false;
+		if (session_fast_forward == SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT) {
+			const PtrSize_t* nxt = client_myds->PSarrayIN->index(0);
+			const char t = *static_cast<const char*>(nxt->ptr);
+			copy_hold = t != 'd' && t != 'c' && t != 'f' && (t != 'H' || nxt->size != 5);
+		}
+
+		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE || copy_hold) {
 			// If the client sends a new packet while a query is still executing,
 			// we no longer treat this as an error. Previously, such packets were
 			// considered unexpected and the session was terminated.
@@ -3224,7 +3243,7 @@ bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int
 	case PGSQL_ERROR_CODES::ERRCODE_ADMIN_SHUTDOWN: // Server shutdown in progress. Requested by Admin
 	case PGSQL_ERROR_CODES::ERRCODE_CRASH_SHUTDOWN: // Server shutdown in progress
 	case PGSQL_ERROR_CODES::ERRCODE_CANNOT_CONNECT_NOW: // Server in initialization mode and not ready to handle new connections
-		myconn->parent->connect_error(9999);
+		myconn->parent->connect_error(myconn->get_error_code());
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
 			retry_conn = query_retry_allowed(myds);
@@ -3465,6 +3484,13 @@ void PgSQL_Session::note_backend_release(unsigned int hostgroup) {
 }
 #endif
 
+// Data this backend stream has queued or started sending: its queue and send buffer, the rest of the
+// message being copied into that buffer, and TLS records not written yet.
+static bool backend_data_unsent(PgSQL_Data_Stream* ds) {
+	return ds->available_data_out() || ds->queueOUT.partial || ds->ssl_write_len ||
+		(ds->encrypted && ds->wbio_ssl && BIO_ctrl_pending(ds->wbio_ssl));
+}
+
 #ifdef PROXYSQL31
 int PgSQL_Session::handler(bool io_only) try {
 #else
@@ -3625,6 +3651,42 @@ handler_again:
 				// register the PgSQL_Data_Stream
 				thread->mypolls.add(POLLIN | POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 			}
+
+		constexpr unsigned char ready_packet[] = { 0x5A, 0x00, 0x00, 0x00, 0x05 };
+		bool is_copy_ready_packet = false;
+		char copy_ready_status = 'I';
+		// if session_fast_forward type is COPY STDIN, we need to check if it is ready packet
+		if (session_fast_forward == SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT) {
+			for (unsigned int i = mybe->server_myds->PSarrayIN->len; i-- > 0 && is_copy_ready_packet == false;) {
+				const PtrSize_t& data = mybe->server_myds->PSarrayIN->pdata[i];
+				if (data.size == 6 && memcmp(data.ptr, ready_packet, sizeof(ready_packet)) == 0) {
+					is_copy_ready_packet = true;
+					copy_ready_status = static_cast<const char*>(data.ptr)[5];
+				}
+			}
+		}
+		if (is_copy_ready_packet) {
+			// The backend has ended the COPY, so it ignores any client COPY message or Flush still
+			// queued for it, such as a CopyDone that arrived with its error. Sent after the TLS is
+			// given back, that message goes out unencrypted and the backend drops the connection.
+			// Discard them, as normal mode discards the ones that arrive later.
+			PtrSizeArray* out = mybe->server_myds->PSarrayOUT;
+			unsigned int n = 0;
+			for (; n < out->len; n++) {
+				const char type = *(const char*)out->index(n)->ptr;
+				if (type != 'd' && type != 'c' && type != 'f' && type != 'H') break;
+				l_free(out->index(n)->size, out->index(n)->ptr);
+			}
+			out->remove_index_range(0, n);
+			// A message it has started to receive must still be completed, or it reads what follows as
+			// the rest of it: an early end (an error, a cancel) can leave one half sent. Its reply waits
+			// here until then, so the client sends nothing new. See the check after writeout().
+			copy_end_pending = backend_data_unsent(mybe->server_myds);
+			if (copy_end_pending) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p -- COPY ended with client data still unsent; holding the reply\n", this);
+				break;
+			}
+		}
 #ifdef PROXYSQLFFTO
 			if (pgsql_thread___ffto_enabled && !ffto_bypassed && m_ffto) {
 				for (unsigned int i = 0; i < mybe->server_myds->PSarrayIN->len; i++) {
@@ -3637,25 +3699,7 @@ handler_again:
 			}
 #endif
 			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
-
-		constexpr unsigned char ready_packet[] = { 0x5A, 0x00, 0x00, 0x00, 0x05 };
-		bool is_copy_ready_packet = false;
-		char copy_ready_status = 'I';
-		while (mybe->server_myds->PSarrayIN->len) {
-
-			// if session_fast_forward type is COPY STDIN, we need to check if it is ready packet
-			if (session_fast_forward == SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT) {
-				const PtrSize_t& data = mybe->server_myds->PSarrayIN->pdata[mybe->server_myds->PSarrayIN->len - 1];
-				if (is_copy_ready_packet == false && data.size == 6) {
-					//const unsigned char* ptr = (static_cast<unsigned char*>(data.ptr) /*+ (data.size - 6)*/);
-					if (memcmp(data.ptr, ready_packet, sizeof(ready_packet)) == 0) {
-						is_copy_ready_packet = true;
-						copy_ready_status = static_cast<const char*>(data.ptr)[5];
-					}
-				}
-			}
-			mybe->server_myds->PSarrayIN->remove_index(mybe->server_myds->PSarrayIN->len - 1, NULL);
-		}
+			mybe->server_myds->PSarrayIN->remove_index_range(0, mybe->server_myds->PSarrayIN->len);
 
 		// if ready packet is found, we need to switch back to normal mode
 		if (is_copy_ready_packet) {
@@ -4295,7 +4339,6 @@ handler_again:
 				if (rc == -1) {
 					// the query failed
 					//bool is_error_present = myconn->is_error_present(); // false means failure is due to server being in OFFLINE state
-					PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, 9999); // TOFIX
 					//CurrentQuery.mysql_stmt = NULL; // immediately reset mysql_stmt
 					int rc1 = handler_ProcessingQueryError_CheckBackendConnectionStatus(myds);
 					if (rc1 == -1) {
@@ -4306,6 +4349,10 @@ handler_again:
 						if (rc1 == 1)
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
 					}
+					// The backend failed the query. An offline server returned above, already counted as
+					// ER_PROXYSQL_OFFLINE_SRV: async_query() then fails before clearing the connection's
+					// error, so its SQLSTATE would be a previous query's.
+					PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 					if (myconn->is_connection_in_reusable_state() == false) {
 						if (handler_minus1_ClientLibraryError(myds)) {
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
@@ -4484,6 +4531,14 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 		return handler_ret;
 	}
 
+	// A COPY reply held in FAST_FORWARD (copy_end_pending): if the last of what the backend was being
+	// sent went out in writeout(), no later event calls us again, so relay the reply now.
+	if (copy_end_pending && status == FAST_FORWARD && backend_data_unsent(mybe->server_myds) == false) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p -- unsent COPY data sent; relaying the reply\n", this);
+		copy_end_pending = false;
+		goto handler_again;
+	}
+
 	// A poisoned transaction ended on a backend that holds session state: roll it back now, before
 	// the client's next packet. Packets that arrive meanwhile wait in PSarrayIN.
 	if (status == WAITING_CLIENT_DATA && poison_rollback_pending && start_poison_rollback()) {
@@ -4606,18 +4661,24 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		) {
 			// use SSL
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
+#ifdef PROXYSQL31
+			if (!client_myds->start_client_tls()) {
+				*wrong_pass = true; // forcefully close the connection
+				client_myds->setDSS_STATE_QUERY_SENT_NET();
+			}
+#else
 			client_myds->DSS = STATE_SSL_INIT;
 			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-#ifdef PROXYSQL31
-			client_myds->tls13_handshake_complete = false;
-#endif
 			client_myds->ssl = GloVars.get_SSL_new();
 			SSL_set_fd(client_myds->ssl, client_myds->fd);
 			SSL_set_accept_state(client_myds->ssl);
 			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
+#endif
 			l_free(pkt->size, pkt->ptr);
+#ifndef PROXYSQL31
 			proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+#endif
 			return;
 	}
 
@@ -6278,7 +6339,9 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	// Query cache handling. A session locked on a hostgroup ran a change ProxySQL could not
 	// track (SET SCHEMA, SET LOCAL, a SET inside a multi-statement query, ...), so the key
 	// does not describe its settings: a cached entry may not fit it. Same rule as the extended cache.
-	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && locked_on_hostgroup < 0) {
+	// *lock_hostgroup: this query asked for the lock, which the caller takes only after we return.
+	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && locked_on_hostgroup < 0 &&
+		*lock_hostgroup == false) {
 		CurrentQuery.simple_cache_seed = simple_query_cache_seed(client_myds->myconn);
 		const std::shared_ptr<PgSQL_QC_entry_t> pgsql_qc_entry = GloPgQC->get(
 			CurrentQuery.simple_cache_seed,
@@ -7009,10 +7072,24 @@ void PgSQL_Session::Memory_Stats() {
 		internal += sizeof(PgSQL_Query_Processor_Output);
 	if (client_myds) {
 		internal += sizeof(PgSQL_Data_Stream);
+#ifdef PROXYSQL31
+		// Rings are fixed at creation: 32 KiB input, 1 KiB output. A packet
+		// removed from PSarrayOUT is owned by queueOUT.pkt, whether it is being
+		// borrowed as the send span or copied into the ring;
+		// PSarrayOUT->total_size() below no longer counts it, so account for any
+		// packet still owned here.
+		if (client_myds->queueIN.storage)
+			frontend += client_myds->queueIN.capacity;
+		if (client_myds->queueOUT.storage)
+			frontend += client_myds->queueOUT.capacity;
+		if (client_myds->queueOUT.pkt.ptr)
+			frontend += client_myds->queueOUT.pkt.size;
+#else
 		if (client_myds->queueIN.buffer)
 			frontend += QUEUE_T_DEFAULT_SIZE;
 		if (client_myds->queueOUT.buffer)
 			frontend += QUEUE_T_DEFAULT_SIZE;
+#endif
 		if (client_myds->myconn) {
 			internal += sizeof(PgSQL_Connection);
 		}
@@ -7033,10 +7110,21 @@ void PgSQL_Session::Memory_Stats() {
 		internal += sizeof(PgSQL_Backend);
 		if (_mybe->server_myds) {
 			internal += sizeof(PgSQL_Data_Stream);
+#ifdef PROXYSQL31
+			// Same accounting as the client stream above: fixed rings plus any
+			// output packet that PSarrayOUT no longer references.
+			if (_mybe->server_myds->queueIN.storage)
+				backend += _mybe->server_myds->queueIN.capacity;
+			if (_mybe->server_myds->queueOUT.storage)
+				backend += _mybe->server_myds->queueOUT.capacity;
+			if (_mybe->server_myds->queueOUT.pkt.ptr)
+				backend += _mybe->server_myds->queueOUT.pkt.size;
+#else
 			if (_mybe->server_myds->queueIN.buffer)
 				backend += QUEUE_T_DEFAULT_SIZE;
 			if (_mybe->server_myds->queueOUT.buffer)
 				backend += QUEUE_T_DEFAULT_SIZE;
+#endif
 			if (_mybe->server_myds->myconn) {
 				PgSQL_Connection* myconn = _mybe->server_myds->myconn;
 				internal += sizeof(PgSQL_Connection);
@@ -8037,18 +8125,6 @@ void PgSQL_Session::switch_fast_forward_to_normal_mode() {
 		session_fast_forward = SESSION_FORWARD_TYPE_NONE;
 		PgSQL_Data_Stream* myds = mybe->server_myds;
 		PgSQL_Connection* myconn = myds->myconn;
-		// The backend has ended the COPY, so it ignores any client COPY message still queued for
-		// it, such as a CopyDone that arrived with its error. Sent after the TLS is given back,
-		// that message goes out unencrypted and the backend drops the connection. Discard them,
-		// as normal mode discards the ones that arrive later.
-		PtrSizeArray* out = myds->PSarrayOUT;
-		unsigned int n = 0;
-		for (; n < out->len; n++) {
-			const char type = *(const char*)out->index(n)->ptr;
-			if (type != 'd' && type != 'c' && type != 'f') break;
-			l_free(out->index(n)->size, out->index(n)->ptr);
-		}
-		out->remove_index_range(0, n);
 		// Give the borrowed TLS back before the session uses the connection again or
 		// it is pooled, or the next query on it never reaches the backend.
 		myds->release_backend_tls();
@@ -10030,7 +10106,7 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 	if (backend_error) {
 		// The error reached the client in its place in the batch, and the backend has concluded it.
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid,
-			myconn->parent->address, myconn->parent->port, 9999);
+			myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 		myconn->reset_error();
 	}
 	if (active_transactions != 0 && myconn->IsKnownActiveTransaction() == false && myconn->is_pipeline_active() == false) {

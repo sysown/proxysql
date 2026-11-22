@@ -372,6 +372,9 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_wait_timeout",
 */
 	(char*)"monitor_writer_is_also_reader",
+#ifdef PROXYSQL31
+	(char*)"monitor_unshun_on_ping_success",
+#endif
 	(char*)"max_allowed_packet",
 	(char*)"tcp_keepalive_time",
 	(char*)"use_tcp_keepalive",
@@ -1115,6 +1118,14 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.monitor_replication_lag_use_percona_heartbeat = strdup((char*)"");
 	variables.monitor_wait_timeout = true;
 	variables.monitor_writer_is_also_reader = true;
+#ifdef PROXYSQL31
+	// On by default in 4.0, opt-in in 3.1.
+#ifdef PROXYSQL40
+	variables.monitor_unshun_on_ping_success = true;
+#else
+	variables.monitor_unshun_on_ping_success = false;
+#endif
+#endif
 	variables.max_allowed_packet = 64 * 1024 * 1024;
 	variables.automatic_detect_sqli = false;
 	variables.firewall_whitelist_enabled = false;
@@ -2293,6 +2304,9 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"] = make_tuple(&variables.monitor_wait_timeout, false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"] = make_tuple(&variables.monitor_writer_is_also_reader, false);
+#ifdef PROXYSQL31
+		VariablesPointers_bool["monitor_unshun_on_ping_success"] = make_tuple(&variables.monitor_unshun_on_ping_success, false);
+#endif
 		VariablesPointers_bool["multiplexing"] = make_tuple(&variables.multiplexing, false);
 		VariablesPointers_bool["preserve_client_on_broken_backend_in_tx"] = make_tuple(&variables.preserve_client_on_broken_backend_in_tx, false);
 		VariablesPointers_bool["query_cache_stores_empty_result"] = make_tuple(&variables.query_cache_stores_empty_result, false);
@@ -4017,8 +4031,15 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 #endif
 			// only if we aren't using MariaDB Client Library
 			int rb = 0;
+			// TLS in fast forward (COPY included): read the socket once per poll pass, then only decrypt
+			// what is already buffered. Reading it on every turn of these loops let a peer that keeps
+			// sending hold the thread here; what is left in the socket is reported by the next poll().
+			// Other sessions read the socket on every turn, as before.
+			const bool fast_forward = myds->sess->session_fast_forward != SESSION_FORWARD_TYPE_NONE;
+			bool allow_recv = true;
 			do {
-				rb = myds->read_from_net();
+				rb = myds->read_from_net(allow_recv);
+				allow_recv = !fast_forward;
 				if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
 					status_variables.stvar[st_var_queries_frontends_bytes_recv] += rb;
 				}
@@ -4041,7 +4062,7 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 */
 							proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p , thread_session_id=%u -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, myds->sess->thread_session_id, rb);
 							while (rb > 0) {
-								rb = myds->read_from_net();
+								rb = myds->read_from_net(false); // decrypt every whole record already received
 								if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
 									status_variables.stvar[st_var_queries_frontends_bytes_recv] += rb;
 								}
@@ -4051,23 +4072,9 @@ bool PgSQL_Thread::consume_data_stream_readiness(PgSQL_Data_Stream *myds) {
 							rb = 0; // exit loop
 						}
 						else { // we are in fast_forward mode and encrypted == false
-							struct pollfd _fds;
-							nfds_t _nfds = 1;
-#ifdef PROXYSQL31
-							_fds.fd = myds->fd;
-#else
-							_fds.fd = mypolls.fds[n].fd;
-#endif
-							_fds.events = POLLIN;
-							_fds.revents = 0;
-							int _rc = poll(&_fds, _nfds, 0);
-							if ((_rc > 0) && _fds.revents == POLLIN) {
-								// there is more data
-								myds->revents = _fds.revents;
-							}
-							else {
-								rb = 0; // exit loop
-							}
+							// Read the socket once per poll pass, as the TLS branch does. Reading it again while
+							// poll() reported more data held the thread for as long as the backend kept sending.
+							rb = 0; // exit loop
 						}
 					}
 					else {
@@ -4565,6 +4572,9 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_wait_timeout = (bool)GloPTH->get_variable_int((char*)"monitor_wait_timeout");
 	*/
 	pgsql_thread___monitor_writer_is_also_reader = (bool)GloPTH->get_variable_int((char*)"monitor_writer_is_also_reader");
+#ifdef PROXYSQL31
+	pgsql_thread___monitor_unshun_on_ping_success = (bool)GloPTH->get_variable_int((char*)"monitor_unshun_on_ping_success");
+#endif
 	pgsql_thread___monitor_enabled = (bool)GloPTH->get_variable_int((char*)"monitor_enabled");
 	pgsql_thread___monitor_history = GloPTH->get_variable_int((char*)"monitor_history");
 	pgsql_thread___monitor_connect_interval = GloPTH->get_variable_int((char*)"monitor_connect_interval");
@@ -6311,7 +6321,15 @@ void PgSQL_Thread::Get_Memory_Stats() {
 			}
 		}
 		else {
+#ifdef PROXYSQL31
+			// Epoll/idle worker: sessions may be owned/moved by another thread,
+			// so they are not inspected individually. Report the default per
+			// connection rings. PostgreSQL has no per-connection output
+			// compression, so the large output ring cannot occur here.
+			status_variables.stvar[st_var_mysql_frontend_buffers_bytes] += (mysql_sessions->len * (QUEUE_IN_DEFAULT_SIZE + QUEUE_OUT_DEFAULT_SIZE));
+#else
 			status_variables.stvar[st_var_mysql_frontend_buffers_bytes] += (mysql_sessions->len * QUEUE_T_DEFAULT_SIZE * 2);
+#endif
 			status_variables.stvar[st_var_mysql_session_internal_bytes] += (mysql_sessions->len * sizeof(PgSQL_Connection));
 #if !defined(__FreeBSD__) && !defined(__APPLE__)
 			status_variables.stvar[st_var_mysql_session_internal_bytes] += ((sizeof(int) + sizeof(int) + sizeof(std::_Rb_tree_node_base)) * mysql_sessions->len);

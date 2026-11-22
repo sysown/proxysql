@@ -1294,6 +1294,9 @@ __thread int pgsql_thread___monitor_replication_lag_timeout;
 __thread int pgsql_thread___monitor_replication_lag_count;
 __thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbeat;
 __thread bool pgsql_thread___monitor_writer_is_also_reader;
+#ifdef PROXYSQL31
+__thread bool pgsql_thread___monitor_unshun_on_ping_success;
+#endif
 __thread int pgsql_thread___monitor_threads;
 __thread int pgsql_thread___monitor_local_dns_cache_ttl;
 __thread int pgsql_thread___monitor_local_dns_cache_refresh_interval;
@@ -1486,6 +1489,9 @@ __thread int mysql_thread___monitor_read_only_timeout;
 __thread int mysql_thread___monitor_read_only_max_timeout_count;
 __thread bool mysql_thread___monitor_wait_timeout;
 __thread bool mysql_thread___monitor_writer_is_also_reader;
+#ifdef PROXYSQL31
+__thread bool mysql_thread___monitor_unshun_on_ping_success;
+#endif
 __thread bool mysql_thread___monitor_replication_lag_group_by_host;
 __thread int mysql_thread___monitor_replication_lag_interval;
 __thread int mysql_thread___monitor_replication_lag_timeout;
@@ -1655,6 +1661,9 @@ extern __thread int pgsql_thread___monitor_replication_lag_count;
 extern __thread char* pgsql_thread___monitor_replication_lag_use_percona_heartbeat;
 extern __thread int pgsql_thread___monitor_read_only_max_timeout_count;
 extern __thread bool pgsql_thread___monitor_writer_is_also_reader;
+#ifdef PROXYSQL31
+extern __thread bool pgsql_thread___monitor_unshun_on_ping_success;
+#endif
 extern __thread int pgsql_thread___monitor_threads;
 extern __thread int pgsql_thread___monitor_local_dns_cache_ttl;
 extern __thread int pgsql_thread___monitor_local_dns_cache_refresh_interval;
@@ -1847,6 +1856,9 @@ extern __thread int mysql_thread___monitor_read_only_timeout;
 extern __thread int mysql_thread___monitor_read_only_max_timeout_count;
 extern __thread bool mysql_thread___monitor_wait_timeout;
 extern __thread bool mysql_thread___monitor_writer_is_also_reader;
+#ifdef PROXYSQL31
+extern __thread bool mysql_thread___monitor_unshun_on_ping_success;
+#endif
 extern __thread bool mysql_thread___monitor_replication_lag_group_by_host;
 extern __thread int mysql_thread___monitor_replication_lag_interval;
 extern __thread int mysql_thread___monitor_replication_lag_timeout;
