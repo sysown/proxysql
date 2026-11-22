@@ -589,6 +589,9 @@ static char * admin_variables_names[]= {
 	(char *)"web_port",
 	(char *)"web_verbosity",
 	(char *)"prometheus_memory_metrics_interval",
+#ifdef PROXYSQL31
+	(char *)"stats_query_digest_memory_refresh_pct",
+#endif
 #ifdef DEBUG
 	(char *)"debug",
 	(char *)"debug_output",
@@ -3185,6 +3188,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.web_port_old = variables.web_port;
 	variables.web_verbosity = 0;
 	variables.p_memory_metrics_interval = 61;
+#ifdef PROXYSQL31
+	variables.stats_query_digest_memory_refresh_pct = 5;
+#endif
 	all_modules_started = false;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
@@ -4624,6 +4630,12 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		snprintf(intbuf, sizeof(intbuf), "%d", variables.p_memory_metrics_interval);
 		return strdup(intbuf);
 	}
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"stats_query_digest_memory_refresh_pct")) {
+		snprintf(intbuf, sizeof(intbuf), "%d", variables.stats_query_digest_memory_refresh_pct);
+		return strdup(intbuf);
+	}
+#endif
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup(variables.debug ? "true" : "false");
@@ -5614,6 +5626,19 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			return false;
 		}
 	}
+#ifdef PROXYSQL31
+	if (!strcasecmp(name,"stats_query_digest_memory_refresh_pct")) {
+		char* end = nullptr;
+		errno = 0;
+		const long fval = strtol(value, &end, 10);
+		if (end != value && *end == '\0' && errno == 0 && fval >= 0 && fval <= 100) {
+			variables.stats_query_digest_memory_refresh_pct = static_cast<int>(fval);
+			return true;
+		} else {
+			return false;
+		}
+	}
+#endif
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {

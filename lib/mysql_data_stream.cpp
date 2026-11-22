@@ -123,6 +123,37 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 }
 #endif
 
+#ifdef PROXYSQL31
+// Allocate the owned ring. `capacity` is fixed for the life of the queue and
+// is only ever raised, once and deliberately, by mysql_queue_grow() below.
+// After init, buffer == storage and head == tail == 0: the common case.
+#define queue_init(_q,_s) { \
+	_q.capacity=_s; \
+	_q.size=_s; \
+	_q.storage=malloc(_q.capacity); \
+	_q.buffer=_q.storage; \
+	_q.head=0; \
+	_q.tail=0; \
+	_q.partial=0; \
+	_q.pkt.ptr=NULL; \
+	_q.pkt.size=0; \
+}
+
+// Destroy the owned ring and any packet still owned by the queue. `buffer` is
+// deliberately not freed: when a span is borrowed, buffer points at pkt.ptr
+// (or at a PSarrayOUT packet), which is not ours to free a second time.
+// pkt.ptr is the queue's responsibility whether it is a staged/compressed
+// packet or a borrowed span.
+#define queue_destroy(_q) { \
+	if (_q.storage) free(_q.storage); \
+	_q.storage=NULL; \
+	_q.buffer=NULL; \
+	if (_q.pkt.ptr) { \
+		l_free(_q.pkt.size,_q.pkt.ptr); \
+		_q.pkt.ptr=NULL; \
+	} \
+}
+#else
 #define queue_init(_q,_s) { \
     _q.size=_s; \
     _q.buffer=malloc(_q.size); \
@@ -141,7 +172,11 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 		queueOUT.pkt.ptr=NULL; \
 	} \
 }
+#endif // PROXYSQL31
 
+// Compact queued bytes to offset 0. Valid only for queueIN: queueOUT can hold
+// a borrowed span (buffer != storage) or a partially staged packet, and moving
+// its bytes would invalidate the pointer handed to send().
 #define queue_zero(_q) { \
   if (_q.tail != 0) { \
     memcpy(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
@@ -150,9 +185,15 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
   _q.tail=0; \
 }
 
+// Space left in the current span. For a borrowed span head == size, so this is
+// 0 and array2buffer() will not try to append to it.
 #define queue_available(_q) (_q.size-_q.head)
+// Bytes queued in the current span. Non-zero while a borrowed span is in flight.
 #define queue_data(_q) (_q.head-_q.tail)
 
+// Consume `_s` bytes from the front of the span. Reaching head means the span is
+// fully sent, so both offsets reset to 0. That reset is also how
+// release_borrowed_out_span() detects that a borrowed span has drained.
 #define queue_r(_q, _s) { \
   _q.tail+=_s; \
   if (_q.tail==_q.head) { \
@@ -161,10 +202,48 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
   } \
 }
 
+// Append `_s` bytes at head. Only ever used on an owned ring (buffer == storage).
 #define queue_w(_q,_s) (_q.head+=_s)
 
+// Read cursor for send()/SSL_write(); write cursor for array2buffer().
 #define queue_r_ptr(_q) ((unsigned char *)_q.buffer+_q.tail)
 #define queue_w_ptr(_q) ((unsigned char *)_q.buffer+_q.head)
+
+#ifdef PROXYSQL31
+// Raise the owned ring to `capacity`, keeping queued bytes.
+//
+// This is the only runtime resize in the queue design, and it is one-way: a
+// connection that negotiated MySQL compression keeps the larger ring even if it
+// later stops compressing (fast-forward, for example). Compression needs it
+// because every compressed frame is built into queueOUT.pkt and then copied
+// through the ring; a 1 KiB ring would hand the socket dozens of tiny writes
+// per frame. Uncompressed connections never come here and stay at 1 KiB.
+//
+// Called from array2buffer() before generate_compressed_packet(), so any bytes
+// already queued (normally the uncompressed auth OK) are compacted to offset 0
+// and preserved. A borrowed span is not ring storage: array2buffer() never
+// reaches this call while one is active, and the guard below makes that
+// invariant explicit. `q.partial` is 0 at every call site because growth only
+// happens while reading a new packet.
+static bool mysql_queue_grow(queue_t& q, unsigned int capacity) {
+	if (q.capacity >= capacity) return true;
+	if (q.buffer != q.storage) return false;
+	void* grown = malloc(capacity);
+	if (grown == nullptr) return false;
+	const unsigned int data = q.head - q.tail;
+	if (data) {
+		memcpy(grown, static_cast<unsigned char*>(q.storage) + q.tail, data);
+	}
+	free(q.storage);
+	q.storage = grown;
+	q.buffer = grown;
+	q.capacity = capacity;
+	q.size = capacity;
+	q.head = data;
+	q.tail = 0;
+	return true;
+}
+#endif // PROXYSQL31
 
 #define add_to_data_packet_history(_o,_p,_s) if (unlikely(GloVars.global.data_packets_history_size)) { \
 	if (static_cast<int>(_o.get_max_size()) != GloVars.global.data_packets_history_size) { \
@@ -341,8 +420,13 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	PSarrayIN=NULL;
 	PSarrayOUT=NULL;
 	resultset=NULL;
+#ifdef PROXYSQL31
+	queue_init(queueIN,QUEUE_IN_DEFAULT_SIZE);
+	queue_init(queueOUT,QUEUE_OUT_DEFAULT_SIZE);
+#else
 	queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
 	queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
+#endif
 	mybe=NULL;
 	active=1;
 	mypolls=NULL;
@@ -367,6 +451,9 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	ssl_write_len = 0;
 	ssl_write_buf = NULL;
 	net_failure=false;
+#ifdef PROXYSQL31
+	queue_out_grow_failed=false;
+#endif
 	CompPktIN.pkt.ptr=NULL;
 	CompPktIN.pkt.size=0;
 	CompPktIN.partial=0;
@@ -536,12 +623,26 @@ void MySQL_Data_Stream::init() {
 	}
 }
 
+#ifdef PROXYSQL31
+// Recreate a queue that was destroyed, for example when a backend data stream
+// is reused for a new connection. A fresh output ring is 1 KiB, so the
+// one-time compression failure latch must start clear as well.
+void MySQL_Data_Stream::reinit_queues() {
+	if (queueIN.storage==NULL)
+		queue_init(queueIN,QUEUE_IN_DEFAULT_SIZE);
+	if (queueOUT.storage==NULL) {
+		queue_init(queueOUT,QUEUE_OUT_DEFAULT_SIZE);
+		queue_out_grow_failed=false;
+	}
+}
+#else
 void MySQL_Data_Stream::reinit_queues() {
 	if (queueIN.buffer==NULL)
 		queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
 	if (queueOUT.buffer==NULL)
 		queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
 }
+#endif // PROXYSQL31
 
 // this function initializes a MySQL_Data_Stream with arguments
 void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int _fd) {
@@ -928,6 +1029,38 @@ int MySQL_Data_Stream::read_from_net() {
 	return r;
 }
 
+#ifdef PROXYSQL31
+// Finish a borrowed output span, if one is active and fully sent.
+//
+// array2buffer() borrows a packet when the ring is empty and the packet is
+// larger than the ring: queueOUT.buffer points at queueOUT.pkt.ptr and the whole
+// packet is one span. send()/SSL_write() advances tail. queue_r() resets both
+// offsets to 0 only when the last byte has been accepted, which is the signal
+// used here. Until then the packet must stay alive and buffer must keep
+// pointing at it; this function is the single place that returns the queue to
+// its owned ring.
+//
+// Ownership: a borrowed packet came from PSarrayOUT (uncompressed) or from
+// generate_compressed_packet() (compressed) and is owned by the queue from the
+// borrow until this release. Once fully accepted, record it in the optional
+// data packet history, which also frees it when history is disabled, then
+// restore the owned ring. Must not run before the span is drained, or send()
+// would read freed memory.
+static void release_borrowed_out_span(MySQL_Data_Stream* ds) {
+	queue_t& q = ds->queueOUT;
+	if (q.buffer == q.storage) return;	// nothing borrowed
+	if (q.head != 0 || q.tail != 0) return;	// span still in flight
+	if (q.pkt.ptr) {
+		add_to_data_packet_history_without_alloc(ds->data_packets_history_OUT, q.pkt.ptr, q.pkt.size);
+		q.pkt.ptr = NULL;
+		q.pkt.size = 0;
+	}
+	q.buffer = q.storage;
+	q.size = q.capacity;
+	q.partial = 0;
+}
+#endif // PROXYSQL31
+
 int MySQL_Data_Stream::write_to_net() {
     int bytes_io=0;
 	int s = queue_data(queueOUT);
@@ -1033,6 +1166,9 @@ int MySQL_Data_Stream::write_to_net() {
 		}
 	} else {
 		queue_r(queueOUT, bytes_io);
+#ifdef PROXYSQL31
+		release_borrowed_out_span(this);
+#endif
 
 		/**
 		 * @brief Update send timestamp in ProxySQL_Poll for activity tracking
@@ -1068,9 +1204,21 @@ int MySQL_Data_Stream::write_to_net() {
 	return bytes_io;
 }
 
+// True when the client still has output to send. This covers all three
+// states of the send path:
+//   - queue_data(queueOUT): bytes queued in the ring, or a borrowed span that
+//     is still in flight (head > tail);
+//   - queueOUT.partial: a packet that is still being copied into the ring. Once
+//     the ring drains, queue_data() is 0 but the rest of the packet is still
+//     pending, so callers must not treat the client as idle;
+//   - PSarrayOUT->len: packets not staged yet.
 bool MySQL_Data_Stream::available_data_out() {
 	int buflen=queue_data(queueOUT);
+#ifdef PROXYSQL31
+	if (buflen || queueOUT.partial || PSarrayOUT->len) {
+#else
 	if (buflen || PSarrayOUT->len) {
+#endif
 		return true;
 	}
 	return false;
@@ -1689,6 +1837,39 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 }
 
 
+/*
+ * Move packets from PSarrayOUT into the output send span.
+ *
+ * Two modes:
+ *
+ *   Staging (buffer == storage)
+ *       Copy packet bytes into the owned ring until it is full or PSarrayOUT is
+ *       empty. This is used for all ordinary protocol chatter and for every
+ *       frame on a compressed connection. A packet larger than the ring is
+ *       copied across several calls, with queueOUT.partial tracking progress.
+ *
+ *   Borrowing (buffer != storage)
+ *       If the ring is empty and the next packet is larger than the ring, point
+ *       buffer/size at the packet and publish it as a single span. No copy is
+ *       made; the packet now belongs to the queue and is freed by
+ *       release_borrowed_out_span() after send()/SSL_write() accepts it. This is
+ *       the normal case for a 32 KiB result slab on an uncompressed connection.
+ *
+ * Invariants:
+ *   - Borrowing only happens when queue_data(queueOUT) == 0, so the ring and the
+ *     packet are never interleaved in one span.
+ *   - A packet that does not fit is left in PSarrayOUT until the ring has
+ *     drained; the guard below exits before assigning it.
+ *   - While a span is borrowed this function does nothing (early return). The
+ *     caller's writeout() loop drains the existing span first.
+ *   - On the compressed path generate_compressed_packet() consumes packets from
+ *     the front of PSarrayOUT itself, which is why the "leave it queued" guard
+ *     is skipped there.
+ *
+ * Return value is the number of bytes made available this call (the span length
+ * when borrowing). array2buffer_full() loops until it returns 0. Callers do not
+ * otherwise interpret the value.
+ */
 int MySQL_Data_Stream::array2buffer() {
 	int ret=0;
 	unsigned int idx=0;
@@ -1699,6 +1880,13 @@ int MySQL_Data_Stream::array2buffer() {
 			goto __exit_array2buffer;
 		}
 	}
+#ifdef PROXYSQL31
+	// A borrowed span is already the send buffer. Do not copy into it: buffer
+	// points at the packet, not at the owned ring.
+	if (queueOUT.buffer != queueOUT.storage) {
+		return 0;
+	}
+#endif
 	while (cont) {
 		//VALGRIND_DISABLE_ERROR_REPORTING;
 		if (queue_available(queueOUT)==0) {
@@ -1707,6 +1895,16 @@ int MySQL_Data_Stream::array2buffer() {
 		if (queueOUT.partial==0) { // read a new packet
 			if (PSarrayOUT->len-idx) {
 				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Removing a packet from array\n", sess, this);
+#ifdef PROXYSQL31
+				// A packet that does not fit in storage is sent in place, but only
+				// once the ring is empty. Leave it queued until then.
+				if (myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION)==false) {
+					PtrSize_t* next = PSarrayOUT->index(idx);
+					if (next->size > queueOUT.capacity && queue_data(queueOUT) != 0) {
+						goto __exit_array2buffer;
+					}
+				}
+#endif
 				if (queueOUT.pkt.ptr) {
 					//l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
 					add_to_data_packet_history_without_alloc(data_packets_history_OUT,queueOUT.pkt.ptr,queueOUT.pkt.size);
@@ -1715,6 +1913,23 @@ int MySQL_Data_Stream::array2buffer() {
 		//VALGRIND_ENABLE_ERROR_REPORTING;
 				if (myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION)==true) {
 					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Compression enabled\n", sess, this);
+#ifdef PROXYSQL31
+					// Every compressed frame is staged through the ring, so a
+					// compressed connection keeps the historical 32 KiB ring.
+					// Uncompressed connections stay at QUEUE_OUT_DEFAULT_SIZE.
+					if (queueOUT.capacity < QUEUE_OUT_COMPRESSED_SIZE) {
+						// Retry every frame (a transient allocation failure can
+						// clear), but log the failure only once per stream so a
+						// persistent failure cannot flood the error log. The frame
+						// still fits, it is just staged through the small ring.
+						if (mysql_queue_grow(queueOUT, QUEUE_OUT_COMPRESSED_SIZE) == false) {
+							if (queue_out_grow_failed == false) {
+								queue_out_grow_failed = true;
+								proxy_error("Session=%p . DataStream: %p -- Failed to grow the compressed output ring to %u bytes, staging in %u bytes\n", sess, this, QUEUE_OUT_COMPRESSED_SIZE, queueOUT.capacity);
+							}
+						}
+					}
+#endif
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
 		//VALGRIND_DISABLE_ERROR_REPORTING;
@@ -1748,6 +1963,21 @@ int MySQL_Data_Stream::array2buffer() {
 				}
 #ifdef DEBUG
 				{ __dump_pkt(__func__,(unsigned char *)queueOUT.pkt.ptr,queueOUT.pkt.size); }
+#endif
+#ifdef PROXYSQL31
+				// Ring is empty and this buffer does not fit in it. Point the span
+				// at the packet (the compressed buffer, when compression built one).
+				if (queue_data(queueOUT) == 0 && queueOUT.pkt.ptr &&
+						queueOUT.pkt.size > queueOUT.capacity) {
+					queueOUT.buffer = queueOUT.pkt.ptr;
+					queueOUT.size = queueOUT.pkt.size;
+					queueOUT.head = queueOUT.pkt.size;
+					queueOUT.tail = 0;
+					queueOUT.partial = 0;
+					pkts_sent += 1;
+					ret = static_cast<int>(queueOUT.pkt.size);
+					goto __exit_array2buffer;
+				}
 #endif
 			} else {
 				cont=false;

@@ -605,7 +605,12 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	backend_unplug_unit-t \
 	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
+	mysql_compressed_output_ring_unit-t \
+	mysql_output_span_unit-t \
+	pgsql_output_span_unit-t \
 	pgsql_stable_io_unit-t \
+	pgsql_alpn_unit-t \
+	pgsql_start_client_tls_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	str_ends_with_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t pgsql_result_flush_allocation_unit-t pgsql_scheduler_contract_unit-t query_processor_unit-t digest_stats_unit-t \
@@ -676,6 +681,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_native_affected_rows_unit-t \
 	pgsql_listen_pin_unit-t \
 	pgsql_dns_cache_all_ips_unit-t \
+	pgsql_login_refusal_shun_unit-t \
 	pgsql_native_tls_handover_unit-t \
 	charset_find_unit-t \
 	config_validation_unit-t \
@@ -733,6 +739,7 @@ UNIT_TESTS += worker_scheduler_cost_unit-t
 
 ifeq ($(PROXYSQL31),1)
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
+UNIT_TESTS += digest_memory_size_unit-t
 endif
 
 ifeq ($(PROXYSQLED25519),1)

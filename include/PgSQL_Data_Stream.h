@@ -13,8 +13,63 @@ typedef unsigned char uchar;
 
 #include "ma_pvio.h"
 
+#ifdef PROXYSQL31
+// Input ring. One per connection, paid by idle clients.
+#define QUEUE_IN_DEFAULT_SIZE	32768
+// Output ring. Packs only what is not sent as its own span.
+// 1 KiB holds protocol chatter; result slabs point at their own buffer.
+// A packet larger than this is sent directly from its own allocation once the
+// ring is empty (see pgsql_queue_t); it is not copied through the ring.
+#define QUEUE_OUT_DEFAULT_SIZE	1024
+// Bytes on the wire before writeout() looks at the client rate. Not a capacity.
+// The old code compared against QUEUE_T_DEFAULT_SIZE because the output ring was
+// always 32 KiB; the throttle is about wire bytes, so keep it as its own name.
+#define WRITEOUT_THROTTLE_BYTES	32768
+// Historical name for the input ring.
+#define QUEUE_T_DEFAULT_SIZE	QUEUE_IN_DEFAULT_SIZE
+
+/*
+ * A queue has two independent identities:
+ *
+ *   storage / capacity
+ *       The owned, contiguous ring. Allocated by queue_init() and never
+ *       resized. PostgreSQL has no per-connection compression, so queueOUT
+ *       never grows after init.
+ *
+ *   buffer / size
+ *       The span the next send()/SSL_write() reads. It is normally storage, but
+ *       while a packet larger than the ring is being sent from an empty ring it
+ *       points directly at that packet ("borrowed span"). Borrowing avoids the
+ *       copy that the old staging path made for every large resultset slab.
+ *
+ * head / tail are offsets into buffer and queue_data(q) == head - tail is the
+ * number of queued bytes in the current span. For an owned ring, array2buffer()
+ * appends at head. For a borrowed span the whole packet is one span: head is
+ * its length and tail advances as the socket accepts bytes. Because a borrowed
+ * packet is not ring storage:
+ *
+ *   - a borrow may only start when the ring is empty (queue_data() == 0);
+ *   - array2buffer() must not append while a borrow is active;
+ *   - release_borrowed_out_span() restores storage only after the span drains;
+ *   - queue_zero(), which compacts in place, is used on queueIN only.
+ *
+ * partial is the number of bytes of pkt already copied into an owned ring. It
+ * is always 0 for a borrowed span. pkt owns the packet (from PSarrayOUT) and is
+ * freed by queue_destroy() if the stream dies mid-transfer.
+ */
+typedef struct _pgsql_queue_t {
+	void* buffer;		// span send()/SSL_write() read; storage, or a borrowed packet
+	void* storage;		// owned ring. destroy() frees this, never buffer
+	unsigned int size;	// length of the current span (capacity for an owned ring)
+	unsigned int capacity;	// immutable size of storage, set at init
+	unsigned int head;	// end of queued data within buffer
+	unsigned int tail;	// start of unsent data within buffer
+	unsigned int partial;	// bytes of pkt already copied into an owned ring
+	PtrSize_t pkt;		// packet being staged, or the borrowed span
+	mysql_hdr hdr;
+} pgsql_queue_t;
+#else
 #define QUEUE_T_DEFAULT_SIZE	32768
-#define MY_SSL_BUFFER	8192
 
 typedef struct _pgsql_queue_t {
 	void* buffer;
@@ -25,6 +80,8 @@ typedef struct _pgsql_queue_t {
 	PtrSize_t pkt;
 	mysql_hdr hdr;
 } pgsql_queue_t;
+#endif // PROXYSQL31
+#define MY_SSL_BUFFER	8192
 
 // this class avoid copying data
 class PgSQL_MyDS_real_query {
@@ -72,6 +129,13 @@ private:
 	int array2buffer();
 	int buffer2array();
 	enum pgsql_sslstatus do_ssl_handshake();
+#ifdef PROXYSQL31
+	/**
+	 * @brief Best-effort send of any pending TLS output (e.g. a failure alert) to the client.
+	 * Call only right before shutting the stream down: its TLS output state is dead afterwards.
+	 */
+	void flush_tls_output_on_failure();
+#endif
 	void queue_encrypted_bytes(const char* buf, size_t len);
 public:
 	void* operator new(size_t);
@@ -144,6 +208,15 @@ public:
 	AUTHENTICATION_METHOD auth_method = AUTHENTICATION_METHOD::NO_PASSWORD;
 	uint32_t auth_next_pkt_type = 0;
 	bool auth_received_startup = false;
+#ifdef PROXYSQL31
+	// An SSLRequest and a GSSENCRequest are each honoured once per connection (see PgSQL_Protocol).
+	bool startup_ssl_done = false;
+	bool startup_gss_done = false;
+	// The first byte of a client connection is checked once, to spot a direct TLS ClientHello.
+	bool first_byte_checked = false;
+	// TLS started on a ClientHello with no SSLRequest first; ALPN postgresql is then required.
+	bool direct_tls = false;
+#endif
 	unsigned char tmp_login_salt[4];
 	ScramState* scram_state;
 	// The stored secret of a login still in progress. SCRAM takes two packets and the credential is
@@ -201,6 +274,16 @@ public:
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(PgSQL_DS_type, PgSQL_Session*, int); // initialize with arguments
+#ifdef PROXYSQL31
+	/**
+	 * @brief Begins the server-side TLS handshake on this client stream.
+	 * Needs a valid fd and no SSL object or BIOs yet; call it at most once per stream
+	 * (after an SSLRequest, or on a direct TLS ClientHello).
+	 * @return false when the TLS objects cannot be created (out of memory); the stream then
+	 * holds no SSL object or BIOs and is not marked encrypted, and the caller must close it.
+	 */
+	bool start_client_tls();
+#endif
 	void shut_soft();
 	void shut_hard();
 #ifdef PROXYSQL31
@@ -208,7 +291,8 @@ public:
 		return tls13_handshake_complete || SSL_is_init_finished(ssl);
 	}
 #endif
-	int read_from_net();
+	// allow_recv=false (TLS only): do not read the socket, only decrypt what rbio_ssl already holds
+	int read_from_net(bool allow_recv = true);
 	int write_to_net();
 	int write_to_net_poll();
 	bool available_data_out();
@@ -296,4 +380,30 @@ public:
 
 	void reset_connection();
 };
+
+#ifdef PROXYSQL31
+/**
+ * @brief Index of the SSL ex_data slot that marks a TLS object as a PgSQL client (owner: its PgSQL_Data_Stream).
+ * @return The ex_data index.
+ */
+int pgsql_client_ssl_ex_index();
+/**
+ * @brief ALPN selection as PostgreSQL's alpn_cb(): objects not marked as PgSQL clients (MySQL) get NOACK;
+ * marked ones must offer "postgresql" or receive a fatal alert.
+ * @param ssl TLS object being negotiated.
+ * @param out Receives the selected protocol.
+ * @param outlen Receives the selected protocol length.
+ * @param in Client's ALPN protocol list (wire format).
+ * @param inlen Length of @p in.
+ * @param arg Unused.
+ * @return SSL_TLSEXT_ERR_OK, SSL_TLSEXT_ERR_NOACK or SSL_TLSEXT_ERR_ALERT_FATAL.
+ */
+int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
+	const unsigned char* in, unsigned int inlen, void* arg);
+/**
+ * @brief Installs pgsql_alpn_select_cb on a context; a null context is ignored.
+ * @param ctx Context to install it on.
+ */
+void pgsql_install_alpn(SSL_CTX* ctx);
+#endif // PROXYSQL31
 #endif /* PROXYSQL_PGSQL_DATA_STREAM_H */

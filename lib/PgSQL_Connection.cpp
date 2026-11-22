@@ -471,8 +471,8 @@ handler_again:
 		if (native_mode && fd >= 0) {
 			native_teardown();
 		}
-		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, 9999 /* TODO: fix this mysql_errno(pgsql) */);
-		parent->connect_error(9999 /* TODO: fix this mysql_errno(pgsql)*/);
+		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, get_connect_error_code_str());
+		parent->connect_error(get_error_code(), get_error_message().c_str());
 		break;
 	case ASYNC_CONNECT_TIMEOUT:
 		// to fix
@@ -485,8 +485,9 @@ handler_again:
 			native_teardown();
 		}
 		proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
-		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, 9999/* TODO: fix this mysql_errno(pgsql)*/);
-		parent->connect_error(9999 /* TODO: fix this mysql_errno(pgsql)*/);
+		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, get_connect_error_code_str());
+		// The backend never answered, so this is not a refused login: it counts toward shunning.
+		parent->connect_error(PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION);
 		break;
 	case ASYNC_QUERY_START:
 		query_start();
@@ -6468,10 +6469,17 @@ void PgSQL_Connection::set_error_from_PQerrorMessage() {
 	std::string_view sqlstate = lookup("C", PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION));
 	std::string_view primary_msg = lookup("M", "");
 	std::string_view lib_errmsg = lookup("LE", "");
+	error_without_sqlstate = lookup("C", "").empty();
 
 	// we are currently distinguishing between server errors and library-generated errors. 
 	// A library-generated error is only set when a server error is not available.
 	const std::string_view& full_msg = !primary_msg.empty() ? primary_msg : lib_errmsg;
+	// libpq refused to log in without a password (PQnoPasswordSupplied), which carries no SQLSTATE.
+	// The native protocol reports the same login as 28P01: so does this, or it would count toward
+	// shunning the server and reach the client as P0001.
+	if (primary_msg.empty() && lib_errmsg.find("no password supplied") != std::string_view::npos) {
+		sqlstate = PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_INVALID_PASSWORD);
+	}
 	PgSQL_Error_Helper::fill_error_info(error_info, sqlstate.data(), full_msg.data(), severity.data());
 }
 

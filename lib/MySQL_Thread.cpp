@@ -452,6 +452,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"resolution_family",
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
+#ifdef PROXYSQL31
+	(char *)"monitor_unshun_on_ping_success",
+#endif
 	(char *)"max_allowed_packet",
 	(char *)"tcp_keepalive_time",
 	(char *)"use_tcp_keepalive",
@@ -1413,6 +1416,14 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
 	variables.monitor_wait_timeout=true;
 	variables.monitor_writer_is_also_reader=true;
+#ifdef PROXYSQL31
+	// On by default in 4.0, opt-in in 3.1.
+#ifdef PROXYSQL40
+	variables.monitor_unshun_on_ping_success = true;
+#else
+	variables.monitor_unshun_on_ping_success = false;
+#endif
+#endif
 	variables.max_allowed_packet=64*1024*1024;
 	variables.automatic_detect_sqli=false;
 	variables.firewall_whitelist_enabled=false;
@@ -3004,6 +3015,9 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"]            = make_tuple(&variables.monitor_wait_timeout,            false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"]   = make_tuple(&variables.monitor_writer_is_also_reader,   false);
+#ifdef PROXYSQL31
+		VariablesPointers_bool["monitor_unshun_on_ping_success"]  = make_tuple(&variables.monitor_unshun_on_ping_success,  false);
+#endif
 		VariablesPointers_bool["multiplexing"]                    = make_tuple(&variables.multiplexing,                    false);
 		VariablesPointers_bool["query_cache_stores_empty_result"] = make_tuple(&variables.query_cache_stores_empty_result, false);
 		VariablesPointers_bool["query_digests"]                   = make_tuple(&variables.query_digests,                   false);
@@ -5462,6 +5476,9 @@ void MySQL_Thread::refresh_variables() {
 
 	REFRESH_VARIABLE_BOOL(monitor_wait_timeout);
 	REFRESH_VARIABLE_BOOL(monitor_writer_is_also_reader);
+#ifdef PROXYSQL31
+	REFRESH_VARIABLE_BOOL(monitor_unshun_on_ping_success);
+#endif
 	REFRESH_VARIABLE_BOOL(monitor_enabled);
 	REFRESH_VARIABLE_INT(monitor_history);
 	REFRESH_VARIABLE_INT(monitor_connect_interval);
@@ -7216,7 +7233,16 @@ void MySQL_Thread::Get_Memory_Stats() {
 				sess->Memory_Stats();
 			}
 		} else {
+#ifdef PROXYSQL31
+			// Epoll/idle worker: sessions may be owned/moved by another thread,
+			// so their rings cannot be inspected safely. Report a conservative
+			// per-connection upper bound: the input ring plus the largest output
+			// ring a compressed connection can grow to. The per-session path
+			// used by normal workers reports the actual capacities.
+			status_variables.stvar[st_var_mysql_frontend_buffers_bytes]+=(mysql_sessions->len * (QUEUE_IN_DEFAULT_SIZE + QUEUE_OUT_COMPRESSED_SIZE));
+#else
 			status_variables.stvar[st_var_mysql_frontend_buffers_bytes]+=(mysql_sessions->len * QUEUE_T_DEFAULT_SIZE * 2);
+#endif
 			status_variables.stvar[st_var_mysql_session_internal_bytes]+=(mysql_sessions->len * sizeof(MySQL_Connection));
 #if !defined(__FreeBSD__) && !defined(__APPLE__)
 			status_variables.stvar[st_var_mysql_session_internal_bytes]+=((sizeof(int) + sizeof(int) + sizeof(std::_Rb_tree_node_base)) * mysql_sessions->len );

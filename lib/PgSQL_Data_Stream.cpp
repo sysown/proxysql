@@ -45,6 +45,36 @@ static void __dump_pkt(const char* func, unsigned char* _ptr, unsigned int len) 
 }
 #endif
 
+#ifdef PROXYSQL31
+// Allocate the owned ring. `capacity` is fixed for the life of the queue;
+// PostgreSQL has no per-connection output compression, so queueOUT never grows.
+// After init, buffer == storage and head == tail == 0: the common case.
+#define queue_init(_q,_s) { \
+	_q.capacity=_s; \
+	_q.size=_s; \
+	_q.storage=malloc(_q.capacity); \
+	_q.buffer=_q.storage; \
+	_q.head=0; \
+	_q.tail=0; \
+	_q.partial=0; \
+	_q.pkt.ptr=NULL; \
+	_q.pkt.size=0; \
+}
+
+// Destroy the owned ring and any packet still owned by the queue. `buffer` is
+// deliberately not freed: when a span is borrowed, buffer points at pkt.ptr
+// (a PSarrayOUT packet), which is not ours to free a second time. pkt.ptr is
+// the queue's responsibility whether it is a staged packet or a borrowed span.
+#define queue_destroy(_q) { \
+	if (_q.storage) free(_q.storage); \
+	_q.storage=NULL; \
+	_q.buffer=NULL; \
+	if (_q.pkt.ptr) { \
+		l_free(_q.pkt.size,_q.pkt.ptr); \
+		_q.pkt.ptr=NULL; \
+	} \
+}
+#else
 #define queue_init(_q,_s) { \
     _q.size=_s; \
     _q.buffer=malloc(_q.size); \
@@ -63,7 +93,11 @@ static void __dump_pkt(const char* func, unsigned char* _ptr, unsigned int len) 
 		queueOUT.pkt.ptr=NULL; \
 	} \
 }
+#endif // PROXYSQL31
 
+// Compact queued bytes to offset 0. Valid only for queueIN: queueOUT can hold a
+// borrowed span (buffer != storage) or a partially staged packet, and moving its
+// bytes would invalidate the pointer handed to send().
 #define queue_zero(_q) { \
   if (_q.tail != 0) { \
 	memmove(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
@@ -72,9 +106,15 @@ static void __dump_pkt(const char* func, unsigned char* _ptr, unsigned int len) 
   _q.tail=0; \
 }
 
+// Space left in the current span. For a borrowed span head == size, so this is
+// 0 and array2buffer() will not try to append to it.
 #define queue_available(_q) (_q.size-_q.head)
+// Bytes queued in the current span. Non-zero while a borrowed span is in flight.
 #define queue_data(_q) (_q.head-_q.tail)
 
+// Consume `_s` bytes from the front of the span. Reaching head means the span is
+// fully sent, so both offsets reset to 0. That reset is also how
+// release_borrowed_out_span() detects that a borrowed span has drained.
 #define queue_r(_q, _s) { \
   _q.tail+=_s; \
   if (_q.tail==_q.head) { \
@@ -83,8 +123,10 @@ static void __dump_pkt(const char* func, unsigned char* _ptr, unsigned int len) 
   } \
 }
 
+// Append `_s` bytes at head. Only ever used on an owned ring (buffer == storage).
 #define queue_w(_q,_s) (_q.head+=_s)
 
+// Read cursor for send()/SSL_write(); write cursor for array2buffer().
 #define queue_r_ptr(_q) ((unsigned char *)_q.buffer+_q.tail)
 #define queue_w_ptr(_q) ((unsigned char *)_q.buffer+_q.head)
 
@@ -140,6 +182,23 @@ void PgSQL_Data_Stream::queue_encrypted_bytes(const char* buf, size_t len) {
 	//proxy_info("New ssl_write_len size: %u\n", ssl_write_len);
 }
 
+#ifdef PROXYSQL31
+// Best effort: the stream is about to be shut down, so push any pending alert
+// to the client now instead of leaving it in the queue.
+void PgSQL_Data_Stream::flush_tls_output_on_failure() {
+	char buf[MY_SSL_BUFFER];
+	if (ssl_write_len > 0) {
+		ssize_t w = send(fd, ssl_write_buf, ssl_write_len, MSG_NOSIGNAL | MSG_DONTWAIT);
+		if (w < 0 || (size_t)w < ssl_write_len) return; // ssl_write_len stays stale: TLS output state is dead, callers always shut_soft()
+		ssl_write_len = 0;
+	}
+	int n;
+	while ((n = BIO_read(wbio_ssl, buf, sizeof(buf))) > 0) {
+		if (send(fd, buf, n, MSG_NOSIGNAL | MSG_DONTWAIT) != n) return;
+	}
+}
+#endif // PROXYSQL31
+
 enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 	char buf[MY_SSL_BUFFER];
 	enum pgsql_sslstatus status;
@@ -190,6 +249,18 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 			}
 		}
 #ifdef PROXYSQL31
+		// As PostgreSQL: with no SSLRequest first, only ALPN says the client speaks its protocol.
+		if (direct_tls) {
+			const unsigned char* alpn = nullptr;
+			unsigned int alpn_len = 0;
+			SSL_get0_alpn_selected(ssl, &alpn, &alpn_len);
+			if (alpn == nullptr) {
+				proxy_error("received direct SSL connection request without ALPN protocol negotiation extension. Client %s:%d\n", addr.addr, addr.port);
+				// With TLS 1.2 our Finished is still queued: send it, so the client sees the handshake complete.
+				flush_tls_output_on_failure();
+				return PGSQL_SSLSTATUS_FAIL;
+			}
+		}
 		// Publish the fast path only after the certificate checks above.
 		tls13_handshake_complete = myds_type == MYDS_FRONTEND &&
 			SSL_version(ssl) == TLS1_3_VERSION;
@@ -213,6 +284,11 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 			}
 		} while (n > 0);
 	}
+#ifdef PROXYSQL31
+	else if (status == PGSQL_SSLSTATUS_FAIL && myds_type == MYDS_FRONTEND) {
+		flush_tls_output_on_failure();
+	}
+#endif
 	return status;
 }
 
@@ -260,8 +336,13 @@ PgSQL_Data_Stream::PgSQL_Data_Stream() {
 	PSarrayIN = NULL;
 	PSarrayOUT = NULL;
 	//resultset = NULL;
+#ifdef PROXYSQL31
+	queue_init(queueIN, QUEUE_IN_DEFAULT_SIZE);
+	queue_init(queueOUT, QUEUE_OUT_DEFAULT_SIZE);
+#else
 	queue_init(queueIN, QUEUE_T_DEFAULT_SIZE);
 	queue_init(queueOUT, QUEUE_T_DEFAULT_SIZE);
+#endif
 	mybe = NULL;
 	active = 1;
 	mypolls = NULL;
@@ -434,12 +515,21 @@ void PgSQL_Data_Stream::init() {
 	}
 }
 
+#ifdef PROXYSQL31
+void PgSQL_Data_Stream::reinit_queues() {
+	if (queueIN.storage == NULL)
+		queue_init(queueIN, QUEUE_IN_DEFAULT_SIZE);
+	if (queueOUT.storage == NULL)
+		queue_init(queueOUT, QUEUE_OUT_DEFAULT_SIZE);
+}
+#else
 void PgSQL_Data_Stream::reinit_queues() {
 	if (queueIN.buffer == NULL)
 		queue_init(queueIN, QUEUE_T_DEFAULT_SIZE);
 	if (queueOUT.buffer == NULL)
 		queue_init(queueOUT, QUEUE_T_DEFAULT_SIZE);
 }
+#endif // PROXYSQL31
 
 // this function initializes a PgSQL_Data_Stream with arguments
 void PgSQL_Data_Stream::init(PgSQL_DS_type _type, PgSQL_Session* _sess, int _fd) {
@@ -483,7 +573,10 @@ void PgSQL_Data_Stream::shut_hard() {
 
 void PgSQL_Data_Stream::check_data_flow() {
 	// This does not apply to frontend data streams because response data is buffered during extended queries.
-	if ((myds_type != MYDS_FRONTEND) && (PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
+	// Nor to fast forward: during a COPY FROM the backend may send an error or a notice while client data
+	// is still queued for it, and the session relays that message to the client.
+	if ((myds_type != MYDS_FRONTEND) && !(sess && sess->session_fast_forward) &&
+		(PSarrayIN->len || queue_data(queueIN)) && (PSarrayOUT->len || queue_data(queueOUT))) {
 		// there is data at both sides of the data stream: this is considered a fatal error
 		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a PgSQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len, queue_data(queueIN), PSarrayOUT->len, queue_data(queueOUT));
 		shut_soft();
@@ -506,7 +599,7 @@ void PgSQL_Data_Stream::check_data_flow() {
 	}
 }
 
-int PgSQL_Data_Stream::read_from_net() {
+int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 	if (myds_type == MYDS_FRONTEND && (revents & POLLERR) && !(revents & POLLIN)) {
 		// An error-only event has no POLLIN to drive recv(). Deactivate the
 		// frontend now so paused sessions are reaped by the worker too.
@@ -545,6 +638,39 @@ int PgSQL_Data_Stream::read_from_net() {
 				// we are reading the very first packet
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 5, 0);
+#ifdef PROXYSQL31
+				// v3.1+ only: on the Stable tier these bytes still read as a packet and close the connection, as before.
+				// Direct TLS (PostgreSQL 17+ sslnegotiation=direct): the client opens with a TLS handshake record
+				// (0x16) instead of a startup packet. Spotted in this read, so no extra syscall: as PostgreSQL's
+				// raw_buf, the bytes already read are replayed into OpenSSL. EOF and EAGAIN are left to the code below.
+				// The Unix socket refusal matches PostgreSQL; an SSLRequest on a Unix socket still gets 'S' here,
+				// where PostgreSQL answers 'N' (unchanged ProxySQL behaviour, outside direct TLS).
+				if (r > 0 && myds_type == MYDS_FRONTEND && !first_byte_checked) {
+					first_byte_checked = true;
+					const unsigned char* first = (const unsigned char*)queue_w_ptr(queueIN);
+					if (first[0] == 0x16) {
+						const char* refusal = !pgsql_thread___have_ssl ? "pgsql-have_ssl is false" :
+							(client_addr && client_addr->sa_family == AF_UNIX) ? "not supported on a Unix socket" : nullptr;
+						if (refusal) {
+							proxy_error("Direct TLS connection from %s:%d refused: %s\n", addr.addr, addr.port, refusal);
+							shut_soft();
+							return -1;
+						}
+						if (!start_client_tls()) {
+							shut_soft();
+							return -1;
+						}
+						direct_tls = true;
+						// TLS bytes, not a packet: never committed to queueIN. The handshake is driven here, as
+						// the TLS branch does, so it cannot complete inside SSL_read() past do_ssl_handshake()'s checks.
+						if (BIO_write(rbio_ssl, first, r) <= 0 || do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
+							shut_soft();
+							return -1;
+						}
+						return 0; // the rest of the ClientHello is read by the TLS branch on the next POLLIN
+					}
+				}
+#endif // PROXYSQL31
 				if (r == 5) {
 					// let's try to read a whole packet
 					unsigned int read_pos = 0;
@@ -599,9 +725,16 @@ int PgSQL_Data_Stream::read_from_net() {
 		if (s < MY_SSL_BUFFER) {
 			return 0;	// no enough space for reads
 		}
-		char buf[MY_SSL_BUFFER];
+		// Nothing left to decrypt is not an EOF: return before the EOF handling below.
+		if (!allow_recv && !data_in_rbio()) {
+			return 0;
+		}
+		// In fast forward one socket read takes as much as a plain read does (a whole queueIN), as the
+		// socket is read once per poll pass. Other sessions read MY_SSL_BUFFER on every turn, as before.
+		char buf[QUEUE_T_DEFAULT_SIZE];
+		const size_t recv_len = (sess && sess->session_fast_forward) ? sizeof(buf) : MY_SSL_BUFFER;
 		//ssize_t n = read(fd, buf, sizeof(buf));
-		int n = recv(fd, buf, sizeof(buf), 0);
+		int n = allow_recv ? recv(fd, buf, recv_len, 0) : 0;
 		//proxy_info("SSL recv of %d bytes\n", n);
 		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %lu ,  num_read: %lu\n", sess, n, BIO_number_written(rbio_ssl), BIO_number_read(rbio_ssl));
 		if (n > 0 || BIO_number_written(rbio_ssl) > BIO_number_read(rbio_ssl)) {
@@ -681,6 +814,12 @@ int PgSQL_Data_Stream::read_from_net() {
 			}
 		}
 		else {
+			// Nothing to decrypt: n is recv()'s own result, so handle it as a plain read does.
+			// SSL_get_error() below would test errno, which recv() returning 0 leaves stale.
+			if (n == 0 || (n == -1 && errno != EINTR && errno != EAGAIN)) {
+				shut_soft();
+				return -1;
+			}
 			r = n;
 			//r += SSL_read (ssl, queue_w_ptr(queueIN), s);
 			//proxy_info("Read %d bytes from SSL\n", r);
@@ -745,6 +884,37 @@ int PgSQL_Data_Stream::read_from_net() {
 	}
 	return r;
 }
+
+#ifdef PROXYSQL31
+// Finish a borrowed output span, if one is active and fully sent.
+//
+// array2buffer() borrows a packet when the ring is empty and the packet is
+// larger than the ring: queueOUT.buffer points at queueOUT.pkt.ptr and the whole
+// packet is one span. send()/SSL_write() advances tail. queue_r() resets both
+// offsets to 0 only when the last byte has been accepted, which is the signal
+// used here. Until then the packet must stay alive and buffer must keep pointing
+// at it; this function is the single place that returns the queue to its owned
+// ring.
+//
+// Ownership: the borrowed packet came from PSarrayOUT and is owned by the queue
+// from the borrow until this release. Once fully accepted, record it in the
+// optional data packet history, which also frees it when history is disabled,
+// then restore the owned ring. Must not run before the span is drained, or
+// send() would read freed memory.
+static void release_borrowed_out_span(PgSQL_Data_Stream* ds) {
+	pgsql_queue_t& q = ds->queueOUT;
+	if (q.buffer == q.storage) return;	// nothing borrowed
+	if (q.head != 0 || q.tail != 0) return;	// span still in flight
+	if (q.pkt.ptr) {
+		add_to_data_packet_history_without_alloc(ds->data_packets_history_OUT, q.pkt.ptr, q.pkt.size);
+		q.pkt.ptr = NULL;
+		q.pkt.size = 0;
+	}
+	q.buffer = q.storage;
+	q.size = q.capacity;
+	q.partial = 0;
+}
+#endif // PROXYSQL31
 
 int PgSQL_Data_Stream::write_to_net() {
 	int bytes_io = 0;
@@ -851,6 +1021,9 @@ int PgSQL_Data_Stream::write_to_net() {
 	}
 	else {
 		queue_r(queueOUT, bytes_io);
+#ifdef PROXYSQL31
+		release_borrowed_out_span(this);
+#endif
 		/**
 		 * @brief Update send timestamp in ProxySQL_Poll for PostgreSQL activity tracking
 		 *
@@ -885,9 +1058,21 @@ int PgSQL_Data_Stream::write_to_net() {
 	return bytes_io;
 }
 
+// True when the client still has output to send. This covers all three states
+// of the send path:
+//   - queue_data(queueOUT): bytes queued in the ring, or a borrowed span that
+//     is still in flight (head > tail);
+//   - queueOUT.partial: a packet that is still being copied into the ring. Once
+//     the ring drains, queue_data() is 0 but the rest of the packet is still
+//     pending, so callers must not treat the client as idle;
+//   - PSarrayOUT->len: packets not staged yet.
 bool PgSQL_Data_Stream::available_data_out() {
 	int buflen = queue_data(queueOUT);
+#ifdef PROXYSQL31
+	if (buflen || queueOUT.partial || PSarrayOUT->len) {
+#else
 	if (buflen || PSarrayOUT->len) {
+#endif
 		return true;
 	}
 	return false;
@@ -1066,6 +1251,36 @@ int PgSQL_Data_Stream::read_pkts() {
 	return rc;
 }
 
+/*
+ * Move packets from PSarrayOUT into the output send span.
+ *
+ * Two modes:
+ *
+ *   Staging (buffer == storage)
+ *       Copy packet bytes into the owned ring until it is full or PSarrayOUT is
+ *       empty. This is used for ordinary protocol chatter. A packet larger than
+ *       the ring is copied across several calls, with queueOUT.partial tracking
+ *       progress.
+ *
+ *   Borrowing (buffer != storage)
+ *       If the ring is empty and the next packet is larger than the ring, point
+ *       buffer/size at the packet and publish it as a single span. No copy is
+ *       made; the packet now belongs to the queue and is freed by
+ *       release_borrowed_out_span() after send()/SSL_write() accepts it. This is
+ *       the normal case for a 32 KiB result slab.
+ *
+ * Invariants:
+ *   - Borrowing only happens when queue_data(queueOUT) == 0, so the ring and the
+ *     packet are never interleaved in one span.
+ *   - A packet that does not fit is left in PSarrayOUT until the ring has
+ *     drained; the guard below exits before assigning it.
+ *   - While a span is borrowed this function does nothing (early return). The
+ *     caller's writeout() loop drains the existing span first.
+ *
+ * Return value is the number of bytes made available this call (the span length
+ * when borrowing). array2buffer_full() loops until it returns 0. Callers do not
+ * otherwise interpret the value.
+ */
 int PgSQL_Data_Stream::array2buffer() {
 	int ret = 0;
 	unsigned int idx = 0;
@@ -1076,6 +1291,13 @@ int PgSQL_Data_Stream::array2buffer() {
 			goto __exit_array2buffer;
 		}
 	}
+#ifdef PROXYSQL31
+	// A borrowed span is already the send buffer. Do not copy into it: buffer
+	// points at the packet, not at the owned ring.
+	if (queueOUT.buffer != queueOUT.storage) {
+		return 0;
+	}
+#endif
 	while (cont) {
 		//VALGRIND_DISABLE_ERROR_REPORTING;
 		if (queue_available(queueOUT) == 0) {
@@ -1084,6 +1306,16 @@ int PgSQL_Data_Stream::array2buffer() {
 		if (queueOUT.partial == 0) { // read a new packet
 			if (PSarrayOUT->len - idx) {
 				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Removing a packet from array\n", sess, this);
+#ifdef PROXYSQL31
+				// A packet that does not fit in storage is sent in place, but only
+				// once the ring is empty. Leave it queued until then.
+				{
+					PtrSize_t* next = PSarrayOUT->index(idx);
+					if (next->size > queueOUT.capacity && queue_data(queueOUT) != 0) {
+						goto __exit_array2buffer;
+					}
+				}
+#endif
 				if (queueOUT.pkt.ptr) {
 					//l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
 					add_to_data_packet_history_without_alloc(data_packets_history_OUT, queueOUT.pkt.ptr, queueOUT.pkt.size);
@@ -1103,6 +1335,20 @@ int PgSQL_Data_Stream::array2buffer() {
 				
 #ifdef DEBUG
 				{ __dump_pkt(__func__, (unsigned char*)queueOUT.pkt.ptr, queueOUT.pkt.size); }
+#endif
+#ifdef PROXYSQL31
+				// Ring is empty and this packet does not fit in it.
+				if (queue_data(queueOUT) == 0 && queueOUT.pkt.ptr &&
+						queueOUT.pkt.size > queueOUT.capacity) {
+					queueOUT.buffer = queueOUT.pkt.ptr;
+					queueOUT.size = queueOUT.pkt.size;
+					queueOUT.head = queueOUT.pkt.size;
+					queueOUT.tail = 0;
+					queueOUT.partial = 0;
+					pkts_sent += 1;
+					ret = static_cast<int>(queueOUT.pkt.size);
+					goto __exit_array2buffer;
+				}
 #endif
 			}
 			else {
@@ -1500,7 +1746,11 @@ bool PgSQL_Data_Stream::data_in_rbio() {
 void PgSQL_Data_Stream::reset_connection() {
 	if (myconn) {
 		// 'healthy' mirrors the same guard on the MySQL side (MySQL_Data_Stream::reset_connection)
+		// A session torn down while still in fast forward (a COPY in progress) relayed the backend's
+		// bytes without parsing them, so the connection's own state is still the one from before the
+		// relay. The backend may have closed, or may still be streaming COPY data: never pool it.
 		if (pgsql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) &&
+			sess && sess->session_fast_forward == SESSION_FORWARD_TYPE_NONE &&
 			myconn->healthy == true && myconn->reusable == true &&
 			myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE &&
 			myconn->is_pipeline_active() == false) {
@@ -1606,3 +1856,55 @@ int PgSQL_Data_Stream::buffer2array() {
 	}
 	return ret;
 }
+
+#ifdef PROXYSQL31
+bool PgSQL_Data_Stream::start_client_tls() {
+	rbio_ssl = BIO_new(BIO_s_mem());
+	wbio_ssl = BIO_new(BIO_s_mem());
+	ssl = GloVars.get_SSL_new();
+	if (rbio_ssl == nullptr || wbio_ssl == nullptr || ssl == nullptr) {
+		// The BIOs are not attached to ssl yet, so SSL_free() would not free them.
+		if (rbio_ssl) BIO_free(rbio_ssl);
+		if (wbio_ssl) BIO_free(wbio_ssl);
+		if (ssl) SSL_free(ssl);
+		rbio_ssl = nullptr;
+		wbio_ssl = nullptr;
+		ssl = nullptr;
+		// The SSLRequest path has set encrypted already: left set, writeout() would use the null ssl.
+		encrypted = false;
+		proxy_error("Cannot start TLS for client %s:%d: out of memory\n", addr.addr, addr.port);
+		return false;
+	}
+	DSS = STATE_SSL_INIT;
+#ifdef PROXYSQL31
+	tls13_handshake_complete = false;
+#endif
+	SSL_set_ex_data(ssl, pgsql_client_ssl_ex_index(), this);
+	SSL_set_fd(ssl, fd);
+	SSL_set_accept_state(ssl);
+	SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
+	encrypted = true; // the SSLRequest path has already set it, the direct TLS path has not
+	proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+	return true;
+}
+
+int pgsql_client_ssl_ex_index() {
+	static const int idx = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+	return idx;
+}
+
+int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
+	const unsigned char* in, unsigned int inlen, void*) {
+	if (SSL_get_ex_data(ssl, pgsql_client_ssl_ex_index()) == nullptr) return SSL_TLSEXT_ERR_NOACK;
+	static const unsigned char pg_alpn[] = { 10, 'p','o','s','t','g','r','e','s','q','l' };
+	if (SSL_select_next_proto(const_cast<unsigned char**>(out), outlen, pg_alpn, sizeof(pg_alpn), in, inlen)
+		!= OPENSSL_NPN_NEGOTIATED) {
+		return SSL_TLSEXT_ERR_ALERT_FATAL;
+	}
+	return SSL_TLSEXT_ERR_OK;
+}
+
+void pgsql_install_alpn(SSL_CTX* ctx) {
+	if (ctx) SSL_CTX_set_alpn_select_cb(ctx, pgsql_alpn_select_cb, nullptr);
+}
+#endif // PROXYSQL31
