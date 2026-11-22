@@ -1,4 +1,7 @@
 #include "Embedded_Plugin_Service.h"
+#ifdef PROXYSQL40
+#include "Embedded_Admin_PgSQL_Prepared.h"
+#endif
 #include "Embedded_PgSQL_Frontend.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -472,6 +475,12 @@ PgSQL_Session::PgSQL_Session() {
 }
 
 void PgSQL_Session::reset() {
+#ifdef PROXYSQL40
+	if (admin_prepared_registered) {
+		embedded::unregister_admin_pgsql_prepared(*this);
+		admin_prepared_registered = false;
+	}
+#endif
 	if (session_type == PROXYSQL_SESSION_DUCKDB) {
 		embedded::teardown_plugin_pgsql(*this);
 		embedded::unregister_pgsql_prepared(*this);
@@ -2282,6 +2291,15 @@ __implicit_flush:
 						c = *((unsigned char*)pkt.ptr);
 						if (session_type == PROXYSQL_SESSION_DUCKDB &&
 						    embedded::handle_pgsql_prepared(*this, pkt)) continue;
+#ifdef PROXYSQL40
+						if ((session_type == PROXYSQL_SESSION_ADMIN ||
+						     session_type == PROXYSQL_SESSION_STATS) &&
+						    !admin_extq_rejected && (c != 'Q' || admin_prepared_registered) &&
+						    embedded::handle_admin_pgsql_prepared(
+						        *this, pkt, admin_extq_rejected, admin_prepared_registered)) {
+							continue;
+						}
+#endif
 						// Recovery discards every message, including simple Query,
 						// until Sync. Terminate must still close the connection.
 						if (admin_extq_rejected && c != 'S' && c != 'X') {
