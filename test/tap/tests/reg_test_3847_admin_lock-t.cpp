@@ -511,7 +511,10 @@ int main(int argc, char** argv) {
 			);
 			sleep(1);
 			waited += 1;
-			check_replica_stall("waiting for workers to stop");
+			// Nothing may run between the deadline and recording the verdict.
+			if (waited < timeout) {
+				check_replica_stall("waiting for workers to stop");
+			}
 		}
 	}
 
