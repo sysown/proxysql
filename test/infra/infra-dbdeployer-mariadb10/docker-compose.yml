@@ -4,6 +4,9 @@ services:
     hostname: dbdeployer1.${INFRA}
     image: proxysql/ci-infra:dbdeployer-mariadb10
     container_name: ${COMPOSE_PROJECT}-dbdeployer1-1
+    volumes:
+      # Run the entrypoint from the checkout, not the copy baked into the image.
+      - ./docker/entrypoint.sh:/entrypoint.sh:ro
     environment:
       - ROOT_PASSWORD=${ROOT_PASSWORD}
       - INFRA=${INFRA}

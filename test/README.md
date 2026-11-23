@@ -76,17 +76,11 @@ Common test groups (defined in `tap/groups/groups.json`):
 
 ## Where logs actually live after a run
 
-Once a run finishes (passed or failed), everything it produced lives under
-`ci_infra_logs/${INFRA_ID}/`. The layout is:
+Once a run finishes (passed or failed), everything ProxySQL and the test runner
+produced lives under `ci_infra_logs/${INFRA_ID}/`. The layout is:
 
 ```text
 ci_infra_logs/${INFRA_ID}/
-├── infra-mysql57/                      # per-backend logs (mysql, mariadb, pgsql, ...)
-│   └── mysql1/
-│       ├── error.log
-│       └── general.log
-├── infra-mariadb10/
-│   └── ...
 ├── proxysql/                           # ProxySQL side
 │   ├── proxysql.log
 │   └── proxysql_audit.log
@@ -98,6 +92,15 @@ ci_infra_logs/${INFRA_ID}/
             ├── pgsql-servers_ssl_params-t.log.gz
             └── ...                                  # one .log.gz per test attempt
 ```
+
+Backend servers do not write there:
+
+- Plain Docker infras (`infra-mysql57`, `infra-mysql84`, `docker-pgsql16-single`, ...)
+  mount their data directories under `ci_infra_logs/<infra>-${INFRA_ID}/`, e.g.
+  `ci_infra_logs/infra-mysql57-${INFRA_ID}/mysql1/`.
+- dbdeployer infras (`infra-dbdeployer-*`) keep everything inside the container:
+  `docker logs <infra>-${INFRA_ID}-dbdeployer1-1` shows the entrypoint output, and
+  each server's error log is `/root/sandboxes/<sandbox>/<node>/data/msandbox.err`.
 
 **All the per-test `.log.gz` files are gzipped** to save space — read them with
 `zcat` or `zless`, not `cat`:
