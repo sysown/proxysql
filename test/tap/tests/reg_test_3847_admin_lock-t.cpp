@@ -92,10 +92,13 @@ static pid_t find_replica_pid(const fs::path& cfg_file) {
 
 /**
  * Records why the replica stopped answering: every thread's name, scheduler state and
- * kernel wait channel from /proc, then a gdb backtrace of all threads when gdb is
- * installed and allowed to attach. Writes everything to 'out_file' and logs a summary.
+ * kernel wait channel from /proc and, with 'with_gdb', a gdb backtrace of all threads
+ * when gdb is installed and allowed to attach. Appends to 'out_file' and logs a summary.
+ *
+ * The /proc part takes milliseconds. gdb pauses the replica for seconds, so callers use
+ * it only after the test's verdict is recorded.
  */
-static void capture_replica_state(pid_t pid, const fs::path& out_file, const string& reason) {
+static void capture_replica_state(pid_t pid, const fs::path& out_file, const string& reason, bool with_gdb) {
 	std::ofstream os { out_file, std::ios::out | std::ios::app };
 	diag("Capturing replica thread state   pid=%d reason='%s' file='%s'", pid, reason.c_str(), out_file.c_str());
 	os << "=== " << reason << " (pid " << pid << ")\n";
@@ -126,6 +129,9 @@ static void capture_replica_state(pid_t pid, const fs::path& out_file, const str
 	}
 	diag("Replica threads by state/wchan: %s", summary.c_str());
 
+	if (!with_gdb) {
+		return;
+	}
 	if (system("command -v gdb >/dev/null 2>&1") != 0) {
 		os << "gdb not installed; no backtraces\n";
 		diag("gdb not installed; only /proc thread state was captured");
@@ -453,8 +459,9 @@ int main(int argc, char** argv) {
 
 	const fs::path stall_file { sec_runtime_dir / "replica_stall_state.txt" };
 	bool stall_captured = false;
-	// Captures the replica's thread state once, the first time its query loop has made
-	// no progress for STALL_CAPTURE_MS while it is still supposed to be running.
+	// Records the replica's thread state from /proc once, the first time its query loop
+	// has made no progress for STALL_CAPTURE_MS. Only the /proc snapshot runs here: it
+	// takes milliseconds, so it cannot move the worker-stop deadline (#6700 review).
 	auto check_replica_stall = [&] (const char* where) -> void {
 		const int64_t idle_ms = now_ms() - globals_last_progress_ms.load();
 		if (stall_captured || q_globals_res.load() != -1 || idle_ms < STALL_CAPTURE_MS) {
@@ -465,7 +472,7 @@ int main(int argc, char** argv) {
 			string { "'th_query_globals' made no progress for " } + std::to_string(idle_ms) + "ms (" + where + ")"
 		};
 		diag("Replica looks stuck: %s", reason.c_str());
-		capture_replica_state(find_replica_pid(sec_cfg_file), stall_file, reason);
+		capture_replica_state(find_replica_pid(sec_cfg_file), stall_file, reason, false);
 	};
 
 	uint32_t timeout = 10;
@@ -508,8 +515,20 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	ok(q_load_res.load() == 0, "'th_load_mysql_vars' thread didn't deadlock: %d", q_load_res.load());
-	ok(q_globals_res.load() == 0, "'th_query_globals' thread didn't deadlock: %d", q_globals_res.load());
+	// Record the verdict at the deadline, before any slow diagnostics: a worker that
+	// recovers while gdb runs must still fail.
+	const int load_verdict = q_load_res.load();
+	const int globals_verdict = q_globals_res.load();
+
+	if (globals_verdict == -1) {
+		capture_replica_state(
+			find_replica_pid(sec_cfg_file), stall_file,
+			"'th_query_globals' still blocked at the worker-stop deadline", true
+		);
+	}
+
+	ok(load_verdict == 0, "'th_load_mysql_vars' thread didn't deadlock: %d", load_verdict);
+	ok(globals_verdict == 0, "'th_query_globals' thread didn't deadlock: %d", globals_verdict);
 
 	th_load_mysql_vars.detach();
 	th_query_globals.detach();
@@ -536,14 +555,14 @@ int main(int argc, char** argv) {
 
 	if (launch_res.load() == -1) {
 		// Still running after the shutdown wait: record what it is doing.
-		capture_replica_state(find_replica_pid(sec_cfg_file), stall_file, "replica still running after PROXYSQL SHUTDOWN SLOW");
+		capture_replica_state(find_replica_pid(sec_cfg_file), stall_file, "replica still running after PROXYSQL SHUTDOWN SLOW", true);
 	}
 
 	launch_sec_proxy.join();
 
 	// The replica runs in the foreground, so its log is the captured stdout/stderr.
 	// Publish it, and any captured thread state, when something went wrong.
-	if (exit_status() != 0 || stall_captured) {
+	if (exit_status() != 0 || stall_captured || globals_verdict == -1) {
 		publish_replica_file(sec_launch_log_file, "replica.log");
 		publish_replica_file(stall_file, "replica_stall_state.txt");
 	}
