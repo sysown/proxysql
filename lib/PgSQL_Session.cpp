@@ -1360,9 +1360,18 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				myconn->parent->port,
 				(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
 			);
+			// As in MySQL, only a connection lost without an error from the backend is retried.
+			// ProxySQL records that loss as connection_exception (class 08), and libpq as
+			// raise_exception when it got no SQLSTATE. Any other error came from the backend (e.g.
+			// FATAL 57P01 from pg_terminate_backend()): every new connection would end the same
+			// way, so the error goes to the client, below, even when the connection is gone.
+			const bool backend_error = error_present &&
+				strncmp(myconn->get_error_code_str(), "08", 2) != 0 &&
+				myconn->get_error_code() != PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION;
 			// rc == -2 is PMC-10003: init_connect returned rows. Retrying only repeats the
 			// same reply, so the session is terminated.
-			if (rc == -2 || error_present == false || myconn->is_connection_in_reusable_state() == false) {
+			if (rc == -2 || error_present == false ||
+				(myconn->is_connection_in_reusable_state() == false && backend_error == false)) {
 				bool retry_conn = false;
 				// client error, serious
 				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting INIT CONNECT", myconn);
@@ -1385,7 +1394,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				return ret;
 			}
 			else {
-				// The backend rejected init_connect and the connection is still usable:
+				// The backend rejected init_connect (the connection may be gone too, e.g. after a FATAL):
 				// a new connection would fail the same way, so report the error instead.
 				proxy_warning("Error while setting INIT CONNECT on %s:%d hg %d: %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myconn->get_error_code_with_message().c_str());
 				// we won't go back to PROCESSING_QUERY

@@ -19,7 +19,7 @@
 
 CommandLine cl;
 
-static constexpr int kPerMode = 18;       // v3.1 cases run once per backend mode
+static constexpr int kPerMode = 20;       // v3.1 cases run once per backend mode
 static constexpr int kStableCases = 3;    // v3.0 cases
 
 // Two statements and one Sync in libpq pipeline mode; the first opens a new connection.
@@ -122,6 +122,21 @@ static void run_mode(PGconn* admin, bool native) {
 	r = ic_query_extended(c7.get(), IC_MARKER);
 	ok(!r.timed_out && r.ok && r.value == "global",
 	   "[native=%d] extended session survives (got '%s')", native, r.value.c_str());
+
+	// The backend sends an error and then closes (FATAL 57P01). As in MySQL, a server error is not
+	// retried: every new connection would end the same way. The client gets it, and keeps its session.
+	ic_set_global(admin, "DO $$BEGIN PERFORM pg_terminate_backend(pg_backend_pid()); END$$");
+	PGConnPtr ck = ic_connect_client(cl);
+	const long long kill_conn0 = atoll(ic_admin_value(admin, "SELECT SUM(ConnOK) FROM stats_pgsql_connection_pool").c_str());
+	r = ic_query(ck.get(), IC_MARKER);
+	const long long kill_conns = atoll(ic_admin_value(admin, "SELECT SUM(ConnOK) FROM stats_pgsql_connection_pool").c_str()) - kill_conn0;
+	ok(!r.timed_out && r.sqlstate == "57P01" && kill_conns == 1,
+	   "[native=%d] a backend that ends its own session is reported, not retried (sqlstate '%s', %lld connections)",
+	   native, r.sqlstate.c_str(), kill_conns);
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	r = ic_query(ck.get(), IC_MARKER);
+	ok(!r.timed_out && r.ok && r.value == "global",
+	   "[native=%d] and the client session is kept (got '%s')", native, r.value.c_str());
 
 	// A later statement of a multi-statement init_connect counts like the first: its error
 	// reaches the client (session kept), its rows close the session (PMC-10003).
