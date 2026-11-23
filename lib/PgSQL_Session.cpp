@@ -1419,7 +1419,11 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				// The rest of an extended-query unit goes too: left queued, it would run ahead of
 				// the client's next unit and fail it (as give_up_waiting() does).
 				reset_extended_query_frame();
-				myds->destroy_MySQL_Connection_From_Pool(true);
+				// The reset destroys the connection itself when a pipeline is open; init_connect
+				// never runs with one today, but destroying a NULL connection would crash.
+				if (myds->myconn) {
+					myds->destroy_MySQL_Connection_From_Pool(true);
+				}
 				myds->fd = 0;
 				RequestEnd(myds, true);
 				ret = true;
