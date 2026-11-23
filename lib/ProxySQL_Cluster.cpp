@@ -2435,6 +2435,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						results[8] = fetch_res;
 					} else {
 						fetching_error = true;
+						fetch_failed = true;
 					}
 				}
 
