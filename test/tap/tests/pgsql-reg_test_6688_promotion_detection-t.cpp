@@ -49,6 +49,9 @@ static std::string g_mon_user;
 static std::vector<std::pair<std::string, std::string>> g_saved_vars;
 static bool g_admin_dirty = false;
 static bool g_backend_dirty = false;
+// The monitor role's own search_path setting before the test ("" if it had none),
+// restored instead of a plain RESET so a site-specific value survives the test.
+static std::string g_saved_search_path;
 
 static PGconn *connect_to(const char *host, int port, const char *user, const char *pass,
 						  const char *dbname) {
@@ -85,9 +88,14 @@ static std::string quote_literal(PGconn *conn, const std::string &s) {
 	return r;
 }
 
-/** Runs a statement and ignores failures; used only on the cleanup path. */
-static void exec_quiet(PGconn *conn, const std::string &sql) {
-	PQclear(PQexec(conn, sql.c_str()));
+/** Runs a statement without bailing out; used on the cleanup path. Logs failures. */
+static bool exec_quiet(PGconn *conn, const std::string &sql) {
+	PGresult *res = PQexec(conn, sql.c_str());
+	const bool ok_res = PQresultStatus(res) == PGRES_TUPLES_OK || PQresultStatus(res) == PGRES_COMMAND_OK;
+	if (!ok_res)
+		diag("cleanup statement failed: '%s': %s", sql.c_str(), PQresultErrorMessage(res));
+	PQclear(res);
+	return ok_res;
 }
 
 /** Closes the monitor's backend sessions so its pool reconnects and picks up the role's search_path. */
@@ -96,9 +104,24 @@ static void kill_monitor_sessions(PGconn *backend, const std::string &mon_user) 
 					   quote_literal(backend, mon_user) + " AND application_name='ProxySQL-Monitor'");
 }
 
-/** Removes the override; safe to call when it does not exist. Never bails out. */
+/** The role-level search_path of 'mon_user' ("" if none), ignoring this test's own override. */
+static std::string role_search_path(PGconn *backend, const std::string &mon_user) {
+	const std::string cfg = query(backend,
+		"SELECT COALESCE(MAX(substr(c, length('search_path=') + 1)), '') FROM pg_db_role_setting s "
+		"JOIN pg_roles r ON r.oid = s.setrole, unnest(s.setconfig) c WHERE s.setdatabase = 0 AND r.rolname=" +
+		quote_literal(backend, mon_user) + " AND c LIKE 'search_path=%'");
+	// A run killed before its cleanup leaves the override in place: that is not
+	// the role's real setting.
+	return cfg.find(SCHEMA) == std::string::npos ? cfg : "";
+}
+
+/** Removes the override and restores the role's search_path; safe to call when there is none. Never bails out. */
 static void drop_override(PGconn *backend, const std::string &mon_user) {
-	exec_quiet(backend, "ALTER ROLE " + quote_ident(backend, mon_user) + " RESET search_path");
+	const std::string role = quote_ident(backend, mon_user);
+	if (g_saved_search_path.empty())
+		exec_quiet(backend, "ALTER ROLE " + role + " RESET search_path");
+	else
+		exec_quiet(backend, "ALTER ROLE " + role + " SET search_path TO " + g_saved_search_path);
 	exec_quiet(backend, std::string("DROP SCHEMA IF EXISTS ") + SCHEMA + " CASCADE");
 	exec_quiet(backend, "SELECT COUNT(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename=" +
 							quote_literal(backend, mon_user) + " AND application_name='ProxySQL-Monitor'");
@@ -225,6 +248,18 @@ int main() {
 		BAIL_OUT("no pgsql backend configured");
 
 	const std::string hgs = std::to_string(WRITER_HG) + "," + std::to_string(READER_HG);
+	// Rows left by a run killed before its cleanup carry this test's comment:
+	// remove them, so only someone else's configuration makes the test refuse.
+	if (query(admin, "SELECT COUNT(*) FROM pgsql_servers WHERE hostgroup_id IN (" + hgs +
+					 ") AND comment='reg_test_6688'") != "0" ||
+		query(admin, "SELECT COUNT(*) FROM pgsql_replication_hostgroups WHERE writer_hostgroup=" +
+					 std::to_string(WRITER_HG) + " AND comment='reg_test_6688'") != "0") {
+		diag("removing leftovers of an interrupted run");
+		query(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id IN (" + hgs + ") AND comment='reg_test_6688'");
+		query(admin, "DELETE FROM pgsql_replication_hostgroups WHERE writer_hostgroup=" +
+					 std::to_string(WRITER_HG) + " AND comment='reg_test_6688'");
+		query(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+	}
 	if (query(admin, "SELECT COUNT(*) FROM pgsql_servers WHERE hostgroup_id IN (" + hgs + ")") != "0" ||
 		query(admin, "SELECT COUNT(*) FROM pgsql_replication_hostgroups WHERE writer_hostgroup IN (" +
 						 hgs + ") OR reader_hostgroup IN (" + hgs + ")") != "0")
@@ -233,6 +268,9 @@ int main() {
 	plan(5);
 
 	g_mon_user = mon_user;
+	g_saved_search_path = role_search_path(backend, mon_user);
+	if (!g_saved_search_path.empty())
+		diag("monitor role has search_path '%s'; it is restored at the end", g_saved_search_path.c_str());
 	g_saved_vars = {{"pgsql-monitor_enabled", ""}, {"pgsql-monitor_read_only_interval", ""}};
 	for (auto &v : g_saved_vars)
 		v.second = query(admin, "SELECT variable_value FROM global_variables WHERE variable_name='" +
@@ -276,10 +314,6 @@ int main() {
 	const std::string reader = std::to_string(READER_HG);
 	std::string last;
 
-	ok(wait_hgs(admin, host, port, {writer}, last),
-	   "primary: %s:%s is in the writer hostgroup only (runtime hostgroups: '%s')",
-	   host.c_str(), port.c_str(), last.c_str());
-
 	// Wait for a read_only check that ran with the override in place, so the
 	// next steps measure the reaction to the flip and not pool reconnection.
 	const std::string log_cond = "hostname='" + host + "' AND port=" + port;
@@ -292,7 +326,13 @@ int main() {
 		if (!fresh)
 			usleep(100000);
 	}
-	ok(fresh, "the monitor keeps running read_only checks on %s:%s", host.c_str(), port.c_str());
+	ok(fresh, "the monitor ran a read_only check reporting primary on %s:%s", host.c_str(), port.c_str());
+
+	// Checked after a read_only check with the override ran, so it verifies the
+	// monitor's classification and not just the initial placement.
+	ok(wait_hgs(admin, host, port, {writer}, last),
+	   "primary: %s:%s is in the writer hostgroup only (runtime hostgroups: '%s')",
+	   host.c_str(), port.c_str(), last.c_str());
 
 	set_in_recovery(backend, true);
 	ok(wait_hgs(admin, host, port, {reader}, last),
