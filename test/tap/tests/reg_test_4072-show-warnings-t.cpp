@@ -70,6 +70,17 @@ int main(int argc, char** argv) {
 
 	std::this_thread::sleep_for(std::chrono::seconds(2));
 
+	// Read the rows back from the writer. The infras route '^SELECT' to the
+	// reader hostgroup, so the COUNT(*) and the fetch below could land on
+	// different servers. On a slow runner a lagging replica still held only
+	// the first row: COUNT(*) returned 2097152 from an up-to-date server, the
+	// fetch returned 1^3 = 1 row from replica 3307, and the test failed with
+	// no error (PR #6705, CI-legacy-g2 run 45151613276). BEGIN goes to the
+	// default (writer) hostgroup, and transaction_persistent keeps both
+	// SELECTs there. The #4072 path under test (a slow client fetching a
+	// result that carries warnings) does not depend on the backend chosen.
+	MYSQL_QUERY(proxysql, "BEGIN");
+
 	MYSQL_QUERY(proxysql, "SELECT COUNT(*) FROM test.tmp a JOIN test.tmp b JOIN test.tmp c");
 
 	auto mysql_result = mysql_use_result(proxysql);
@@ -203,6 +214,8 @@ int main(int argc, char** argv) {
 
 	diag("Done... Total rows fetched:'%lu'\n", fetched_row_count);
 	ok(add_row_count == fetched_row_count, "All rows fetched");
+
+	MYSQL_QUERY(proxysql, "COMMIT");
 
 	mysql_close(proxysql);
 	mysql_close(proxysql_admin);
