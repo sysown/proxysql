@@ -1387,6 +1387,9 @@ __thread int mysql_thread___query_processor_iterations;
 __thread int mysql_thread___query_processor_first_comment_parsing;
 __thread int mysql_thread___query_processor_regex;
 __thread int mysql_thread___set_query_lock_on_hostgroup;
+#ifdef PROXYSQL31
+__thread bool mysql_thread___causal_read_fallback_to_source;
+#endif
 __thread int mysql_thread___set_parser_algorithm;
 __thread int mysql_thread___query_processor_parser;
 __thread int mysql_thread___user_variable_tracking;
@@ -1754,6 +1757,9 @@ extern __thread int mysql_thread___query_processor_iterations;
 extern __thread int mysql_thread___query_processor_first_comment_parsing;
 extern __thread int mysql_thread___query_processor_regex;
 extern __thread int mysql_thread___set_query_lock_on_hostgroup;
+#ifdef PROXYSQL31
+extern __thread bool mysql_thread___causal_read_fallback_to_source;
+#endif
 extern __thread int mysql_thread___set_parser_algorithm;
 extern __thread int mysql_thread___query_processor_parser;
 extern __thread int mysql_thread___user_variable_tracking;

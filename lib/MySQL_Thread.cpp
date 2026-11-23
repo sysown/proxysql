@@ -189,6 +189,9 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	// (proxysql_genai_detected_anomalies_total /
 	//  proxysql_genai_blocked_queries_total).
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char *)"max_connect_timeouts" },
+#ifdef PROXYSQL31
+	{ st_var_causal_reads_routed_to_source, p_th_counter::causal_reads_routed_to_source, (char *)"causal_reads_routed_to_source" },
+#endif
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char *)"generated_error_packets" },
 	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char *)"client_host_error_killed_connections" },
 	{ st_var_set_wait_timeout_commands,    p_th_counter::mysql_set_wait_timeout_commands,  (char *)"mysql_set_wait_timeout_commands" },
@@ -495,6 +498,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_processor_regex",
 	(char *)"query_processor_parser", // NOSONAR: matches array pattern
 	(char *)"set_query_lock_on_hostgroup",
+#ifdef PROXYSQL31
+	(char *)"causal_read_fallback_to_source",
+#endif
 	(char *)"set_parser_algorithm",
 	(char *)"user_variable_tracking",
 	(char *)"reset_connection_algorithm",
@@ -865,6 +871,18 @@ th_metrics_map = std::make_tuple(
 
 			}
 		),
+#ifdef PROXYSQL31
+		std::make_tuple (
+			p_th_counter::causal_reads_routed_to_source,
+			"proxysql_causal_reads_routed_to_source_total",
+			"Causal reads sent to the GTID source hostgroup because no reader had the GTID.",
+			metric_tags {
+
+				{ "protocol", "mysql" }
+
+			}
+		),
+#endif
 		std::make_tuple (
 			p_th_counter::backend_lagging_during_query,
 			"proxysql_backend_lagging_during_query_total",
@@ -1463,6 +1481,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #endif
 	variables.query_processor_parser=0;
 	variables.set_query_lock_on_hostgroup=1;
+#ifdef PROXYSQL31
+	variables.causal_read_fallback_to_source = false;
+#endif
 	variables.set_parser_algorithm=2; // before 2.6.0 this was 1
 	variables.user_variable_tracking=0;
 	variables.reset_connection_algorithm=2;
@@ -3132,6 +3153,9 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_processor_parser"]           = make_tuple(&variables.query_processor_parser,            0,           1, false);
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
+#ifdef PROXYSQL31
+		VariablesPointers_bool["causal_read_fallback_to_source"] = make_tuple(&variables.causal_read_fallback_to_source, false);
+#endif
 		VariablesPointers_int["set_parser_algorithm"]            = make_tuple(&variables.set_parser_algorithm,             1,           3, false);
 		VariablesPointers_int["user_variable_tracking"]          = make_tuple(&variables.user_variable_tracking,           0,           1, false);
 
@@ -5427,6 +5451,9 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(query_processor_regex);
 	REFRESH_VARIABLE_INT(query_processor_parser);
 	REFRESH_VARIABLE_INT(set_query_lock_on_hostgroup);
+#ifdef PROXYSQL31
+	REFRESH_VARIABLE_BOOL(causal_read_fallback_to_source);
+#endif
 	REFRESH_VARIABLE_INT(set_parser_algorithm);
 	REFRESH_VARIABLE_INT(user_variable_tracking);
 	REFRESH_VARIABLE_INT(reset_connection_algorithm);

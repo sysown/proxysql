@@ -25,6 +25,7 @@
 #include "MySQL_Query_Processor.h"
 #include "MySQL_Logger.hpp"
 #include "proxysql_gtid.h"
+#include "GTID_Server_Data.h"
 
 #include <cstring>
 #include <memory>
@@ -207,10 +208,220 @@ void test_get_connection(SessionFixture& f) {
 #endif // PROXYSQL31
 }
 
+#ifdef PROXYSQL31
+const char kReaderAddr[] = "causal-fallback-reader";
+const char kWriterAddr[] = "causal-fallback-writer";
+constexpr int kServerPort = 16416;
+const char kHeldGtid[] = "aaaaaaaa-0000-1111-2222-00000000aaaa:584";
+
+MySrvC* add_server(int hostgroup, const char* address, int weight = 1) {
+	srv_info_t info;
+	info.addr = address;
+	info.port = kServerPort;
+	info.kind = "test";
+	srv_opts_t opts;
+	opts.weigth = weight;
+	opts.max_conns = 10;
+	opts.use_ssl = 0;
+	MyHGM->wrlock();
+	MyHGM->create_new_server_in_hg(hostgroup, info, opts);
+	MyHGC* hgc = MyHGM->MyHGC_find(hostgroup);
+	MySrvC* server = nullptr;
+	for (unsigned int i = 0; hgc != nullptr && i < hgc->mysrvs->cnt() && server == nullptr; i++) {
+		if (std::strcmp(hgc->mysrvs->idx(i)->address, address) == 0) server = hgc->mysrvs->idx(i);
+	}
+	MyHGM->wrunlock();
+	return server;
+}
+
+void remove_server(int hostgroup, const char* address) {
+	MyHGM->wrlock();
+	MyHGM->remove_server_in_hg(hostgroup, std::string(address), kServerPort);
+	MyHGM->wrunlock();
+}
+
+/** @brief Makes a server hold, or not hold, the tracked transaction. */
+void set_server_gtid(const char* address, bool holds) {
+	const std::string endpoint = std::string(address) + ":" + std::to_string(kServerPort);
+	pthread_rwlock_wrlock(&MyHGM->gtid_rwlock);
+	auto it = MyHGM->gtid_map.find(endpoint);
+	if (it != MyHGM->gtid_map.end()) {
+		delete it->second;
+		MyHGM->gtid_map.erase(it);
+	}
+	if (holds) {
+		auto* data = new GTID_Server_Data(nullptr, const_cast<char*>(address), 0, kServerPort);
+		data->add_gtid_from_ok(kHeldGtid);
+		MyHGM->gtid_map[endpoint] = data;
+	}
+	pthread_rwlock_unlock(&MyHGM->gtid_rwlock);
+}
+
+void set_status_locked(MySrvC* server, MySerStatus status) {
+	MyHGM->wrlock();
+	server->set_status(status);
+	MyHGM->wrunlock();
+}
+
+void test_source_fallback(SessionFixture& f) {
+	MySQL_Session& s = *f.session;
+	const char usable[] = "aaaaaaaa-0000-1111-2222-00000000aaaa:582-584";
+	auto route = [&](bool locks = false) { return s.route_causal_read_without_candidate_to_source(locks); };
+	const int saved_latency = mysql_thread___default_max_latency_ms;
+	mysql_thread___default_max_latency_ms = 1000;
+
+	mysql_thread___causal_read_fallback_to_source = false;
+	f.reset(usable);
+	ok(!route() && f.hostgroup() == kReader, "fallback off: the read stays on the reader");
+
+	mysql_thread___causal_read_fallback_to_source = true;
+	MySrvC* source = add_server(kWriter, kWriterAddr);
+	MySrvC* reader = nullptr;
+	set_server_gtid(kWriterAddr, true);
+	f.reset(usable);
+	ok(source != nullptr && route() && f.hostgroup() == kWriter,
+		"empty destination hostgroup: the read goes to a source that holds the GTID");
+
+	set_server_gtid(kWriterAddr, false);
+	f.reset(usable);
+	ok(!route() && f.hostgroup() == kReader,
+		"source not known to hold the GTID (failover, no stream): the read is not rerouted");
+	set_server_gtid(kWriterAddr, true);
+
+	reader = add_server(kReader, kReaderAddr);
+	ok(source != nullptr && reader != nullptr, "server fixtures exist");
+	if (source != nullptr && reader != nullptr) {
+		set_server_gtid(kReaderAddr, true);
+		f.reset(usable);
+		ok(!route() && f.hostgroup() == kReader, "a reader holds the GTID: the read stays on the reader");
+
+		reader->max_connections = 0;
+		f.reset(usable);
+		ok(!route() && f.hostgroup() == kReader,
+			"a full reader that holds the GTID still counts: capacity is not missing data");
+		reader->max_connections = 10;
+
+		set_status_locked(reader, MYSQL_SERVER_STATUS_SHUNNED);
+		f.reset(usable);
+		ok(route() && f.hostgroup() == kWriter, "a shunned reader does not count");
+		set_status_locked(reader, MYSQL_SERVER_STATUS_ONLINE);
+
+		reader->weight = 0;
+		f.reset(usable);
+		ok(route() && f.hostgroup() == kWriter, "a reader with weight 0 does not count");
+		reader->weight = 1;
+
+		reader->current_latency_us = 2000000;
+		f.reset(usable);
+		ok(route() && f.hostgroup() == kWriter, "a reader excluded by latency does not count");
+		reader->current_latency_us = 0;
+
+		set_server_gtid(kReaderAddr, false);
+		const auto before = s.thread->status_variables.stvar[st_var_causal_reads_routed_to_source];
+		f.reset(usable);
+		s.qpo->max_lag_ms = 500;
+		ok(route() && f.hostgroup() == kWriter &&
+			s.thread->status_variables.stvar[st_var_causal_reads_routed_to_source] == before + 1,
+			"no reader holds the GTID: the read goes to the source and is counted");
+		// A full source records the predicate without opening a real connection.
+		source->max_connections = 0;
+		MySQL_Backend* attached = select_and_get_connection(f, false);
+		source->max_connections = 10;
+		ok(attached == f.writer && s.mybe == f.writer && s.last_pool_gtid && s.with_gtid,
+			"the source is still read under the GTID predicate");
+
+		f.reset("");
+		ok(!route() && f.hostgroup() == kReader, "no tracked GTID: no rerouting");
+
+		f.reset(usable);
+		char min_gtid[] = "aaaaaaaa-0000-1111-2222-00000000aaaa:5";
+		s.qpo->min_gtid = min_gtid;
+		ok(!route() && f.hostgroup() == kReader, "min_gtid has no known source: no rerouting");
+		s.qpo->min_gtid = nullptr;
+
+		f.reset(usable);
+		s.current_hostgroup = kWriter;
+		ok(!route() && f.hostgroup() == kWriter, "destination is already the source: no rerouting");
+
+		f.reset(usable);
+		s.transaction_persistent_hostgroup = kReader;
+		ok(!route() && f.hostgroup() == kReader, "a transaction-persistent hostgroup is not changed");
+
+		f.reset(usable);
+		s.locked_on_hostgroup = kReader;
+		ok(!route() && f.hostgroup() == kReader, "a locked hostgroup is not changed");
+
+		f.reset(usable);
+		s.session_fast_forward = SESSION_FORWARD_TYPE_PERMANENT;
+		ok(!route() && f.hostgroup() == kReader, "a fast-forward session is not changed");
+
+		f.reset(usable);
+		s.qpo->create_new_conn = true;
+		ok(!route() && f.hostgroup() == kReader, "create_new_conn is not changed");
+
+		f.reset(usable);
+		s.qpo->switch_to_fast_forward = true;
+		ok(!route() && f.hostgroup() == kReader, "a rule switching to fast-forward is not changed");
+		s.qpo->switch_to_fast_forward = false;
+
+		f.reset(usable);
+		ok(!route(true) && f.hostgroup() == kReader, "a query that locks the hostgroup is not changed");
+
+		f.reset(usable);
+		MySQL_Backend* destination = s.find_backend(kReader);
+		std::unique_ptr<MySQL_Connection> held(new MySQL_Connection());
+		destination->server_myds->myconn = held.get();
+		ok(!route() && f.hostgroup() == kReader, "a connection held on the destination is not abandoned");
+		destination->server_myds->myconn = nullptr;
+
+		// A connection held on the source is reused as is: that server must hold the GTID.
+		const char lagging_addr[] = "causal-fallback-lagging-source";
+		MySrvC* lagging = add_server(kWriter, lagging_addr);
+		held->parent = lagging;
+		f.writer->server_myds->myconn = held.get();
+		f.reset(usable);
+		ok(lagging != nullptr && !route() && f.hostgroup() == kReader,
+			"a connection held on a lagging source server blocks the reroute");
+		held->parent = source;
+		f.reset(usable);
+		ok(route() && f.hostgroup() == kWriter, "a connection held on a source server with the GTID allows it");
+		f.writer->server_myds->myconn = nullptr;
+		held->parent = nullptr;
+		if (lagging != nullptr) remove_server(kWriter, lagging_addr);
+
+		// A backup that holds the GTID is not selectable while a primary is present.
+		const char primary_addr[] = "causal-fallback-primary-reader";
+		MySrvC* primary = add_server(kReader, primary_addr, 100);
+		MyHGC* reader_hgc = MyHGM->MyHGC_find(kReader);
+		reader_hgc->attributes.backup_weight_threshold = 10;
+		reader_hgc->attributes.backup_availability = 1;
+		set_server_gtid(kReaderAddr, true);
+		f.reset(usable);
+		ok(primary != nullptr && route() && f.hostgroup() == kWriter,
+			"a backup with the GTID does not count while a primary is present");
+		reader_hgc->attributes.backup_weight_threshold = 0;
+		reader_hgc->attributes.backup_availability = 0;
+		if (primary != nullptr) remove_server(kReader, primary_addr);
+	}
+
+	f.reset("");
+	mysql_thread___causal_read_fallback_to_source = false;
+	mysql_thread___default_max_latency_ms = saved_latency;
+	set_server_gtid(kReaderAddr, false);
+	set_server_gtid(kWriterAddr, false);
+	if (reader != nullptr) remove_server(kReader, kReaderAddr);
+	if (source != nullptr) remove_server(kWriter, kWriterAddr);
+}
+#endif // PROXYSQL31
+
 } // namespace
 
 int main() {
+#ifdef PROXYSQL31
+	plan(40);
+#else
 	plan(16);
+#endif
 	if (test_init_minimal() != 0 || test_init_auth() != 0 ||
 		test_init_query_processor() != 0 || test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize unit-test globals");
@@ -227,6 +438,9 @@ int main() {
 		test_routing(fixture);
 		test_fixed_hostgroups(fixture);
 		test_get_connection(fixture);
+#ifdef PROXYSQL31
+		test_source_fallback(fixture);
+#endif
 	}
 	test_cleanup_hostgroups();
 	delete GloMyLogger;

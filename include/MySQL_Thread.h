@@ -186,6 +186,9 @@ enum MySQL_Thread_status_variable {
 	st_var_gtid_session_collected,
 	st_var_generated_pkt_err,
 	st_var_max_connect_timeout_err,
+#ifdef PROXYSQL31
+	st_var_causal_reads_routed_to_source,
+#endif
 	st_var_backend_lagging_during_query,
 	st_var_backend_offline_during_query,
 	st_var_unexpected_com_quit,
@@ -454,6 +457,9 @@ struct p_th_counter {
 		connpool_get_conn_failure,
 		generated_error_packets,
 		max_connect_timeouts,
+#ifdef PROXYSQL31
+		causal_reads_routed_to_source,
+#endif
 		backend_lagging_during_query,
 		backend_offline_during_query,
 		queries_with_max_lag_ms,
@@ -805,6 +811,9 @@ class MySQL_Threads_Handler
 		int query_processor_regex;
 		int query_processor_parser;
 		int set_query_lock_on_hostgroup;
+#ifdef PROXYSQL31
+		bool causal_read_fallback_to_source;
+#endif
 		int set_parser_algorithm;
 		int user_variable_tracking;
 		int reset_connection_algorithm;
