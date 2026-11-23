@@ -109,9 +109,12 @@ jobs:
         # (repo-root lib/*.cpp, include/*). Without them sparse checkout
         # omits daemon sources, codecov-cli drops those SF: entries, and
         # Codecov shows only test/+src/ -- the regression after #5967.
+        # plugins is required too: plugin .so files are built with coverage,
+        # and fastcov exits 6 when it cannot find their sources (#6696).
         sparse-checkout: |
           include
           lib
+          plugins
           src
           test/infra
           test/tap

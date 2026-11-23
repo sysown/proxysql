@@ -38,7 +38,11 @@ jobs:
     needs:
     - tier-context
     if: ${{ needs.tier-context.result == 'success' && fromJson(needs.tier-context.outputs.matrices)['unit-tests'][0] != null }}
-    runs-on: ${{ fromJson(needs.tier-context.outputs.runson) }}
+    # On the self-hosted pool, also require the proxysql-build label. Only the
+    # ci-vm-* and ci-big5-vm-* runners carry it; on ci7-vm-* the ASAN build took
+    # 105 of the 120 minutes and the job was cancelled (#6696). The picker
+    # returns either the self-hosted label list or a hosted runner name.
+    runs-on: ${{ (startsWith(needs.tier-context.outputs.runson, '[') && fromJson('["self-hosted","proxysql-ci","proxysql-build"]')) || fromJson(needs.tier-context.outputs.runson) }}
     timeout-minutes: 120
     permissions:
       actions: read

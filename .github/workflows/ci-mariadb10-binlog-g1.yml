@@ -110,6 +110,7 @@ jobs:
         sparse-checkout: |
           include
           lib
+          plugins
           src
           test/infra
           test/tap
