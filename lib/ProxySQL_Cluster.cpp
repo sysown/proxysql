@@ -349,6 +349,8 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								if (peer_resultset_ok(result, 4, query3, node->hostname, node->port)) {
 									rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result);
 								} else {
+									// The global checksum is already cached: make the next poll fetch the checksums again.
+									GloProxyCluster->Reset_Global_Checksums(true);
 									rc_query = 1;
 								}
 								mysql_free_result(result);
@@ -2128,11 +2130,10 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						mysql_free_result(result);
 						result = nullptr;
 					}
-				}
-
-				if (result != nullptr && !peer_resultset_ok(result, 12, CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS, hostname, port)) {
+				} else if (!peer_resultset_ok(result, 12, CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS, hostname, port)) {
 					mysql_free_result(result);
 					result = nullptr;
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_failure]->Increment();
 					fetch_failed = true;
 				}
 
