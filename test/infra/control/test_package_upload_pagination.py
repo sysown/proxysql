@@ -176,11 +176,18 @@ class UploadPaginationTests(unittest.TestCase):
 
     def test_every_producer_replaces_an_asset_beyond_100(self):
         # Removing pagination from any single producer must fail this behavior check.
+        # The producers share a few identical upload bodies, so run each distinct
+        # body once: a producer whose copy changes becomes a new body and is run too.
+        groups = {}
         for workflow in self.workflows:
-            with self.subTest(workflow=workflow.name):
-                name = ('proxysql-3.0.12-linux-amd64.tar.gz' if '-tarball.yml' in workflow.name
+            tarball = '-tarball.yml' in workflow.name
+            groups.setdefault((upload_body(workflow), tarball), []).append(workflow)
+        for (_, tarball), workflows in groups.items():
+            with self.subTest(workflow=workflows[0].name, sharing=len(workflows),
+                              producers=' '.join(w.name for w in workflows)):
+                name = ('proxysql-3.0.12-linux-amd64.tar.gz' if tarball
                         else 'proxysql_3.0.12-debian12_amd64.deb')
-                self.assert_replaced(*self.run_upload(workflow, name, position=238, count=251), name)
+                self.assert_replaced(*self.run_upload(workflows[0], name, position=238, count=251), name)
 
     def test_first_page_replacement_preserves_unrelated_assets(self):
         name = 'proxysql_3.0.12-debian12_amd64.deb'
