@@ -147,8 +147,8 @@ jobs:
         # bare install 404s when a runner's pre-baked index refers to
         # "404 Not Found"). Refresh the index first so we resolve to the
         # currently-published version.
-        sudo apt-get update -y
-        sudo apt-get install -y -qq --no-install-recommends \
+        sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update -y
+        sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y -qq --no-install-recommends \
           libaio1t64 libnuma1 libncurses6 libtinfo6
         MYSQLX_COMPAT_LIB_DIR="${RUNNER_TEMP}/mysqlx-compat-libs"
         mkdir -p "${MYSQLX_COMPAT_LIB_DIR}"
