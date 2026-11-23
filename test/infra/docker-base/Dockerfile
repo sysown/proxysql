@@ -9,9 +9,10 @@ ARG ORCHESTRATOR_CLIENT_VERSION=4.32.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Bound every apt network wait. apt's defaults have no connection timeout and
-# no retries, so one stalled connection to the Ubuntu archive blocked the
-# install below until CI's 20-minute step timeout killed the job (#6710).
+# Bound every apt network wait. apt 2.8 retries a failed fetch 3 times and
+# waits 120 s on a silent connection; with a stalled Ubuntu archive that held
+# the install below until CI's 20-minute step timeout killed the job (#6710).
+# Give up on a silent connection after 30 s and retry it up to 5 times.
 RUN printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' \
     > /etc/apt/apt.conf.d/80-network-timeouts
 
