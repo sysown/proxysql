@@ -427,6 +427,7 @@ docker run \
     --network "${NETWORK_NAME}" \
     --cap-add=NET_ADMIN \
     --cap-add=SYS_ADMIN \
+    --cap-add=SYS_PTRACE \
     -v "${WORKSPACE}:${WORKSPACE}" \
     -v "${WORKSPACE}:/opt/proxysql:ro" \
     -v "${PROXY_DATA_DIR_HOST}:/var/lib/proxysql" \
@@ -536,7 +537,10 @@ docker run \
                     echo \">>> Copying .gcno files adjacent to .gcda files in /gcov...\"
                     matched=0
                     unmatched=0
-                    cd /gcov && find . -name '*.gcda' -type f | while read gcda; do
+                    # Feed the loop by process substitution, not a pipe: a piped
+                    # while loop runs in a subshell and its counters are lost.
+                    cd /gcov
+                    while read gcda; do
                         relpath=\"\${gcda#./}\"
                         base=\"\${relpath%.gcda}\"
                         bname=\$(basename \"\${base}\")
@@ -549,7 +553,7 @@ docker run \
                         else
                             unmatched=\$((unmatched + 1))
                         fi
-                    done
+                    done < <(find . -name '*.gcda' -type f)
                     rm -f \"\${GCNO_INDEX}\"
                     echo \">>> .gcno copy: matched=\${matched} unmatched=\${unmatched}\"
 
@@ -564,9 +568,20 @@ docker run \
                             local coverage_log=\"\${COVERAGE_REPORT_DIR}/coverage-generation.log\"
                             echo \">>> Running fastcov on /gcov...\"
                             cd /gcov
+                            # Capture the exit code: under set -e a non-zero fastcov
+                            # exit used to end this subshell without a message.
+                            # Exit 6 (excl_not_found) means sources are missing,
+                            # e.g. a plugin not in the sparse checkout (#6696).
+                            # The job still fails, but the report it wrote is kept.
+                            local fastcov_rc=0
                             fastcov -b -j\$(nproc) -l \
                                 -e /usr deps \
-                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1
+                                -d . -o \"\${coverage_file}\" >> \"\${coverage_log}\" 2>&1 || fastcov_rc=\$?
+                            if [ \"\${fastcov_rc}\" -ne 0 ]; then
+                                echo \">>> ERROR: fastcov exited with code \${fastcov_rc} (see \${coverage_log}); last errors:\" >&2
+                                grep -F '[error]' \"\${coverage_log}\" | tail -n 10 | sed 's/^/>>>     /' >&2 || true
+                                coverage_failed=1
+                            fi
                             if [ ! -s \"\${coverage_file}\" ]; then
                                 echo \">>> ERROR: fastcov produced an empty coverage report (see \${coverage_log})\" >&2
                                 exit 1

@@ -40,6 +40,9 @@ RUN apt-get update -qq && \
     python3-packaging \
     python3-structlog \
     sysbench \
+    # gdb lets TAP tests dump thread stacks of a ProxySQL that stops
+    # responding, e.g. reg_test_3847_admin_lock-t (#6696).
+    gdb \
     php-cli \
     php-mysql \
     lcov \
