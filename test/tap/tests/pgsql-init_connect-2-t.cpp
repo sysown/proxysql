@@ -38,7 +38,9 @@ static std::vector<std::vector<std::string>> rows(PGconn* admin, const char* sql
 			out.push_back(row);
 		}
 	} else {
-		diag("admin query failed: %s -- %s", sql, PQresultErrorMessage(r));
+		// The snapshot drives cleanup: with a partial one, cleanup would delete rows this test
+		// did not add. Stop before anything is changed.
+		BAIL_OUT("snapshot query failed: %s -- %s", sql, PQresultErrorMessage(r));
 	}
 	PQclear(r);
 	return out;

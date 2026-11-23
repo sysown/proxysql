@@ -9,9 +9,10 @@
  *
  * The monitor is disabled for the duration: its probes would connect to the mock too.
  *
- * State touched (restored on exit): hostgroup 6700 in pgsql_servers and
- * pgsql_hostgroup_attributes, pgsql_query_rules rule_id 6700, 'pgsql-monitor_enabled',
- * 'pgsql-use_native_backend_protocol'.
+ * State touched: hostgroup 6700 in pgsql_servers and pgsql_hostgroup_attributes, and
+ * pgsql_query_rules rule_id 6700, are created and removed on exit (the test refuses to run if
+ * they already exist). 'pgsql-monitor_enabled' and 'pgsql-use_native_backend_protocol' are
+ * restored on exit.
  */
 
 #include "pgsql_init_connect_common.h"
@@ -101,6 +102,15 @@ int main(int, char**) {
 		skip(6, "init_connect needs ProxySQL v3.1+");
 		return exit_status();
 	}
+
+	// The test owns hostgroup and rule 6700 and removes them on exit, so refuse to run if
+	// anything already uses them rather than overwrite it.
+	const std::string in_use = ic_admin_value(admin,
+		"SELECT (SELECT COUNT(*) FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(kHg) + ")"
+		" + (SELECT COUNT(*) FROM pgsql_hostgroup_attributes WHERE hostgroup_id=" + std::to_string(kHg) + ")"
+		" + (SELECT COUNT(*) FROM pgsql_query_rules WHERE rule_id=6700)");
+	if (in_use != "0")
+		BAIL_OUT("hostgroup or query rule 6700 is already configured (%s rows); this test would overwrite it", in_use.c_str());
 
 	const std::string orig_monitor = global_value(admin, "pgsql-monitor_enabled");
 	const std::string orig_native = global_value(admin, "pgsql-use_native_backend_protocol");
