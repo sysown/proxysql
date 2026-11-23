@@ -13,6 +13,14 @@ if [[ ! -x "${runner}" ]]; then
 	exit 1
 fi
 
+# Git exports repository-local variables such as GIT_DIR to hooks (always
+# when pushing from a linked worktree). The lint suite builds throwaway fixture
+# repositories with plain `git` commands; with GIT_DIR inherited those commands
+# would commit, rewrite refs and set core.bare in THIS repository instead.
+while IFS= read -r variable_name; do
+	unset "${variable_name}"
+done < <(git rev-parse --local-env-vars)
+
 echo ">>> Running repository CI lint suite before push"
 cd "${repo_root}"
 exec "${runner}"

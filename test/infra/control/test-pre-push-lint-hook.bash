@@ -73,4 +73,29 @@ if (
 	fail "hook must return non-zero when the lint runner fails"
 fi
 
+# Regression: when pushing from a linked worktree git exports GIT_DIR (and
+# can export GIT_WORK_TREE / GIT_INDEX_FILE) to the hook. The lint runner must
+# not inherit them, or fixture `git init`/`commit` calls hit the real repo.
+cat > "${fixture}/test/infra/control/run-ci-lint.bash" <<'RUNNER'
+#!/usr/bin/env bash
+env | grep -E '^GIT_(DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|COMMON_DIR)=' > "${LINT_HOOK_PROBE}" || true
+exit 0
+RUNNER
+(
+	clear_git_local_environment
+	cd "${fixture}"
+	GIT_DIR="${fixture}/.git" GIT_WORK_TREE="${fixture}" \
+		GIT_INDEX_FILE="${fixture}/.git/index" LINT_HOOK_PROBE="${probe}" \
+		"${fixture}/.githooks/pre-push" origin example.invalid
+) || fail "hook must succeed when invoked with git-exported repository variables"
+[[ ! -s "${probe}" ]] \
+	|| fail "hook must clear repository-local GIT_* variables before running the lint runner (leaked: $(tr '\n' ' ' <"${probe}"))"
+
+# The shared runner is also invoked outside the hook; it must clear the same
+# variables before its first check.
+clear_line="$(grep -n 'git rev-parse --local-env-vars' "${runner}" | head -n1 | cut -d: -f1)"
+first_check_line="$(grep -n '^run_check ' "${runner}" | head -n1 | cut -d: -f1)"
+[[ -n "${clear_line}" && -n "${first_check_line}" && "${clear_line}" -lt "${first_check_line}" ]] \
+	|| fail "shared runner must clear repository-local GIT_* variables before its first check"
+
 echo "pre-push lint hook contract: OK"
