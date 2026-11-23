@@ -12,8 +12,8 @@
  *   written only once the client sent something else. A client waiting for that result set sends
  *   nothing and hangs.
  *
- *   For MySQL and PostgreSQL, the test registers a frontend session on a real worker thread and
- *   calls the move check directly:
+ *   For MySQL and PostgreSQL, the test registers a frontend session in a worker object (the thread
+ *   is not started) and calls the move check directly from the test thread:
  *   - with no output pending (plaintext and TLS), the session is moved: the fixture reaches the
  *     move, so the refusals below are not caused by the fixture;
  *   - after a real short write over TLS (socketpair with a tiny SO_SNDBUF), with ciphertext left in
@@ -126,6 +126,8 @@ struct Frontend {
 		server_ctx = SSL_CTX_new(TLS_server_method());
 		client_ctx = SSL_CTX_new(TLS_client_method());
 		require(server_ctx && client_ctx, "SSL_CTX_new");
+		require(SSL_CTX_set_min_proto_version(server_ctx, TLS1_3_VERSION) == 1, "server TLS 1.3 minimum");
+		require(SSL_CTX_set_min_proto_version(client_ctx, TLS1_3_VERSION) == 1, "client TLS 1.3 minimum");
 		require(SSL_CTX_use_certificate_file(server_ctx, (certs / "proxysql-cert.pem").c_str(), SSL_FILETYPE_PEM) == 1, "certificate");
 		require(SSL_CTX_use_PrivateKey_file(server_ctx, (certs / "proxysql-key.pem").c_str(), SSL_FILETYPE_PEM) == 1, "private key");
 		myds->encrypted = true;
