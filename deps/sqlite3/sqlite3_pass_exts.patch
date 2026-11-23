@@ -1,7 +1,7 @@
 --- sqlite3.c	2024-03-22 19:22:47.046093173 +0100
 +++ sqlite3-pass-exts.c	2024-03-22 19:24:09.557303716 +0100
-@@ -26275,6 +26275,250 @@
-   sqlite3ResultStrAccum(context, &sRes);
+@@ -27442,6 +27442,250 @@
+   sqlite3_result_str(context, pRes, SQLITE_FINISH);
  }
  
 +#define DEF_SALT_SIZE 20
@@ -251,7 +251,7 @@
  /*
  ** current_time()
  **
-@@ -133230,6 +133474,10 @@
+@@ -137768,6 +138012,10 @@
      FUNCTION(substr,             3, 0, 0, substrFunc       ),
      FUNCTION(substring,          2, 0, 0, substrFunc       ),
      FUNCTION(substring,          3, 0, 0, substrFunc       ),
