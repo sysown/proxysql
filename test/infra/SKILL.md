@@ -100,10 +100,12 @@ export TEST_PY_TAP_INCL="test_binlog.*"
 ```bash
 # Destroy existing infrastructure first (from the repository root)
 export INFRA_ID="dev-$USER"
-export TAP_GROUP="basictests-g1"  # the group whose infras you started (uses infra-mysql57)
+export TAP_GROUP="<group>"  # replace with the group whose infras failed to start
 ./test/infra/control/destroy-infras.bash
-# ProxySQL/test logs, plus the data directory of each plain Docker infra of the group
-sudo rm -rf ci_infra_logs/${INFRA_ID} ci_infra_logs/infra-mysql57-${INFRA_ID}
+# ProxySQL/test logs (always under ci_infra_logs), plus the data directory of
+# each plain Docker infra of the group (here infra-mysql57), which follows
+# INFRA_LOGS_PATH when set.
+sudo rm -rf "ci_infra_logs/${INFRA_ID}" "${INFRA_LOGS_PATH:-ci_infra_logs}/infra-mysql57-${INFRA_ID}"
 ```
 
 ### Issue: "Access denied for user 'root'"
