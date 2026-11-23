@@ -120,8 +120,11 @@ is_elf() { [ "$(head -c4 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454
 echo "==> Installing package: /tmp/pkg.$PKG_TYPE"
 case "$PKG_TYPE" in
     deb)
-        apt-get update -qq 2>/dev/null || true
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /tmp/pkg.deb 2>&1
+        # Drop and retry stalled archive connections instead of waiting on
+        # them indefinitely (#6710).
+        APT_NET=(-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+        apt-get "${APT_NET[@]}" update -qq 2>/dev/null || true
+        DEBIAN_FRONTEND=noninteractive apt-get "${APT_NET[@]}" install -y -qq /tmp/pkg.deb 2>&1
         ;;
     rpm)
         if command -v dnf &>/dev/null; then
@@ -193,7 +196,10 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> Starting clean container from $IMAGE ..."
-if ! docker run -d --name "$CID" "$IMAGE" sleep 120 >/dev/null 2>&1; then
+# The container must outlive the install: with a fixed 'sleep 120' a slow
+# package archive let PID 1 exit mid-install and the exec died with 137
+# (#6710). cleanup() kills the container when this script exits.
+if ! docker run -d --name "$CID" "$IMAGE" sleep infinity >/dev/null 2>&1; then
     echo "ERROR: could not start container from $IMAGE" >&2
     exit 1
 fi
