@@ -2,6 +2,8 @@
 using json = nlohmann::json;
 #define PROXYJSON
 #include <variant>
+#include <mutex>
+#include <unordered_set>
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Thread.h"
 #include "ProxySQL_PluginManager.h"
@@ -1301,10 +1303,25 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 		}
 #else
 		// v3.0 has no SETTING_INIT_CONNECT handler: sending it would stall the session.
+		// Warn once per source and value, so a changed value is logged again.
 		if (tmp_init_connect && tmp_init_connect[0]) {
-			static std::atomic<bool> warned{false};
-			if (!warned.exchange(true)) {
-				proxy_warning("PostgreSQL init_connect is ignored: it requires ProxySQL v3.1 or later\n");
+			const bool from_hostgroup = hg_strings != nullptr && !hg_strings->init_connect.empty();
+			const int hid = mybe->server_myds->myconn->parent->myhgc->hid;
+			std::string key = (from_hostgroup ? std::to_string(hid) : std::string("global")) + '\n' + tmp_init_connect;
+			// shortcut: every warned value is kept for the process lifetime; values are admin config, so few.
+			static std::mutex warned_mutex;
+			static std::unordered_set<std::string> warned;
+			bool first = false;
+			{
+				std::lock_guard<std::mutex> lock(warned_mutex);
+				first = warned.insert(std::move(key)).second;
+			}
+			if (first) {
+				if (from_hostgroup) {
+					proxy_warning("PostgreSQL init_connect for hostgroup %d is ignored: it requires ProxySQL v3.1 or later\n", hid);
+				} else {
+					proxy_warning("PostgreSQL init_connect for pgsql-init_connect is ignored: it requires ProxySQL v3.1 or later\n");
+				}
 			}
 		}
 #endif // PROXYSQL31
