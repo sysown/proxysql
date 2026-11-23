@@ -91,11 +91,46 @@ RUNNER
 [[ ! -s "${probe}" ]] \
 	|| fail "hook must clear repository-local GIT_* variables before running the lint runner (leaked: $(tr '\n' ' ' <"${probe}"))"
 
-# The shared runner is also invoked outside the hook; it must clear the same
-# variables before its first check.
-clear_line="$(grep -n 'git rev-parse --local-env-vars' "${runner}" | head -n1 | cut -d: -f1)"
-first_check_line="$(grep -n '^run_check ' "${runner}" | head -n1 | cut -d: -f1)"
-[[ -n "${clear_line}" && -n "${first_check_line}" && "${clear_line}" -lt "${first_check_line}" ]] \
-	|| fail "shared runner must clear repository-local GIT_* variables before its first check"
+# The shared runner is also invoked outside the hook, so exercise the real
+# runner directly with repository variables pointing at a sentinel repository.
+# The runner calls resolve-ci-engine-ref.bash before its first check; a stub in
+# its place records the environment the checks would inherit, builds a fixture
+# repository the way the lint checks do, then stops the runner.
+sentinel="${fixture}/sentinel"
+(
+	clear_git_local_environment
+	git init -q "${sentinel}"
+	git -C "${sentinel}" -c user.name=t -c user.email=t@example.invalid \
+		commit -q --allow-empty -m sentinel
+)
+sentinel_head="$(clear_git_local_environment; git -C "${sentinel}" rev-parse HEAD)"
+cp "${runner}" "${fixture}/test/infra/control/run-ci-lint.bash"
+cat > "${fixture}/test/infra/control/resolve-ci-engine-ref.bash" <<'RESOLVER'
+#!/usr/bin/env bash
+env | grep -E '^GIT_(DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|COMMON_DIR)=' > "${LINT_RUNNER_PROBE}" || true
+scratch="$(mktemp -d)"
+git -C "${scratch}" init -q
+git -C "${scratch}" -c user.name=t -c user.email=t@example.invalid \
+	commit -q --allow-empty -m fixture
+rm -rf "${scratch}"
+exit 42
+RESOLVER
+chmod +x "${fixture}/test/infra/control/resolve-ci-engine-ref.bash"
+runner_probe="${fixture}/runner-probe"
+if (
+	clear_git_local_environment
+	cd "${fixture}"
+	GIT_DIR="${sentinel}/.git" GIT_WORK_TREE="${sentinel}" \
+		GIT_INDEX_FILE="${sentinel}/.git/index" LINT_RUNNER_PROBE="${runner_probe}" \
+		"${fixture}/test/infra/control/run-ci-lint.bash" >/dev/null 2>&1
+); then
+	fail "shared runner must stop when resolve-ci-engine-ref.bash fails"
+fi
+[[ -e "${runner_probe}" ]] \
+	|| fail "shared runner must call resolve-ci-engine-ref.bash before its first check"
+[[ ! -s "${runner_probe}" ]] \
+	|| fail "shared runner must clear repository-local GIT_* variables before running checks (leaked: $(tr '\n' ' ' <"${runner_probe}"))"
+[[ "$(clear_git_local_environment; git -C "${sentinel}" rev-parse HEAD)" == "${sentinel_head}" ]] \
+	|| fail "fixture git commands run by the shared runner must not modify the caller's repository"
 
 echo "pre-push lint hook contract: OK"
