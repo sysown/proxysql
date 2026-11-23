@@ -20,7 +20,7 @@
 CommandLine cl;
 
 static constexpr int kPerMode = 18;       // v3.1 cases run once per backend mode
-static constexpr int kStableCases = 5;    // v3.0 cases
+static constexpr int kStableCases = 3;    // v3.0 cases
 
 // Two statements and one Sync in libpq pipeline mode; the first opens a new connection.
 static bool pipeline_sees(PGconn* c, const char* expected) {
@@ -193,35 +193,24 @@ static void run_mode(PGconn* admin, bool native) {
 	   native, before.c_str(), held.c_str(), fresh.c_str());
 }
 
-// v3.0 ignores init_connect instead of stalling every new connection, and warns once per
-// distinct value, so a changed value is logged again.
+// v3.0 ignores init_connect instead of stalling every new connection, and warns when the
+// value is loaded to runtime.
 static void run_stable(PGconn* admin) {
+	const std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
+	std::fstream log;
+	const bool log_open = open_file_and_seek_end(log_path, log) == EXIT_SUCCESS;
 	ic_set_global(admin, "SET ic.marker TO 'global'");
+	if (log_open) {
+		ok(wait_for_log_match(log, "\\[WARNING\\] pgsql-init_connect is ignored"),
+		   "v3.0: loading a non-empty pgsql-init_connect logs a warning");
+	} else {
+		skip(1, "cannot open ProxySQL log at %s", log_path.c_str());
+	}
+
 	PGConnPtr c = ic_connect_client(cl);
 	const IcResult r = ic_query(c.get(), IC_MARKER);
 	ok(!r.timed_out && r.ok, "v3.0: query is not blocked by init_connect");
 	ok(r.value.empty(), "v3.0: init_connect is not applied (got '%s')", r.value.c_str());
-
-	const std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
-	std::fstream log;
-	if (open_file_and_seek_end(log_path, log) != EXIT_SUCCESS) {
-		skip(3, "cannot open ProxySQL log at %s", log_path.c_str());
-		return;
-	}
-	const char* const warning = "PostgreSQL init_connect for pgsql-init_connect is ignored";
-	// Values unique to this run: the server remembers every value it already warned about.
-	const std::string token = std::to_string(monotonic_time());
-	ic_set_global(admin, "SET ic.marker TO 'a" + token + "'");
-	PGConnPtr c1 = ic_connect_client(cl);
-	ic_query(c1.get(), IC_MARKER);
-	ok(wait_for_log_match(log, warning), "v3.0: an ignored value is logged");
-	ic_set_global(admin, "SET ic.marker TO 'b" + token + "'");
-	PGConnPtr c2 = ic_connect_client(cl);
-	ic_query(c2.get(), IC_MARKER);
-	ok(wait_for_log_match(log, warning), "v3.0: a changed value is logged again");
-	PGConnPtr c3 = ic_connect_client(cl);
-	ic_query(c3.get(), IC_MARKER);
-	ok(!wait_for_log_match(log, warning, 1000), "v3.0: the same value is not logged twice");
 }
 
 int main(int, char**) {

@@ -2,8 +2,6 @@
 using json = nlohmann::json;
 #define PROXYJSON
 #include <variant>
-#include <mutex>
-#include <unordered_set>
 #include "PgSQL_HostGroups_Manager.h"
 #include "PgSQL_Thread.h"
 #include "ProxySQL_PluginManager.h"
@@ -1280,6 +1278,9 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
 bool PgSQL_Session::handler_again___verify_init_connect() {
+	// v3.0 has no SETTING_INIT_CONNECT handler, and sending init_connect would stall the session,
+	// so v3.0 ignores it. It warns when a non-empty value is loaded to runtime instead.
+#ifdef PROXYSQL31
 	if (mybe->server_myds->myconn->options.init_connect_sent == false) {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent = true;
@@ -1291,7 +1292,6 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 			// pgsql_hostgroup_attributes takes priority
 			tmp_init_connect = hg_strings->init_connect.c_str();
 		}
-#ifdef PROXYSQL31
 		// Tracked parameters (search_path, TimeZone, ...) set here are not recorded in this
 		// connection's variable state, so the client's value may or may not be re-applied.
 		if (tmp_init_connect) {
@@ -1301,31 +1301,8 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
-#else
-		// v3.0 has no SETTING_INIT_CONNECT handler: sending it would stall the session.
-		// Warn once per source and value, so a changed value is logged again.
-		if (tmp_init_connect && tmp_init_connect[0]) {
-			const bool from_hostgroup = hg_strings != nullptr && !hg_strings->init_connect.empty();
-			const int hid = mybe->server_myds->myconn->parent->myhgc->hid;
-			std::string key = (from_hostgroup ? std::to_string(hid) : std::string("global")) + '\n' + tmp_init_connect;
-			// shortcut: every warned value is kept for the process lifetime; values are admin config, so few.
-			static std::mutex warned_mutex;
-			static std::unordered_set<std::string> warned;
-			bool first = false;
-			{
-				std::lock_guard<std::mutex> lock(warned_mutex);
-				first = warned.insert(std::move(key)).second;
-			}
-			if (first) {
-				if (from_hostgroup) {
-					proxy_warning("PostgreSQL init_connect for hostgroup %d is ignored: it requires ProxySQL v3.1 or later\n", hid);
-				} else {
-					proxy_warning("PostgreSQL init_connect for pgsql-init_connect is ignored: it requires ProxySQL v3.1 or later\n");
-				}
-			}
-		}
-#endif // PROXYSQL31
 	}
+#endif // PROXYSQL31
 	return false;
 }
 

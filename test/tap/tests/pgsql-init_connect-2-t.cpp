@@ -15,6 +15,7 @@
 
 #include "pgsql_init_connect_common.h"
 
+#include <fstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,7 +23,7 @@
 CommandLine cl;
 
 static constexpr int kV31Cases = 10;
-static constexpr int kStableCases = 2;    // v3.0 cases
+static constexpr int kStableCases = 3;    // v3.0 cases
 
 static std::vector<std::pair<std::string, std::string>> existing_rows;   // hostgroup_id, init_connect
 static std::vector<std::string> added_rows;                              // hostgroup_id
@@ -115,9 +116,20 @@ static void run_v31(PGconn* admin) {
 	ok(!r.timed_out && r.ok && r.value == "hg", "back to a valid hostgroup value (got '%s')", r.value.c_str());
 }
 
-// v3.0 ignores init_connect (with a warning) instead of stalling every new connection.
+// v3.0 ignores init_connect instead of stalling every new connection, and warns when the
+// value is loaded to runtime.
 static void run_stable(PGconn* admin) {
+	const std::string log_path = get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log";
+	std::fstream log;
+	const bool log_open = open_file_and_seek_end(log_path, log) == EXIT_SUCCESS;
 	ic_set_hostgroups(admin, "SET ic.marker TO 'hg'");
+	if (log_open) {
+		ok(wait_for_log_match(log, "\\[WARNING\\] pgsql_hostgroup_attributes.init_connect for hostgroup [0-9]+ is ignored"),
+		   "v3.0: loading a non-empty hostgroup init_connect logs a warning");
+	} else {
+		skip(1, "cannot open ProxySQL log at %s", log_path.c_str());
+	}
+
 	PGConnPtr c = ic_connect_client(cl);
 	const IcResult r = ic_query(c.get(), IC_MARKER);
 	ok(!r.timed_out && r.ok, "v3.0: query is not blocked by hostgroup init_connect");
