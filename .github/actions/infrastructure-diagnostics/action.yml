@@ -16,6 +16,25 @@ inputs:
 runs:
   using: composite
   steps:
+    # Self-hosted runners keep the workspace between jobs, and the test
+    # containers write ci_infra_logs as root. A cancelled or killed job never
+    # reaches its cleanup, so the root-owned tree stays and the next job's
+    # actions/checkout fails with EACCES before building anything (#6711).
+    # The setup phase runs before the product checkout in every workflow, so
+    # remove the tree here, escalating only when the runner user cannot.
+    - name: Remove ci_infra_logs left by an earlier job
+      if: ${{ inputs.phase == 'setup' }}
+      shell: bash
+      run: |
+        logs="$GITHUB_WORKSPACE/proxysql/ci_infra_logs"
+        [ -e "$logs" ] || exit 0
+        rm -rf "$logs" 2>/dev/null || sudo -n rm -rf "$logs" 2>/dev/null ||
+          docker run --rm -v "$GITHUB_WORKSPACE/proxysql:/w" ubuntu:24.04 rm -rf /w/ci_infra_logs || true
+        if [ -e "$logs" ]; then
+          echo "::warning::Could not remove $logs; actions/checkout may fail to clean the workspace."
+        else
+          echo "Removed $logs left by an earlier job."
+        fi
     - name: Install capture before Docker teardown
       if: ${{ inputs.phase == 'setup' }}
       shell: bash
