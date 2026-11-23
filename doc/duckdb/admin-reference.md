@@ -132,8 +132,8 @@ source may be enabled.
 `stats_duckdb_replica` is projected from the replica thread. `applying`
 means the dump is being followed; `seconds_behind_source` is the age of the
 last applied event. `error` is sticky until `STOP`. `RESET DUCKDB REPLICA` is
-legal only while stopped. It drops the snapshot tables and
-`proxysql_replica.position`, not the source definition.
+legal only while stopped. It drops the snapshot tables,
+`proxysql_replica.columns` and `proxysql_replica.position`, not the source definition.
 
 The source user needs `REPLICATION CLIENT`, `REPLICATION SLAVE`, `SELECT` on
 the opted-in tables, and `RELOAD` for the snapshot lock. A table without a
@@ -156,6 +156,42 @@ v1 stops on any DDL in the binlog (`ALTER`, `RENAME`, and so on) rather than
 applying it. Stop the replica, `RESET DUCKDB REPLICA`, and `START` again to
 resnapshot. Online schema-change tools therefore require an explicit
 resnapshot. `TRUNCATE` and `DROP`/`CREATE` are also treated as DDL in v1.
+
+### Recorded source column metadata
+
+DuckDB cannot tell a MySQL `DATETIME` from a `TIMESTAMP` (both become
+`TIMESTAMP`), and it does not keep a text column's collation. The snapshot
+therefore also writes `proxysql_replica.columns`, one row per replicated column,
+in the same transaction that creates the table:
+
+```text
+proxysql_replica.columns(source_id, schema_name, table_name, column_name, ordinal,
+                         mysql_data_type, mysql_column_type, character_set_name,
+                         collation_name, duckdb_type)   -- primary key: first four
+```
+
+The values come from `information_schema.COLUMNS` (`DATA_TYPE`, `COLUMN_TYPE`,
+`CHARACTER_SET_NAME`, `COLLATION_NAME`) plus the DuckDB type the replica chose.
+`RESET DUCKDB REPLICA` drops the table, and a new snapshot replaces the rows of
+its source. Databases snapshotted by an earlier version have no such table; the
+`mysql_analytical` dialect then simply sees unknown source facts, and a
+reset-and-resnapshot records them. Nothing else changes for those databases.
+
+The analytical translator may use these rows only through
+`duckdb_mysql_select_context`, which attaches them to a column when **all** of
+these hold: the table is listed in `proxysql_replica.tables`; exactly one row
+names the column; the row's `duckdb_type` still equals the column's live native
+type; and the recorded MySQL type agrees with the native kind. Anything else
+(native tables, views, a column altered natively, duplicate rows from two
+sources, a deleted row) leaves that column unknown, which the translator treats
+as unprovable. A query never fails because a row is missing.
+
+Trust boundary: the table is ordinary data in the DuckDB database. A client that
+may write to the database can edit `proxysql_replica`, as it already can edit
+the manifest and position. The checks above stop stale or inconsistent rows from
+becoming wrong facts, but they do not authenticate the rows. Because the replica
+stops on any source DDL (see above), rows cannot drift from the source schema
+without a resnapshot.
 
 `STOP DUCKDB REPLICA` can take up to the dump read timeout (5 seconds) when
 the source is idle, and longer if the thread is waiting on the snapshot lock.

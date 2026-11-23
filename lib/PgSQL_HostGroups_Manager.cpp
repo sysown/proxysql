@@ -5,6 +5,9 @@ using json = nlohmann::json;
 #include "PgSQL_HostGroups_Manager.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "ConnectionPoolDecision.h"
+#ifdef PROXYSQL31
+#include "MonitorHealthDecision.h"
+#endif
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -414,42 +417,46 @@ PgSQL_SrvC::PgSQL_SrvC(
 	ConnectionsFree=new PgSQL_SrvConnList(this);
 }
 
-void PgSQL_SrvC::connect_error(int err_num, bool get_mutex) {
+void PgSQL_SrvC::connect_error(PGSQL_ERROR_CODES err_code, const char* err_msg, bool get_mutex) {
 	// NOTE: this function operates without any mutex
 	// although, it is not extremely important if any counter is lost
 	// as a single connection failure won't make a significant difference
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Connect failed with code '%d'\n", err_num);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Connect failed with code '%s'\n", PgSQL_Error_Helper::get_error_code(err_code));
 	__sync_fetch_and_add(&connect_ERR,1);
 	__sync_fetch_and_add(&PgHGM->status.server_connections_aborted,1);
-	if (err_num >= 1048 && err_num <= 1052)
-		return;
-	if (err_num >= 1054 && err_num <= 1075)
-		return;
-	if (err_num >= 1099 && err_num <= 1104)
-		return;
-	if (err_num >= 1106 && err_num <= 1113)
-		return;
-	if (err_num >= 1116 && err_num <= 1118)
-		return;
-	if (err_num == 1136 || (err_num >= 1138 && err_num <= 1149))
-		return;
-	switch (err_num) {
-		case 1007: // Can't create database
-		case 1008: // Can't drop database
-		case 1044: // access denied
-		case 1045: // access denied
-/*
-		case 1048: // Column cannot be null
-		case 1049: // Unknown database
-		case 1050: // Table already exists
-		case 1051: // Unknown table
-		case 1052: // Column is ambiguous
-*/
-		case 1120:
-		case 1203: // User %s already has more than 'max_user_connections' active connections
-		case 1226: // User '%s' has exceeded the '%s' resource (current value: %ld)
-		case 3118: // Access denied for user '%s'. Account is locked..
+	switch (err_code) {
+		// PostgreSQL refused this login, which says nothing about the server's health (as MySrvC
+		// skips access denied): counting it let one rejected client shun the server for everyone.
+		// The SQLSTATEs are those PostgreSQL 16 raises during connection startup.
+		case PGSQL_ERROR_CODES::ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION: // 28000: pg_hba.conf, client certificate,
+		                                                                     //   unknown or NOLOGIN role, non-password auth
+		case PGSQL_ERROR_CODES::ERRCODE_INVALID_PASSWORD:                    // 28P01: password, md5, scram
+		case PGSQL_ERROR_CODES::ERRCODE_INVALID_CATALOG_NAME:                // 3D000: database does not exist
+		case PGSQL_ERROR_CODES::ERRCODE_UNDEFINED_DATABASE:                  // 3D000 too: ProxySQL's table lists it twice
+		case PGSQL_ERROR_CODES::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE:    // 55000: database takes no connections, or is invalid
+		// A startup option the client sent (passed on as -c key=value) that PostgreSQL rejects.
+		case PGSQL_ERROR_CODES::ERRCODE_INVALID_PARAMETER_VALUE:             // 22023: bad value
+		case PGSQL_ERROR_CODES::ERRCODE_UNDEFINED_OBJECT:                    // 42704: unknown parameter
+		case PGSQL_ERROR_CODES::ERRCODE_CANT_CHANGE_RUNTIME_PARAM:           // 55P02: not settable at connect
+		case PGSQL_ERROR_CODES::ERRCODE_ACTIVE_SQL_TRANSACTION:              // 25001: transaction_isolation, transaction_deferrable
+		case PGSQL_ERROR_CODES::ERRCODE_INVALID_NAME:                        // 42602: invalid parameter name
+		case PGSQL_ERROR_CODES::ERRCODE_SYNTAX_ERROR:                        // 42601: options the backend cannot parse
+		case PGSQL_ERROR_CODES::ERRCODE_FEATURE_NOT_SUPPORTED:               // 0A000: client_encoding the database cannot convert
 			return;
+		// The rest are told apart by the message.
+		// shortcut: matches PostgreSQL's English messages (lc_messages); a localized one still counts.
+		// 42501 is also how a file-permission error reads (EACCES, EPERM, EROFS), and that breaks
+		// every connect: only the database's CONNECT privilege and a startup option the client may
+		// not set are the client's own.
+		case PGSQL_ERROR_CODES::ERRCODE_INSUFFICIENT_PRIVILEGE:
+			if (err_msg && (strstr(err_msg, "permission denied for database") || strstr(err_msg, "permission denied to set ")))
+				return;
+			break;
+		// 53300 is also a role's or a database's own CONNECTION LIMIT, which one client can reach (as
+		// MySrvC skips max_user_connections). Only a full server ("too many clients") counts.
+		case PGSQL_ERROR_CODES::ERRCODE_TOO_MANY_CONNECTIONS:
+			if (err_msg && (strstr(err_msg, "too many connections for role") || strstr(err_msg, "too many connections for database")))
+				return;
 			break;
 		default:
 			break;
@@ -1058,6 +1065,10 @@ PgSQL_HostGroups_Manager::~PgSQL_HostGroups_Manager() {
 }
 
 void PgSQL_HostGroups_Manager::p_update_pgsql_error_counter(p_pgsql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
+	p_update_pgsql_error_counter(err_type, hid, address, port, std::to_string(code));
+}
+
+void PgSQL_HostGroups_Manager::p_update_pgsql_error_counter(p_pgsql_error_type err_type, unsigned int hid, char* address, uint16_t port, const std::string& sqlstate) {
 	PgSQL_p_hg_dyn_counter::metric metric = PgSQL_p_hg_dyn_counter::pgsql_error;
 	if (err_type == p_pgsql_error_type::proxysql) {
 		metric = PgSQL_p_hg_dyn_counter::proxysql_pgsql_error;
@@ -1067,7 +1078,7 @@ void PgSQL_HostGroups_Manager::p_update_pgsql_error_counter(p_pgsql_error_type e
 	std::string s_address = std::string(address);
 	std::string s_port = std::to_string(port);
 	// TODO: Create switch here to classify error codes
-	std::string s_code = std::to_string(code);
+	const std::string s_code = sqlstate.empty() ? PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_UNKNOWN) : sqlstate;
 	std::string metric_id = s_hostgroup + ":" + address + ":" + s_port + ":" + s_code;
 	std::map<string, string> metric_labels {
 		{ "hostgroup", s_hostgroup },
@@ -3921,6 +3932,19 @@ void PgSQL_HostGroups_Manager::read_only_action_v2(
 // return true if the status was changed
 bool PgSQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 	time_t t = time(NULL);
+	// if Monitor is enabled and pgsql-monitor_ping_interval is
+	// set too high, ProxySQL will unshun hosts that are not
+	// available. For this reason time_last_detected_error will
+	// be tuned in the future.
+	// Tuned once, before the loop: the same server in several hostgroups waits the same time.
+	if (pgsql_thread___monitor_enabled) {
+		int a = pgsql_thread___shun_recovery_time_sec;
+		int b = pgsql_thread___monitor_ping_interval;
+		b = b/1000;
+		if (b > a) {
+			t = t + (b - a);
+		}
+	}
 	bool ret = false;
 	wrlock();
 	PgSQL_SrvC *mysrvc=NULL;
@@ -3950,18 +3974,6 @@ bool PgSQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 						default:
 							break;
 					}
-					// if Monitor is enabled and pgsql-monitor_ping_interval is
-					// set too high, ProxySQL will unshun hosts that are not
-					// available. For this reason time_last_detected_error will
-					// be tuned in the future
-					if (mysql_thread___monitor_enabled) {
-						int a = pgsql_thread___shun_recovery_time_sec;
-						int b = mysql_thread___monitor_ping_interval;
-						b = b/1000;
-						if (b > a) {
-							t = t + (b - a);
-						}
-					}
 					mysrvc->time_last_detected_error = t;
 				}
 			}
@@ -3971,6 +3983,43 @@ bool PgSQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 	return ret;
 }
 
+#ifdef PROXYSQL31
+bool PgSQL_HostGroups_Manager::unshun_on_monitor_success(char *hostname, int port) {
+	const time_t t = time(NULL);
+	bool ret = false;
+	wrlock();
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		PgSQL_HGC *myhgc=(PgSQL_HGC *)MyHostGroups->index(i);
+		const unsigned int l=myhgc->mysrvs->cnt();
+		for (unsigned int j=0; j<l; j++) {
+			PgSQL_SrvC *mysrvc=myhgc->mysrvs->idx(j);
+			if (mysrvc->port!=port || strcmp(mysrvc->address,hostname)!=0) {
+				continue;
+			}
+			if (mysrvc->status!=MYSQL_SERVER_STATUS_SHUNNED || mysrvc->shunned_automatic==false) {
+				continue;
+			}
+			if (!can_unshun_server(
+				mysrvc->time_last_detected_error, t,
+				pgsql_thread___shun_recovery_time_sec, pgsql_thread___connect_timeout_server_max,
+				mysrvc->shunned_and_kill_all_connections,
+				mysrvc->ConnectionsUsed->conns_length(), mysrvc->ConnectionsFree->conns_length()
+			)) {
+				continue;
+			}
+			mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+			mysrvc->shunned_automatic=false;
+			mysrvc->shunned_and_kill_all_connections=false;
+			mysrvc->connect_ERR_at_time_last_detected_error=0;
+			mysrvc->time_last_detected_error=0;
+			ret = true;
+		}
+	}
+	wrunlock();
+	return ret;
+}
+
+#endif
 // set_server_current_latency_us
 // this function is called only from MySQL_Monitor::monitor_ping()
 // it set the average latency for a host in the last 3 pings
@@ -4608,11 +4657,15 @@ int PgSQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& ad
 PgSQL_SrvC* PgSQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
 	PgSQL_SrvC* f_server = nullptr;
 
+	// Only a hostgroup whose id matches may be searched: when '_hid' does not
+	// exist yet, 'myhgc' must stay nullptr rather than pointing at whatever
+	// hostgroup the scan visited last.
 	PgSQL_HGC* myhgc = nullptr;
 	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
-		myhgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
+		PgSQL_HGC* hgc = static_cast<PgSQL_HGC*>(MyHostGroups->index(i));
 
-		if (myhgc->hid == _hid) {
+		if (hgc->hid == _hid) {
+			myhgc = hgc;
 			break;
 		}
 	}

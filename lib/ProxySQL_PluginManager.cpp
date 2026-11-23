@@ -1,3 +1,4 @@
+#include "Embedded_Plugin_Service.h"
 // Plugin chassis is a v4.0 feature.  Under v3.0/v3.1 this whole
 // translation unit compiles to nothing; the linker doesn't see a
 // ProxySQL_PluginManager symbol, and any caller that referenced it is
@@ -748,11 +749,13 @@ ProxySQL_PluginManager::ProxySQL_PluginManager() {
 	services_.prepare_managed_runtime_locked = &proxysql_prepare_managed_runtime_locked;
 	services_.activate_managed_runtime_locked = &proxysql_activate_managed_runtime_locked;
 	services_.destroy_managed_prepared_runtime = &proxysql_destroy_managed_prepared_runtime;
+	services_.get_embedded_execution_service = &proxysql_embedded_execution_service;
 
 	// Phase-B (register_schemas) services: same layout as init(), but DB
 	// handle getters and the query-hook registrar are stubbed -- see the
 	// ProxySQL_PluginServices comment in ProxySQL_Plugin.h for the contract.
 	std::memset(&services_phase_b_, 0, sizeof(services_phase_b_));
+	services_phase_b_.get_embedded_execution_service = []() noexcept -> const ProxySQL_Embedded_ServiceV1* { return nullptr; };
 	services_phase_b_.register_table = &register_table_service;
 	services_phase_b_.register_command = &register_command_service;
 	services_phase_b_.get_mysql_users_snapshot = &snapshot_stub;

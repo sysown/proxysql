@@ -5,6 +5,7 @@ prefix. Effective values use the same names in `runtime_global_variables`.
 
 | Variable | Default | Accepted value | Live behavior |
 |---|---|---|---|
+| `duckdb-mysql_dialect` | `native` | `native` or `mysql_analytical` | changed value rejected; reopen plugin |
 | `duckdb-mysql_ifaces` | `0.0.0.0:6031` | semicolon-separated `addr:port` | changed value rejected; reopen listener |
 | `duckdb-pgsql_ifaces` | `0.0.0.0:6034` | semicolon-separated `addr:port` | changed value rejected; reopen listener |
 | `duckdb-database_path` | `:memory:` | DuckDB path or `:memory:` | changed value rejected; reopen database |
@@ -17,6 +18,23 @@ prefix. Effective values use the same names in `runtime_global_variables`.
 Boolean aliases (`true/false`, `1/0`, `on/off`) are stored canonically. An
 empty database path becomes `:memory:`. Runtime engine values come from
 DuckDB `current_setting()`, including its canonical memory units.
+
+## `duckdb-mysql_dialect`
+
+This startup-only setting selects the MySQL listener dialect. `native` preserves
+DuckDB SQL. `mysql_analytical` admits the bounded ParserSQL-based SELECT subset
+in the [compatibility contract](mysql-query-compatibility.md), requires UTF-8,
+and executes accepted SQL in private read-only transactions. Unsupported input
+returns an error before execution. PostgreSQL uses the native dialect.
+
+In `mysql_analytical`, a MySQL database name selects a schema of the replica's
+single DuckDB catalog: `USE db`, the handshake database and COM_CHANGE_USER
+and `COM_INIT_DB` select it, `SELECT DATABASE()` reports it, and relative names resolve in it.
+Reserved engine/replica schemas are refused. The native dialect keeps DuckDB's
+own catalog/schema behavior and the historical `DATABASE()` value. No separate
+setting controls this; it is part of the dialect. String
+collation and original replication-source type provenance are not inferred from
+native metadata. See the contract for the exact current restrictions.
 
 ## Listener variables
 

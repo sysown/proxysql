@@ -5,6 +5,7 @@
 #include "duckdb_engine.h"
 #include "duckdb_listener.h"
 #include "duckdb_replica.h"
+#include "ProxySQL_EmbeddedExecution.h"
 
 #include <mutex>
 #include <string>
@@ -71,6 +72,14 @@ bool duckdb_start() {
 		}
 	}
 
+	if (!ctx.services || !ctx.services->get_embedded_execution_service) {
+		log_error("duckdb: embedded execution service getter unavailable"); return false;
+	}
+	const auto* service = ctx.services->get_embedded_execution_service();
+	if (!service || service->abi_version != ProxySQL_Embedded_ABI_V1 || service->struct_size < sizeof(*service) ||
+	    !service->register_mysql || !service->register_pgsql || !service->unregister_mysql || !service->unregister_pgsql) {
+		log_error("duckdb: incompatible embedded execution service"); return false;
+	}
 	std::string err;
 	ctx.engine = std::make_unique<DuckDBEngine>();
 	if (!ctx.engine->open(*ctx.config_store, err)) {
@@ -89,7 +98,7 @@ bool duckdb_start() {
 	}
 
 	ctx.listener = std::make_unique<DuckDBListener>();
-	if (!ctx.listener->start(*ctx.config_store, *ctx.engine, err)) {
+	if (!ctx.listener->start(*ctx.config_store, *ctx.engine, err, service)) {
 		log_error("duckdb: listener start failed: " + err);
 		ctx.listener.reset();
 		ctx.engine->close();

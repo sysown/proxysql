@@ -1,0 +1,1496 @@
+#include "duckdb.h"
+#include "duckdb_mysql_select_compat.h"
+#include "tap.h"
+#include <limits>
+#include <string>
+#include <vector>
+
+int main() {
+    plan(NO_PLAN);
+    DuckDBMySQLSelectContext context;
+    size_t calls = 0;
+    context.resolve_relation = [&](const std::vector<std::string> &parts,
+                                   DuckDBMySQLRelation &out) {
+        ++calls;
+        if (parts != std::vector<std::string>{"odd`table"})
+            return false;
+        out.canonical_name = {"odd`table"};
+        out.exact_name_resolution = true;
+        out.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"a`b", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"txt", {DuckDBMySQLTypeKind::text, 0, 0}},
+                       {"u", {DuckDBMySQLTypeKind::unsigned_integer, 0, 0}},
+                       {"tiny", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"d", {DuckDBMySQLTypeKind::exact_decimal, 18, 4}},
+                       {"fraction", {DuckDBMySQLTypeKind::exact_decimal, 38, 30}},
+                       {"wide", {DuckDBMySQLTypeKind::exact_decimal, 38, 0}},
+                       {"invalid_decimal", {DuckDBMySQLTypeKind::exact_decimal, 40, 0}},
+                       {"huge", {DuckDBMySQLTypeKind::exact_decimal, 39, 0}},
+                       {"fraction_only", {DuckDBMySQLTypeKind::exact_decimal, 2, 2}}};
+        out.unique_keys = {{"id"}};
+        return true;
+    };
+    auto result = duckdb_translate_mysql_select(
+        "SELECT `a``b`, id AS x, id AS x FROM `odd``table` ORDER BY id LIMIT 2, 3", context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported,
+       "backticks and comma limit are admitted");
+    ok(result.sql == "SELECT \"a`b\", \"id\" AS \"x\", \"id\" AS \"x\" FROM \"odd`table\" ORDER BY "
+                     "\"id\" ASC NULLS FIRST LIMIT 3 OFFSET 2",
+       "emission preserves identifiers and aliases");
+    ok(calls == 1, "one metadata lookup");
+    duckdb_database db = nullptr;
+    duckdb_connection connection = nullptr;
+    duckdb_result native{};
+    bool opened = duckdb_open(nullptr, &db) == DuckDBSuccess &&
+                  duckdb_connect(db, &connection) == DuckDBSuccess;
+    ok(opened, "open test database");
+    bool created = opened && duckdb_query(connection,
+                                          "CREATE TABLE \"odd`table\" (id BIGINT, \"a`b\" BIGINT, "
+                                          "txt VARCHAR, u UBIGINT, tiny TINYINT, d DECIMAL(18,4), "
+                                          "fraction DECIMAL(38,30), wide DECIMAL(38,0))",
+                                          &native) == DuckDBSuccess;
+    duckdb_destroy_result(&native);
+    ok(created, "create test relation");
+    duckdb_prepared_statement statement = nullptr;
+    ok(created && duckdb_prepare(connection, result.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares emitted SQL");
+    auto column_name = [&](idx_t index) {
+        const char *name = duckdb_prepared_statement_column_name(statement, index);
+        std::string value = name ? name : "";
+        if (name)
+            duckdb_free(const_cast<char *>(name));
+        return value;
+    };
+    ok(statement && column_name(0) == "a`b" && column_name(1) == "x" && column_name(2) == "x",
+       "DuckDB preserves duplicate result labels");
+    duckdb_destroy_prepare(&statement);
+    result = duckdb_translate_mysql_select(
+        "SELECT `a``b`, COUNT(*) AS n, MIN(id) AS lo, MAX(id) AS hi FROM `odd``table` GROUP BY "
+        "`a``b` HAVING COUNT(*) > 1 AND MIN(id) IS NOT NULL ORDER BY `a``b` LIMIT 1, 2",
+        context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported,
+       "group, typed aggregates and HAVING admitted");
+    ok(result.sql.find("GROUP BY \"a`b\" HAVING") != std::string::npos &&
+           result.sql.find("NULLS FIRST LIMIT 2 OFFSET 1") != std::string::npos,
+       "grouping, HAVING and deterministic comma LIMIT rendered");
+    statement = nullptr;
+    ok(created && result.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, result.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares translated grouped SQL");
+    duckdb_destroy_prepare(&statement);
+    auto decimals = duckdb_translate_mysql_select(
+        "SELECT 001.2300,.50,1. FROM `odd``table` WHERE d = 1.0", context);
+    ok(decimals.decision == DuckDBMySQLSelectDecision::supported,
+       "decimal literals and exact comparison admitted");
+    ok(decimals.sql.find("CAST('001.2300' AS DECIMAL(7,4)) AS \"001.2300\"") != std::string::npos,
+       "decimal token emitted losslessly with original label");
+    statement = nullptr;
+    ok(created && decimals.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, decimals.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares translated exact decimals");
+    duckdb_destroy_prepare(&statement);
+    auto prepare_context = context;
+    prepare_context.parameter_mode = DuckDBMySQLParameterMode::prepare;
+    const std::string parameter_sql = "SELECT id FROM `odd``table` WHERE tiny = ?";
+    auto parameter_result = duckdb_translate_mysql_select(parameter_sql, prepare_context);
+    ok(parameter_result.decision == DuckDBMySQLSelectDecision::supported &&
+           parameter_result.parameter_count == 1,
+       "prepare mode admits signed integer predicate parameter");
+    ok(parameter_result.sql.find("CAST(\"tiny\" AS BIGINT) = CAST(? AS BIGINT)") !=
+           std::string::npos,
+       "signed column and placeholder use explicit BIGINT casts");
+    statement = nullptr;
+    bool prepared_param =
+        created && parameter_result.decision == DuckDBMySQLSelectDecision::supported &&
+        duckdb_prepare(connection, parameter_result.sql.c_str(), &statement) == DuckDBSuccess;
+    ok(prepared_param && duckdb_nparams(statement) == 1 &&
+           duckdb_param_type(statement, 1) == DUCKDB_TYPE_BIGINT,
+       "DuckDB prepares one BIGINT parameter");
+    duckdb_result param_rows{};
+    if (created) {
+        duckdb_query(connection, "INSERT INTO \"odd`table\" (id,tiny) VALUES (1,5),(2,6)",
+                     &param_rows);
+        duckdb_destroy_result(&param_rows);
+    }
+    auto execute_bound = [&](int64_t value, bool is_null) -> idx_t {
+        if (!statement)
+            return 999;
+        duckdb_clear_bindings(statement);
+        if ((is_null ? duckdb_bind_null(statement, 1) : duckdb_bind_int64(statement, 1, value)) !=
+            DuckDBSuccess)
+            return 999;
+        duckdb_result rows{};
+        if (duckdb_execute_prepared(statement, &rows) != DuckDBSuccess) {
+            duckdb_destroy_result(&rows);
+            return 999;
+        }
+        auto count = duckdb_row_count(&rows);
+        duckdb_destroy_result(&rows);
+        return count;
+    };
+    ok(prepared_param && execute_bound(5, false) == 1 && execute_bound(6, false) == 1,
+       "one native prepared handle supports changing integer values");
+    ok(prepared_param && execute_bound(200, false) == 0,
+       "out-of-TINYINT-range binding returns zero rows");
+    ok(prepared_param && execute_bound(0, true) == 0,
+       "NULL bound predicate uses three-valued logic");
+    ok(prepared_param && execute_bound(std::numeric_limits<int64_t>::min(), false) == 0 &&
+           execute_bound(std::numeric_limits<int64_t>::max(), false) == 0,
+       "full signed 64-bit boundary parameters do not narrow");
+    duckdb_destroy_prepare(&statement);
+    auto multi = duckdb_translate_mysql_select(
+        "SELECT id FROM `odd``table` WHERE (? < id AND id <= ?)", prepare_context);
+    statement = nullptr;
+    bool multi_prepared =
+        multi.decision == DuckDBMySQLSelectDecision::supported &&
+        duckdb_prepare(connection, multi.sql.c_str(), &statement) == DuckDBSuccess &&
+        duckdb_nparams(statement) == 2;
+    duckdb_result multi_rows{};
+    bool multi_ok = multi_prepared && duckdb_bind_int64(statement, 1, 1) == DuckDBSuccess &&
+                    duckdb_bind_int64(statement, 2, 2) == DuckDBSuccess &&
+                    duckdb_execute_prepared(statement, &multi_rows) == DuckDBSuccess;
+    ok(multi_ok && duckdb_row_count(&multi_rows) == 1 && duckdb_value_int64(&multi_rows, 0, 0) == 2,
+       "native binding keeps multiple placeholders in source order");
+    duckdb_destroy_result(&multi_rows);
+    duckdb_destroy_prepare(&statement);
+    auto date_context = context;
+    date_context.resolve_relation = [](const std::vector<std::string> &, DuckDBMySQLRelation &out) {
+        out.canonical_name = {"date_probe"};
+        out.exact_name_resolution = true;
+        out.columns = {
+            {"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+            {"d", {DuckDBMySQLTypeKind::date, 0, 0}},
+            {"dt", {DuckDBMySQLTypeKind::datetime, 0, 0}},
+            {"pdt", {DuckDBMySQLTypeKind::datetime, 0, 0}, {DuckDBMySQLSourceType::datetime}},
+            {"ts", {DuckDBMySQLTypeKind::datetime, 0, 0}, {DuckDBMySQLSourceType::timestamp}},
+            {"txt", {DuckDBMySQLTypeKind::text, 0, 0}},
+            {"bin", {DuckDBMySQLTypeKind::binary, 0, 0}},
+            {"n", {DuckDBMySQLTypeKind::exact_decimal, 10, 0}}};
+        out.unique_keys = {{"id"}};
+        return true;
+    };
+    duckdb_result date_rows{};
+    bool date_created = created && duckdb_query(connection,
+                                                "CREATE TABLE \"date_probe\" (id BIGINT, d DATE, "
+                                                "dt TIMESTAMP, pdt TIMESTAMP, ts TIMESTAMP, "
+                                                "txt VARCHAR, bin BLOB, n DECIMAL(10,0))",
+                                                &date_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&date_rows);
+    ok(date_created, "create date and datetime relation");
+    auto date_format = duckdb_translate_mysql_select(
+        "SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe ORDER BY id", date_context);
+    ok(date_format.decision == DuckDBMySQLSelectDecision::supported,
+       "DATE_FORMAT on a DATE column is admitted");
+    ok(date_format.sql == "SELECT strftime(\"d\", '%Y-%m') AS \"DATE_FORMAT(d,'%Y-%m')\" FROM "
+                          "\"date_probe\" ORDER BY \"id\" ASC NULLS FIRST",
+       "DATE_FORMAT emits explicit strftime under the source-text label");
+    statement = nullptr;
+    bool date_prepared =
+        date_created && date_format.decision == DuckDBMySQLSelectDecision::supported &&
+        duckdb_prepare(connection, date_format.sql.c_str(), &statement) == DuckDBSuccess;
+    ok(date_prepared && column_name(0) == "DATE_FORMAT(d,'%Y-%m')" &&
+           duckdb_prepared_statement_column_type(statement, 0) == DUCKDB_TYPE_VARCHAR,
+       "DuckDB prepares DATE_FORMAT as VARCHAR with the MySQL label");
+    duckdb_destroy_prepare(&statement);
+    result = duckdb_translate_mysql_select(
+        "SELECT DATE_FORMAT(d,'%Y-%m') AS ym FROM date_probe ORDER BY id LIMIT 2", date_context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported &&
+           result.sql == "SELECT strftime(\"d\", '%Y-%m') AS \"ym\" FROM \"date_probe\" ORDER BY "
+                         "\"id\" ASC NULLS FIRST LIMIT 2",
+       "DATE projections take an alias and a deterministic limit");
+    statement = nullptr;
+    ok(date_created && result.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, result.sql.c_str(), &statement) == DuckDBSuccess &&
+           column_name(0) == "ym",
+       "DuckDB prepares aliased DATE formatting");
+    duckdb_destroy_prepare(&statement);
+    result = duckdb_translate_mysql_select(
+        "SELECT date_format( d , '%Y-%m' ) FROM date_probe ORDER BY id", date_context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported &&
+           result.sql.find("AS \"date_format( d , '%Y-%m' )\"") != std::string::npos,
+       "mixed-case name and spaced argument list preserve the source label");
+    statement = nullptr;
+    ok(date_created && result.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, result.sql.c_str(), &statement) == DuckDBSuccess &&
+           column_name(0) == "date_format( d , '%Y-%m' )",
+       "DuckDB prepares mixed-case DATE_FORMAT with its spaced label");
+    duckdb_destroy_prepare(&statement);
+    result = duckdb_translate_mysql_select(
+        "SELECT q.d, DATE_FORMAT(q.`d`,'%Y-%m') AS ym FROM date_probe AS q ORDER BY q.id",
+        date_context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported &&
+           result.sql == "SELECT \"d\", strftime(\"d\", '%Y-%m') AS \"ym\" FROM \"date_probe\" "
+                         "ORDER BY \"id\" ASC NULLS FIRST",
+       "qualified and backtick DATE_FORMAT arguments are resolved");
+    statement = nullptr;
+    ok(date_created && result.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, result.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares qualified DATE_FORMAT identifiers");
+    duckdb_destroy_prepare(&statement);
+    result = duckdb_translate_mysql_select(
+        "SELECT id, DATE_FORMAT(d,'%Y-%m'), d FROM date_probe ORDER BY id", date_context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported &&
+           result.sql == "SELECT \"id\", strftime(\"d\", '%Y-%m') AS \"DATE_FORMAT(d,'%Y-%m')\", "
+                         "\"d\" FROM \"date_probe\" ORDER BY \"id\" ASC NULLS FIRST",
+       "DATE_FORMAT mixes with plain DATE projections");
+    statement = nullptr;
+    ok(date_created && result.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, result.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares mixed DATE_FORMAT projections");
+    duckdb_destroy_prepare(&statement);
+    result = duckdb_translate_mysql_select(
+        "SELECT DATE_FORMAT(d,'%Y-%m') AS x, DATE_FORMAT(d,'%Y-%m') AS x FROM date_probe "
+        "ORDER BY id",
+        date_context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported &&
+           result.sql.find("strftime(\"d\", '%Y-%m') AS \"x\", strftime(\"d\", '%Y-%m') AS "
+                           "\"x\"") != std::string::npos,
+       "duplicate DATE_FORMAT aliases are preserved");
+    statement = nullptr;
+    ok(date_created && result.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, result.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares duplicate DATE_FORMAT aliases");
+    duckdb_destroy_prepare(&statement);
+    auto date_refused = [&](const std::string &sql) {
+        auto x = duckdb_translate_mysql_select(sql, date_context);
+        return x.decision != DuckDBMySQLSelectDecision::supported && x.sql.empty();
+    };
+    auto date_reason = [&](const std::string &sql) {
+        return duckdb_translate_mysql_select(sql, date_context).reason;
+    };
+    auto datetime_refused = duckdb_translate_mysql_select(
+        "SELECT DATE_FORMAT(dt,'%Y-%m') FROM date_probe", date_context);
+    ok(datetime_refused.decision == DuckDBMySQLSelectDecision::unsupported &&
+           datetime_refused.reason == "session_time_zone_unknown" && datetime_refused.sql.empty() &&
+           datetime_refused.required_context.size() == 1 &&
+           datetime_refused.required_context[0] == "source_column_type_provenance",
+       "DATETIME DATE_FORMAT refused: a replicated TIMESTAMP depends on the session time zone");
+    ok(date_reason("SELECT DATE_FORMAT(q.`dt`,'%Y-%m') AS ym FROM date_probe AS q") ==
+           "session_time_zone_unknown",
+       "qualified DATETIME DATE_FORMAT argument is refused with the same reason");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m'), DATE_FORMAT(dt,'%Y-%m') FROM date_probe") ==
+           "session_time_zone_unknown",
+       "one DATETIME argument refuses the whole projection");
+    ok(date_reason("SELECT DATE_FORMAT(ts,'%Y-%m') FROM date_probe") ==
+           "session_time_zone_dependent",
+       "a recorded MySQL TIMESTAMP is refused because its text depends on the session time zone");
+    auto proven_datetime = duckdb_translate_mysql_select(
+        "SELECT DATE_FORMAT(pdt,'%Y-%m') AS ym FROM date_probe ORDER BY id", date_context);
+    ok(proven_datetime.decision == DuckDBMySQLSelectDecision::supported &&
+           proven_datetime.sql == "SELECT strftime(\"pdt\", '%Y-%m') AS \"ym\" FROM \"date_probe\" "
+                                  "ORDER BY \"id\" ASC NULLS FIRST",
+       "a recorded MySQL DATETIME is admitted");
+    statement = nullptr;
+    ok(date_created && proven_datetime.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, proven_datetime.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares the proven DATETIME emission");
+    duckdb_destroy_prepare(&statement);
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m'), DATE_FORMAT(ts,'%Y-%m') FROM date_probe") ==
+           "session_time_zone_dependent",
+       "one TIMESTAMP argument refuses the whole projection");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m-%d') FROM date_probe") == "unsupported_ast",
+       "other DATE_FORMAT formats refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m ') FROM date_probe") == "unsupported_ast",
+       "format literals with trailing bytes refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,NULL) FROM date_probe") == "unsupported_ast",
+       "non-literal DATE_FORMAT format refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%\\m') FROM date_probe") == "unsupported_ast",
+       "escaped DATE_FORMAT format refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,\"%Y-%m\") FROM date_probe") == "unsupported_ast",
+       "double-quoted DATE_FORMAT format refused under unknown ANSI_QUOTES");
+    ok(date_reason("SELECT DATE_FORMAT(d,txt) FROM date_probe") == "unsupported_ast",
+       "column-valued DATE_FORMAT format refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,_utf8mb4'%Y-%m') FROM date_probe") == "unsupported_ast",
+       "charset-introduced DATE_FORMAT format refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,CONCAT('%Y','-%m')) FROM date_probe") == "unsupported_ast",
+       "concatenated DATE_FORMAT format refused");
+    ok(date_reason("SELECT DATE_FORMAT(d) FROM date_probe") == "unsupported_ast",
+       "one-argument DATE_FORMAT refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m','x') FROM date_probe") == "unsupported_ast",
+       "three-argument DATE_FORMAT refused");
+    ok(date_reason("SELECT DATE_FORMAT(txt,'%Y-%m') FROM date_probe") == "unsupported_ast",
+       "text DATE_FORMAT argument refused");
+    ok(date_reason("SELECT DATE_FORMAT(id,'%Y-%m') FROM date_probe") == "unsupported_ast",
+       "integer DATE_FORMAT argument refused");
+    ok(date_reason("SELECT DATE_FORMAT(bin,'%Y-%m') FROM date_probe") == "unsupported_ast",
+       "binary DATE_FORMAT argument refused");
+    ok(date_reason("SELECT DATE_FORMAT(n,'%Y-%m') FROM date_probe") == "unsupported_ast",
+       "decimal DATE_FORMAT argument refused");
+    ok(date_refused("SELECT DATE_FORMAT('2024-01-01','%Y-%m') FROM date_probe"),
+       "literal DATE_FORMAT argument refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe WHERE DATE_FORMAT(d,'%Y-%m') "
+                   "IS NULL") == "unsupported_ast",
+       "DATE_FORMAT in WHERE refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe ORDER BY "
+                   "DATE_FORMAT(d,'%Y-%m')") == "unsupported_ast",
+       "DATE_FORMAT in ORDER BY refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe GROUP BY "
+                   "DATE_FORMAT(d,'%Y-%m')") == "unsupported_ast",
+       "DATE_FORMAT in GROUP BY refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m') FROM date_probe HAVING "
+                   "DATE_FORMAT(d,'%Y-%m') IS NULL") == "unsupported_ast",
+       "DATE_FORMAT in HAVING refused");
+    ok(date_reason("SELECT DATE_FORMAT(d,'%Y-%m'),COUNT(*) FROM date_probe") == "unsupported_ast",
+       "DATE_FORMAT combined with an aggregate refused");
+    ok(date_reason("SELECT d,DATE_FORMAT(d,'%Y-%m'),COUNT(*) FROM date_probe GROUP BY d") ==
+           "unsupported_ast",
+       "DATE_FORMAT combined with grouping refused");
+    ok(date_reason("SELECT DATE_FORMAT (d,'%Y-%m') FROM date_probe") ==
+           "session_sensitive_function_syntax",
+       "spaced DATE_FORMAT requires unknown IGNORE_SPACE mode");
+    ok(date_reason("SELECT `DATE_FORMAT`(d,'%Y-%m') FROM date_probe") == "unsupported_ast",
+       "quoted DATE_FORMAT name is not an admitted builtin");
+    auto date_prepare = date_context;
+    date_prepare.parameter_mode = DuckDBMySQLParameterMode::prepare;
+    ok(duckdb_translate_mysql_select("SELECT DATE_FORMAT(d,?) FROM date_probe", date_prepare)
+               .reason == "unsupported_ast",
+       "placeholder DATE_FORMAT format refused");
+    ok(duckdb_translate_mysql_select("SELECT DATE_FORMAT(?,'%Y-%m') FROM date_probe", date_prepare)
+               .reason == "unsupported_ast",
+       "placeholder DATE_FORMAT argument refused");
+    const std::string date_label_spaces(233, ' ');
+    auto long_label = duckdb_translate_mysql_select("SELECT DATE_FORMAT(" + date_label_spaces +
+                                                        "d,'%Y-%m') FROM date_probe ORDER BY id",
+                                                    date_context);
+    ok(long_label.decision == DuckDBMySQLSelectDecision::supported,
+       "255-byte implicit DATE_FORMAT label preserved");
+    statement = nullptr;
+    ok(date_created && long_label.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, long_label.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares the 255-byte DATE_FORMAT label");
+    duckdb_destroy_prepare(&statement);
+    const std::string date_label_overflow(234, ' ');
+    ok(duckdb_translate_mysql_select("SELECT DATE_FORMAT(" + date_label_overflow +
+                                         "d,'%Y-%m') FROM date_probe ORDER BY id",
+                                     date_context)
+               .reason == "unsupported_metadata_label",
+       "256-byte implicit DATE_FORMAT label truncation boundary refused");
+    // SUM and AVG: exact integer/decimal aggregates. AVG is emitted as exact
+    // integer arithmetic because native DuckDB AVG is DOUBLE.
+    auto sum_context = context;
+    sum_context.resolve_relation = [](const std::vector<std::string> &parts,
+                                      DuckDBMySQLRelation &out) {
+        if (parts != std::vector<std::string>{"sum_table"})
+            return false;
+        out.canonical_name = {"sum_table"};
+        out.exact_name_resolution = true;
+        out.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"i", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"u", {DuckDBMySQLTypeKind::unsigned_integer, 0, 0}},
+                       {"d19", {DuckDBMySQLTypeKind::exact_decimal, 19, 2}},
+                       {"d18", {DuckDBMySQLTypeKind::exact_decimal, 18, 4}},
+                       {"d20", {DuckDBMySQLTypeKind::exact_decimal, 20, 2}},
+                       {"d19i", {DuckDBMySQLTypeKind::exact_decimal, 19, 0}},
+                       {"frac", {DuckDBMySQLTypeKind::exact_decimal, 2, 2}},
+                       {"grp", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"txt", {DuckDBMySQLTypeKind::text, 0, 0}},
+                       {"dt", {DuckDBMySQLTypeKind::date, 0, 0}},
+                       {"f", {DuckDBMySQLTypeKind::unknown, 0, 0}}};
+        out.unique_keys = {{"id"}};
+        return true;
+    };
+    duckdb_result sum_rows{};
+    bool sum_created =
+        created && duckdb_query(connection,
+                                "CREATE TABLE \"sum_table\" (id BIGINT, i BIGINT, u UBIGINT, "
+                                "d19 DECIMAL(19,2), d18 DECIMAL(18,4), d20 DECIMAL(20,2), "
+                                "d19i DECIMAL(19,0), frac DECIMAL(2,2), grp BIGINT, "
+                                "txt VARCHAR, dt DATE, f DOUBLE)",
+                                &sum_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&sum_rows);
+    ok(sum_created, "create SUM and AVG relation");
+    auto sum_integer = duckdb_translate_mysql_select(
+        "SELECT SUM(i) AS si, AVG(i) AS ai, SUM(u) AS su, AVG(u) AS au FROM sum_table",
+        sum_context);
+    ok(sum_integer.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_integer.sql.find("SUM(\"i\") AS \"si\"") != std::string::npos &&
+           sum_integer.sql.find("CAST(SUM(\"u\") AS HUGEINT)") != std::string::npos &&
+           sum_integer.sql.find("AS DECIMAL(23,4)) AS \"ai\"") != std::string::npos &&
+           sum_integer.sql.find("AS DECIMAL(24,4)) AS \"au\"") != std::string::npos,
+       "integer SUM is native and AVG is exact decimal arithmetic");
+    statement = nullptr;
+    bool sum_integer_prepared =
+        sum_created && sum_integer.decision == DuckDBMySQLSelectDecision::supported &&
+        duckdb_prepare(connection, sum_integer.sql.c_str(), &statement) == DuckDBSuccess;
+    ok(sum_integer_prepared && column_name(0) == "si" && column_name(2) == "su" &&
+           duckdb_prepared_statement_column_type(statement, 0) == DUCKDB_TYPE_HUGEINT &&
+           duckdb_prepared_statement_column_type(statement, 1) == DUCKDB_TYPE_DECIMAL &&
+           duckdb_prepared_statement_column_type(statement, 3) == DUCKDB_TYPE_DECIMAL,
+       "DuckDB prepares integer SUM and exact AVG");
+    auto decimal_meta = [&](idx_t index) {
+        std::pair<int, int> out{-1, -1};
+        auto type = duckdb_prepared_statement_column_logical_type(statement, index);
+        if (type) {
+            if (duckdb_get_type_id(type) == DUCKDB_TYPE_DECIMAL)
+                out = {duckdb_decimal_width(type), duckdb_decimal_scale(type)};
+            duckdb_destroy_logical_type(&type);
+        }
+        return out;
+    };
+    ok(sum_integer_prepared && decimal_meta(1) == std::pair<int, int>{23, 4} &&
+           decimal_meta(3) == std::pair<int, int>{24, 4},
+       "AVG result metadata carries MySQL precision p+4 and scale s+4");
+    duckdb_destroy_prepare(&statement);
+    auto sum_decimal = duckdb_translate_mysql_select(
+        "SELECT SUM(d19), AVG(d19), SUM(d18), AVG(d18), SUM(d19i), AVG(d19i), SUM(frac), "
+        "AVG(frac) FROM sum_table",
+        sum_context);
+    ok(sum_decimal.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_decimal.sql.find("SUM(\"d19\") AS \"SUM(d19)\"") != std::string::npos &&
+           sum_decimal.sql.find("replace(CAST(SUM(\"d19\") AS VARCHAR), '.', '')") !=
+               std::string::npos &&
+           sum_decimal.sql.find("AS DECIMAL(23,6)) AS \"AVG(d19)\"") != std::string::npos &&
+           sum_decimal.sql.find("AS DECIMAL(22,8)) AS \"AVG(d18)\"") != std::string::npos &&
+           sum_decimal.sql.find("AS DECIMAL(23,4)) AS \"AVG(d19i)\"") != std::string::npos &&
+           sum_decimal.sql.find("AS DECIMAL(7,6)) AS \"AVG(frac)\"") != std::string::npos,
+       "decimal SUM is native and AVG scales by column scale plus four");
+    statement = nullptr;
+    bool sum_decimal_prepared =
+        sum_created && sum_decimal.decision == DuckDBMySQLSelectDecision::supported &&
+        duckdb_prepare(connection, sum_decimal.sql.c_str(), &statement) == DuckDBSuccess;
+    ok(sum_decimal_prepared && decimal_meta(1) == std::pair<int, int>{23, 6} &&
+           decimal_meta(3) == std::pair<int, int>{22, 8} &&
+           decimal_meta(7) == std::pair<int, int>{7, 6},
+       "fraction-only AVG widens by one digit to keep MySQL zero rendering");
+    duckdb_destroy_prepare(&statement);
+    auto sum_grouped = duckdb_translate_mysql_select(
+        "SELECT grp, SUM(i) AS si, AVG(d19) AS a19 FROM sum_table GROUP BY grp ORDER BY grp "
+        "LIMIT 2",
+        sum_context);
+    ok(sum_grouped.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_grouped.sql.find("GROUP BY \"grp\" ORDER BY \"grp\" ASC NULLS FIRST LIMIT 2") !=
+               std::string::npos,
+       "grouped SUM and AVG with a deterministic limit are admitted");
+    statement = nullptr;
+    ok(sum_created && sum_grouped.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, sum_grouped.sql.c_str(), &statement) == DuckDBSuccess &&
+           column_name(2) == "a19",
+       "DuckDB prepares grouped SUM and AVG");
+    duckdb_destroy_prepare(&statement);
+    auto sum_labels =
+        duckdb_translate_mysql_select("SELECT SUM(i), AVG(d18) FROM sum_table", sum_context);
+    ok(sum_labels.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_labels.sql.find("AS \"SUM(i)\"") != std::string::npos &&
+           sum_labels.sql.find("AS \"AVG(d18)\"") != std::string::npos,
+       "unaliased SUM and AVG labels are the source call text");
+    auto sum_spaced_labels =
+        duckdb_translate_mysql_select("SELECT SUM( i ) FROM sum_table", sum_context);
+    ok(sum_spaced_labels.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_spaced_labels.sql.find("AS \"SUM( i )\"") != std::string::npos,
+       "spaces inside the argument list are kept in the implicit label");
+    auto sum_mixed = duckdb_translate_mysql_select(
+        "SELECT sum(s.`i`) AS si, avg(s.`d19`) AS a19 FROM sum_table AS s", sum_context);
+    ok(sum_mixed.decision == DuckDBMySQLSelectDecision::supported &&
+           sum_mixed.sql.find("SUM(\"i\") AS \"si\"") != std::string::npos &&
+           sum_mixed.sql.find("COUNT(\"d19\")") != std::string::npos &&
+           sum_mixed.sql.find("AS \"a19\"") != std::string::npos,
+       "mixed-case qualified builtin spellings are admitted");
+    const std::string sum_label_spaces(249, ' ');
+    ok(duckdb_translate_mysql_select("SELECT SUM(" + sum_label_spaces + "i) FROM sum_table",
+                                     sum_context)
+               .decision == DuckDBMySQLSelectDecision::supported,
+       "255-byte implicit SUM label preserved");
+    const std::string sum_label_overflow(250, ' ');
+    ok(duckdb_translate_mysql_select("SELECT SUM(" + sum_label_overflow + "i) FROM sum_table",
+                                     sum_context)
+               .reason == "unsupported_metadata_label",
+       "256-byte implicit SUM label truncation boundary refused");
+    auto sum_reason = [&](const std::string &sql) {
+        return duckdb_translate_mysql_select(sql, sum_context).reason;
+    };
+    ok(sum_reason("SELECT SUM(DISTINCT i) FROM sum_table") == "incomplete_or_non_select",
+       "SUM(DISTINCT) remains a ParserSQL framing refusal");
+    ok(sum_reason("SELECT AVG(DISTINCT i) FROM sum_table") == "incomplete_or_non_select",
+       "AVG(DISTINCT) remains a ParserSQL framing refusal");
+    ok(sum_reason("SELECT SUM(txt) FROM sum_table") == "unsupported_ast",
+       "SUM over text is refused");
+    ok(sum_reason("SELECT AVG(dt) FROM sum_table") == "unsupported_ast",
+       "AVG over DATE is refused");
+    ok(sum_reason("SELECT SUM(f) FROM sum_table") == "unsupported_ast",
+       "SUM over a floating-point column is refused");
+    ok(sum_reason("SELECT SUM(1)") == "unsupported_ast", "SUM of a literal is refused");
+    ok(sum_reason("SELECT SUM(i+1) FROM sum_table") == "unsupported_ast",
+       "SUM of an expression is refused");
+    ok(sum_reason("SELECT AVG(i*2) FROM sum_table") == "unsupported_ast",
+       "AVG of an expression is refused");
+    ok(sum_reason("SELECT SUM(d20) FROM sum_table") == "unsupported_ast",
+       "SUM above the proved decimal precision is refused");
+    ok(sum_reason("SELECT AVG(d20) FROM sum_table") == "unsupported_ast",
+       "AVG above the proved decimal precision is refused");
+    ok(duckdb_translate_mysql_select("SELECT SUM(huge) FROM `odd``table`", context).reason ==
+           "unsupported_ast",
+       "SUM of the 39-digit wide mapping is refused");
+    ok(duckdb_translate_mysql_select("SELECT SUM(fraction) FROM `odd``table`", context).reason ==
+           "unsupported_ast",
+       "SUM of DECIMAL(38,30) is refused");
+    ok(sum_reason("SELECT SUM (i) FROM sum_table") == "session_sensitive_function_syntax",
+       "spaced SUM requires unknown IGNORE_SPACE mode");
+    ok(sum_reason("SELECT AVG\t(i) FROM sum_table") == "session_sensitive_function_syntax",
+       "tab-separated AVG cannot be treated as a builtin");
+    ok(sum_reason("SELECT `SUM`(i) FROM sum_table") == "unsupported_ast",
+       "quoted SUM name is not an admitted builtin");
+    ok(sum_reason("SELECT SUM(?) FROM sum_table") == "unsupported_ast",
+       "placeholder SUM argument is refused");
+    ok(sum_reason("SELECT AVG(?) FROM sum_table") == "unsupported_ast",
+       "placeholder AVG argument is refused");
+    ok(sum_reason("SELECT grp,SUM(i) FROM sum_table GROUP BY grp HAVING SUM(i) IS NOT NULL") ==
+           "unsupported_having_aggregate",
+       "SUM in HAVING stays refused");
+    ok(sum_reason("SELECT grp,AVG(i) FROM sum_table GROUP BY grp HAVING AVG(i) > 0") ==
+           "unsupported_having_aggregate",
+       "AVG in HAVING stays refused");
+    ok(sum_reason("SELECT SUM(i),i FROM sum_table") == "unsupported_ast",
+       "mixed aggregate and plain SUM projection is refused");
+    ok(sum_reason("SELECT SUM(i) FROM sum_table WHERE SUM(i) > 0") == "unsupported_ast",
+       "aggregate SUM in WHERE is refused");
+    ok(sum_reason("SELECT SUM(i) FROM sum_table ORDER BY SUM(i)") == "unsupported_ast",
+       "aggregate SUM in ORDER BY is refused");
+    ok(sum_reason("SELECT SUM(i) FROM sum_table GROUP BY txt") == "unsupported_ast",
+       "text grouping stays refused beside SUM");
+    auto sum_prepare = sum_context;
+    sum_prepare.parameter_mode = DuckDBMySQLParameterMode::prepare;
+    ok(duckdb_translate_mysql_select("SELECT SUM(?) FROM sum_table", sum_prepare).reason ==
+           "unsupported_ast",
+       "prepare mode also refuses a placeholder SUM argument");
+    auto bounded_sum = sum_context;
+    bounded_sum.max_output_bytes = 100;
+    auto bounded_avg = duckdb_translate_mysql_select("SELECT AVG(i) FROM sum_table", bounded_sum);
+    ok(bounded_avg.reason == "resource_limit" && bounded_avg.sql.empty(),
+       "exact AVG emission observes the output bound");
+    auto text_context = context;
+    text_context.resolve_relation = [](const std::vector<std::string> &, DuckDBMySQLRelation &out) {
+        out.canonical_name = {"text_probe"};
+        out.exact_name_resolution = true;
+        out.columns = {{"id", {DuckDBMySQLTypeKind::signed_integer, 0, 0}},
+                       {"t",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}},
+                       {"u",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}},
+                       {"ai",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_ai_ci"}},
+                       {"acs",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_as_cs"}},
+                       {"pad",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_bin"}},
+                       {"abin",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "ascii", "ascii_bin"}},
+                       {"u3",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb3", "utf8mb3_bin"}},
+                       {"unproven", {DuckDBMySQLTypeKind::text, 0, 0}},
+                       {"blank",
+                        {DuckDBMySQLTypeKind::text, 0, 0},
+                        {DuckDBMySQLSourceType::other, "utf8mb4", ""}},
+                       {"n", {DuckDBMySQLTypeKind::signed_integer, 0, 0}}};
+        out.unique_keys = {{"id"}};
+        return true;
+    };
+    duckdb_result text_rows{};
+    bool text_created =
+        created && duckdb_query(connection,
+                                "CREATE TABLE \"text_probe\" (id BIGINT PRIMARY KEY, "
+                                "t VARCHAR, u VARCHAR, ai VARCHAR, acs VARCHAR, "
+                                "pad VARCHAR, abin VARCHAR, u3 VARCHAR, unproven VARCHAR, "
+                                "blank VARCHAR, n BIGINT)",
+                                &text_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&text_rows);
+    ok(text_created, "create text comparison relation");
+    auto text_translate = [&](const std::string &sql) {
+        return duckdb_translate_mysql_select(sql, text_context);
+    };
+    auto text_admitted = [&](const std::string &sql) {
+        auto translated = text_translate(sql);
+        if (translated.decision != DuckDBMySQLSelectDecision::supported || translated.sql.empty())
+            return false;
+        duckdb_prepared_statement prepared = nullptr;
+        bool prepared_ok = text_created && duckdb_prepare(connection, translated.sql.c_str(),
+                                                          &prepared) == DuckDBSuccess;
+        duckdb_destroy_prepare(&prepared);
+        return prepared_ok;
+    };
+    auto text_reason = [&](const std::string &sql) { return text_translate(sql).reason; };
+    // A NUL byte inside a literal would be cut off if the emitted SQL were handed to the engine
+    // as a C string, so it must never be admitted or emitted.
+    const std::string nul_literal = std::string("SELECT id FROM text_probe WHERE t = 'a") +
+                                    std::string(1, '\0') + "b' OR id > 0";
+    auto nul_result = text_translate(nul_literal);
+    ok(nul_result.decision != DuckDBMySQLSelectDecision::supported &&
+           nul_result.sql.find('\0') == std::string::npos,
+       "a NUL byte in a text literal is refused, never emitted");
+    auto text_exact = text_translate("SELECT id FROM text_probe WHERE t = 'it''s' ORDER BY id");
+    ok(text_exact.decision == DuckDBMySQLSelectDecision::supported &&
+           text_exact.sql == "SELECT \"id\" FROM \"text_probe\" WHERE "
+                             "(\"t\" COLLATE \"binary\" = 'it''s' COLLATE \"binary\") "
+                             "ORDER BY \"id\" ASC NULLS FIRST",
+       "doubled single quote literal is emitted as one DuckDB literal");
+    ok(text_admitted("SELECT id FROM text_probe WHERE t = 'it''s' ORDER BY id"),
+       "DuckDB prepares the doubled-quote text predicate");
+    const char *text_positive[] = {
+        "SELECT id FROM text_probe WHERE t = '' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = ' ' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a ' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = ' a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t <> 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t != 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t < 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t <= 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t > 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t >= 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE 'a' = t ORDER BY id",
+        "SELECT id FROM text_probe WHERE 'a' < t ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t <> u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t < u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t <= u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t > u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t >= u ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'é' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = '😀' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'e\xCC\x81' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a\ta' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a\001b' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'a\"b' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'ab' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t = 'A' ORDER BY id",
+        "SELECT id FROM text_probe WHERE (t = 'a' OR t IS NULL) AND u <> 'b' ORDER BY id",
+        "SELECT id FROM text_probe WHERE t IS NOT NULL AND t >= 'a' ORDER BY id",
+        "SELECT id FROM text_probe WHERE ((t = 'a') OR (t = ' ')) AND u IS NOT NULL ORDER BY id",
+        "SELECT t FROM text_probe WHERE t = 'a' ORDER BY id",
+        "SELECT id FROM text_probe ORDER BY t ASC, id ASC",
+        "SELECT id FROM text_probe ORDER BY t DESC, id ASC",
+        "SELECT id FROM text_probe ORDER BY t ASC, id ASC LIMIT 2",
+        "SELECT id FROM text_probe ORDER BY t DESC, id ASC LIMIT 2, 3"};
+    for (const char *sql : text_positive)
+        ok(text_admitted(sql), "admitted text comparison or ordering: %s", sql);
+    auto text_order = text_translate("SELECT id FROM text_probe ORDER BY t DESC, id LIMIT 2");
+    ok(text_order.decision == DuckDBMySQLSelectDecision::supported &&
+           text_order.sql == "SELECT \"id\" FROM \"text_probe\" ORDER BY \"t\" COLLATE \"binary\" DESC NULLS LAST, "
+                             "\"id\" ASC NULLS FIRST LIMIT 2",
+       "text ordering keeps explicit MySQL NULL placement and deterministic limit");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 'a'") == "supported",
+       "text comparison against a proven binary column succeeds");
+    ok(text_reason("SELECT id FROM text_probe WHERE ai = 'a'") == "unsupported_collation",
+       "ai_ci text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE acs = 'a'") == "unsupported_collation",
+       "as_cs text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE pad = 'a'") == "unsupported_collation",
+       "PAD SPACE utf8mb4_bin text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE abin = 'a'") == "unsupported_collation",
+       "ascii_bin text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE u3 = 'a'") == "unsupported_collation",
+       "PAD SPACE utf8mb3_bin text comparison refused");
+    auto text_unproven = text_translate("SELECT id FROM text_probe WHERE unproven = 'a'");
+    ok(text_unproven.decision == DuckDBMySQLSelectDecision::unsupported &&
+           text_unproven.reason == "collation_unproven" && text_unproven.sql.empty() &&
+           text_unproven.required_context ==
+               std::vector<std::string>{"source_column_collation_provenance"},
+       "column without recorded collation refuses with the required-context hint");
+    ok(text_reason("SELECT id FROM text_probe WHERE blank = 'a'") == "collation_unproven",
+       "known source without a collation string is still unproven");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = ai") == "unsupported_collation",
+       "column-to-column comparison checks both collations");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = unproven") == "collation_unproven",
+       "column-to-column comparison refuses an unproven operand");
+    ok(text_reason("SELECT id FROM text_probe ORDER BY ai") == "unsupported_collation",
+       "ai_ci text ordering refused");
+    ok(text_reason("SELECT id FROM text_probe ORDER BY unproven") == "collation_unproven",
+       "text ordering without recorded collation refused");
+    ok(text_reason("SELECT id FROM text_probe ORDER BY t LIMIT 1") == "nondeterministic_limit",
+       "text ordering alone does not establish a deterministic limit");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 1") == "unsupported_ast",
+       "text versus number comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE 1 = t") == "unsupported_ast",
+       "number versus text comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 'a\\b'") == "unsupported_ast",
+       "backslash literal refused because SQL mode is unknown");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = \"x\"") == "unsupported_ast",
+       "double-quoted literal refused under unknown ANSI_QUOTES");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = _utf8mb4'x'") == "unsupported_ast",
+       "charset-introduced literal refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = X'41'") == "unsupported_ast",
+       "hex literal refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = b'1'") == "unsupported_ast",
+       "bit literal refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t COLLATE utf8mb4_0900_bin = 'x'") ==
+           "unsupported_ast",
+       "explicit COLLATE refused even for the admitted collation");
+    ok(text_reason("SELECT id FROM text_probe WHERE t LIKE 'x%'") == "unsupported_ast",
+       "LIKE refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t REGEXP 'a'") == "unsupported_ast",
+       "REGEXP refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = BINARY 'a'") == "incomplete_or_non_select",
+       "BINARY operator is not a complete admitted statement");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 'a' COLLATE utf8mb4_0900_bin") ==
+           "unsupported_ast",
+       "COLLATE on the literal side is refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t IN ('a','b')") == "unsupported_ast",
+       "IN remains outside this slice");
+    ok(text_reason("SELECT id FROM text_probe WHERE t NOT IN ('a')") == "unsupported_ast",
+       "NOT IN remains outside this slice");
+    ok(text_reason("SELECT id FROM text_probe WHERE NOT (t = 'a')") == "unsupported_ast",
+       "unary NOT predicate remains outside this slice");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = NULL") == "unsupported_ast",
+       "text versus NULL literal refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE 'a' = 'b'") == "unsupported_ast",
+       "literal-to-literal comparison refused");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = N'x'") == "incomplete_or_non_select",
+       "national literal is not a complete admitted statement");
+    ok(text_reason("SELECT id FROM text_probe WHERE t = 'a' 'b'") == "incomplete_or_non_select",
+       "adjacent literal concatenation never reaches the literal check");
+    auto text_prepare = text_context;
+    text_prepare.parameter_mode = DuckDBMySQLParameterMode::prepare;
+    ok(duckdb_translate_mysql_select("SELECT id FROM text_probe WHERE t = ?", text_prepare)
+               .reason == "unsupported_ast",
+       "text parameters remain refused");
+    const std::string text_literal_4096(4096, 'a');
+    const std::string text_literal_4097(4097, 'a');
+    ok(text_admitted("SELECT id FROM text_probe WHERE t = '" + text_literal_4096 + "' ORDER BY id"),
+       "4096-byte string literal is admitted");
+    ok(text_translate("SELECT id FROM text_probe WHERE t = '" + text_literal_4097 + "' ORDER BY id")
+               .reason == "resource_limit",
+       "4097-byte string literal hits the literal resource bound");
+    statement = nullptr;
+    bool text_prepared =
+        text_created && text_exact.decision == DuckDBMySQLSelectDecision::supported &&
+        duckdb_prepare(connection, text_exact.sql.c_str(), &statement) == DuckDBSuccess;
+    duckdb_result text_insert{};
+    bool text_inserted =
+        text_prepared && duckdb_query(connection,
+                                      "INSERT INTO \"text_probe\" (id,t,u) VALUES (1,'a','a'),"
+                                      "(2,'it''s','it''s'),(3,NULL,NULL)",
+                                      &text_insert) == DuckDBSuccess;
+    duckdb_destroy_result(&text_insert);
+    duckdb_result text_result{};
+    bool text_executed =
+        text_inserted && duckdb_execute_prepared(statement, &text_result) == DuckDBSuccess &&
+        duckdb_row_count(&text_result) == 1 && duckdb_value_int64(&text_result, 0, 0) == 2;
+    duckdb_destroy_result(&text_result);
+    ok(text_executed, "prepared doubled-quote predicate selects the apostrophe row");
+    duckdb_destroy_prepare(&statement);
+    if (connection)
+        duckdb_disconnect(&connection);
+    if (db)
+        duckdb_close(&db);
+    result = duckdb_translate_mysql_select(
+        "SELECT q.id FROM `odd``table` AS q ORDER BY q.id LIMIT 1", context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported,
+       "table alias and qualified column admitted");
+    ok(result.sql.find("SELECT \"id\"") == 0, "qualified column preserves column output label");
+    result = duckdb_translate_mysql_select("SELECT 001, NULL", context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported, "literal SELECT admitted");
+    ok(result.sql == "SELECT 001 AS \"001\", NULL AS \"NULL\"", "literal output labels preserved");
+    auto refused = [&](const char *sql) {
+        return duckdb_translate_mysql_select(sql, context).decision !=
+               DuckDBMySQLSelectDecision::supported;
+    };
+    auto admitted = [&](const char *sql) {
+        return duckdb_translate_mysql_select(sql, context).decision ==
+               DuckDBMySQLSelectDecision::supported;
+    };
+    ok(admitted("SELECT id,COUNT(*) FROM `odd``table` GROUP BY id"),
+       "key and count group admitted");
+    ok(admitted("SELECT MIN(id),MAX(id) FROM `odd``table`"),
+       "ungrouped signed min and max admitted");
+    ok(admitted("SELECT COUNT(*) FROM `odd``table` HAVING COUNT(*) = 0"),
+       "empty aggregate HAVING admitted");
+    ok(admitted("SELECT id,COUNT(*) FROM `odd``table` GROUP BY id ORDER BY id LIMIT 1"),
+       "complete group-key ordering establishes deterministic limit");
+    ok(refused("SELECT id,COUNT(*) FROM `odd``table` GROUP BY `a``b`"),
+       "non-key group projection refused");
+    ok(refused("SELECT txt,COUNT(*) FROM `odd``table` GROUP BY txt"), "text group key refused");
+    ok(refused("SELECT id,COUNT(*) FROM `odd``table` GROUP BY id ORDER BY id LIMIT 1,2; SELECT 1"),
+       "multi-statement grouping refused");
+    ok(refused("SELECT id,COUNT(*) FROM `odd``table` GROUP BY id ORDER BY `a``b` LIMIT 1"),
+       "non-key group ordering refused");
+    ok(refused("SELECT id,COUNT(*) FROM `odd``table` GROUP BY id LIMIT 1"),
+       "unordered group limit refused");
+    ok(refused("SELECT id AS `a``b`,COUNT(*) FROM `odd``table` GROUP BY `a``b`"),
+       "group alias shadowing refused");
+    ok(refused("SELECT id,COUNT(*) AS id FROM `odd``table` GROUP BY id"),
+       "group key alias ambiguity refused");
+    ok(admitted("SELECT SUM(id) FROM `odd``table`"), "signed integer SUM admitted");
+    ok(admitted("SELECT AVG(id) FROM `odd``table`"), "signed integer AVG admitted");
+    ok(admitted("SELECT u,MIN(u),MAX(u) FROM `odd``table` GROUP BY u ORDER BY u"),
+       "unsigned keys and extrema admitted");
+    ok(refused("SELECT MIN(u) FROM `odd``table` HAVING MIN(u) > 1"),
+       "unsigned extrema comparison refuses unproven coercion");
+    ok(refused("SELECT MIN(id) FROM `odd``table` HAVING MIN(id) > 9223372036854775808"),
+       "HAVING literal overflow refused");
+    ok(refused("SELECT MIN(txt) FROM `odd``table`"), "text MIN refused");
+    ok(refused("SELECT MIN(MAX(id)) FROM `odd``table`"), "nested aggregate refused");
+    ok(refused("SELECT COUNT(*) FROM `odd``table` HAVING COUNT(*) > txt"),
+       "ambiguous HAVING operand refused");
+    ok(refused("SELECT COUNT(*) AS n FROM `odd``table` HAVING n > 1"),
+       "HAVING output alias refused");
+    ok(refused("SELECT id,COUNT(*) FROM `odd``table` GROUP BY 1"), "group ordinal refused");
+    ok(refused("SELECT id,COUNT(*) FROM `odd``table` GROUP BY id WITH ROLLUP"), "ROLLUP refused");
+    ok(admitted("SELECT d FROM `odd``table` WHERE d = tiny"),
+       "decimal and signed integer comparison admitted");
+    ok(admitted("SELECT d FROM `odd``table` WHERE d < u"),
+       "decimal and unsigned integer comparison admitted");
+    ok(admitted("SELECT fraction FROM `odd``table` WHERE fraction = 1"),
+       "scale-30 decimal with small integer literal admitted");
+    ok(admitted(
+           "SELECT wide FROM `odd``table` WHERE wide = 99999999999999999999999999999999999999"),
+       "38-digit integer literal compares exactly to decimal");
+    ok(refused("SELECT fraction FROM `odd``table` WHERE fraction = id"),
+       "common precision 49 refused");
+    ok(refused("SELECT 1e3"), "exponent literal refused");
+    ok(refused("SELECT 0.0000000000000000000000000000001"), "decimal scale above 30 refused");
+    ok(refused("SELECT 999999999999999999999999999999999999999.0"),
+       "decimal precision above 38 refused");
+    ok(refused("SELECT d FROM `odd``table` WHERE d = txt"), "decimal text coercion refused");
+    ok(refused("SELECT d FROM `odd``table` WHERE d = ?"), "decimal parameter refused by default");
+    ok(admitted("SELECT huge FROM `odd``table`"),
+       "39-digit native wide integer projection remains available");
+    ok(refused("SELECT id FROM `odd``table` WHERE huge = 1.0"),
+       "39-digit native integer decimal comparison refused");
+    ok(refused("SELECT invalid_decimal FROM `odd``table` WHERE invalid_decimal = 1.0"),
+       "invalid native decimal precision refused");
+    auto fractional_projection =
+        duckdb_translate_mysql_select("SELECT fraction_only FROM `odd``table`", context);
+    ok(fractional_projection.decision == DuckDBMySQLSelectDecision::supported &&
+           fractional_projection.sql.find(
+               "CAST(\"fraction_only\" AS DECIMAL(3,2)) AS \"fraction_only\"") != std::string::npos,
+       "fraction-only decimal projection preserves original label");
+    auto fractional_context = context;
+    fractional_context.resolve_relation = [](const std::vector<std::string> &,
+                                             DuckDBMySQLRelation &out) {
+        out.canonical_name = {"t"};
+        out.exact_name_resolution = true;
+        out.columns = {{"only_fraction", {DuckDBMySQLTypeKind::exact_decimal, 2, 2}}};
+        return true;
+    };
+    auto fractional_star = duckdb_translate_mysql_select("SELECT * FROM t", fractional_context);
+    ok(fractional_star.decision == DuckDBMySQLSelectDecision::supported &&
+           fractional_star.sql.find(
+               "CAST(\"only_fraction\" AS DECIMAL(3,2)) AS \"only_fraction\"") != std::string::npos,
+       "star expands and normalizes fraction-only decimal");
+    auto fractional_alias = duckdb_translate_mysql_select(
+        "SELECT fraction_only AS x, fraction_only AS x FROM `odd``table`", context);
+    ok(fractional_alias.decision == DuckDBMySQLSelectDecision::supported &&
+           fractional_alias.sql.find("CAST(\"fraction_only\" AS DECIMAL(3,2)) AS \"x\", "
+                                     "CAST(\"fraction_only\" AS DECIMAL(3,2)) AS \"x\"") !=
+               std::string::npos,
+       "fraction-only casts preserve duplicate explicit aliases");
+    auto fractional_and_wide = fractional_context;
+    fractional_and_wide.resolve_relation = [](const std::vector<std::string> &,
+                                              DuckDBMySQLRelation &out) {
+        out.canonical_name = {"t"};
+        out.exact_name_resolution = true;
+        out.columns = {{"frac", {DuckDBMySQLTypeKind::exact_decimal, 2, 2}},
+                       {"wide", {DuckDBMySQLTypeKind::exact_decimal, 39, 0}}};
+        return true;
+    };
+    auto mixed_star = duckdb_translate_mysql_select("SELECT * FROM t", fractional_and_wide);
+    ok(mixed_star.decision == DuckDBMySQLSelectDecision::supported &&
+           mixed_star.sql.find("CAST(\"frac\" AS DECIMAL(3,2)) AS \"frac\", \"wide\"") !=
+               std::string::npos,
+       "expanded star preserves wide integer projection");
+    auto fractional_ambiguous = fractional_context;
+    fractional_ambiguous.resolve_relation = [](const std::vector<std::string> &,
+                                               DuckDBMySQLRelation &out) {
+        out.canonical_name = {"t"};
+        out.exact_name_resolution = true;
+        out.columns = {{"v", {DuckDBMySQLTypeKind::exact_decimal, 2, 2}},
+                       {"V", {DuckDBMySQLTypeKind::signed_integer, 0, 0}}};
+        return true;
+    };
+    ok(duckdb_translate_mysql_select("SELECT * FROM t", fractional_ambiguous).decision !=
+           DuckDBMySQLSelectDecision::supported,
+       "star expansion refuses ambiguous native names");
+    auto fractional_output_bound = fractional_context;
+    fractional_output_bound.max_output_bytes = 20;
+    ok(duckdb_translate_mysql_select("SELECT * FROM t", fractional_output_bound).reason ==
+           "resource_limit",
+       "expanded star observes output bound");
+    ok(admitted("SELECT id FROM `odd``table` WHERE fraction_only = .50"),
+       "fraction-only decimal comparison admitted");
+    ok(refused("SELECT MIN(d) FROM `odd``table`"), "decimal MIN remains refused");
+    auto prep = context;
+    prep.parameter_mode = DuckDBMySQLParameterMode::prepare;
+    ok(duckdb_translate_mysql_select("SELECT d FROM `odd``table` WHERE d = ?", prep).decision !=
+           DuckDBMySQLSelectDecision::supported,
+       "decimal parameter remains refused even in prepare mode");
+    auto execute = context;
+    execute.parameter_mode = DuckDBMySQLParameterMode::execute;
+    execute.parameter_kinds = {DuckDBMySQLParameterKind::signed_integer,
+                               DuckDBMySQLParameterKind::null_value};
+    const std::string two = "SELECT id FROM `odd``table` WHERE (? < id AND id <= ?)";
+    auto translated = duckdb_translate_mysql_select(two, execute);
+    ok(translated.decision == DuckDBMySQLSelectDecision::supported &&
+           translated.parameter_count == 2 &&
+           translated.sql.find("CAST(? AS BIGINT) < CAST(\"id\" AS BIGINT)") != std::string::npos,
+       "two placeholders retain reversed source order and accept NULL kind");
+    execute.parameter_kinds = {DuckDBMySQLParameterKind::unsupported,
+                               DuckDBMySQLParameterKind::null_value};
+    ok(duckdb_translate_mysql_select(two, execute).reason == "unsupported_parameter_type",
+       "unsupported bound kind rejected");
+    execute.parameter_kinds = {DuckDBMySQLParameterKind::signed_integer};
+    ok(duckdb_translate_mysql_select(two, execute).reason == "parameter_count_mismatch",
+       "bound count mismatch rejected");
+    execute.parameter_kinds = {DuckDBMySQLParameterKind::signed_integer,
+                               DuckDBMySQLParameterKind::null_value};
+    ok(duckdb_translate_mysql_select(two, execute).decision == DuckDBMySQLSelectDecision::supported,
+       "valid bound types recover after rejection");
+    ok(refused("SELECT id FROM `odd``table` WHERE id = ?"),
+       "default COM_QUERY forbids placeholders");
+    for (const char *sql :
+         {"SELECT ?", "SELECT id FROM `odd``table` ORDER BY ?",
+          "SELECT id FROM `odd``table` LIMIT ?",
+          "SELECT COUNT(*) FROM `odd``table` HAVING COUNT(*) > ?",
+          "SELECT id FROM `odd``table` WHERE txt = ?", "SELECT id FROM `odd``table` WHERE u = ?",
+          "SELECT id FROM `odd``table` WHERE ? = ?"})
+        ok(duckdb_translate_mysql_select(sql, prep).decision !=
+               DuckDBMySQLSelectDecision::supported,
+           "unsupported parameter placement refused: %s", sql);
+    auto too_many_facts = execute;
+    too_many_facts.parameter_kinds.assign(257, DuckDBMySQLParameterKind::signed_integer);
+    ok(duckdb_translate_mysql_select(two, too_many_facts).reason == "resource_limit",
+       "parameter fact vector has a hard limit before copying");
+    auto invalid_mode = context;
+    invalid_mode.parameter_mode = static_cast<DuckDBMySQLParameterMode>(255);
+    ok(duckdb_translate_mysql_select("SELECT 1", invalid_mode).reason == "invalid_parameter_mode",
+       "invalid parameter mode refused");
+    auto invalid_kind = execute;
+    invalid_kind.parameter_kinds = {static_cast<DuckDBMySQLParameterKind>(255),
+                                    DuckDBMySQLParameterKind::null_value};
+    auto invalid_result = duckdb_translate_mysql_select(two, invalid_kind);
+    ok(invalid_result.reason == "unsupported_parameter_type" && invalid_result.sql.empty(),
+       "unknown bound kind refused without SQL");
+    std::function<std::string(size_t)> balanced = [&](size_t n) -> std::string {
+        if (n == 1)
+            return "id = ?";
+        const size_t left = n / 2;
+        return "(" + balanced(left) + " OR " + balanced(n - left) + ")";
+    };
+    const std::string prefix = "SELECT id FROM `odd``table` WHERE ";
+    auto max_result = duckdb_translate_mysql_select(prefix + balanced(256), prep);
+    ok(max_result.decision == DuckDBMySQLSelectDecision::supported &&
+           max_result.parameter_count == 256,
+       "256 balanced placeholders are admitted");
+    auto oversized_result = duckdb_translate_mysql_select(prefix + balanced(257), prep);
+    ok(oversized_result.reason == "resource_limit" && oversized_result.sql.empty(),
+       "257 balanced placeholders hit the parameter limit");
+    auto mixed = duckdb_translate_mysql_select("SELECT ? FROM `odd``table` WHERE id = ?", prep);
+    ok(mixed.decision != DuckDBMySQLSelectDecision::supported && mixed.sql.empty(),
+       "unconsumed earlier parameter refuses whole query");
+    auto same_sql = duckdb_translate_mysql_select(two, prep);
+    ok(same_sql.decision == DuckDBMySQLSelectDecision::supported && same_sql.sql == translated.sql,
+       "prepare and execute emit identical SQL and placeholder order");
+    ok(duckdb_translate_mysql_select("SELECT COUNT(*) FROM `odd``table` GROUP BY ?", prep)
+               .decision != DuckDBMySQLSelectDecision::supported,
+       "GROUP BY placeholder refused");
+    auto forbidden_facts = prep;
+    forbidden_facts.parameter_kinds = {DuckDBMySQLParameterKind::null_value};
+    ok(duckdb_translate_mysql_select("SELECT 1", forbidden_facts).reason ==
+           "parameter_count_mismatch",
+       "prepare mode rejects bound facts");
+    size_t before = calls;
+    ok(refused("SELECT nextval('x')"), "side-effect function refused");
+    ok(calls == before, "function analysis invokes no resolver or execution");
+    ok(refused("SELECT @x"), "user variable refused");
+    ok(refused("SELECT @@version"), "system variable refused");
+    ok(refused("SELECT 1;;"), "extra empty statement refused");
+    ok(refused("SELECT 1; SELECT 2"), "multiple statements refused");
+    ok(refused("SELECT 1 /*! + 1 */"), "executable comment refused");
+    ok(duckdb_translate_mysql_select("SELECT COUNT(*) FROM `odd``table`", context).decision ==
+           DuckDBMySQLSelectDecision::supported,
+       "count star admitted");
+    ok(refused("SELECT COUNT(*), id FROM `odd``table`"),
+       "mixed aggregate and plain columns refused");
+    ok(refused("SELECT 1 + 2"), "arithmetic refused");
+    ok(refused("SELECT 9223372036854775808"), "overflow literal refused");
+    ok(refused("SELECT id FROM `odd``table` LIMIT 1"), "unordered limit refused");
+    ok(refused("SELECT id FROM `odd``table` ORDER BY txt"),
+       "text ordering refused without collation");
+    ok(refused("SELECT id FROM `odd``table` WHERE txt = 'x'"), "text comparison refused");
+    result = duckdb_translate_mysql_select(
+        "SELECT id FROM `odd``table` WHERE id = 2 ORDER BY id DESC LIMIT 1", context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported &&
+           result.sql.find("DESC NULLS LAST") != std::string::npos,
+       "integer comparison and MySQL null ordering admitted");
+    result = duckdb_translate_mysql_select("SELECT null, NuLl", context);
+    ok(result.decision == DuckDBMySQLSelectDecision::supported &&
+           result.sql == "SELECT NULL AS \"NULL\", NULL AS \"NULL\"",
+       "NULL expression labels use MySQL canonical case");
+    std::string alias256(256, 'a');
+    ok(admitted(("SELECT 1 AS `" + alias256 + "`").c_str()), "256-byte alias is preserved");
+    ok(refused(("SELECT 1 AS `" + alias256 + "a`").c_str()), "alias truncation boundary refused");
+    ok(refused("SELECT 1 AS `x😀y`"), "supplementary metadata characters refused");
+    ok(refused("SELECT 1 AS ` x`"), "leading alias whitespace refused");
+    ok(admitted("SELECT 1 AS `x `"), "trailing alias whitespace preserved");
+    std::string bmp;
+    for (size_t i = 0; i < 128; ++i)
+        bmp += "é";
+    ok(admitted(("SELECT 1 AS `" + bmp + "`").c_str()), "256-byte BMP alias preserved");
+    ok(refused(("SELECT 1 AS `" + bmp + "é`").c_str()), "BMP byte-length overflow refused");
+    ok(admitted(("SELECT COUNT(" + std::string(247, ' ') + "*)").c_str()),
+       "255-byte aggregate label preserved");
+    ok(refused(("SELECT COUNT(" + std::string(248, ' ') + "*)").c_str()),
+       "aggregate label truncation boundary refused");
+    ok(admitted(("SELECT " + std::string(300, '0') + "1").c_str()),
+       "long integral literal labels remain supported");
+    ok(refused("SELECT COUNT (*)"), "spaced COUNT requires unknown IGNORE_SPACE mode");
+    ok(refused("SELECT MIN (id) FROM `odd``table`"), "spaced MIN cannot be treated as builtin");
+    ok(refused("SELECT MAX\t(id) FROM `odd``table`"),
+       "tab-separated MAX cannot be treated as builtin");
+    ok(refused("SELECT COUNT(*) FROM `odd``table` HAVING COUNT (*) > 0"),
+       "HAVING enforces the same function-resolution rule");
+    ok(refused("SELECT `COUNT`(*)"), "quoted function name is not an admitted builtin");
+    ok(admitted("SELECT cOuNt(*)"), "contiguous builtin remains case-insensitive");
+    auto bounded_group = context;
+    bounded_group.max_output_bytes = 24;
+    ok(duckdb_translate_mysql_select("SELECT id,COUNT(*) FROM `odd``table` GROUP BY id",
+                                     bounded_group)
+               .reason == "resource_limit",
+       "grouped output remains bounded");
+    auto bounded = context;
+    bounded.max_nodes = 2;
+    ok(duckdb_translate_mysql_select("SELECT 1", bounded).reason == "resource_limit",
+       "node bound enforced");
+    bounded = context;
+    bounded.max_input_bytes = 3;
+    ok(duckdb_translate_mysql_select("SELECT 1", bounded).reason == "resource_limit",
+       "input bound enforced");
+    bounded = context;
+    bounded.max_output_bytes = 2;
+    ok(duckdb_translate_mysql_select("SELECT 1", bounded).reason == "resource_limit",
+       "output bound enforced");
+    ok(refused("SELECT `a``b` AS id FROM `odd``table` ORDER BY id"),
+       "ambiguous ORDER BY alias refused");
+    ok(refused("SELECT id AS \"x\" FROM `odd``table`"),
+       "double-quoted alias refused with unknown mode");
+    auto unknown = context;
+    unknown.resolve_relation = [](const std::vector<std::string> &, DuckDBMySQLRelation &out) {
+        out.canonical_name = {"t"};
+        out.exact_name_resolution = true;
+        out.columns = {{"x", {DuckDBMySQLTypeKind::unknown, 0, 0}}};
+        return true;
+    };
+    ok(duckdb_translate_mysql_select("SELECT x FROM t", unknown).decision ==
+           DuckDBMySQLSelectDecision::unsupported,
+       "unknown projection type refused");
+    ok(duckdb_translate_mysql_select("SELECT * FROM t", unknown).decision ==
+           DuckDBMySQLSelectDecision::unsupported,
+       "star with unknown type refused");
+    unknown.resolve_relation = [](const std::vector<std::string> &, DuckDBMySQLRelation &) -> bool {
+        throw 1;
+    };
+    ok(duckdb_translate_mysql_select("SELECT x FROM t", unknown).reason == "provider_failure",
+       "resolver exception is contained");
+    bounded = context;
+    bounded.max_input_bytes = 999999;
+    ok(duckdb_translate_mysql_select(std::string(65537, 'x'), bounded).reason == "resource_limit",
+       "implementation hard input cap cannot be raised");
+    bounded = context;
+    bounded.max_depth = 1;
+    ok(duckdb_translate_mysql_select("SELECT 1", bounded).reason == "resource_limit",
+       "AST depth bound enforced");
+    bounded = context;
+    bounded.max_resolver_calls = 0;
+    ok(duckdb_translate_mysql_select("SELECT id FROM `odd``table`", bounded).reason ==
+           "missing_context",
+       "resolver bound enforced");
+    // Two- and three-relation joins. Single-relation emissions above stay
+    // byte-identical; only a multi-relation query uses the private emitted
+    // aliases and explicit labels.
+    auto join_context = context;
+    std::vector<std::string> resolved_order;
+    join_context.resolve_relation = [&](const std::vector<std::string> &parts,
+                                        DuckDBMySQLRelation &out) {
+        auto text_column = [](const char *name) {
+            return DuckDBMySQLColumn{name,
+                                     {DuckDBMySQLTypeKind::text, 0, 0},
+                                     {DuckDBMySQLSourceType::other, "utf8mb4", "utf8mb4_0900_bin"}};
+        };
+        auto decimal_column = [](const char *name) {
+            return DuckDBMySQLColumn{name, {DuckDBMySQLTypeKind::exact_decimal, 10, 2}};
+        };
+        auto signed_column = [](const char *name, DuckDBMySQLTypeKind kind) {
+            return DuckDBMySQLColumn{name, {kind, 0, 0}};
+        };
+        resolved_order.push_back(parts.empty() ? std::string() : parts.back());
+        if (parts == std::vector<std::string>{"join_left"}) {
+            out.canonical_name = {"join_left"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("k", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("u", DuckDBMySQLTypeKind::unsigned_integer),
+                           decimal_column("dec_key"),
+                           text_column("txt"),
+                           signed_column("nk", DuckDBMySQLTypeKind::signed_integer)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"join_right"}) {
+            out.canonical_name = {"join_right"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("lid", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("k", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("u", DuckDBMySQLTypeKind::unsigned_integer),
+                           decimal_column("dec_key"),
+                           text_column("txt"),
+                           signed_column("nk", DuckDBMySQLTypeKind::signed_integer)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"join_third"}) {
+            out.canonical_name = {"join_third"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("rid", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("k", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("u", DuckDBMySQLTypeKind::unsigned_integer),
+                           decimal_column("dec_key"),
+                           text_column("txt")};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"join_empty"}) {
+            out.canonical_name = {"join_empty"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("lid", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("k", DuckDBMySQLTypeKind::signed_integer)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"join_unproven"}) {
+            out.canonical_name = {"join_unproven"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("txt", DuckDBMySQLTypeKind::text)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        if (parts == std::vector<std::string>{"date_probe"}) {
+            out.canonical_name = {"date_probe"};
+            out.exact_name_resolution = true;
+            out.columns = {signed_column("id", DuckDBMySQLTypeKind::signed_integer),
+                           signed_column("d", DuckDBMySQLTypeKind::date)};
+            out.unique_keys = {{"id"}};
+            return true;
+        }
+        return false;
+    };
+    duckdb_database join_db = nullptr;
+    duckdb_connection join_connection = nullptr;
+    bool join_opened = duckdb_open(nullptr, &join_db) == DuckDBSuccess &&
+                       duckdb_connect(join_db, &join_connection) == DuckDBSuccess;
+    ok(join_opened, "open joined test database");
+    connection = join_connection;
+    db = join_db;
+    duckdb_result join_rows{};
+    bool join_created =
+        created &&
+        duckdb_query(connection,
+                     "CREATE TABLE join_left (id BIGINT PRIMARY KEY, k BIGINT, u UBIGINT, dec_key "
+                     "DECIMAL(10,2), txt VARCHAR, nk BIGINT)",
+                     &join_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&join_rows);
+    join_created = join_created &&
+                   duckdb_query(connection,
+                                "CREATE TABLE join_right (id BIGINT PRIMARY KEY, lid BIGINT, k "
+                                "BIGINT, u UBIGINT, dec_key DECIMAL(10,2), txt VARCHAR, nk BIGINT)",
+                                &join_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&join_rows);
+    join_created =
+        join_created &&
+        duckdb_query(connection,
+                     "CREATE TABLE join_third (id BIGINT PRIMARY KEY, rid BIGINT, k BIGINT, u "
+                     "UBIGINT, dec_key DECIMAL(10,2), txt VARCHAR)",
+                     &join_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&join_rows);
+    join_created = join_created &&
+                   duckdb_query(connection,
+                                "CREATE TABLE join_empty (id BIGINT PRIMARY KEY, lid BIGINT, k "
+                                "BIGINT)",
+                                &join_rows) == DuckDBSuccess;
+    duckdb_destroy_result(&join_rows);
+    ok(join_created, "create joined relations");
+    duckdb_result join_insert{};
+    bool join_inserted =
+        join_created &&
+        duckdb_query(connection,
+                     "INSERT INTO join_left VALUES (1,10,10,1.50,'a',1),(2,10,20,2.50,'b',2),"
+                     "(3,20,30,3.50,'A',NULL),(4,NULL,0,NULL,NULL,4)",
+                     &join_insert) == DuckDBSuccess;
+    duckdb_destroy_result(&join_insert);
+    join_inserted =
+        join_inserted && duckdb_query(connection,
+                                      "INSERT INTO join_right VALUES (10,1,10,10,1.50,'a',1),"
+                                      "(11,1,10,20,2.50,'b',2),(12,2,20,30,3.50,'A',NULL),"
+                                      "(13,3,99,0,NULL,NULL,4)",
+                                      &join_insert) == DuckDBSuccess;
+    duckdb_destroy_result(&join_insert);
+    ok(join_inserted, "insert joined rows");
+    resolved_order.clear();
+    const std::string join_limit =
+        "SELECT l.id, r.id, l.k FROM join_left l INNER JOIN join_right r ON l.id=r.lid WHERE "
+        "r.k>=10 ORDER BY l.id, r.id LIMIT 2";
+    auto join_translated = duckdb_translate_mysql_select(join_limit, join_context);
+    ok(join_translated.decision == DuckDBMySQLSelectDecision::supported &&
+           join_translated.sql ==
+               "SELECT \"r0\".\"id\" AS \"id\", \"r1\".\"id\" AS \"id\", \"r0\".\"k\" AS \"k\" "
+               "FROM \"join_left\" AS \"r0\" INNER JOIN \"join_right\" AS \"r1\" ON "
+               "(\"r0\".\"id\" = \"r1\".\"lid\") WHERE (\"r1\".\"k\" >= 10) ORDER BY "
+               "\"r0\".\"id\" ASC NULLS FIRST, \"r1\".\"id\" ASC NULLS FIRST LIMIT 2",
+       "joined projection, predicate, order and limit are emitted exactly");
+    ok(resolved_order == std::vector<std::string>{"join_left", "join_right"},
+       "each joined relation is resolved once in FROM order");
+    statement = nullptr;
+    ok(join_created && join_translated.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_translated.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares the joined emission");
+    duckdb_result joined_result{};
+    bool joined_executed = join_created && statement &&
+                           duckdb_execute_prepared(statement, &joined_result) == DuckDBSuccess &&
+                           duckdb_row_count(&joined_result) == 2;
+    duckdb_destroy_result(&joined_result);
+    duckdb_destroy_prepare(&statement);
+    ok(joined_executed, "joined emission executes with the expected multiplicity");
+    auto join_left_translated = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid ORDER BY l.id, "
+        "r.id",
+        join_context);
+    ok(join_left_translated.decision == DuckDBMySQLSelectDecision::supported &&
+           join_left_translated.sql ==
+               "SELECT \"r0\".\"id\" AS \"id\", \"r1\".\"id\" AS \"id\" FROM \"join_left\" AS "
+               "\"r0\" LEFT JOIN \"join_right\" AS \"r1\" ON (\"r0\".\"id\" = \"r1\".\"lid\") "
+               "ORDER BY \"r0\".\"id\" ASC NULLS FIRST, \"r1\".\"id\" ASC NULLS FIRST",
+       "LEFT JOIN emission keeps NULL-extended rows and qualified order keys");
+    statement = nullptr;
+    ok(join_created && join_left_translated.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_left_translated.sql.c_str(), &statement) ==
+               DuckDBSuccess,
+       "DuckDB prepares the LEFT JOIN emission");
+    duckdb_result left_result{};
+    bool left_executed = join_created && statement &&
+                         duckdb_execute_prepared(statement, &left_result) == DuckDBSuccess &&
+                         duckdb_row_count(&left_result) == 5;
+    duckdb_destroy_result(&left_result);
+    duckdb_destroy_prepare(&statement);
+    ok(left_executed, "LEFT JOIN keeps the unmatched left row");
+    resolved_order.clear();
+    auto join_three = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id, t.id FROM join_left l JOIN join_right r ON l.id=r.lid JOIN join_third "
+        "t ON r.id=t.rid ORDER BY l.id, r.id, t.id",
+        join_context);
+    ok(join_three.decision == DuckDBMySQLSelectDecision::supported &&
+           join_three.sql.find("FROM \"join_left\" AS \"r0\" INNER JOIN \"join_right\" AS \"r1\" "
+                               "ON (\"r0\".\"id\" = \"r1\".\"lid\") INNER JOIN \"join_third\" AS "
+                               "\"r2\" ON (\"r1\".\"id\" = \"r2\".\"rid\")") != std::string::npos,
+       "three relations are joined left to right with explicit aliases");
+    ok(resolved_order == std::vector<std::string>{"join_left", "join_right", "join_third"},
+       "three relations resolve once each in FROM order");
+    statement = nullptr;
+    ok(join_created && join_three.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_three.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares the three-relation emission");
+    duckdb_destroy_prepare(&statement);
+    auto join_star = duckdb_translate_mysql_select(
+        "SELECT * FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id=1 ORDER BY r.id",
+        join_context);
+    ok(join_star.decision == DuckDBMySQLSelectDecision::supported &&
+           join_star.sql.find("\"r0\".\"id\" AS \"id\"") != std::string::npos &&
+           join_star.sql.find("\"r1\".\"nk\" AS \"nk\"") != std::string::npos &&
+           join_star.sql.find("\"r1\".\"lid\" AS \"lid\"") != std::string::npos,
+       "star expands over every joined relation in FROM order");
+    statement = nullptr;
+    ok(join_created && join_star.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_star.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares the multi-relation star emission");
+    duckdb_destroy_prepare(&statement);
+    auto join_alias_star = duckdb_translate_mysql_select(
+        "SELECT l.*, r.k FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id=1 ORDER BY "
+        "r.id",
+        join_context);
+    ok(join_alias_star.decision == DuckDBMySQLSelectDecision::supported &&
+           join_alias_star.sql.find("\"r0\".\"nk\" AS \"nk\"") != std::string::npos &&
+           join_alias_star.sql.find("\"r1\".\"k\" AS \"k\"") != std::string::npos &&
+           join_alias_star.sql.find("\"r1\".\"lid\" AS") == std::string::npos,
+       "alias star expands exactly one relation");
+    auto join_self = duckdb_translate_mysql_select(
+        "SELECT x.id, y.id, x.k FROM join_left x JOIN join_left y ON x.k=y.k WHERE x.id < y.id "
+        "ORDER BY x.id, y.id",
+        join_context);
+    ok(join_self.decision == DuckDBMySQLSelectDecision::supported &&
+           join_self.sql.find("FROM \"join_left\" AS \"r0\" INNER JOIN \"join_left\" AS \"r1\"") !=
+               std::string::npos,
+       "self join with distinct case-sensitive aliases is admitted");
+    auto join_signed_unsigned = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k=r.u ORDER BY l.id, r.id",
+        join_context);
+    ok(join_signed_unsigned.decision == DuckDBMySQLSelectDecision::supported &&
+           join_signed_unsigned.sql.find("ON (CAST(\"r0\".\"k\" AS DECIMAL(20,0)) = "
+                                         "CAST(\"r1\".\"u\" AS DECIMAL(20,0)))") !=
+               std::string::npos,
+       "signed and unsigned join keys use an exact common DECIMAL");
+    auto join_decimal = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.dec_key=r.dec_key ORDER BY "
+        "l.id, r.id",
+        join_context);
+    ok(join_decimal.decision == DuckDBMySQLSelectDecision::supported &&
+           join_decimal.sql.find("ON (CAST(\"r0\".\"dec_key\" AS DECIMAL(10,2)) = "
+                                 "CAST(\"r1\".\"dec_key\" AS DECIMAL(10,2)))") != std::string::npos,
+       "decimal join keys use the common DECIMAL cast");
+    auto join_text = duckdb_translate_mysql_select(
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.txt=r.txt ORDER BY l.id, r.id",
+        join_context);
+    ok(join_text.decision == DuckDBMySQLSelectDecision::supported &&
+           join_text.sql.find("ON (\"r0\".\"txt\" COLLATE \"binary\" = "
+                              "\"r1\".\"txt\" COLLATE \"binary\")") != std::string::npos,
+       "binary-collation text join key is admitted");
+    auto join_group = duckdb_translate_mysql_select(
+        "SELECT l.k, COUNT(*) AS n, COUNT(r.id) AS m, MIN(r.id) AS lo, SUM(r.id) AS s, "
+        "AVG(r.id) AS a FROM join_left l LEFT JOIN join_right r ON l.k=r.k GROUP BY l.k ORDER BY "
+        "l.k",
+        join_context);
+    ok(join_group.decision == DuckDBMySQLSelectDecision::supported &&
+           join_group.sql.find("COUNT(\"r1\".\"id\") AS \"m\"") != std::string::npos &&
+           join_group.sql.find("MIN(\"r1\".\"id\") AS \"lo\"") != std::string::npos &&
+           join_group.sql.find("GROUP BY \"r0\".\"k\" ORDER BY \"r0\".\"k\"") != std::string::npos,
+       "aggregates and grouping qualify joined columns");
+    statement = nullptr;
+    ok(join_created && join_group.decision == DuckDBMySQLSelectDecision::supported &&
+           duckdb_prepare(connection, join_group.sql.c_str(), &statement) == DuckDBSuccess,
+       "DuckDB prepares grouped aggregates over a join");
+    duckdb_destroy_prepare(&statement);
+    const char *join_admitted[] = {
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY l.id, r.id "
+        "LIMIT 3",
+        "SELECT l.id, r.id FROM join_left l LEFT OUTER JOIN join_right r ON l.id=r.lid ORDER BY "
+        "l.id, r.id LIMIT 4, 3",
+        "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid WHERE r.id IS "
+        "NULL ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid AND r.k=20 "
+        "ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid AND r.k=20 ORDER BY "
+        "l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.nk=r.nk ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k < r.k ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k <> r.k ORDER BY l.id, r.id",
+        "SELECT l.k, r.k, COUNT(*) AS n FROM join_left l JOIN join_right r ON l.k=r.k GROUP BY "
+        "l.k, r.k ORDER BY l.k, r.k",
+        "SELECT l.k, COUNT(*) AS n FROM join_left l JOIN join_right r ON l.k=r.k GROUP BY l.k "
+        "HAVING COUNT(*) > 1 ORDER BY l.k",
+        "SELECT l.k, COUNT(*) AS n FROM join_left l JOIN join_right r ON l.k=r.k GROUP BY l.k "
+        "ORDER BY l.k LIMIT 1, 2",
+        "SELECT l.id, e.id FROM join_left l LEFT JOIN join_empty e ON l.id=e.lid ORDER BY l.id, "
+        "e.id",
+        "SELECT l.id, r.id, t.id FROM join_left l LEFT JOIN join_right r ON l.id=r.lid INNER JOIN "
+        "join_third t ON r.id=t.rid ORDER BY l.id, r.id, t.id",
+        "SELECT l.id, r.id, t.id FROM join_left l INNER JOIN join_right r ON l.id=r.lid LEFT JOIN "
+        "join_third t ON r.id=t.rid ORDER BY l.id, r.id, t.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY r.txt DESC, "
+        "l.id ASC, r.id ASC LIMIT 4",
+        "SELECT l.id, r.id, r.dec_key FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY "
+        "r.dec_key ASC, l.id, r.id",
+        "SELECT l.id, r.id, r.u FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY r.u "
+        "ASC, l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.txt=r.txt ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.dec_key=r.dec_key ORDER BY "
+        "l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.k=r.u ORDER BY l.id, r.id",
+        "SELECT x.id, y.id FROM join_left x JOIN join_left y ON x.k=y.k WHERE x.id<y.id ORDER BY "
+        "x.id, y.id",
+        "SELECT l.*, r.k FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id=1 ORDER BY "
+        "r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid AND (r.nk IS NULL OR "
+        "r.k>20) ORDER BY l.id, r.id",
+        "SELECT l.id, r.id FROM join_left l JOIN join_right r ON 1=1 ORDER BY l.id, r.id LIMIT 10",
+        "SELECT l.ID, r.ID FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY l.id, r.id"};
+    for (const char *sql : join_admitted) {
+        auto translated = duckdb_translate_mysql_select(sql, join_context);
+        statement = nullptr;
+        bool prepared =
+            join_created && translated.decision == DuckDBMySQLSelectDecision::supported &&
+            duckdb_prepare(connection, translated.sql.c_str(), &statement) == DuckDBSuccess;
+        duckdb_destroy_prepare(&statement);
+        ok(prepared, "DuckDB prepares admitted join query: %s", sql);
+    }
+    auto join_reason = [&](const std::string &sql) {
+        return duckdb_translate_mysql_select(sql, join_context).reason;
+    };
+    const std::pair<std::string, std::string> join_refused[] = {
+        {"SELECT * FROM join_left l JOIN join_right r USING (id)", "using_join"},
+        {"SELECT * FROM join_left NATURAL JOIN join_right", "natural_join"},
+        {"SELECT * FROM join_left, join_right", "comma_join"},
+        {"SELECT * FROM join_left CROSS JOIN join_right", "cross_join"},
+        {"SELECT * FROM join_left RIGHT JOIN join_right ON join_left.id=join_right.lid",
+         "right_join"},
+        {"SELECT * FROM join_left FULL OUTER JOIN join_right ON join_left.id=join_right.lid",
+         "full_join"},
+        {"SELECT * FROM (SELECT id FROM join_left) x JOIN join_right r ON x.id=r.lid",
+         "derived_table"},
+        {"SELECT l.id FROM join_left l JOIN join_right r ON l.id=r.lid AND l.id = (SELECT MIN(id) "
+         "FROM join_left)",
+         "unsupported_subquery"},
+        {"SELECT id FROM join_left l JOIN join_right r ON l.id=r.lid", "ambiguous_column"},
+        {"SELECT z.id FROM join_left l JOIN join_right r ON l.id=r.lid", "unknown_relation_alias"},
+        {"SELECT nope FROM join_left l JOIN join_right r ON l.id=r.lid", "unknown_column"},
+        {"SELECT z.* FROM join_left l JOIN join_right r ON l.id=r.lid", "unknown_relation_alias"},
+        {"SELECT join_left.id FROM join_left AS l JOIN join_right r ON l.id=r.lid",
+         "unknown_relation_alias"},
+        {"SELECT * FROM join_left l JOIN join_right l ON l.id=l.lid", "duplicate_relation"},
+        {"SELECT * FROM join_left JOIN join_left ON join_left.id=join_left.id",
+         "duplicate_relation"},
+        {"SELECT * FROM join_left l JOIN join_right r ON l.id=r.lid JOIN join_third t ON "
+         "r.id=t.rid JOIN join_empty e ON t.id=e.lid",
+         "join_relation_limit"},
+        {"SELECT l.id FROM join_left l JOIN join_right r ON l.txt=r.id",
+         "unsupported_join_predicate"},
+        {"SELECT u.id FROM join_unproven u JOIN join_unproven v ON u.txt=v.txt",
+         "collation_unproven"},
+        {"SELECT p.id FROM date_probe p JOIN date_probe q ON p.d=q.d",
+         "unsupported_join_predicate"},
+        {"SELECT l.id, r.id FROM join_left l JOIN join_right r ON l.id=r.lid ORDER BY l.id LIMIT "
+         "1",
+         "nondeterministic_limit"},
+        {"SELECT * FROM join_left STRAIGHT_JOIN join_right ON join_left.id=join_right.lid",
+         "incomplete_or_non_select"},
+        {"SELECT * FROM (join_left l JOIN join_right r ON l.id=r.lid)", "incomplete_or_non_select"},
+        {"SELECT x.l.id FROM join_left l JOIN join_right r ON l.id=r.lid",
+         "unsupported_column_reference"},
+        {"SELECT * FROM join_left l JOIN join_right r", "join_without_condition"}};
+    for (const auto &entry : join_refused)
+        ok(join_reason(entry.first) == entry.second, "join refusal %s -> %s", entry.first.c_str(),
+           entry.second.c_str());
+    auto join_prepare_context = join_context;
+    join_prepare_context.parameter_mode = DuckDBMySQLParameterMode::prepare;
+    ok(duckdb_translate_mysql_select(
+           "SELECT l.id FROM join_left l JOIN join_right r ON l.id=r.lid WHERE l.id = ?",
+           join_prepare_context)
+               .reason == "unsupported_parameter_join",
+       "placeholders are refused for a joined query");
+    auto join_bounded = join_context;
+    join_bounded.max_resolver_calls = 2;
+    ok(duckdb_translate_mysql_select(
+           "SELECT l.id FROM join_left l JOIN join_right r ON l.id=r.lid JOIN join_third t ON "
+           "r.id=t.rid",
+           join_bounded)
+               .reason == "missing_context",
+       "the resolver-call allowance still bounds joined queries");
+    // A single-relation query keeps the exact SQL shape it had before joins.
+    auto single_unchanged = duckdb_translate_mysql_select(
+        "SELECT `a``b`, id AS x FROM `odd``table` WHERE id = 1 ORDER BY id LIMIT 2", context);
+    ok(single_unchanged.decision == DuckDBMySQLSelectDecision::supported &&
+           single_unchanged.sql ==
+               "SELECT \"a`b\", \"id\" AS \"x\" FROM \"odd`table\" WHERE (\"id\" = 1) ORDER BY "
+               "\"id\" ASC NULLS FIRST LIMIT 2",
+       "single-relation emission is byte-identical to the pre-join translator");
+    if (connection)
+        duckdb_disconnect(&connection);
+    if (db)
+        duckdb_close(&db);
+    return exit_status();
+}

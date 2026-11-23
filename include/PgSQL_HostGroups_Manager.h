@@ -232,7 +232,7 @@ class PgSQL_SrvC {	// MySQL Server Container
 		char* _comment
 	);
 	~PgSQL_SrvC();
-	void connect_error(int, bool get_mutex=true);
+	void connect_error(PGSQL_ERROR_CODES err_code, const char* err_msg = nullptr, bool get_mutex=true);
 	void shun_and_killall();
 	/**
 	 * @brief Update the maximum number of used connections
@@ -703,6 +703,10 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	 * @param errno The error code itself.
 	 */
 	void p_update_pgsql_error_counter(p_pgsql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code);
+	/**
+	 * @brief As above, labelled with a backend error's SQLSTATE. An empty one (no error) is labelled XXXXX.
+	 */
+	void p_update_pgsql_error_counter(p_pgsql_error_type err_type, unsigned int hid, char* address, uint16_t port, const std::string& sqlstate);
 
 	wqueue<PgSQL_Connection *> queue;
 
@@ -898,6 +902,19 @@ class PgSQL_HostGroups_Manager : public Base_HostGroups_Manager<PgSQL_HGC> {
 	unsigned int copy_hostgroup_strings(HostgroupStringsMap& out);
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);
+#ifdef PROXYSQL31
+	/**
+	 * @brief Brings a server the monitor shunned back ONLINE after a successful ping.
+	 * @details Only rows SHUNNED automatically are changed, in every hostgroup, and
+	 *   only when can_unshun_server() allows it: the same recovery time and connection
+	 *   drain rules a query applies in get_random_MySrvC(). Unlike a query's unshun with
+	 *   pgsql-unshun_algorithm=0, every hostgroup's row of the server comes back: the ping
+	 *   checks the server, not one hostgroup. Rows shunned for replication lag (a
+	 *   different status) or set OFFLINE by an admin are never changed.
+	 * @return true if at least one row was brought back ONLINE.
+	 */
+	bool unshun_on_monitor_success(char *hostname, int port);
+#endif
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
 

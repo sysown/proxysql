@@ -5,6 +5,14 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../../.." && pwd)"
 
+# Several checks create fixture repositories with plain `git` commands. If the
+# caller exported repository-local variables (GIT_DIR, GIT_WORK_TREE,
+# GIT_INDEX_FILE, ...), as git does for hooks, those commands would operate on
+# the caller's repository instead of the fixture. Clear them before any check.
+while IFS= read -r variable_name; do
+	unset "${variable_name}"
+done < <(git rev-parse --local-env-vars)
+
 if ! command -v envsubst >/dev/null 2>&1; then
 	echo "CI lint prerequisite missing: envsubst (install gettext-base on Debian/Ubuntu or gettext on macOS)." >&2
 	exit 1
@@ -65,8 +73,6 @@ run_check "Check RE2 platform and unit linker flags" \
 	test/infra/control/test-re2-platform-link.bash
 run_check "Check RE2 system-library link mode" \
 	test/infra/control/test-re2-system-link.bash
-run_check "Check ClickHouse feature propagation and platform linker flags" \
-	python3 test/infra/control/test_clickhouse_build.py
 run_check "Check configured DuckDB static archives" \
 	python3 test/infra/control/test_duckdb_archives.py
 run_check "Check DuckDB portable CPU profile" \

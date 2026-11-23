@@ -89,9 +89,11 @@ class UnitRunnerTimeoutTests(unittest.TestCase):
         path.write_text('#!/usr/bin/env bash\n' + body + '\n')
         path.chmod(0o755)
 
-    def run_suite(self, timeout='1'):
+    def run_suite(self, timeout='1', kill_after='1'):
         env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'],
                    UNIT_TEST_TIMEOUT_SECONDS=timeout, SKIP_PROXYSQL='1',
+                   # Keep the TERM-to-KILL grace short; production uses 10 s.
+                   UNIT_TEST_KILL_AFTER_SECONDS=kill_after,
                    TAP_GROUP='unit-tests-g1', INFRA_ID='timeout-regression',
                    INFRA_TYPE='', COVERAGE='0', TEST_PY_TAP_EXCL='')
         groups = self.root / 'test/tap/groups'
@@ -208,6 +210,12 @@ class UnitRunnerTimeoutTests(unittest.TestCase):
         result = self.run_suite(timeout='0')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('UNIT_TEST_TIMEOUT_SECONDS', result.stderr)
+
+    def test_zero_kill_grace_is_rejected(self):
+        self.executable(self.units / 'pass-t', 'exit 0')
+        result = self.run_suite(kill_after='0')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('UNIT_TEST_KILL_AFTER_SECONDS', result.stderr)
 
 
 class IsolatedUnitRunnerTimeoutTests(UnitRunnerTimeoutTests):

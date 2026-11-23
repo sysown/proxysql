@@ -1,6 +1,6 @@
 --- sqlite3.c.O	2025-05-29 14:35:06.000000000 +0000
 +++ sqlite3.c	2025-05-30 14:53:11.510407512 +0000
-@@ -25954,6 +25954,44 @@
+@@ -27083,6 +27083,44 @@
  }
  
  /*
@@ -45,7 +45,7 @@
  **    time( TIMESTRING, MOD, MOD, ...)
  **
  ** Return HH:MM:SS
-@@ -26520,6 +26558,7 @@
+@@ -27649,6 +27687,7 @@
  #ifdef SQLITE_DEBUG
      PURE_DATE(datedebug,        -1, 0, 0, datedebugFunc ),
  #endif

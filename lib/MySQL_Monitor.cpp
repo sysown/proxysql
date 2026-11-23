@@ -3295,6 +3295,32 @@ __sleep_monitor_connect_loop:
 	return NULL;
 }
 
+#ifdef PROXYSQL31
+/**
+ * @brief Whether the latest ping of hostname:port in 'mysql_server_ping_log' succeeded.
+ * @details A prepared statement with bound parameters; any SQLite failure answers false,
+ *   so the caller leaves the server as it is until the next ping cycle.
+ */
+static bool mysql_latest_ping_succeeded(SQLite3DB *db, const char *hostname, int port) {
+	auto [rc, stmt_unique] = db->prepare_v2(
+		"SELECT 1 FROM (SELECT ping_error FROM mysql_server_ping_log WHERE hostname=?1 AND port=?2"
+		" ORDER BY time_start_us DESC LIMIT 1) a WHERE ping_error IS NULL"
+	);
+	if (rc != SQLITE_OK) {
+		proxy_error("Monitor: cannot prepare the latest ping query, rc=%d\n", rc);
+		return false;
+	}
+	sqlite3_stmt *statement = stmt_unique.get();
+	if ((*proxy_sqlite3_bind_text)(statement, 1, hostname, -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+		return false;
+	}
+	if ((*proxy_sqlite3_bind_int)(statement, 2, port) != SQLITE_OK) {
+		return false;
+	}
+	return (*proxy_sqlite3_step)(statement) == SQLITE_ROW;
+}
+#endif
+
 void * MySQL_Monitor::monitor_ping() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -3467,6 +3493,16 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 
 			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time_us) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time_us,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
 			for (j=0;j<i;j++) {
+#ifdef PROXYSQL31
+				// Bring back a host shunned for errors once its latest ping succeeded. Without
+				// this, a shunned host returns only when a query selects its hostgroup, so a
+				// hostgroup with no traffic keeps it SHUNNED indefinitely after it recovered.
+				if (mysql_thread___monitor_unshun_on_ping_success &&
+					mysql_latest_ping_succeeded(monitordb, addresses[j], atoi(ports[j])) &&
+					MyHGM->unshun_on_monitor_success(addresses[j], atoi(ports[j]))) {
+					proxy_info("Monitor: server %s:%s answers pings again; no longer SHUNNED\n", addresses[j], ports[j]);
+				}
+#endif
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				sprintf(buff,new_query,addresses[j],ports[j]);
 				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);

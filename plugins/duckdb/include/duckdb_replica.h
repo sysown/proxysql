@@ -92,18 +92,24 @@ struct DuckDBReplicaMappedColumn {
 	uint8_t scale { 0 };
 	bool not_null { false };
 	bool primary_key { false };
+	// Original MySQL facts, recorded in proxysql_replica.columns.
+	std::string mysql_data_type; // lower-case DATA_TYPE
+	std::string mysql_column_type;
+	std::string charset;
+	std::string collation;
 };
 
 // Empty string means the column can be snapshotted. `column_type` is MySQL's
-// full type (`bigint(20) unsigned`, `decimal(10,2)`). `charset` is empty for
-// non-character columns.
+// full type (`bigint(20) unsigned`, `decimal(10,2)`). `charset` and `collation`
+// are empty for non-character columns.
 std::string duckdb_replica_map_column(const std::string& name,
                                       const std::string& data_type,
                                       const std::string& column_type,
                                       const std::string& charset,
                                       const std::string& column_key,
                                       bool nullable,
-                                      DuckDBReplicaMappedColumn& out);
+                                      DuckDBReplicaMappedColumn& out,
+                                      const std::string& collation = "");
 
 std::string duckdb_replica_create_table_sql(const std::string& schema,
                                             const std::string& table,
