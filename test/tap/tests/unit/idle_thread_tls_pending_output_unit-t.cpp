@@ -201,10 +201,11 @@ struct Frontend {
 		free(myds->ssl_write_buf);
 		myds->ssl_write_buf = nullptr;
 		myds->ssl_write_len = 0;
-		sess->client_myds = nullptr;
 		sess->thread = nullptr;
+		// The session owns its client data stream, as in production: deleting the session deletes
+		// the stream, which closes fds[0] and frees the server SSL with its BIOs.
 		delete sess;
-		delete myds; // closes fds[0] and frees the server SSL with its BIOs
+		myds = nullptr;
 		close(fds[1]);
 		if (peer) SSL_free(peer);
 		if (server_ctx) SSL_CTX_free(server_ctx);
