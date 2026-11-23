@@ -1652,6 +1652,18 @@ int MySQL_Threads_Handler::listener_add(const char *iface) {
 			}
 			free(perthrsocks);
 		}
+		// Wait until every worker has added the socket to its poll set, as
+		// listener_del() waits for its removal. A worker can leave its bootstrap
+		// spin just before the add is posted and take it only after its next
+		// poll(). A PROXYSQL STOP in that window finds no listener to remove,
+		// closes the socket, and the worker then adds the closed FD and asserts
+		// on POLLNVAL (#6718).
+		for (i=0;i<num_threads;i++) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			while(__sync_fetch_and_add(&thr->mypolls.pending_listener_add,0)) {
+				usleep(std::min(std::max(mysql_thread___poll_timeout/20, 10000), 40000));
+			}
+		}
 	}
 	return rc;
 }
