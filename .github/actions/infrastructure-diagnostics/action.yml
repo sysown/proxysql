@@ -16,6 +16,60 @@ inputs:
 runs:
   using: composite
   steps:
+    # A cancelled job leaves its containers running: the runner kills the
+    # docker client, not the container. One that mounts this workspace keeps
+    # writing root-owned files into it after the next job's checkout (.gcda
+    # files from a cancelled coverage run broke a handoff restore). Jobs
+    # never share a runner workspace, so any container mounting it is left
+    # over. Remove those first, then the files they left behind.
+    - name: Remove containers left by an earlier job
+      if: ${{ inputs.phase == 'setup' }}
+      shell: bash
+      run: |
+        command -v docker >/dev/null || exit 0
+        sweep() {
+          for id in $(docker ps -q 2>/dev/null); do
+            mounts=$(docker inspect -f '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' "$id" 2>/dev/null) || continue
+            while IFS= read -r src; do
+              [ "$src" = "$GITHUB_WORKSPACE" ] || [ "${src#"$GITHUB_WORKSPACE"/}" != "$src" ] || continue
+              echo "Removing container left by an earlier job:"
+              docker ps -a --filter "id=$id" --format '  {{.Names}} ({{.Image}}, {{.RunningFor}})' || true
+              docker rm -f "$id" >/dev/null || echo "::warning::Could not remove container $id."
+              break
+            done <<< "$mounts"
+          done
+        }
+        export -f sweep
+        # One deadline for the whole sweep: setup has one minute in all.
+        timeout -k 5s 10s bash -c sweep ||
+          echo "::warning::Removing leftover containers failed or exceeded 10 s; continuing."
+    # Self-hosted runners keep the workspace between jobs, and the test
+    # containers write ci_infra_logs as root. A cancelled or killed job never
+    # reaches its cleanup, so the root-owned tree stays and the next job's
+    # actions/checkout fails with EACCES before building anything (#6711).
+    # The setup phase runs before the product checkout in every workflow, so
+    # remove the tree here, escalating only when the runner user cannot.
+    # Callers give setup one minute, so the Docker fallback (which may need
+    # to pull its image) is bounded to 15 s. docker run passes SIGTERM to the
+    # container, whose PID 1 ignores it, so timeout follows up with SIGKILL;
+    # killing the client leaves the container running, so it is removed by
+    # name. On expiry only the warning runs.
+    - name: Remove ci_infra_logs left by an earlier job
+      if: ${{ inputs.phase == 'setup' }}
+      shell: bash
+      run: |
+        logs="$GITHUB_WORKSPACE/proxysql/ci_infra_logs"
+        [ -e "$logs" ] || exit 0
+        if ! rm -rf "$logs" 2>/dev/null && ! sudo -n rm -rf "$logs" 2>/dev/null; then
+          name="ci-infra-logs-cleanup-${GITHUB_RUN_ID:-0}-$$"
+          timeout -k 3s 15s docker run --rm --name "$name" -v "$GITHUB_WORKSPACE/proxysql:/w" ubuntu:24.04 rm -rf /w/ci_infra_logs ||
+            timeout -k 2s 5s docker rm -f "$name" >/dev/null 2>&1 || true
+        fi
+        if [ -e "$logs" ]; then
+          echo "::warning::Could not remove $logs; actions/checkout may fail to clean the workspace."
+        else
+          echo "Removed $logs left by an earlier job."
+        fi
     - name: Install capture before Docker teardown
       if: ${{ inputs.phase == 'setup' }}
       shell: bash
