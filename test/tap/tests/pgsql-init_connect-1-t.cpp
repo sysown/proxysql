@@ -19,7 +19,7 @@
 
 CommandLine cl;
 
-static constexpr int kPerMode = 20;       // v3.1 cases run once per backend mode
+static constexpr int kPerMode = 21;       // v3.1 cases run once per backend mode
 static constexpr int kStableCases = 3;    // v3.0 cases
 
 // Two statements and one Sync in libpq pipeline mode; the first opens a new connection.
@@ -137,6 +137,18 @@ static void run_mode(PGconn* admin, bool native) {
 	r = ic_query(ck.get(), IC_MARKER);
 	ok(!r.timed_out && r.ok && r.value == "global",
 	   "[native=%d] and the client session is kept (got '%s')", native, r.value.c_str());
+
+	// An init_connect that fails inside its own transaction leaves that backend in 'E'. That
+	// transaction is ProxySQL's, not the client's: the client must not be left in a failed one.
+	ic_set_global(admin, "BEGIN; SET statement_timeout TO 'bogus'; COMMIT");
+	PGConnPtr ct = ic_connect_client(cl);
+	r = ic_query(ct.get(), IC_MARKER);
+	ic_set_global(admin, "SET ic.marker TO 'global'");
+	const IcResult simple = ic_query(ct.get(), IC_MARKER);
+	const IcResult ext = ic_query_extended(ct.get(), IC_MARKER);
+	ok(!r.timed_out && r.sqlstate == "22023" && simple.value == "global" && ext.value == "global",
+	   "[native=%d] an init_connect transaction does not leave the client in one (sqlstate '%s', then '%s'/'%s' %s/%s)",
+	   native, r.sqlstate.c_str(), simple.value.c_str(), ext.value.c_str(), simple.sqlstate.c_str(), ext.sqlstate.c_str());
 
 	// A later statement of a multi-statement init_connect counts like the first: its error
 	// reaches the client (session kept), its rows close the session (PMC-10003).

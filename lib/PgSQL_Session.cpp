@@ -1399,18 +1399,18 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				proxy_warning("Error while setting INIT CONNECT on %s:%d hg %d: %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myconn->get_error_code_with_message().c_str());
 				// we won't go back to PROCESSING_QUERY
 				previous_status.pop();
-				// The connection is dropped below, and any transaction with it.
-				client_myds->myprot.generate_error_packet(true, true, myconn->get_error_message().c_str(), myconn->get_error_code(), false,
+				const std::string errmsg = myconn->get_error_message();
+				const PGSQL_ERROR_CODES errcode = myconn->get_error_code();
+				// Drop the connection first: no client statement ran on it, so a transaction it holds
+				// (an init_connect such as "BEGIN; ...") is ProxySQL's. Left in place, the client's
+				// transaction state below would count it and poison a client that never opened one.
+				myds->destroy_MySQL_Connection_From_Pool(true);
+				myds->fd = 0;
+				client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), errcode, false,
 					false, NULL, txn_state_for_local_error(true));
 				// The rest of an extended-query unit goes too: left queued, it would run ahead of
 				// the client's next unit and fail it (as give_up_waiting() does).
 				reset_extended_query_frame();
-				// The reset destroys the connection itself when a pipeline is open; init_connect
-				// never runs with one today, but destroying a NULL connection would crash.
-				if (myds->myconn) {
-					myds->destroy_MySQL_Connection_From_Pool(true);
-				}
-				myds->fd = 0;
 				RequestEnd(myds, true);
 				ret = true;
 			}
