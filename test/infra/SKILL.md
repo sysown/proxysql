@@ -104,7 +104,8 @@ export TAP_GROUP="<group>"  # replace with the group whose infras failed to star
 ./test/infra/control/destroy-infras.bash
 # ProxySQL/test logs (always under ci_infra_logs), plus the data directory of
 # each plain Docker infra of the group (here infra-mysql57), which follows
-# INFRA_LOGS_PATH when set.
+# INFRA_LOGS_PATH when set. Set INFRA_LOGS_PATH to an absolute path: the init
+# script resolves a relative one from the infra directory, not from here.
 sudo rm -rf "ci_infra_logs/${INFRA_ID}" "${INFRA_LOGS_PATH:-ci_infra_logs}/infra-mysql57-${INFRA_ID}"
 ```
 
