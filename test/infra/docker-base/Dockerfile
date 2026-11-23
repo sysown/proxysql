@@ -9,6 +9,12 @@ ARG ORCHESTRATOR_CLIENT_VERSION=4.32.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Bound every apt network wait. apt's defaults have no connection timeout and
+# no retries, so one stalled connection to the Ubuntu archive blocked the
+# install below until CI's 20-minute step timeout killed the job (#6710).
+RUN printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' \
+    > /etc/apt/apt.conf.d/80-network-timeouts
+
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
     mysql-client \
@@ -53,7 +59,7 @@ RUN apt-get update -qq && \
     && python3 -c "import psycopg; assert psycopg.__version__ == '${PSYCOPG_VERSION}'" \
     && ORC_ARCH="$(dpkg --print-architecture)" \
     && case "${ORC_ARCH}" in amd64|arm64) ;; *) echo "orchestrator-client: unsupported architecture ${ORC_ARCH}" >&2; exit 1 ;; esac \
-    && wget "https://github.com/proxysql/orchestrator/releases/download/v${ORCHESTRATOR_CLIENT_VERSION}/orchestrator-client_${ORCHESTRATOR_CLIENT_VERSION}_${ORC_ARCH}.deb" -O /tmp/orc.deb \
+    && wget --timeout=30 --tries=5 "https://github.com/proxysql/orchestrator/releases/download/v${ORCHESTRATOR_CLIENT_VERSION}/orchestrator-client_${ORCHESTRATOR_CLIENT_VERSION}_${ORC_ARCH}.deb" -O /tmp/orc.deb \
     && apt-get install -y /tmp/orc.deb \
     && rm -rf /var/lib/apt/lists/* /tmp/orc.deb
 
