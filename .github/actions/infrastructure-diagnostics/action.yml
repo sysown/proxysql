@@ -16,6 +16,27 @@ inputs:
 runs:
   using: composite
   steps:
+    # A cancelled job leaves its containers running: the runner kills the
+    # docker client, not the container. One that mounts this workspace keeps
+    # writing root-owned files into it after the next job's checkout (.gcda
+    # files from a cancelled coverage run broke a handoff restore). Jobs
+    # never share a runner workspace, so any container mounting it is left
+    # over. Remove those first, then the files they left behind.
+    - name: Remove containers left by an earlier job
+      if: ${{ inputs.phase == 'setup' }}
+      shell: bash
+      run: |
+        command -v docker >/dev/null || exit 0
+        for id in $(timeout 10s docker ps -q 2>/dev/null); do
+          mounts=$(timeout 10s docker inspect -f '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' "$id" 2>/dev/null) || continue
+          while IFS= read -r src; do
+            [ "$src" = "$GITHUB_WORKSPACE" ] || [ "${src#"$GITHUB_WORKSPACE"/}" != "$src" ] || continue
+            echo "Removing container left by an earlier job:"
+            timeout 10s docker ps -a --filter "id=$id" --format '  {{.Names}} ({{.Image}}, {{.RunningFor}})' || true
+            timeout 20s docker rm -f "$id" >/dev/null || echo "::warning::Could not remove container $id."
+            break
+          done <<< "$mounts"
+        done
     # Self-hosted runners keep the workspace between jobs, and the test
     # containers write ci_infra_logs as root. A cancelled or killed job never
     # reaches its cleanup, so the root-owned tree stays and the next job's
