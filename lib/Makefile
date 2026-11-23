@@ -147,7 +147,7 @@ _OBJ_CXX := ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo
 	ProxySQL_PluginManager.oo ProxySQL_PluginCLI.oo ProxySQL_PluginSecrets.oo ProxySQL_PluginListenerGate.oo ProxySQL_PluginConfig.oo ProxySQL_ManagedRuntime.oo \
 	ProxySQL_ServerDiscovery.oo \
 	ProxySQL_StartupGate.oo \
-	ProxySQL_ClusterPluginHash.oo \
+	ProxySQL_ClusterPluginHash.oo ProxySQL_ClusterResultset.oo \
 	BaseSrvList.oo BaseHGC.oo Base_HostGroups_Manager.oo \
 	QP_rule_text.oo QP_query_digest_stats.oo \
 	GTID_Server_Data.oo MyHGC.oo MySrvConnList.oo MySrvC.oo \

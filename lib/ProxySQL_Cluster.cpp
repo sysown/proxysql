@@ -21,6 +21,7 @@
 #include "ProxySQL_StartupGate.h"
 #include "proxysql_admin_global_sql_lock.h"
 #include "ProxySQL_ClusterPluginHash.h"
+#include "ProxySQL_ClusterResultset.h"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -118,6 +119,39 @@ using std::string;
 static char *NODE_COMPUTE_DELIMITER=(char *)"-gtyw23a-"; // a random string used for hashing
 
 /**
+ * @brief Checks a result set a peer returned for 'query' (see ProxySQL_ClusterResultset.h).
+ * @param log Whether to log a warning when the result set cannot be used.
+ * @return True if the result set can be used.
+ */
+static bool peer_resultset_ok(MYSQL_RES* result, const char* query, const char* hostname, int port, bool log = true) {
+	std::string error {};
+	if (proxysql_cluster_check_resultset(result, query, error)) {
+		return true;
+	}
+	if (log) {
+		proxy_warning(
+			"Cluster: unexpected result set from peer %s:%d for query '%s': %s . Skipping this sync\n",
+			hostname, port, query, error.c_str()
+		);
+	}
+	return false;
+}
+
+/**
+ * @brief Monitor thread variant of peer_resultset_ok(): an unusable result set counts as a failed
+ *   query, and is logged at the same rate as query errors.
+ */
+static bool monitor_resultset_ok(
+	MYSQL_RES* result, const char* query, const ProxySQL_Node_Address* node, int& query_error_counter
+) {
+	if (peer_resultset_ok(result, query, node->hostname, node->port, query_error_counter == 0)) {
+		return true;
+	}
+	if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
+	return false;
+}
+
+/**
  * Safely updates peer information by freeing existing allocations and creating new ones
  *
  * @param existing_hostname Pointer to existing hostname allocation (may be NULL)
@@ -189,9 +223,9 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	// sync until the plugin lifecycle has finished (ProxySQL_StartupGate.h).
 	proxysql_startup_gate_wait_for_runtime([] { return glovars.shutdown != 0; });
 #endif /* PROXYSQL40 */
-	char *query1 = (char *)"SELECT GLOBAL_CHECKSUM()"; // in future this will be used for "light check"
-	char *query2 = (char *)"SELECT * FROM stats_mysql_global ORDER BY Variable_Name";
-	char *query3 = (char *)"SELECT * FROM runtime_checksums_values ORDER BY name";
+	char *query1 = (char *)CLUSTER_QUERY_GLOBAL_CHECKSUM; // in future this will be used for "light check"
+	char *query2 = (char *)CLUSTER_QUERY_METRICS;
+	char *query3 = (char *)CLUSTER_QUERY_CHECKSUMS;
 	bool rc_bool = true;
 	int query_error_counter = 0;
 	char *query_error = NULL;
@@ -295,9 +329,14 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 
 					rc_query = mysql_query(conn,query1);
 					if ( rc_query == 0 ) {
+						MYSQL_RES *result = mysql_store_result(conn);
+						if (!monitor_resultset_ok(result, query1, node, query_error_counter)) {
+							mysql_free_result(result);
+							rc_query = 1;
+							continue;
+						}
 						query_error = NULL;
 						query_error_counter = 0;
-						MYSQL_RES *result = mysql_store_result(conn);
 						//unsigned long long after_query_time=monotonic_time();
 						//unsigned long long elapsed_time_us = (after_query_time - before_query_time);
 						bool update_checksum = GloProxyCluster->Update_Global_Checksum(node->hostname, node->port, result);
@@ -309,10 +348,14 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							unsigned long long before_query_time=monotonic_time();
 							rc_query = mysql_query(conn,query3);
 							if ( rc_query == 0 ) {
-								query_error = NULL;
-								query_error_counter = 0;
 								MYSQL_RES *result = mysql_store_result(conn);
-								rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result);
+								if (monitor_resultset_ok(result, query3, node, query_error_counter)) {
+									query_error = NULL;
+									query_error_counter = 0;
+									rc_bool = GloProxyCluster->Update_Node_Checksums(node->hostname, node->port, result);
+								} else {
+									rc_query = 1;
+								}
 								mysql_free_result(result);
 							} else {
 								query_error = query3;
@@ -337,12 +380,16 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								unsigned long long before_query_time=monotonic_time();
 								rc_query = mysql_query(conn,query2);
 								if ( rc_query == 0 ) {
-									query_error = NULL;
-									query_error_counter = 0;
 									MYSQL_RES *result = mysql_store_result(conn);
-									unsigned long long after_query_time=monotonic_time();
-									unsigned long long elapsed_time_us = (after_query_time - before_query_time);
-									rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us);
+									if (monitor_resultset_ok(result, query2, node, query_error_counter)) {
+										query_error = NULL;
+										query_error_counter = 0;
+										unsigned long long after_query_time=monotonic_time();
+										unsigned long long elapsed_time_us = (after_query_time - before_query_time);
+										rc_bool = GloProxyCluster->Update_Node_Metrics(node->hostname, node->port, result, elapsed_time_us);
+									} else {
+										rc_query = 1;
+									}
 									mysql_free_result(result);
 								} else {
 									query_error = query2;
@@ -1219,6 +1266,14 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 					rc_query = mysql_query(conn,CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING);
 					if ( rc_query == 0) {
 						result2 = mysql_store_result(conn);
+					}
+					if ( rc_query == 0 && (
+						!peer_resultset_ok(result1, CLUSTER_QUERY_MYSQL_QUERY_RULES, hostname, port) ||
+						!peer_resultset_ok(result2, CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, hostname, port)
+					)) {
+						metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment();
+						fetch_failed = true;
+					} else if ( rc_query == 0) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Query Rules from peer %s:%d completed\n", hostname, port);
 						proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d completed\n", hostname, port);
 
@@ -1689,9 +1744,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching LDAP Mappings from peer %s:%d.\n", hostname, port);
 					proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d.\n", hostname, port);
 
-					rc_query = mysql_query(
-						conn, "SELECT priority, frontend_entity, backend_entity, comment FROM mysql_ldap_mapping ORDER BY priority"
-					);
+					rc_query = mysql_query(conn, CLUSTER_QUERY_MYSQL_LDAP_MAPPING);
 
 					if (rc_query == 0) {
 						ldap_mapping_result = mysql_store_result(conn);
@@ -1703,6 +1756,24 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
 						fetch_failed = true;
 					}
+				}
+
+				if (
+					!peer_resultset_ok(mysql_users_result, CLUSTER_QUERY_MYSQL_USERS, hostname, port) ||
+					(ldap_mapping_result && !peer_resultset_ok(ldap_mapping_result, CLUSTER_QUERY_MYSQL_LDAP_MAPPING, hostname, port))
+				) {
+					if (mysql_users_result) {
+						mysql_free_result(mysql_users_result);
+					}
+					if (ldap_mapping_result) {
+						mysql_free_result(ldap_mapping_result);
+					}
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
+					if (GloMyLdapAuth) {
+						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
+					}
+					fetch_failed = true;
+					goto __exit_pull_mysql_users_from_peer;
 				}
 
 				unique_ptr<SQLite3_result> mysql_users_resultset { nullptr };
@@ -1810,7 +1881,8 @@ __exit_pull_mysql_users_from_peer:
  *   2. Message to display when the operation is complete.
  *   3. Message to display in case the query fails to be executed.
  * @param result The result of the executed query.
- * @return int The errno in case fo the query execution not being successful,
+ * @return int The errno in case fo the query execution not being successful, -1 if the peer
+ *  returned a result set that does not match the query (see ProxySQL_ClusterResultset.h),
  *  zero otherwise.
  */
 int ProxySQL_Cluster::fetch_and_store(MYSQL* conn, const fetch_query& f_query, MYSQL_RES** result) {
@@ -1827,6 +1899,16 @@ int ProxySQL_Cluster::fetch_and_store(MYSQL* conn, const fetch_query& f_query, M
 	if (query_res == 0) {
 		*result = mysql_store_result(conn);
 		query_res = mysql_errno(conn);
+		if (query_res == 0 && !peer_resultset_ok(*result, query, conn->host, conn->port)) {
+			if (*result) {
+				mysql_free_result(*result);
+				*result = nullptr;
+			}
+			if (f_query.failure_counter != p_cluster_counter::metric(-1)) {
+				metrics.p_counter_array[f_query.failure_counter]->Increment();
+			}
+			query_res = -1;
+		}
 	} else {
 		// report error
 		if (!msgs[2].empty()) {
@@ -2070,6 +2152,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						mysql_free_result(result);
 						result = nullptr;
 					}
+					fetch_failed = true;
 				}
 
 				if (result != nullptr) {
@@ -2813,7 +2896,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
 				std::string s_query = "";
-				string_format("SELECT * FROM runtime_global_variables WHERE variable_name LIKE '%s-%%'", s_query, var_type.c_str());
+				string_format(CLUSTER_QUERY_GLOBAL_VARIABLES " WHERE variable_name LIKE '%s-%%'", s_query, var_type.c_str());
 				if (var_type == "mysql") {
 					s_query += " AND variable_name NOT IN ('mysql-threads')";
 				}
@@ -2831,6 +2914,12 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 
 				if (rc_query == 0) {
 					MYSQL_RES *result = mysql_store_result(conn);
+					if (!peer_resultset_ok(result, CLUSTER_QUERY_GLOBAL_VARIABLES, hostname, port)) {
+						mysql_free_result(result);
+						metrics.p_counter_array[failure_metric]->Increment();
+						fetch_failed = true;
+						goto __exit_pull_mysql_variables_from_peer;
+					}
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching %s Variables from peer %s:%d completed\n", vars_type_str, hostname, port);
 					proxy_info("Cluster: Fetching %s Variables from peer %s:%d completed\n", vars_type_str, hostname, port);
 
@@ -2922,6 +3011,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 							"Cluster: Fetching %s Variables from peer %s:%d failed: Checksum changed from %s to %s\n",
 							vars_type_str, hostname, port, expected_checksum.c_str(), computed_checksum.c_str()
 						);
+						mysql_free_result(result);
 						metrics.p_counter_array[failure_metric]->Increment();
 						fetch_failed = true;
 					}
@@ -2989,9 +3079,15 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
-				int rc_query = mysql_query(conn,"SELECT hostname, port, weight, comment FROM runtime_proxysql_servers ORDER BY hostname, port");
+				int rc_query = mysql_query(conn, CLUSTER_QUERY_PROXYSQL_SERVERS);
 				if ( rc_query == 0 ) {
 					MYSQL_RES* result = mysql_store_result(conn);
+					if (!peer_resultset_ok(result, CLUSTER_QUERY_PROXYSQL_SERVERS, hostname, port)) {
+						mysql_free_result(result);
+						metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();
+						fetch_failed = true;
+						goto __exit_pull_proxysql_servers_from_peer;
+					}
 					uint64_t proxy_servers_hash = mysql_raw_checksum(result);
 					const string computed_cks { get_checksum_from_hash(proxy_servers_hash) };
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching ProxySQL Servers from peer %s:%d completed. Computed checksum: %s\n", hostname, port, computed_cks.c_str());
@@ -3167,6 +3263,13 @@ void ProxySQL_Cluster::pull_pgsql_users_from_peer(const std::string& expected_ch
 					goto __exit_pull_pgsql_users_from_peer;
 				}
 
+				if (!peer_resultset_ok(pgsql_users_result, CLUSTER_QUERY_PGSQL_USERS, hostname, port)) {
+					mysql_free_result(pgsql_users_result);
+					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_users_failure]->Increment();
+					fetch_failed = true;
+					goto __exit_pull_pgsql_users_from_peer;
+				}
+
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching PostgreSQL Users from peer %s:%d completed\n", hostname, port);
 				proxy_info("Cluster: Fetching PostgreSQL Users from peer %s:%d completed\n", hostname, port);
 
@@ -3273,6 +3376,13 @@ void ProxySQL_Cluster::pull_pgsql_variables_from_peer(const std::string& expecte
 				MYSQL_RES* pgsql_variables_result = mysql_store_result(conn);
 				if (pgsql_variables_result == nullptr) {
 					proxy_error("mysql_store_result returned NULL for pgsql_variables from peer %s:%d\n", hostname, port);
+					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_variables_failure]->Increment();
+					fetch_failed = true;
+					goto __exit_pull_pgsql_variables_from_peer;
+				}
+
+				if (!peer_resultset_ok(pgsql_variables_result, CLUSTER_QUERY_PGSQL_VARIABLES, hostname, port)) {
+					mysql_free_result(pgsql_variables_result);
 					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_variables_failure]->Increment();
 					fetch_failed = true;
 					goto __exit_pull_pgsql_variables_from_peer;
@@ -3463,6 +3573,17 @@ void ProxySQL_Cluster::pull_pgsql_query_rules_from_peer(const std::string& expec
 					if (query_rules_result) {
 						mysql_free_result(query_rules_result);
 					}
+					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_query_rules_failure]->Increment();
+					fetch_failed = true;
+					goto __exit_pull_pgsql_query_rules_from_peer;
+				}
+
+				if (
+					!peer_resultset_ok(query_rules_result, CLUSTER_QUERY_PGSQL_QUERY_RULES, hostname, port) ||
+					!peer_resultset_ok(fast_routing_result, CLUSTER_QUERY_PGSQL_QUERY_RULES_FAST_ROUTING, hostname, port)
+				) {
+					mysql_free_result(query_rules_result);
+					mysql_free_result(fast_routing_result);
 					metrics.p_counter_array[p_cluster_counter::pulled_pgsql_query_rules_failure]->Increment();
 					fetch_failed = true;
 					goto __exit_pull_pgsql_query_rules_from_peer;
