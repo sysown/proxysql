@@ -663,7 +663,6 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	embedded_pgsql_result_unit-t \
 	embedded_pgsql_prepared_unit-t \
 	embedded_pgsql_frontend_unit-t \
-	embedded_mysql_prepared_unit-t \
 	embedded_mysql_result_unit-t \
 	duckdb_prepared_adapter_unit-t \
 	duckdb_mysql_set_unit-t \
@@ -760,6 +759,9 @@ include $(PROXYSQL_PATH)/test/tap/ai_genai_unit_tests.mk
 # mysqlx plugin source references chassis types, so none of these are
 # compilable under !PROXYSQL40.
 ifeq ($(PROXYSQL40),1)
+# The embedded SQLite adapter (Admin and STATS prepared statements) is linked into libproxysql.a
+# only with PROXYSQL40 (lib/Makefile).
+UNIT_TESTS += embedded_mysql_prepared_unit-t
 # AWS IAM backend authentication is compiled only with PROXYSQL40.
 UNIT_TESTS += aws_iam_policy_unit-t aws_iam_connection_config_unit-t \
 	aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t \
