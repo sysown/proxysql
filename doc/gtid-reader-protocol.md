@@ -1,8 +1,8 @@
-# GTID reader wire contract
+# GTID reader protocol
 
 ProxySQL routes causal reads by asking which servers already hold a GTID. It
 learns that from a plain-text stream on each server's `gtid_port`. The usual
-sender is `proxysql_binlog_reader`, but any program that follows this contract
+sender is `proxysql_binlog_reader`, but any program that follows these rules
 can report progress for a read target.
 
 This page describes the behavior of `GTID_Server_Data` in
@@ -65,7 +65,7 @@ An empty `ST=` is valid and means the target holds nothing yet.
 - Other lines are currently ignored. Do not rely on this: a future version may
   give them a meaning.
 
-## What an advertised GTID promises
+## What reporting a GTID means
 
 Reporting a GTID means: **a read served by this target now reflects that
 transaction, for every table the target can serve.**
