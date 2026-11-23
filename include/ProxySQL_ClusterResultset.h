@@ -7,9 +7,14 @@
  *
  * The Cluster code reads each peer result set by fixed column index, and parses most columns with
  * atoll()/strcmp(). A peer that answers with fewer columns, or with NULL in a column the code parses,
- * made ProxySQL read past the row or dereference NULL. Every result set a peer returns is now checked
- * against the definition of its query (exact column count, and the columns that must not be NULL)
- * before any of it is used. A result set that does not match fails the sync, as a failed query does.
+ * made ProxySQL read past the row or dereference NULL. The result sets of the monitor and sync queries
+ * are now checked against the definition of their query (exact column count, and the columns that
+ * must not be NULL) before any of it is used. A result set that does not match fails the sync, as a
+ * failed query does.
+ *
+ * The peer identity query ("SELECT @@version", or PROXYSQL_CLUSTER_PEER_IDENTITY_QUERY on v4.0) is
+ * not listed here: its answer decides whether the node is a peer at all, and the handshake checks it
+ * where it reads it (NULL version, and the column count before reading the plugin-set hash).
  *
  * The columns that must not be NULL are exactly the NOT NULL columns of the table each query reads,
  * so a healthy peer always passes. unit/cluster_resultset_unit-t checks the definitions against the

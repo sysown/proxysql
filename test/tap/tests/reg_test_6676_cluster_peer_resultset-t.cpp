@@ -85,6 +85,11 @@ bool set_rule(MYSQL* admin, int rule_id, const string& replace) {
 		admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 }
 
+/** @brief Value of admin variable 'name' in 'table' ('global_variables' or 'runtime_global_variables'). */
+std::vector<string> admin_variable(MYSQL* admin, const string& table, const string& name) {
+	return first_row(admin, "SELECT variable_value FROM " + table + " WHERE variable_name=" + sql_quote(name));
+}
+
 bool proxysql_alive(MYSQL* admin) {
 	return !first_row(admin, "SELECT 1").empty();
 }
@@ -120,14 +125,19 @@ int main(int argc, char** argv) {
 		"SELECT variable_value FROM global_variables WHERE variable_name='mysql-interfaces'");
 	const std::vector<string> hostgroup = first_row(admin,
 		"SELECT default_hostgroup FROM mysql_users WHERE username=" + sql_quote(cl.username));
-	const std::vector<string> saved_user = first_row(admin,
-		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_username'");
-	const std::vector<string> saved_pass = first_row(admin,
-		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_password'");
-	const std::vector<string> saved_interval = first_row(admin,
-		"SELECT variable_value FROM global_variables WHERE variable_name='admin-cluster_check_interval_ms'");
-	if (identity.empty() || mysql_iface.empty() || hostgroup.empty() || saved_user.empty() || saved_pass.empty() ||
-		saved_interval.empty()) {
+	// The admin variables the test changes, in memory and at runtime: they are restored separately.
+	const std::vector<string> changed_vars {
+		"admin-cluster_username", "admin-cluster_password", "admin-cluster_check_interval_ms" };
+	std::vector<string> saved_memory {};
+	std::vector<string> saved_runtime {};
+	for (const auto& v : changed_vars) {
+		const std::vector<string> mem = admin_variable(admin, "global_variables", v);
+		const std::vector<string> run = admin_variable(admin, "runtime_global_variables", v);
+		if (mem.empty() || run.empty()) BAIL_OUT("Unable to read %s", v.c_str());
+		saved_memory.push_back(mem[0]);
+		saved_runtime.push_back(run[0]);
+	}
+	if (identity.empty() || mysql_iface.empty() || hostgroup.empty()) {
 		BAIL_OUT("Unable to read the current configuration");
 	}
 	const string& version = identity[0];
@@ -136,12 +146,22 @@ int main(int argc, char** argv) {
 	const string peer_user = PEER_USER;
 	const string peer_pass = PEER_PASS;
 	bool backend_user = false;
+	bool created_backend_user = false;
 	{
 		MYSQL* backend = mysql_init(NULL);
 		if (mysql_real_connect(backend, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
-			backend_user = mysql_query(backend, ("CREATE USER IF NOT EXISTS " + sql_quote(peer_user) + "@'%' IDENTIFIED BY " +
-				sql_quote(peer_pass)).c_str()) == 0;
-			if (!backend_user) diag("CREATE USER failed: %s", mysql_error(backend));
+			// An existing account is used as is, and left in place.
+			const bool exists = !first_row(backend, "SELECT 1 FROM mysql.user WHERE user=" + sql_quote(peer_user) +
+				" AND host='%'").empty();
+			if (exists) {
+				diag("Backend user '%s' already exists: using it, it is not dropped", peer_user.c_str());
+				backend_user = true;
+			} else {
+				backend_user = mysql_query(backend, ("CREATE USER " + sql_quote(peer_user) + "@'%' IDENTIFIED BY " +
+					sql_quote(peer_pass)).c_str()) == 0;
+				created_backend_user = backend_user;
+				if (!backend_user) diag("CREATE USER failed: %s", mysql_error(backend));
+			}
 		} else {
 			diag("Backend connection to %s:%d failed: %s", cl.mysql_host, cl.mysql_port, mysql_error(backend));
 		}
@@ -247,23 +267,32 @@ int main(int argc, char** argv) {
 	}
 
 	// Cleanup: stop the monitor first, then restore the configuration.
-	// An empty 'admin-cluster_username' cannot be set back; the isolated infra always sets one.
-	if (saved_user[0].empty()) diag("Cluster credentials were empty: they stay set to '%s'", peer_user.c_str());
 	bool cleanup = admin_exec(admin, "DELETE FROM proxysql_servers WHERE comment=" + sql_quote(PEER_COMMENT)) &&
-		admin_exec(admin, "LOAD PROXYSQL SERVERS TO RUNTIME") &&
-		(saved_user[0].empty() || admin_exec(admin, "SET admin-cluster_username=" + sql_quote(saved_user[0]))) &&
-		(saved_pass[0].empty() || admin_exec(admin, "SET admin-cluster_password=" + sql_quote(saved_pass[0]))) &&
-		admin_exec(admin, "SET admin-cluster_check_interval_ms=" + saved_interval[0]) &&
-		admin_exec(admin, "LOAD ADMIN VARIABLES TO RUNTIME") &&
-		admin_exec(admin, "DELETE FROM mysql_query_rules WHERE rule_id BETWEEN " + std::to_string(RULE_BASE) +
+		admin_exec(admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+	// The runtime values first (SET + LOAD), then the memory values (SET only). An empty
+	// 'admin-cluster_username' or 'admin-cluster_password' cannot be set back; the isolated infra
+	// always sets them.
+	for (const auto* saved : { &saved_runtime, &saved_memory }) {
+		for (size_t i = 0; i < changed_vars.size(); i++) {
+			if ((*saved)[i].empty()) {
+				diag("%s was empty: it cannot be set back", changed_vars[i].c_str());
+				continue;
+			}
+			cleanup = admin_exec(admin, "SET " + changed_vars[i] + "=" + sql_quote((*saved)[i])) && cleanup;
+		}
+		if (saved == &saved_runtime) {
+			cleanup = admin_exec(admin, "LOAD ADMIN VARIABLES TO RUNTIME") && cleanup;
+		}
+	}
+	cleanup = admin_exec(admin, "DELETE FROM mysql_query_rules WHERE rule_id BETWEEN " + std::to_string(RULE_BASE) +
 			" AND " + std::to_string(RULE_BASE + 99)) &&
 		admin_exec(admin, "LOAD MYSQL QUERY RULES TO RUNTIME") &&
 		admin_exec(admin, "DELETE FROM mysql_users WHERE comment=" + sql_quote(PEER_COMMENT)) &&
-		admin_exec(admin, "LOAD MYSQL USERS TO RUNTIME");
-	{
+		admin_exec(admin, "LOAD MYSQL USERS TO RUNTIME") && cleanup;
+	if (created_backend_user) {
 		MYSQL* backend = mysql_init(NULL);
 		if (mysql_real_connect(backend, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
-			cleanup = mysql_query(backend, ("DROP USER IF EXISTS " + sql_quote(peer_user) + "@'%'").c_str()) == 0 && cleanup;
+			cleanup = mysql_query(backend, ("DROP USER " + sql_quote(peer_user) + "@'%'").c_str()) == 0 && cleanup;
 		} else {
 			cleanup = false;
 		}

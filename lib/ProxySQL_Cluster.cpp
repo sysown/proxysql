@@ -1758,10 +1758,12 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 					}
 				}
 
-				if (
-					!peer_resultset_ok(mysql_users_result, CLUSTER_QUERY_MYSQL_USERS, hostname, port) ||
-					(ldap_mapping_result && !peer_resultset_ok(ldap_mapping_result, CLUSTER_QUERY_MYSQL_LDAP_MAPPING, hostname, port))
-				) {
+				// With LDAP, 'rc_query' is the result of the LDAP mapping query. A failed LDAP query
+				// fails the sync too: it was already logged and counted above.
+				const bool users_ok = peer_resultset_ok(mysql_users_result, CLUSTER_QUERY_MYSQL_USERS, hostname, port);
+				const bool ldap_ok = GloMyLdapAuth == nullptr || (rc_query == 0 &&
+					peer_resultset_ok(ldap_mapping_result, CLUSTER_QUERY_MYSQL_LDAP_MAPPING, hostname, port));
+				if (!users_ok || !ldap_ok) {
 					if (mysql_users_result) {
 						mysql_free_result(mysql_users_result);
 					}
@@ -1769,7 +1771,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 						mysql_free_result(ldap_mapping_result);
 					}
 					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
-					if (GloMyLdapAuth) {
+					if (GloMyLdapAuth && rc_query == 0) {
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
 					}
 					fetch_failed = true;
