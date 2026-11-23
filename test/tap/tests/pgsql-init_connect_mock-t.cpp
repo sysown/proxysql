@@ -75,6 +75,11 @@ static void run_mode(PGconn* admin, bool native) {
 	   native, r.value.c_str(), r.ok ? "" : mock.last_error().c_str());
 	ok(mock.connections_accepted() == 2,
 	   "[native=%d] ProxySQL retried on a new connection (%d connections)", native, mock.connections_accepted());
+	// The first connection must have dropped on init_connect, not on the client's query: had
+	// init_connect been skipped, that connection would have taken the query too.
+	ok(mock.queries_observed() == 1,
+	   "[native=%d] the client's query reached only the second connection (%d deliveries)",
+	   native, mock.queries_observed());
 
 	client.reset();
 	ic_admin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(kHg));
@@ -91,9 +96,9 @@ int main(int, char**) {
 	PGConnPtr admin_conn = ic_connect_admin(cl);
 	PGconn* admin = admin_conn.get();
 	if (PQstatus(admin) != CONNECTION_OK) return exit_status();
-	plan(4);
+	plan(6);
 	if (!ic_is_v31(admin)) {
-		skip(4, "init_connect needs ProxySQL v3.1+");
+		skip(6, "init_connect needs ProxySQL v3.1+");
 		return exit_status();
 	}
 
