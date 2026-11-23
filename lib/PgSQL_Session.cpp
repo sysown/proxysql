@@ -4671,6 +4671,8 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
 			client_myds->ssl = GloVars.get_SSL_new();
+			// Keep records within libpq's guaranteed read window. See PGSQL_TLS_MAX_SEND_FRAGMENT.
+			SSL_set_max_send_fragment(client_myds->ssl, PGSQL_TLS_MAX_SEND_FRAGMENT);
 			SSL_set_fd(client_myds->ssl, client_myds->fd);
 			SSL_set_accept_state(client_myds->ssl);
 			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
