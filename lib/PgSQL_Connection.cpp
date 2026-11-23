@@ -3652,7 +3652,15 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 	} else {
 		int r = native_recv_into_framer();
 		if (r < 0) {
-			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch");
+			// A FATAL the backend sent just before closing (recorded below) is the reason, as
+			// with libpq; the close on its own only says the backend went away.
+			const PGSQL_ERROR_SEVERITY sev = get_error_severity();
+			if (is_error_present() &&
+				(sev == PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL || sev == PGSQL_ERROR_SEVERITY::ERRSEVERITY_PANIC)) {
+				native_result_backend_closed();
+			} else {
+				native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch");
+			}
 			return;
 		}
 		if (r == 0) {
@@ -4013,6 +4021,15 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				count_bytes(query_result->add_native_data_rows(msg.payload - 5, row_size + extra, rows));
 				if (pause_after('D')) return;
 				continue;
+			}
+
+			// A killed backend (57P01, 57P05) sends its FATAL and closes, with no ReadyForQuery.
+			// Record it, so the close above reports it instead of a bare connection failure.
+			if (msg.type == 'E') {
+				const PgSQLErrorResult e = pgsql_parse_error_response(msg.payload, msg.payload_len);
+				if (e.severity_len == 5 && (memcmp(e.severity, "FATAL", 5) == 0 || memcmp(e.severity, "PANIC", 5) == 0)) {
+					native_fill_error_from_E(msg.payload, msg.payload_len);
+				}
 			}
 
 			// Native simple queries collect all results through ReadyForQuery.
