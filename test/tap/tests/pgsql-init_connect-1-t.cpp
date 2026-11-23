@@ -87,9 +87,9 @@ static void run_mode(PGconn* admin, bool native) {
 	r = ic_query(c3.get(), IC_MARKER);
 	ok(!r.timed_out && !r.ok, "[native=%d] SELECT 1 init_connect fails the query", native);
 	ic_set_global(admin, "SET ic.marker TO 'global'");
-	// With a valid init_connect again, only a closed session can still fail.
+	// With a valid init_connect again, a closed session still fails, and libpq saw it close (not a hang).
 	r = ic_query(c3.get(), IC_MARKER);
-	ok(!r.timed_out && !r.ok, "[native=%d] and closes the session", native);
+	ok(!r.timed_out && !r.ok && PQstatus(c3.get()) == CONNECTION_BAD, "[native=%d] and closes the session", native);
 	PGConnPtr c4 = ic_connect_client(cl);
 	r = ic_query(c4.get(), IC_MARKER);
 	ok(!ic_admin_value(admin, "SELECT 1").empty() && r.ok && r.value == "global",
@@ -139,7 +139,7 @@ static void run_mode(PGconn* admin, bool native) {
 	r = ic_query(m2.get(), IC_MARKER);
 	ic_set_global(admin, "SET ic.marker TO 'global'");
 	after = ic_query(m2.get(), IC_MARKER);
-	ok(!r.timed_out && !r.ok && !after.ok,
+	ok(!r.timed_out && !r.ok && !after.ok && PQstatus(m2.get()) == CONNECTION_BAD,
 	   "[native=%d] rows from a later statement close the session", native);
 
 	ic_set_global(admin, "SET ic.a TO '1'; SET ic.b TO '2'");

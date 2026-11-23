@@ -83,7 +83,7 @@ static void run_v31(PGconn* admin) {
 	ok(!r.timed_out && !r.ok, "SELECT 1 hostgroup init_connect fails the query");
 	ic_set_hostgroups(admin, "SET ic.marker TO 'hg'");
 	r = ic_query(c2.get(), IC_MARKER);
-	ok(!r.timed_out && !r.ok, "and closes the session (PMC-10003)");
+	ok(!r.timed_out && !r.ok && PQstatus(c2.get()) == CONNECTION_BAD, "and closes the session (PMC-10003)");
 
 	ic_set_hostgroups(admin, "SELECT pg_sleep(3)");
 	PGConnPtr c3 = ic_connect_client(cl);
