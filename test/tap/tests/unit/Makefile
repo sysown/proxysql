@@ -605,17 +605,12 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	backend_unplug_unit-t \
 	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
-	mysql_compressed_output_ring_unit-t \
-	mysql_output_span_unit-t \
-	pgsql_output_span_unit-t \
 	pgsql_stable_io_unit-t \
-	pgsql_alpn_unit-t \
-	pgsql_start_client_tls_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	str_ends_with_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t pgsql_result_flush_allocation_unit-t pgsql_scheduler_contract_unit-t query_processor_unit-t digest_stats_unit-t \
 	gtid_local_cache_unit-t gtid_writer_fallback_route_unit-t mysql_resultset_add_row2_unit-t \
-	protocol_unit-t auth_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
+	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
 	stmt_execute_shared_decoder_unit-t \
 	stmt_prepare_shared_response_unit-t \
@@ -625,7 +620,6 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
 	pgsql_command_complete_unit-t \
 	pgsql_extq_batch_unit-t \
-	ffto_protocol_unit-t \
 	server_selection_unit-t \
   hostgroup_routing_unit-t \
 	transaction_state_unit-t \
@@ -652,21 +646,6 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_poison_rollback_cancel_unit-t \
 	pgsql_conn_liveness_unit-t \
 	sqlite3db_unit-t \
-	embedded_sqlite_adapter_unit-t \
-	embedded_sqlite_pg_profile_unit-t \
-	embedded_parameter_positions_unit-t \
-	embedded_prepared_unit-t \
-	embedded_quota_unit-t \
-	embedded_plugin_adapter_unit-t \
-	embedded_plugin_service_unit-t \
-	embedded_pgsql_value_unit-t \
-	embedded_pgsql_result_unit-t \
-	embedded_pgsql_prepared_unit-t \
-	embedded_pgsql_frontend_unit-t \
-	embedded_mysql_result_unit-t \
-	duckdb_prepared_adapter_unit-t \
-	duckdb_mysql_set_unit-t \
-	duckdb_prepared_provider_unit-t \
 	pgsql_error_helper_unit-t \
 	pgsql_native_params_unit-t \
 	pgsql_native_tier_policy_unit-t \
@@ -714,7 +693,6 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	connection_unhealthy_unit-t \
 	connection_max_age_unit-t latency_awareness_selection_unit-t \
 	cluster_sync_unit-t cluster_admin_lock_order_unit-t \
-	genai_sql_readonly_unit-t \
 	parsersql_unit-t parsersql_v30_flow_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
@@ -723,17 +701,11 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_set_transaction_characteristics_unit-t \
 	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
-	mysql_resultset_framer_unit-t \
-	mysql_resultset_framer_traffic_unit-t \
-	pgsql_response_framer_unit-t \
-	pgsql_response_framer_traffic_unit-t \
 	pgsql_reconcile_unit-t \
-	ffto_state_machine_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	restapi_tls_config_unit-t \
-	mcp_client_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
@@ -741,6 +713,12 @@ UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t modu
 UNIT_TESTS += worker_scheduler_cost_unit-t
 
 ifeq ($(PROXYSQL31),1)
+# Tagged @proxysql_min_version:3.1 in groups.json.
+UNIT_TESTS += \
+	ffto_protocol_unit-t ffto_state_machine_unit-t mysql_compressed_output_ring_unit-t \
+	mysql_output_span_unit-t mysql_resultset_framer_traffic_unit-t mysql_resultset_framer_unit-t \
+	pgsql_alpn_unit-t pgsql_output_span_unit-t pgsql_response_framer_traffic_unit-t \
+	pgsql_response_framer_unit-t pgsql_start_client_tls_unit-t
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
 UNIT_TESTS += digest_memory_size_unit-t
 endif
@@ -759,9 +737,16 @@ include $(PROXYSQL_PATH)/test/tap/ai_genai_unit_tests.mk
 # mysqlx plugin source references chassis types, so none of these are
 # compilable under !PROXYSQL40.
 ifeq ($(PROXYSQL40),1)
-# The embedded SQLite adapter (Admin and STATS prepared statements) is linked into libproxysql.a
-# only with PROXYSQL40 (lib/Makefile).
-UNIT_TESTS += embedded_mysql_prepared_unit-t
+# Tagged @proxysql_min_version:4.0 in groups.json: the embedded engines and DuckDB (reached only
+# through the plugin chassis), AWS locality, GenAI and MCP.
+UNIT_TESTS += embedded_mysql_prepared_unit-t \
+	aws_locality_manager_unit-t aws_locality_policy_unit-t duckdb_mysql_set_unit-t \
+	duckdb_prepared_adapter_unit-t duckdb_prepared_provider_unit-t embedded_mysql_result_unit-t \
+	embedded_parameter_positions_unit-t embedded_pgsql_frontend_unit-t embedded_pgsql_prepared_unit-t \
+	embedded_pgsql_result_unit-t embedded_pgsql_value_unit-t embedded_plugin_adapter_unit-t \
+	embedded_plugin_service_unit-t embedded_prepared_unit-t embedded_quota_unit-t \
+	embedded_sqlite_adapter_unit-t embedded_sqlite_pg_profile_unit-t genai_sql_readonly_unit-t \
+	mcp_client_unit-t
 # AWS IAM backend authentication is compiled only with PROXYSQL40.
 UNIT_TESTS += aws_iam_policy_unit-t aws_iam_connection_config_unit-t \
 	aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t \
