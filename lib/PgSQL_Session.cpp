@@ -1414,7 +1414,9 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				// Drop the connection first: no client statement ran on it, so a transaction it holds
 				// (an init_connect such as "BEGIN; ...") is ProxySQL's. Left in place, the client's
 				// transaction state below would count it and poison a client that never opened one.
-				myds->destroy_MySQL_Connection_From_Pool(true);
+				// Initialization already failed: close directly. Graceful destruction would
+				// treat ASYNC_QUERY_END as in-flight work and open a termination connection.
+				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd = 0;
 				client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), errcode.c_str(), false,
 					false, NULL, txn_state_for_local_error(true));

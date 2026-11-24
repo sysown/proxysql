@@ -98,7 +98,7 @@ static void run_backend_errors(PGconn* admin, bool native) {
 		{ "42601", false, true }, // ordinary error must survive EOF
 		{ "08P01", true, true },  // backend class 08 is not a transport failure
 		{ "P0001", true, true },  // backend RAISE is not libpq's fallback error
-		{ "ZX001", false, false }, // preserve an SQLSTATE outside the built-in enum
+		{ "ZX001", false, false }, // preserve raw SQLSTATE; cleanup must close without another connection
 	};
 	for (const Case& tc : cases) {
 		PgSQL_Mock_Backend mock;
