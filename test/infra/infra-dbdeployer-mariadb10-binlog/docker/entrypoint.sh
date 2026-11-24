@@ -92,6 +92,7 @@ dbdeployer deploy replication "${MYSQL_VERSION}" \
     --base-port=3305 \
     -c log-slave-updates \
     -c max_connections=500 \
+    -c innodb_use_native_aio=0 \
     -c max_binlog_size=100M \
     -c plugin_load_add=ha_blackhole \
     -c binlog_format=ROW \

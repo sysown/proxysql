@@ -1875,6 +1875,8 @@ bool PgSQL_Data_Stream::start_client_tls() {
 		proxy_error("Cannot start TLS for client %s:%d: out of memory\n", addr.addr, addr.port);
 		return false;
 	}
+	// Keep records within libpq's guaranteed read window. See PGSQL_TLS_MAX_SEND_FRAGMENT.
+	SSL_set_max_send_fragment(ssl, PGSQL_TLS_MAX_SEND_FRAGMENT);
 	DSS = STATE_SSL_INIT;
 #ifdef PROXYSQL31
 	tls13_handshake_complete = false;
