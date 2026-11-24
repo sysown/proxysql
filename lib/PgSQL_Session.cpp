@@ -1375,14 +1375,9 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				myconn->parent->port,
 				myconn->get_simple_command_error_code_str(rc)
 			);
-			// As in MySQL, only a connection lost without an error from the backend is retried.
-			// ProxySQL records that loss as connection_exception (class 08), and libpq as
-			// raise_exception when it got no SQLSTATE. Any other error came from the backend (e.g.
-			// FATAL 57P01 from pg_terminate_backend()): every new connection would end the same
-			// way, so the error goes to the client, below, even when the connection is gone.
-			const bool backend_error = error_present &&
-				strncmp(myconn->get_error_code_str(), "08", 2) != 0 &&
-				myconn->get_error_code() != PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION;
+			// A backend can send class 08 or P0001 itself. Only transport failures without
+			// a backend ErrorResponse are retryable, regardless of their SQLSTATE.
+			const bool backend_error = myconn->has_backend_error();
 			// rc == -2 is PMC-10003: init_connect returned rows. Retrying only repeats the
 			// same reply, so the session is terminated.
 			if (rc == -2 || error_present == false ||
@@ -1415,13 +1410,13 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				// we won't go back to PROCESSING_QUERY
 				previous_status.pop();
 				const std::string errmsg = myconn->get_error_message();
-				const PGSQL_ERROR_CODES errcode = myconn->get_error_code();
+				const std::string errcode = myconn->get_error_code_str();
 				// Drop the connection first: no client statement ran on it, so a transaction it holds
 				// (an init_connect such as "BEGIN; ...") is ProxySQL's. Left in place, the client's
 				// transaction state below would count it and poison a client that never opened one.
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd = 0;
-				client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), errcode, false,
+				client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), errcode.c_str(), false,
 					false, NULL, txn_state_for_local_error(true));
 				// The rest of an extended-query unit goes too: left queued, it would run ahead of
 				// the client's next unit and fail it (as give_up_waiting() does).

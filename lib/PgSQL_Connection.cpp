@@ -1830,16 +1830,17 @@ void PgSQL_Connection::native_result_fatal(const char* code, const char* message
 	native_result_complete = true;   // nothing more will come from this connection
 }
 
-// A killed backend sends its FATAL (57P01, 57P05) just before it closes. Keep that as the
-// reason; the close on its own only says the backend went away.
+// Keep any recorded backend error when EOF follows it before ReadyForQuery.
+// The close on its own only says the backend went away.
 void PgSQL_Connection::native_result_backend_closed() {
 	if (!is_error_present()) {
 		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed the connection");
 		return;
 	}
-	const std::string code = get_error_code_str();
-	const std::string message = get_error_message();
-	native_result_fatal(code.c_str(), message.c_str());
+	// Teardown must not replace the error or its origin and severity.
+	native_result_aborted = true;
+	native_teardown();
+	native_result_complete = true;
 }
 
 // A failed send() after login means the socket is dead (ECONNRESET / EPIPE), so it gets the
@@ -2891,6 +2892,7 @@ void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, ui
 		}
 	}
 	PgSQL_Error_Helper::fill_error_info(error_info, sqlstate.c_str(), message.c_str(), severity.c_str());
+	error_from_backend = true;
 }
 
 void PgSQL_Connection::native_drive_auth(short /*event*/) {
@@ -3653,15 +3655,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 	} else {
 		int r = native_recv_into_framer();
 		if (r < 0) {
-			// A FATAL the backend sent just before closing (recorded below) is the reason, as
-			// with libpq; the close on its own only says the backend went away.
-			const PGSQL_ERROR_SEVERITY sev = get_error_severity();
-			if (is_error_present() &&
-				(sev == PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL || sev == PGSQL_ERROR_SEVERITY::ERRSEVERITY_PANIC)) {
-				native_result_backend_closed();
-			} else {
-				native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch");
-			}
+			native_result_backend_closed();
 			return;
 		}
 		if (r == 0) {
@@ -6460,6 +6454,7 @@ std::map<std::string, std::vector<std::string>> PgSQL_Connection::parse_pq_error
 }
 
 void PgSQL_Connection::set_error_from_PQerrorMessage() {
+	error_from_backend = false;
 	const char* raw_msg = PQerrorMessage(pgsql_conn);
 	if (raw_msg == nullptr) {
 		PgSQL_Error_Helper::fill_error_info(error_info, PGSQL_ERROR_CODES::ERRCODE_INTERNAL_ERROR, "Unknown error",
@@ -6487,6 +6482,7 @@ void PgSQL_Connection::set_error_from_PQerrorMessage() {
 	std::string_view primary_msg = lookup("M", "");
 	std::string_view lib_errmsg = lookup("LE", "");
 	error_without_sqlstate = lookup("C", "").empty();
+	error_from_backend = !error_without_sqlstate;
 
 	// we are currently distinguishing between server errors and library-generated errors. 
 	// A library-generated error is only set when a server error is not available.

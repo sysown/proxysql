@@ -466,6 +466,11 @@ public:
 	}
 
 	inline
+	bool has_backend_error() const {
+		return is_error_present() && error_from_backend;
+	}
+
+	inline
 	PGSQL_ERROR_SEVERITY get_error_severity() const {
 		return error_info.severity;
 	}
@@ -535,10 +540,12 @@ public:
 	}
 
 	void set_error(const char* code, const char* message, bool is_fatal) {
+		error_from_backend = false;
 		PgSQL_Error_Helper::fill_error_info(error_info, code, message, is_fatal ? "FATAL" : "ERROR");
 	}
 
 	void set_error(PGSQL_ERROR_CODES code, const char* message, bool is_fatal) {
+		error_from_backend = false;
 		PgSQL_Error_Helper::fill_error_info(error_info, code, message, is_fatal ? 
 			PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL : PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR);
 	}
@@ -553,12 +560,13 @@ public:
 	void set_error_from_result(const PGresult* result, uint16_t ext_fields = 0) {
 		if (is_error_result_valid(result)) { 
 			PgSQL_Error_Helper::fill_error_info(error_info, result, ext_fields);
+			error_from_backend = true;
 		} else {
 			set_error_from_PQerrorMessage();
 		}
 	}
 
-	void reset_error() { reset_error_info(error_info, false); error_without_sqlstate = false; }
+	void reset_error() { reset_error_info(error_info, false); error_without_sqlstate = false; error_from_backend = false; }
 
 	bool reset_session_in_txn = false;
 	bool reset_session_in_pipeline = false;
@@ -819,6 +827,8 @@ public:
 	PgSQL_ErrorInfo error_info;
 	// error_info came from a libpq failure with no SQLSTATE, which set_error_from_PQerrorMessage() fills with P0001
 	bool error_without_sqlstate = false;
+	// Set only when a backend ErrorResponse (native or libpq) supplies the error.
+	bool error_from_backend = false;
 	PGconn* pgsql_conn;
 	bool native_mode = false;          // true → native wire protocol, false → libpq
 	class PgSQL_Backend_Protocol* bp = NULL;  // owned in native mode only; NULL in libpq mode

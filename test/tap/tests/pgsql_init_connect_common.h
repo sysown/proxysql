@@ -89,6 +89,7 @@ struct IcResult {
 	bool timed_out = false;
 	bool ok = false;               // no error result and the command was sent
 	std::string sqlstate;          // SQLSTATE of the first error
+	std::string message;           // message of the first error
 	std::string value;             // first cell of the last tuples result
 	unsigned long long elapsed_ms = 0;
 };
@@ -119,6 +120,8 @@ static IcResult ic_wait(PGconn* c, int timeout_ms, unsigned long long start_us) 
 			if (!error) {
 				const char* s = PQresultErrorField(r, PG_DIAG_SQLSTATE);
 				res.sqlstate = s ? s : "";
+				const char* m = PQresultErrorField(r, PG_DIAG_MESSAGE_PRIMARY);
+				res.message = m ? m : "";
 				diag("query error: %s", PQresultErrorMessage(r));
 			}
 			error = true;

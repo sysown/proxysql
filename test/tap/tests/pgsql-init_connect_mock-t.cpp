@@ -88,6 +88,63 @@ static void run_mode(PGconn* admin, bool native) {
 	mock.stop();
 }
 
+// Report a backend ErrorResponse verbatim, even if the socket closes before ReadyForQuery.
+// Installing a successful script for later connections makes an incorrect retry observable
+// without leaving the test stuck in a reconnect loop.
+static void run_backend_errors(PGconn* admin, bool native) {
+	set_global(admin, "pgsql-use_native_backend_protocol", native ? "true" : "false");
+	struct Case { const char* code; bool fatal; bool close; };
+	const Case cases[] = {
+		{ "42601", false, true }, // ordinary error must survive EOF
+		{ "08P01", true, true },  // backend class 08 is not a transport failure
+		{ "P0001", true, true },  // backend RAISE is not libpq's fallback error
+		{ "ZX001", false, false }, // preserve an SQLSTATE outside the built-in enum
+	};
+	for (const Case& tc : cases) {
+		PgSQL_Mock_Backend mock;
+		if (!mock.start()) BAIL_OUT("mock backend could not listen");
+		const std::string host = pgmb_local_ip_towards(cl.pgsql_host, cl.pgsql_port);
+		if (host.empty()) BAIL_OUT("cannot discover the mock's address");
+		std::string error = pgmb_error_response(tc.code, "init_connect rejected");
+		if (tc.fatal) {
+			// ERROR and FATAL have equal length, preserving the wire frame length.
+			for (size_t pos = 0; (pos = error.find("ERROR", pos)) != std::string::npos; pos += 5)
+				error.replace(pos, 5, "FATAL");
+		}
+		std::vector<Step> reject = pgmb_script_accept_trust();
+		reject.push_back(step_expect_query(true));
+		reject.push_back(step_sleep(300));
+		reject.push_back(step_send(error + (tc.close ? "" : pgmb_ready_for_query('I'))));
+		reject.push_back(tc.close ? step_close() : step_expect_message());
+		mock.set_script(reject);
+		ic_admin(admin, "INSERT INTO pgsql_servers(hostgroup_id,hostname,port) VALUES(" +
+			std::to_string(kHg) + ",'" + host + "'," + std::to_string(mock.port()) + ")");
+		ic_admin(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+
+		PGConnPtr client = ic_connect_client(cl);
+		const unsigned long long start = monotonic_time();
+		if (!PQsendQuery(client.get(), kQuery)) BAIL_OUT("cannot send query: %s", PQerrorMessage(client.get()));
+		for (int i = 0; i < 500 && mock.connections_accepted() < 1; ++i) usleep(10000);
+		std::vector<Step> answer = pgmb_script_accept_trust();
+		answer.push_back(step_expect_query());
+		answer.push_back(step_send(pgmb_simple_result("v", "unexpected retry", 1)));
+		answer.push_back(step_expect_message());
+		mock.set_script(answer);
+		const IcResult r = ic_wait(client.get(), 10000, start);
+		ok(!r.timed_out && !r.ok && r.sqlstate == tc.code &&
+			r.message == "init_connect rejected" && PQstatus(client.get()) == CONNECTION_OK,
+			"[native=%d] init_connect %s reaches the live client unchanged (got '%s')",
+			native, tc.code, r.sqlstate.c_str());
+		ok(mock.connections_accepted() == 1,
+			"[native=%d] backend error %s is not retried (%d connections)",
+			native, tc.code, mock.connections_accepted());
+		client.reset();
+		ic_admin(admin, "DELETE FROM pgsql_servers WHERE hostgroup_id=" + std::to_string(kHg));
+		ic_admin(admin, "LOAD PGSQL SERVERS TO RUNTIME");
+		mock.stop();
+	}
+}
+
 int main(int, char**) {
 	alarm(120);
 	if (cl.getEnv()) {
@@ -97,9 +154,9 @@ int main(int, char**) {
 	PGConnPtr admin_conn = ic_connect_admin(cl);
 	PGconn* admin = admin_conn.get();
 	if (PQstatus(admin) != CONNECTION_OK) return exit_status();
-	plan(6);
+	plan(22);
 	if (!ic_is_v31(admin)) {
-		skip(6, "init_connect needs ProxySQL v3.1+");
+		skip(22, "init_connect needs ProxySQL v3.1+");
 		return exit_status();
 	}
 
@@ -121,7 +178,10 @@ int main(int, char**) {
 		"VALUES(6700,1,'ic_mock_query'," + std::to_string(kHg) + ",1)");
 	ic_admin(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
 
-	for (bool native : {true, false}) run_mode(admin, native);
+	for (bool native : {true, false}) {
+		run_mode(admin, native);
+		run_backend_errors(admin, native);
+	}
 
 	ic_admin(admin, "DELETE FROM pgsql_query_rules WHERE rule_id=6700");
 	ic_admin(admin, "LOAD PGSQL QUERY RULES TO RUNTIME");
