@@ -20,7 +20,8 @@
  *    - a correct password is accepted and the session now belongs to the target user;
  *    - a wrong password is rejected with ER_ACCESS_DENIED_ERROR (1045);
  *    - a second COM_CHANGE_USER on the same connection works (no stale auth state);
- *    - COM_CHANGE_USER works on a compressed connection.
+ *    - COM_CHANGE_USER works on a compressed connection, zlib and zstd (the switch must
+ *      keep the negotiated algorithm).
  */
 
 #include <cstdlib>
@@ -64,7 +65,10 @@ const char* tr_str(transport t) {
 	return "?";
 }
 
-const string SRC_USER { "cu4618_src" };
+// Every account this test creates starts with this per-run prefix, so the test never
+// touches a pre-existing account and the cleanup removes exactly what it created.
+const string USER_PREFIX { "cu4618_" + std::to_string(getpid() % 100000) + "_" };
+const string SRC_USER { USER_PREFIX + "src" };
 const string SRC_PASS { "cu4618_src_pass" };
 const string TG_PASS { "cu4618-Secret" };
 const string WRONG_PASS { "cu4618-Wrong" };
@@ -124,14 +128,59 @@ int create_user(MYSQL* admin, const string& user, const string& stored) {
 	return run_admin(admin, "LOAD MYSQL USERS TO RUNTIME");
 }
 
-int set_default_plugin(MYSQL* admin, const string& plugin) {
-	if (run_admin(admin,
-		"SET mysql-default_authentication_plugin='" + plugin + "'"
-	)) return EXIT_FAILURE;
+int set_variable(MYSQL* admin, const string& name, const string& value) {
+	if (run_admin(admin, "SET " + name + "='" + value + "'")) return EXIT_FAILURE;
 	return run_admin(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 }
 
-MYSQL* connect_src(const CommandLine& cl, transport t, bool compress) {
+int set_default_plugin(MYSQL* admin, const string& plugin) {
+	return set_variable(admin, "mysql-default_authentication_plugin", plugin);
+}
+
+/**
+ * @brief Memory and runtime value of a global variable, restored by 'restore_variable()'.
+ */
+struct var_snapshot_t {
+	string name;
+	string mem;
+	string rt;
+	bool valid;
+};
+
+var_snapshot_t snapshot_variable(MYSQL* admin, const string& name) {
+	var_snapshot_t s { name, {}, {}, false };
+	s.valid =
+		admin_scalar(admin,
+			"SELECT variable_value FROM global_variables WHERE variable_name='" + name + "'", s.mem
+		) == EXIT_SUCCESS &&
+		admin_scalar(admin,
+			"SELECT variable_value FROM runtime_global_variables WHERE variable_name='" + name + "'", s.rt
+		) == EXIT_SUCCESS;
+	return s;
+}
+
+/**
+ * @brief Restores the runtime value first, then the memory value, so an unsaved runtime
+ *   value is not replaced by the memory one.
+ */
+void restore_variable(MYSQL* admin, const var_snapshot_t& s) {
+	if (!s.valid) { return; }
+	set_variable(admin, s.name, s.rt);
+	run_admin(admin, "SET " + s.name + "='" + s.mem + "'");
+}
+
+enum class compression { NONE, ZLIB, ZSTD };
+
+const char* comp_str(compression c) {
+	switch (c) {
+		case compression::NONE: return "";
+		case compression::ZLIB: return " compress=zlib";
+		case compression::ZSTD: return " compress=zstd";
+	}
+	return "?";
+}
+
+MYSQL* connect_src(const CommandLine& cl, transport t, compression comp) {
 	MYSQL* proxy = mysql_init(NULL);
 	mysql_options(proxy, MYSQL_DEFAULT_AUTH, "caching_sha2_password");
 
@@ -142,8 +191,10 @@ MYSQL* connect_src(const CommandLine& cl, transport t, bool compress) {
 		bool get_key = true;
 		mysql_options(proxy, MYSQL_OPT_GET_SERVER_PUBLIC_KEY, &get_key);
 	}
-	if (compress) {
+	if (comp == compression::ZLIB) {
 		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
+	} else if (comp == compression::ZSTD) {
+		mysql_options(proxy, MYSQL_OPT_COMPRESSION_ALGORITHMS, "zstd");
 	}
 
 	if (!mysql_real_connect(
@@ -184,14 +235,14 @@ struct case_t {
 	string def_plugin;
 	stored_fmt fmt;
 	transport tr;
-	bool compress;
+	compression comp;
 	bool exp_ok;
 };
 
 int user_seq = 0;
 
 string next_user() {
-	return "cu4618_" + std::to_string(getpid() % 100000) + "_" + std::to_string(user_seq++);
+	return USER_PREFIX + std::to_string(user_seq++);
 }
 
 /**
@@ -201,7 +252,7 @@ string next_user() {
 void run_case(MYSQL* admin, const CommandLine& cl, const case_t& c) {
 	const string desc {
 		"def_plugin=" + c.def_plugin + " stored=" + fmt_str(c.fmt) + " transport=" + tr_str(c.tr) +
-		(c.compress ? " compress" : "")
+		comp_str(c.comp)
 	};
 
 	if (set_default_plugin(admin, c.def_plugin)) {
@@ -217,7 +268,7 @@ void run_case(MYSQL* admin, const CommandLine& cl, const case_t& c) {
 		MYSQL* proxy = nullptr;
 
 		if (stored.empty() || create_user(admin, tg_user, stored) ||
-			(proxy = connect_src(cl, c.tr, c.compress)) == nullptr) {
+			(proxy = connect_src(cl, c.tr, c.comp)) == nullptr) {
 			ok(0, "Setup failed   %s", desc.c_str());
 		} else {
 			const int rc = mysql_change_user(proxy, tg_user.c_str(), TG_PASS.c_str(), NULL);
@@ -250,7 +301,7 @@ void run_case(MYSQL* admin, const CommandLine& cl, const case_t& c) {
 		MYSQL* proxy = nullptr;
 
 		if (stored.empty() || create_user(admin, tg_user, stored) ||
-			(proxy = connect_src(cl, c.tr, c.compress)) == nullptr) {
+			(proxy = connect_src(cl, c.tr, c.comp)) == nullptr) {
 			ok(0, "Setup failed   %s", desc.c_str());
 		} else {
 			const int rc = mysql_change_user(proxy, tg_user.c_str(), WRONG_PASS.c_str(), NULL);
@@ -284,7 +335,7 @@ void run_chained(MYSQL* admin, const CommandLine& cl, transport t) {
 		set_default_plugin(admin, "caching_sha2_password") ||
 		create_user(admin, full_user, stored_value(admin, stored_fmt::SHA2_HASH, TG_PASS)) ||
 		create_user(admin, fast_user, TG_PASS) ||
-		(proxy = connect_src(cl, t, false)) == nullptr
+		(proxy = connect_src(cl, t, compression::NONE)) == nullptr
 	) {
 		ok(0, "Setup failed   %s", desc.c_str());
 		if (proxy) { mysql_close(proxy); }
@@ -337,48 +388,60 @@ int main(int argc, char** argv) {
 			" WHERE variable_name='mysql-caching_sha2_password_auto_generate_rsa_keys'",
 			rsa_auto_gen
 		) == EXIT_SUCCESS;
-	string orig_def_plugin {};
-	admin_scalar(admin,
-		"SELECT variable_value FROM global_variables WHERE variable_name='mysql-default_authentication_plugin'",
-		orig_def_plugin
-	);
+	const vector<var_snapshot_t> snapshots {
+		snapshot_variable(admin, "mysql-default_authentication_plugin"),
+		snapshot_variable(admin, "mysql-have_ssl"),
+		snapshot_variable(admin, "mysql-have_compress"),
+	};
 
 	vector<case_t> cases {};
 	const vector<stored_fmt> fmts { stored_fmt::CLEAR, stored_fmt::NATIVE_HASH, stored_fmt::SHA2_HASH };
 
 	// Reproducer from #4618 plus all stored formats, over TLS and over plain+RSA.
 	for (const stored_fmt f : fmts) {
-		cases.push_back({ "caching_sha2_password", f, transport::TLS, false, true });
+		cases.push_back({ "caching_sha2_password", f, transport::TLS, compression::NONE, true });
 	}
 	if (have_rsa) {
 		for (const stored_fmt f : fmts) {
-			cases.push_back({ "caching_sha2_password", f, transport::PLAIN_RSA, false, true });
+			cases.push_back({ "caching_sha2_password", f, transport::PLAIN_RSA, compression::NONE, true });
 		}
 	}
 	// Clear text needs no full authentication: fast auth works on any transport.
-	cases.push_back({ "caching_sha2_password", stored_fmt::CLEAR, transport::PLAIN_NO_KEY, false, true });
+	cases.push_back({ "caching_sha2_password", stored_fmt::CLEAR, transport::PLAIN_NO_KEY, compression::NONE, true });
 	// A 'caching_sha2_password' hash needs full auth; a plain connection that does not
 	// request the server key cannot carry it, exactly as for a fresh connection.
-	cases.push_back({ "caching_sha2_password", stored_fmt::SHA2_HASH, transport::PLAIN_NO_KEY, false, false });
+	cases.push_back({ "caching_sha2_password", stored_fmt::SHA2_HASH, transport::PLAIN_NO_KEY, compression::NONE, false });
 	// Same for a 'mysql_native_password' hash: with 'caching_sha2_password' advertised it is
 	// verified through full auth, as for a fresh connection (before #4618 this case went
 	// through a 'mysql_native_password' switch).
-	cases.push_back({ "caching_sha2_password", stored_fmt::NATIVE_HASH, transport::PLAIN_NO_KEY, false, false });
-	// Compressed connection.
-	cases.push_back({ "caching_sha2_password", stored_fmt::SHA2_HASH, transport::TLS, true, true });
-	cases.push_back({ "caching_sha2_password", stored_fmt::CLEAR, transport::TLS, true, true });
+	cases.push_back({ "caching_sha2_password", stored_fmt::NATIVE_HASH, transport::PLAIN_NO_KEY, compression::NONE, false });
+	// Compressed connections. The next command after the switch must still be readable,
+	// which 'session_username()' checks. zstd also checks that the auth continuation
+	// packets (fast auth, full auth) keep the negotiated algorithm.
+	for (const compression comp : { compression::ZLIB, compression::ZSTD }) {
+		cases.push_back({ "caching_sha2_password", stored_fmt::SHA2_HASH, transport::TLS, comp, true });
+		cases.push_back({ "caching_sha2_password", stored_fmt::CLEAR, transport::TLS, comp, true });
+		// 'mysql_native_password' switch on a compressed connection.
+		cases.push_back({ "mysql_native_password", stored_fmt::CLEAR, transport::TLS, comp, true });
+	}
 	// ProxySQL advertising 'mysql_native_password' must keep working.
-	cases.push_back({ "mysql_native_password", stored_fmt::CLEAR, transport::TLS, false, true });
-	cases.push_back({ "mysql_native_password", stored_fmt::NATIVE_HASH, transport::TLS, false, true });
-	cases.push_back({ "mysql_native_password", stored_fmt::CLEAR, transport::PLAIN_NO_KEY, false, true });
+	cases.push_back({ "mysql_native_password", stored_fmt::CLEAR, transport::TLS, compression::NONE, true });
+	cases.push_back({ "mysql_native_password", stored_fmt::NATIVE_HASH, transport::TLS, compression::NONE, true });
+	cases.push_back({ "mysql_native_password", stored_fmt::CLEAR, transport::PLAIN_NO_KEY, compression::NONE, true });
 
 	const size_t chained = have_rsa ? 2 : 1;
 	plan(cases.size() * 2 + chained);
 
 	diag("RSA key exchange available: %s", have_rsa ? "yes" : "no (skipping plain+RSA cases)");
 
+	// The TLS cases must not depend on the state left by earlier tests.
 	// Source user: clear text password, so the initial connect works on every transport.
-	if (create_user(admin, SRC_USER, SRC_PASS)) {
+	if (
+		set_variable(admin, "mysql-have_ssl", "true") ||
+		set_variable(admin, "mysql-have_compress", "true") ||
+		create_user(admin, SRC_USER, SRC_PASS)
+	) {
+		for (const var_snapshot_t& s : snapshots) { restore_variable(admin, s); }
 		mysql_close(admin);
 		return exit_status();
 	}
@@ -393,11 +456,16 @@ int main(int argc, char** argv) {
 	}
 
 	// Cleanup
-	run_admin(admin, "DELETE FROM mysql_users WHERE username LIKE 'cu4618\\_%' ESCAPE '\\'");
-	run_admin(admin, "LOAD MYSQL USERS TO RUNTIME");
-	if (!orig_def_plugin.empty()) {
-		set_default_plugin(admin, orig_def_plugin);
+	// Cleanup: only the accounts created by this run ('USER_PREFIX' has no LIKE wildcard
+	// other than '_', escaped below).
+	string like_prefix {};
+	for (const char ch : USER_PREFIX) {
+		if (ch == '_' || ch == '%' || ch == '\\') { like_prefix += '\\'; }
+		like_prefix += ch;
 	}
+	run_admin(admin, "DELETE FROM mysql_users WHERE username LIKE '" + like_prefix + "%' ESCAPE '\\'");
+	run_admin(admin, "LOAD MYSQL USERS TO RUNTIME");
+	for (const var_snapshot_t& s : snapshots) { restore_variable(admin, s); }
 
 	mysql_close(admin);
 

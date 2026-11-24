@@ -33,7 +33,8 @@ ADMIN = {
 PROXY_HOST = os.environ.get('TAP_HOST', '127.0.0.1')
 PROXY_PORT = int(os.environ.get('TAP_PORT', '6033'))
 
-SRC_USER = 'cu4618i_src'
+# Per-run names: the test never touches a pre-existing account.
+SRC_USER = 'cu4618i_{}_src'.format(os.getpid() % 100000)
 SRC_PASS = 'cu4618i_src_pass'
 TG_PASS = 'cu4618i-Secret'
 WRONG_PASS = 'cu4618i-Wrong'
@@ -87,9 +88,32 @@ def create_user(admin, user, stored):
     admin_exec(admin, "LOAD MYSQL USERS TO RUNTIME")
 
 
-def set_default_plugin(admin, plugin):
-    admin_exec(admin, "SET mysql-default_authentication_plugin='{}'".format(plugin))
+def set_variable(admin, name, value):
+    admin_exec(admin, "SET {}='{}'".format(name, value))
     admin_exec(admin, "LOAD MYSQL VARIABLES TO RUNTIME")
+
+
+def set_default_plugin(admin, plugin):
+    set_variable(admin, 'mysql-default_authentication_plugin', plugin)
+
+
+def snapshot_variable(admin, name):
+    """Return (memory value, runtime value) of a global variable."""
+    mem = admin_exec(
+        admin, "SELECT variable_value FROM global_variables WHERE variable_name='{}'".format(name)
+    )[0][0]
+    rt = admin_exec(
+        admin,
+        "SELECT variable_value FROM runtime_global_variables WHERE variable_name='{}'".format(name)
+    )[0][0]
+    return mem, rt
+
+
+def restore_variable(admin, name, snapshot):
+    """Restore runtime first, then memory, so an unsaved runtime value survives."""
+    mem, rt = snapshot
+    set_variable(admin, name, rt)
+    admin_exec(admin, "SET {}='{}'".format(name, mem))
 
 
 def connect_src(use_tls):
@@ -149,22 +173,31 @@ def run_case(admin, def_plugin, fmt, use_tls):
             except Exception:  # noqa: BLE001
                 pass
 
-    # Wrong password
+    # Wrong password. Only an error raised by cmd_change_user() itself counts: a 1045
+    # from the fixture or from the source connection is a test failure.
     tg_user = next_user()
     conn = None
     try:
         create_user(admin, tg_user, stored_value(admin, fmt, TG_PASS))
         conn = connect_src(use_tls)
-        conn.cmd_change_user(username=tg_user, password=WRONG_PASS)
-        ok(False, 'COM_CHANGE_USER (inline scramble) with a wrong password should fail '
-                  'with 1045   {} (it succeeded)'.format(desc))
-    except mysql.connector.Error as ex:
-        ok(ex.errno == errorcode.ER_ACCESS_DENIED_ERROR,
-           'COM_CHANGE_USER (inline scramble) with a wrong password should fail with 1045   '
-           '{} errno={} err={!r}'.format(desc, ex.errno, ex))
     except Exception as ex:  # noqa: BLE001
         ok(False, 'COM_CHANGE_USER (inline scramble) with a wrong password should fail '
-                  'with 1045   {} err={!r}'.format(desc, ex))
+                  'with 1045   {} setup failed: err={!r}'.format(desc, ex))
+        if conn is not None:
+            conn.close()
+        return
+    try:
+        try:
+            conn.cmd_change_user(username=tg_user, password=WRONG_PASS)
+            ok(False, 'COM_CHANGE_USER (inline scramble) with a wrong password should fail '
+                      'with 1045   {} (it succeeded)'.format(desc))
+        except mysql.connector.Error as ex:
+            ok(ex.errno == errorcode.ER_ACCESS_DENIED_ERROR,
+               'COM_CHANGE_USER (inline scramble) with a wrong password should fail with 1045   '
+               '{} errno={} err={!r}'.format(desc, ex.errno, ex))
+        except Exception as ex:  # noqa: BLE001
+            ok(False, 'COM_CHANGE_USER (inline scramble) with a wrong password should fail '
+                      'with 1045   {} err={!r}'.format(desc, ex))
     finally:
         if conn is not None:
             try:
@@ -187,21 +220,35 @@ def main():
 
     admin = mysql.connector.connect(use_pure=True, ssl_disabled=True, **ADMIN)
     admin.autocommit = True
-    orig_plugin = admin_exec(
-        admin,
-        "SELECT variable_value FROM global_variables "
-        "WHERE variable_name='mysql-default_authentication_plugin'"
-    )[0][0]
+    variables = ('mysql-default_authentication_plugin', 'mysql-have_ssl')
+    snapshots = {name: snapshot_variable(admin, name) for name in variables}
     diag('mysql-connector-python version: {}'.format(mysql.connector.__version__))
 
     try:
+        # The TLS cases must not depend on the state left by earlier tests.
+        set_variable(admin, 'mysql-have_ssl', 'true')
         create_user(admin, SRC_USER, SRC_PASS)
         for def_plugin, fmt, use_tls in cases:
             run_case(admin, def_plugin, fmt, use_tls)
     finally:
-        admin_exec(admin, "DELETE FROM mysql_users WHERE username LIKE 'cu4618i\\_%' ESCAPE '\\'")
-        admin_exec(admin, "LOAD MYSQL USERS TO RUNTIME")
-        set_default_plugin(admin, orig_plugin)
+        # Every step is attempted even if an earlier one fails. Only users with this
+        # run's prefix are removed: they were all created by this test.
+        cleanup = [
+            lambda: admin_exec(
+                admin,
+                "DELETE FROM mysql_users WHERE username LIKE 'cu4618i\\_{}\\_%' ESCAPE '\\'"
+                .format(os.getpid() % 100000)
+            ),
+            lambda: admin_exec(admin, "LOAD MYSQL USERS TO RUNTIME"),
+        ] + [
+            (lambda name=name: restore_variable(admin, name, snapshots[name]))
+            for name in variables
+        ]
+        for step in cleanup:
+            try:
+                step()
+            except Exception as ex:  # noqa: BLE001
+                diag('cleanup step failed: {!r}'.format(ex))
         admin.close()
 
     return 1 if failures else 0
