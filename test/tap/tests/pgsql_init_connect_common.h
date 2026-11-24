@@ -65,7 +65,10 @@ static bool ic_is_v31(PGconn* admin) {
 	const std::string v = ic_admin_value(admin,
 		"SELECT variable_value FROM global_variables WHERE variable_name='admin-version'");
 	int major = 0, minor = 0;
-	if (sscanf(v.c_str(), "%d.%d", &major, &minor) != 2)
+	// A Stable build made with GIT_VERSION_BASE="v3.x.y" keeps the leading 'v'; tier builds drop it.
+	const char* num = v.c_str();
+	if (*num == 'v') ++num;
+	if (sscanf(num, "%d.%d", &major, &minor) != 2)
 		BAIL_OUT("Cannot determine ProxySQL build tier from admin-version '%s'", v.c_str());
 	return major > 3 || (major == 3 && minor >= 1);
 }
