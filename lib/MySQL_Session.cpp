@@ -8351,9 +8351,14 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					// connection, but as a consequence of a 'COM_USER_CHANGE' which
 					// requires an 'Auth Switch'. Thus, we impose a 'pid' of '3' for the
 					// response 'OK' packet. See #3504 for more context.
+					// A 'caching_sha2_password' switch (#4618) exchanges a variable number
+					// of packets before the OK (fast auth, full auth over TLS or RSA), so
+					// it follows the client's sequence id like the initial handshake does.
 					const bool switching_user = change_user_auth_switch;
 					if (switching_user) {
-						_pid = 3;
+						if (client_myds->switching_auth_sent != AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
+							_pid = 3;
+						}
 						change_user_auth_switch = 0;
 					}
 					if (use_ssl == true && is_encrypted == false) {
