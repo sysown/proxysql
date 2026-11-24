@@ -4,15 +4,14 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
-#include <openssl/bio.h>
 #include <poll.h>
+
+#include "DataStreamOutputPending.h"
 
 /** @brief Includes TLS ciphertext and partially staged packets in pending Admin output. */
 template<class Stream>
 bool proxysql_admin_response_pending(Stream& stream) {
-	return stream.available_data_out() || stream.queueOUT.partial ||
-		(stream.encrypted && (stream.ssl_write_len ||
-			(stream.wbio_ssl && BIO_ctrl_pending(stream.wbio_ssl))));
+	return proxysql_stream_output_pending(stream);
 }
 
 /**
