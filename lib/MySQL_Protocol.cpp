@@ -2243,10 +2243,13 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 	// is only reached from COM_CHANGE_USER. v3.1+ only: the Stable tier never sends that
 	// switch.
 #ifdef PROXYSQL31
+	// Check the stream's own state first: PPHR_1 can run on a stream without a session
+	// (the protocol unit tests build one), so 'sess' is only read when it can matter.
 	const bool change_user_sha2_scramble =
-		(*myds)->sess->change_user_auth_switch &&
 		(*myds)->switching_auth_stage == 0 &&
-		(*myds)->switching_auth_type == AUTH_MYSQL_CACHING_SHA2_PASSWORD;
+		(*myds)->switching_auth_type == AUTH_MYSQL_CACHING_SHA2_PASSWORD &&
+		(*myds)->sess != nullptr &&
+		(*myds)->sess->change_user_auth_switch;
 	if (len==5 && !(change_user_sha2_scramble && *pkt == '\0')) {
 #else
 	if (len==5) {
