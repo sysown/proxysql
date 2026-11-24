@@ -8351,14 +8351,18 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					// connection, but as a consequence of a 'COM_USER_CHANGE' which
 					// requires an 'Auth Switch'. Thus, we impose a 'pid' of '3' for the
 					// response 'OK' packet. See #3504 for more context.
-					// A 'caching_sha2_password' switch (#4618) exchanges a variable number
-					// of packets before the OK (fast auth, full auth over TLS or RSA), so
-					// it follows the client's sequence id like the initial handshake does.
+					// A 'caching_sha2_password' switch (#4618, v3.1+) exchanges a variable
+					// number of packets before the OK (fast auth, full auth over TLS or RSA),
+					// so it follows the client's sequence id like the initial handshake does.
 					const bool switching_user = change_user_auth_switch;
 					if (switching_user) {
+#ifdef PROXYSQL31
 						if (client_myds->switching_auth_sent != AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
 							_pid = 3;
 						}
+#else
+						_pid = 3;
+#endif // PROXYSQL31
 						change_user_auth_switch = 0;
 					}
 					if (use_ssl == true && is_encrypted == false) {
@@ -8400,8 +8404,12 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						// connection already went through that at login, and a compressed one
 						// would stay in STATE_CLIENT_AUTH_OK and reject the next command as an
 						// unexpected packet. Go straight to STATE_SLEEP, like the COM_CHANGE_USER
-						// path that needs no switch does.
+						// path that needs no switch does. v3.1+ only; Stable keeps the old state.
+#ifdef PROXYSQL31
 						client_myds->DSS = switching_user ? STATE_SLEEP : STATE_CLIENT_AUTH_OK;
+#else
+						client_myds->DSS=STATE_CLIENT_AUTH_OK;
+#endif // PROXYSQL31
 					}
 				}
 			}

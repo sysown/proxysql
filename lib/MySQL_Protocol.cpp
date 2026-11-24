@@ -1653,10 +1653,15 @@ bool MySQL_Protocol::verify_user_pass(
 				ret=true;
 			}
 		} else if (auth_plugin_id == 2) { // caching_sha2_password
-			// Fail closed. process_pkt_COM_CHANGE_USER never sends a 'caching_sha2_password'
-			// response here for the session types that can complete an Auth Switch: it
-			// answers with an 'Auth Switch Request' and the handshake state machine verifies
-			// the response (#4618). Only sessions that cannot switch reach this branch.
+			// Fail closed.
+			// - v3.1+ (PROXYSQL31): process_pkt_COM_CHANGE_USER never sends a
+			//   'caching_sha2_password' response here for the session types that can complete
+			//   an Auth Switch: it answers with an 'Auth Switch Request' and the handshake state
+			//   machine verifies the response (#4618). Only sessions that cannot switch get here.
+			// - v3.0 Stable: COM_CHANGE_USER with inline 'caching_sha2_password' data is a
+			//   documented limitation (https://proxysql.com/documentation/authentication-methods/#limitations).
+			//   The #4618 support is deliberately not backported to keep the Stable
+			//   authentication core unchanged.
 			ret = false;
 #ifdef PROXYSQLED25519
 		} else if (auth_plugin_id == AUTH_MYSQL_ED25519) {
@@ -1999,6 +2004,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
+#ifdef PROXYSQL31
+			// v3.1+ only (#4618): the Stable tier keeps the pre-#4618 behaviour below.
 			// A 'caching_sha2_password' client cannot be verified from the COM_CHANGE_USER
 			// packet alone: libmysqlclient-style clients send no auth data and wait for a
 			// scramble, while Connector/J-style clients send a SHA-256 scramble that can
@@ -2031,6 +2038,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				(*myds)->myconn->userinfo->set((char *)user, NULL, db, NULL);
 				ret = false;
 			} else
+#endif // PROXYSQL31
 			// If pass not sent within 'COM_CHANGE_USER' packet, an 'Auth Switch Request'
 			// is required. We default to 'mysql_native_password'. See #3504 for more context.
 			if (pass_len == 0) {
@@ -2232,12 +2240,17 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 	// (process_pkt_COM_CHANGE_USER): the raw 32-byte SHA-256 scramble, not NUL
 	// terminated, or a single 0x00 when the client has no password. The initial
 	// handshake never switches to 'caching_sha2_password', so stage 0 with this plugin
-	// is only reached from COM_CHANGE_USER.
+	// is only reached from COM_CHANGE_USER. v3.1+ only: the Stable tier never sends that
+	// switch.
+#ifdef PROXYSQL31
 	const bool change_user_sha2_scramble =
 		(*myds)->sess->change_user_auth_switch &&
 		(*myds)->switching_auth_stage == 0 &&
 		(*myds)->switching_auth_type == AUTH_MYSQL_CACHING_SHA2_PASSWORD;
 	if (len==5 && !(change_user_sha2_scramble && *pkt == '\0')) {
+#else
+	if (len==5) {
+#endif // PROXYSQL31
 		ret = false;
 		vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
 		if ((*myds)->switching_auth_stage == 5 && *pkt == 2) {
@@ -2303,10 +2316,13 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 		return 1;
 #endif
 	}
+#ifdef PROXYSQL31
 	if (change_user_sha2_scramble) {
 		// a lone 0x00 is the empty-password response
 		vars1.pass_len = (payload_length == 1 && *pkt == '\0') ? 0 : payload_length;
-	} else if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD
+	} else
+#endif // PROXYSQL31
+	if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD
 #ifdef PROXYSQLED25519
 		|| auth_plugin_id == AUTH_MYSQL_ED25519 // raw 64-byte signature, not NUL-terminated
 #endif

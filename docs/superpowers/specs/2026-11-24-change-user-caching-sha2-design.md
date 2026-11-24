@@ -36,6 +36,20 @@ Measured on `v3.0` @ `116e34f67`, `PROXYSQL31=1` debug build, `mysql84-g6` infra
   `STATE_SLEEP` in its *uncompressed* branch (`mysql_data_stream.cpp`, "compression is
   enabled *after* the first OK").
 
+## Tier: v3.1+ only (maintainer decision)
+
+This fixes a long-standing bug, but it changes the authentication core, so it ships as
+new behaviour in the Innovative tier and the Stable tier stays as it is: every change
+(including the compression fix below) sits behind `#ifdef PROXYSQL31`, and both new
+tests are tagged `@proxysql_min_version:3.1`. This is a deliberate exception to the
+"correctness fixes are not confined to v3.1+" rule of `doc/agents/invariants.md` I-2,
+decided by the maintainer on this PR. On v3.0 the limitation stays documented
+(authentication-methods → Limitations).
+
+Verified: with `PROXYSQL31` undefined, `lib/MySQL_Protocol.cpp` and
+`lib/MySQL_Session.cpp` preprocess to the same token stream as `v3.0` (`497814d46`), once
+line numbers and file paths are normalised.
+
 ## Decision
 
 When the client names `caching_sha2_password` in `COM_CHANGE_USER` **and** ProxySQL
