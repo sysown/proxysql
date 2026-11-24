@@ -171,6 +171,7 @@ extern "C" bool proxysql_router_contract_secret_round_trip() {
 
 #include <arpa/inet.h>
 #include <algorithm>
+#include <atomic>
 #include <dlfcn.h>
 #include <fstream>
 #include <memory>
@@ -178,6 +179,7 @@ extern "C" bool proxysql_router_contract_secret_round_trip() {
 #include <poll.h>
 #include <string>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -385,6 +387,27 @@ bool drain_listener_add(MySQL_Thread& worker) {
 		&worker.mypolls.pending_listener_add, listener_fd, 0);
 }
 
+// listener_add() returns only once every worker has taken the new socket
+// (#6718). The worker in this test never runs its loop, so a helper thread
+// takes the add while listener_add() waits, as a running worker would.
+bool listener_add_on_idle_worker(const std::string& iface, MySQL_Thread& worker) {
+	std::atomic<bool> stop { false };
+	bool drained = false;
+	std::thread taker([&]() {
+		while (!stop.load()) {
+			if (drain_listener_add(worker)) {
+				drained = true;
+				return;
+			}
+			usleep(1000);
+		}
+	});
+	const int rc = GloMTH->listener_add(iface.c_str());
+	stop = true;
+	taker.join();
+	return rc >= 0 && drained;
+}
+
 void live_gtid_async_noop(struct ev_loop*, struct ev_async*, int) {}
 
 struct FakeControl {
@@ -555,9 +578,9 @@ int main() {
 	}
 	GloMTH->bootstrapping_listeners = false;
 	const bool operator_notification_drained = variables_ready &&
-		GloMTH->listener_add(operator_interface.c_str()) >= 0 && drain_listener_add(*accept_worker);
+		listener_add_on_idle_worker(operator_interface, *accept_worker);
 	const bool fake_startup_drained = operator_notification_drained &&
-		GloMTH->listener_add(fake_interface.c_str()) >= 0 && drain_listener_add(*accept_worker);
+		listener_add_on_idle_worker(fake_interface, *accept_worker);
 	ok(fake_startup_drained && find_registered_loopback_listener(operator_port) >= 0 &&
 		accept_worker->mypolls.find_index(find_registered_loopback_listener(operator_port)) >= 0 &&
 		find_registered_loopback_listener(fake_port) >= 0 &&
