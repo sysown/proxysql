@@ -48,7 +48,10 @@ decided by the maintainer on this PR. On v3.0 the limitation stays documented
 
 Verified: with `PROXYSQL31` undefined, `lib/MySQL_Protocol.cpp` and
 `lib/MySQL_Session.cpp` preprocess to the same token stream as `v3.0` (`497814d46`), once
-line numbers and file paths are normalised.
+line numbers and file paths are normalised. Re-checked on the merged result (`e1a7dc6c2`,
+including items 6–8): the merge changes only `include/MySQL_Protocol.h`,
+`lib/MySQL_Protocol.cpp` and `lib/MySQL_Session.cpp`, and with `PROXYSQL31` undefined
+and comments removed, each one has the same tokens as its parent on `v3.0`.
 
 ## Decision
 
@@ -126,6 +129,30 @@ switch does and as MySQL does for COM_CHANGE_USER. The RSA path also decrypts ag
    login-time "enable compression on the first OK" transition is not needed, and on an
    already-compressed connection it never fires. This matches the COM_CHANGE_USER path
    that needs no switch, which already sets `STATE_SLEEP`.
+6. **zstd across Auth Switch packets** (added after review). Two things lost zstd:
+   - Every reply packet of the auth exchange (the Auth Switch response, `caching_sha2`
+     full auth, RSA) goes through `PPHR_SetConnAttrs`, which recomputes
+     `options.compression_zstd` from `vars1`. On those packets `vars1` has the capabilities
+     but no zstd fields, so zstd was turned off and ProxySQL answered a zstd client with
+     zlib. Fix: `PPHR_keep_compression()` copies the zstd choice from the connection into
+     `vars1` for every reply packet (end of `PPHR_1`, and the RSA decrypt path).
+   - When the client's first login packet is answered with an Auth Switch,
+     `PPHR_SetConnAttrs` does not run for that packet, so the client's zstd request was
+     never recorded. This affected plain logins too, with no change-user involved: a zstd
+     client offering `caching_sha2_password` against `mysql-default_authentication_plugin
+     = mysql_native_password` lost the connection on its first query (ProxySQL logged
+     `RECEIVED AN UNKNOWN COMMAND: 0`). Fix: `PPHR_2` stores `compression_zstd` and
+     `zstd_compression_level` on the connection as soon as it parses the first packet.
+7. **Pass-through re-check on the switch response** (added after review). The pass-through
+   gate in `process_pkt_COM_CHANGE_USER` runs before the switch is sent. If the target row
+   becomes pass-through eligible before the client answers (an admin `LOAD MYSQL USERS TO
+   RUNTIME` in between), `PPHR_verify_password` would take the pass-through
+   `empty_pw_case` / `unknown_user_case` path for a change-user. It now refuses that while
+   `change_user_auth_switch` is set, with the same generic error as the up-front gate.
+8. **`PPHR_1` without a session** (found by `protocol_unit-t` under ASAN). The stage-0 check
+   for the raw sha2 scramble (item 2) read `(*myds)->sess` unconditionally, and the unit
+   tests build a stream with no session. The check now looks at the stream's own state
+   first and reads `sess` only when it is set.
 
 ## Goals
 
@@ -141,7 +168,10 @@ switch does and as MySQL does for COM_CHANGE_USER. The RSA path also decrypts ag
 
 - Accepting the inline scramble without a round trip (optimisation; can come later).
 - A fresh nonce for the switch (MySQL and the native switch both reuse the scramble).
-- COM_CHANGE_USER for pass-through users or SPIFFE sessions (explicitly rejected today).
+- COM_CHANGE_USER for pass-through users or SPIFFE sessions (explicitly rejected today;
+  item 7 keeps it rejected when the target becomes pass-through mid-switch).
+- Fixing the zstd problems of item 6 on the Stable tier. They exist there too, but every
+  change here is v3.1+ only (see *Tier*).
 - `max_connections` accounting on COM_CHANGE_USER (existing `FIXME`, separate issue).
 
 ## Anti-goals
@@ -166,10 +196,15 @@ connections without an RSA key.
 
 - `reg_test_4618-change_user_caching_sha2_libmysql-t` (C++, Oracle libmysqlclient 8.4,
   empty-data behaviour): stored clear/native/sha2 × TLS / plain+RSA / plain without key,
-  wrong password, compression, consecutive change-user, default plugin native.
+  wrong password, consecutive change-user, default plugin native, and zlib and zstd
+  compression for each of: sha2 default + sha2 hash, sha2 default + clear text, native
+  default + clear text (38 assertions). Each run uses its own account names
+  (`cu4618_<pid>_*`) and saves and restores `mysql-default_authentication_plugin`,
+  `mysql-have_ssl` and `mysql-have_compress` (in-memory and runtime values).
 - `reg_test_4618-change_user_caching_sha2_inline-t.py` (mysql-connector-python pure,
   inline-scramble behaviour): stored clear/native/sha2 over TLS, clear over plain, wrong
-  password, default plugin native.
+  password, default plugin native. Accounts are `cu4618i_<pid>_*`, and the wrong-password
+  case counts only a 1045 that comes from `cmd_change_user()`, not a setup failure.
 - Existing: `reg_test_3504-change_user-t` (native/clear/sha2 clients with default native),
   `test_auth_methods-t`, `test_ed25519_auth-t`, `reg_test_5988-caching_sha2_rsa-t`.
 
@@ -191,6 +226,14 @@ wrong-password assertion was already rejected before and still is):
 | caching_sha2 | native `*` | plain, no key | ok (native switch) | rejected — the behaviour change above (added after the red run) |
 | caching_sha2 | sha2 `$A$` | TLS + compression | **Access denied** | ok |
 | caching_sha2 | clear | TLS + compression | **disconnected on next query** | ok |
+| caching_sha2 | sha2 `$A$` / clear | TLS + zstd | not measured | ok |
+| native | clear | TLS + zlib / zstd | not measured | ok |
+
+The zstd and native-compressed rows were added after review and were not run against
+`v3.0`. During development, before item 6, native + zstd failed with `Lost connection`
+(ProxySQL: `RECEIVED AN UNKNOWN COMMAND: 0`); the same login reproduced with the `mysql`
+CLI (`--compression-algorithms=zstd --default-auth=caching_sha2_password` against
+`mysql-default_authentication_plugin = mysql_native_password`), without any change-user.
 | native | clear / native `*` | TLS / plain | ok | ok |
 | consecutive change-user (sha2 → clear → source → sha2) | | TLS / plain+RSA | **fail** | ok |
 
