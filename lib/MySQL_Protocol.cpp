@@ -2213,12 +2213,25 @@ int MySQL_Protocol::PPHR_decrypt_caching_sha2_rsa_response(
 	vars1.db = (*myds)->myconn->userinfo->schemaname;
 	vars1.charset = (*myds)->tmp_charset;
 	vars1.capabilities = (*myds)->myconn->options.client_flag;
+	PPHR_keep_compression(vars1);
 	auth_plugin_id = (*myds)->switching_auth_type;
 	(*myds)->switching_auth_stage = 5;
 	frontend_auth_error_ = MySQLFrontendAuthError::NONE;
 	return 2;
 }
 #endif
+
+#ifdef PROXYSQL31
+// A continuation packet of the auth exchange (Auth Switch response, caching_sha2 full
+// auth, RSA) carries no capability or compression data: PPHR_SetConnAttrs would rebuild
+// the compression settings from empty temporaries and clear the zstd choice the first
+// packet negotiated, while the connection keeps compressing. zstd clients would then get
+// zlib frames. Carry the already negotiated zstd choice into the continuation.
+void MySQL_Protocol::PPHR_keep_compression(MyProt_tmp_auth_vars& vars1) {
+	vars1.use_zstd_compression = (*myds)->myconn->options.compression_zstd;
+	vars1.zstd_compression_level = (*myds)->myconn->options.zstd_compression_level;
+}
+#endif // PROXYSQL31
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
 int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 1
@@ -2358,6 +2371,9 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 	vars1.charset=(*myds)->tmp_charset;
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,2,"Session=%p , DS=%p . Encrypted: %d , switching_auth: %d, auth_plugin_id: %d\n", (*myds)->sess, (*myds), (*myds)->encrypted, (*myds)->switching_auth_stage, auth_plugin_id);
 	vars1.capabilities = (*myds)->myconn->options.client_flag;
+#ifdef PROXYSQL31
+	PPHR_keep_compression(vars1);
+#endif // PROXYSQL31
 	return 2;
 }
 
@@ -2609,6 +2625,15 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		vars1.use_zstd_compression = true;
 		vars1.zstd_compression_level = *extra_pkt;
 	}
+#ifdef PROXYSQL31
+	// Record the client's zstd request on the connection now. When this packet is answered
+	// with an Auth Switch, PPHR_SetConnAttrs does not run for it, and the continuation
+	// packets only see what is stored here (PPHR_keep_compression). PPHR_SetConnAttrs
+	// still validates it against the capabilities when authentication completes, and
+	// compression is enabled only after the final OK.
+	(*myds)->myconn->options.compression_zstd = vars1.use_zstd_compression;
+	(*myds)->myconn->options.zstd_compression_level = vars1.zstd_compression_level;
+#endif // PROXYSQL31
 	return true;
 }
 
@@ -3558,6 +3583,25 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			ret = false;
 			return ret;
 		}
+
+#ifdef PROXYSQL31
+		// COM_CHANGE_USER never enters pass-through (spec §5.4). process_pkt_COM_CHANGE_USER
+		// rejects a pass-through target, but only for the row it saw when the command
+		// arrived. Since #4618 a caching_sha2_password COM_CHANGE_USER is answered with an
+		// Auth Switch, and its response is verified here against the row as it is now: if
+		// the row became pass-through eligible in between, the probe or cache-hit branch
+		// below must not run. Same generic failure as the COM_CHANGE_USER gate.
+		if (mysql_thread___passthrough_auth_enabled
+			&& (empty_pw_case || unknown_user_case)
+			&& (*myds)->sess->change_user_auth_switch) {
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"COM_CHANGE_USER Auth Switch response for pass-through-eligible user '%s' "
+				"rejected (pass-through is not supported via CHANGE_USER, spec §5.4)\n",
+				vars1.user ? (const char*)vars1.user : "(null)");
+			ret = false;
+			return ret;
+		}
+#endif // PROXYSQL31
 
 		if (mysql_thread___passthrough_auth_enabled
 			&& auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
