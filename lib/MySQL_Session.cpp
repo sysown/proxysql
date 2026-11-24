@@ -8394,7 +8394,14 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						client_myds->myprot.generate_pkt_OK(true, NULL, NULL, _pid, 0, 0, 2, 0, NULL);
 						handshake_err = false;
 						status=WAITING_CLIENT_DATA;
-						client_myds->DSS=STATE_CLIENT_AUTH_OK;
+						// STATE_CLIENT_AUTH_OK makes the output path enable compression and move
+						// to STATE_SLEEP once the OK is flushed -- but only on a connection that
+						// is not compressed yet. After a COM_CHANGE_USER 'Auth Switch' the
+						// connection already went through that at login, and a compressed one
+						// would stay in STATE_CLIENT_AUTH_OK and reject the next command as an
+						// unexpected packet. Go straight to STATE_SLEEP, like the COM_CHANGE_USER
+						// path that needs no switch does.
+						client_myds->DSS = switching_user ? STATE_SLEEP : STATE_CLIENT_AUTH_OK;
 					}
 				}
 			}
