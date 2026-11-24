@@ -962,6 +962,8 @@ bool read_client_final_message(ScramState* scram_state, const uint8_t *raw_input
 	}
 
 	client_final_nonce = read_attr_value(&input, 'r');
+	if (client_final_nonce == NULL)
+		goto failed;
 
 	/* ignore optional extensions */
 	do {

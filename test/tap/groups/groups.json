@@ -449,6 +449,7 @@
   "pgsql_native_params_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_read_burst_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_scram_order_unit-t" : [ "unit-tests-g1" ],
+  "pgsql_scram_client_final_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_send_failure_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_startup_params_reset_unit-t" : [ "unit-tests-g1" ],
   "pgsql_native_teardown_state_unit-t" : [ "unit-tests-g1" ],
