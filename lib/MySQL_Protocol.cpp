@@ -1653,18 +1653,15 @@ bool MySQL_Protocol::verify_user_pass(
 				ret=true;
 			}
 		} else if (auth_plugin_id == 2) { // caching_sha2_password
-			// ## FIXME: Current limitation
-			// For now, if a 'COM_CHANGE_USER' is received with a hashed 'password' for
-			// 'caching_sha2_password', we fail to authenticate. This is part of the broader limitation of
-			// 'Auth Switch' support for 'caching_sha2_password' (See
-			// https://proxysql.com/documentation/authentication-methods/#limitations).
-			//
-			// ## Future Fix
-			// The right approach is to perform an 'Auth Switch Request' or to accept the hash if the clear
-			// text password is already known and the hash can be verified. This processing is now performed
-			// in 'process_pkt_COM_CHANGE_USER', state at which it should be determine if we can accept the
-			// hash, or if we should prepare the state machine for a 'Auth Switch Request'. Progress for this
-			// is tracked in https://github.com/sysown/proxysql/issues/4618.
+			// Fail closed.
+			// - v3.1+ (PROXYSQL31): process_pkt_COM_CHANGE_USER never sends a
+			//   'caching_sha2_password' response here for the session types that can complete
+			//   an Auth Switch: it answers with an 'Auth Switch Request' and the handshake state
+			//   machine verifies the response (#4618). Only sessions that cannot switch get here.
+			// - v3.0 Stable: COM_CHANGE_USER with inline 'caching_sha2_password' data is a
+			//   documented limitation (https://proxysql.com/documentation/authentication-methods/#limitations).
+			//   The #4618 support is deliberately not backported to keep the Stable
+			//   authentication core unchanged.
 			ret = false;
 #ifdef PROXYSQLED25519
 		} else if (auth_plugin_id == AUTH_MYSQL_ED25519) {
@@ -2007,6 +2004,41 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
+#ifdef PROXYSQL31
+			// v3.1+ only (#4618): the Stable tier keeps the pre-#4618 behaviour below.
+			// A 'caching_sha2_password' client cannot be verified from the COM_CHANGE_USER
+			// packet alone: libmysqlclient-style clients send no auth data and wait for a
+			// scramble, while Connector/J-style clients send a SHA-256 scramble that can
+			// only be checked against a clear-text password, never against a stored
+			// hash. Answer with an 'Auth Switch Request' instead, and let the regular
+			// handshake state machine (process_pkt_handshake_response) authenticate the
+			// response exactly as it would a fresh connection on this transport: fast
+			// auth, full auth over TLS or RSA, stored '*'/'$A$' hashes, additional
+			// password. The switch keeps the plugin advertised in this connection's
+			// initial handshake: 'caching_sha2_password', or 'mysql_native_password'
+			// (same as PPHR_3/PPHR_4auth0 do for a fresh connection). See #4618.
+			const bool client_sha2 =
+				strcmp(client_auth_plugin, plugins[AUTH_MYSQL_CACHING_SHA2_PASSWORD]) == 0;
+			const bool switch_capable_session =
+				session_type == PROXYSQL_SESSION_MYSQL ||
+				session_type == PROXYSQL_SESSION_SQLITE ||
+				session_type == PROXYSQL_SESSION_DUCKDB;
+			if (client_sha2 && switch_capable_session) {
+				(*myds)->switching_auth_type =
+					sent_auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
+						? AUTH_MYSQL_CACHING_SHA2_PASSWORD : AUTH_MYSQL_NATIVE_PASSWORD;
+				// Start a new exchange: the initial login may have left a full-auth stage
+				// (5) behind, which would make the sha2 state machine read the scramble
+				// as a clear-text password.
+				(*myds)->switching_auth_stage = 0;
+				(*myds)->auth_in_progress = 0;
+				(*myds)->sess->change_user_auth_switch = true;
+
+				generate_pkt_auth_switch_request(true, NULL, NULL);
+				(*myds)->myconn->userinfo->set((char *)user, NULL, db, NULL);
+				ret = false;
+			} else
+#endif // PROXYSQL31
 			// If pass not sent within 'COM_CHANGE_USER' packet, an 'Auth Switch Request'
 			// is required. We default to 'mysql_native_password'. See #3504 for more context.
 			if (pass_len == 0) {
@@ -2181,12 +2213,25 @@ int MySQL_Protocol::PPHR_decrypt_caching_sha2_rsa_response(
 	vars1.db = (*myds)->myconn->userinfo->schemaname;
 	vars1.charset = (*myds)->tmp_charset;
 	vars1.capabilities = (*myds)->myconn->options.client_flag;
+	PPHR_keep_compression(vars1);
 	auth_plugin_id = (*myds)->switching_auth_type;
 	(*myds)->switching_auth_stage = 5;
 	frontend_auth_error_ = MySQLFrontendAuthError::NONE;
 	return 2;
 }
 #endif
+
+#ifdef PROXYSQL31
+// A continuation packet of the auth exchange (Auth Switch response, caching_sha2 full
+// auth, RSA) carries no capability or compression data: PPHR_SetConnAttrs would rebuild
+// the compression settings from empty temporaries and clear the zstd choice the first
+// packet negotiated, while the connection keeps compressing. zstd clients would then get
+// zlib frames. Carry the already negotiated zstd choice into the continuation.
+void MySQL_Protocol::PPHR_keep_compression(MyProt_tmp_auth_vars& vars1) {
+	vars1.use_zstd_compression = (*myds)->myconn->options.compression_zstd;
+	vars1.zstd_compression_level = (*myds)->myconn->options.zstd_compression_level;
+}
+#endif // PROXYSQL31
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
 int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 1
@@ -2204,7 +2249,24 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 		(*myds)->switching_auth_stage=5;
 	}
 	(*myds)->auth_in_progress = 0;
+	// Response to a COM_CHANGE_USER 'Auth Switch Request' for 'caching_sha2_password'
+	// (process_pkt_COM_CHANGE_USER): the raw 32-byte SHA-256 scramble, not NUL
+	// terminated, or a single 0x00 when the client has no password. The initial
+	// handshake never switches to 'caching_sha2_password', so stage 0 with this plugin
+	// is only reached from COM_CHANGE_USER. v3.1+ only: the Stable tier never sends that
+	// switch.
+#ifdef PROXYSQL31
+	// Check the stream's own state first: PPHR_1 can run on a stream without a session
+	// (the protocol unit tests build one), so 'sess' is only read when it can matter.
+	const bool change_user_sha2_scramble =
+		(*myds)->switching_auth_stage == 0 &&
+		(*myds)->switching_auth_type == AUTH_MYSQL_CACHING_SHA2_PASSWORD &&
+		(*myds)->sess != nullptr &&
+		(*myds)->sess->change_user_auth_switch;
+	if (len==5 && !(change_user_sha2_scramble && *pkt == '\0')) {
+#else
 	if (len==5) {
+#endif // PROXYSQL31
 		ret = false;
 		vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
 		if ((*myds)->switching_auth_stage == 5 && *pkt == 2) {
@@ -2270,6 +2332,12 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 		return 1;
 #endif
 	}
+#ifdef PROXYSQL31
+	if (change_user_sha2_scramble) {
+		// a lone 0x00 is the empty-password response
+		vars1.pass_len = (payload_length == 1 && *pkt == '\0') ? 0 : payload_length;
+	} else
+#endif // PROXYSQL31
 	if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD
 #ifdef PROXYSQLED25519
 		|| auth_plugin_id == AUTH_MYSQL_ED25519 // raw 64-byte signature, not NUL-terminated
@@ -2303,6 +2371,9 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 	vars1.charset=(*myds)->tmp_charset;
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,2,"Session=%p , DS=%p . Encrypted: %d , switching_auth: %d, auth_plugin_id: %d\n", (*myds)->sess, (*myds), (*myds)->encrypted, (*myds)->switching_auth_stage, auth_plugin_id);
 	vars1.capabilities = (*myds)->myconn->options.client_flag;
+#ifdef PROXYSQL31
+	PPHR_keep_compression(vars1);
+#endif // PROXYSQL31
 	return 2;
 }
 
@@ -2554,6 +2625,15 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		vars1.use_zstd_compression = true;
 		vars1.zstd_compression_level = *extra_pkt;
 	}
+#ifdef PROXYSQL31
+	// Record the client's zstd request on the connection now. When this packet is answered
+	// with an Auth Switch, PPHR_SetConnAttrs does not run for it, and the continuation
+	// packets only see what is stored here (PPHR_keep_compression). PPHR_SetConnAttrs
+	// still validates it against the capabilities when authentication completes, and
+	// compression is enabled only after the final OK.
+	(*myds)->myconn->options.compression_zstd = vars1.use_zstd_compression;
+	(*myds)->myconn->options.zstd_compression_level = vars1.zstd_compression_level;
+#endif // PROXYSQL31
 	return true;
 }
 
@@ -3503,6 +3583,25 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			ret = false;
 			return ret;
 		}
+
+#ifdef PROXYSQL31
+		// COM_CHANGE_USER never enters pass-through (spec §5.4). process_pkt_COM_CHANGE_USER
+		// rejects a pass-through target, but only for the row it saw when the command
+		// arrived. Since #4618 a caching_sha2_password COM_CHANGE_USER is answered with an
+		// Auth Switch, and its response is verified here against the row as it is now: if
+		// the row became pass-through eligible in between, the probe or cache-hit branch
+		// below must not run. Same generic failure as the COM_CHANGE_USER gate.
+		if (mysql_thread___passthrough_auth_enabled
+			&& (empty_pw_case || unknown_user_case)
+			&& (*myds)->sess->change_user_auth_switch) {
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"COM_CHANGE_USER Auth Switch response for pass-through-eligible user '%s' "
+				"rejected (pass-through is not supported via CHANGE_USER, spec §5.4)\n",
+				vars1.user ? (const char*)vars1.user : "(null)");
+			ret = false;
+			return ret;
+		}
+#endif // PROXYSQL31
 
 		if (mysql_thread___passthrough_auth_enabled
 			&& auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD

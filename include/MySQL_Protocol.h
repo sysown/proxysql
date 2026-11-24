@@ -217,6 +217,9 @@ class MySQL_Protocol {
 
 	// all the following functions were inline inside process_pkt_handshake_response() , but it was split for readibility
 	int PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
+#ifdef PROXYSQL31
+	void PPHR_keep_compression(MyProt_tmp_auth_vars& vars1);
+#endif // PROXYSQL31
 	bool PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
 	void PPHR_3(MyProt_tmp_auth_vars& vars1);
 	bool PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
