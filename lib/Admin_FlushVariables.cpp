@@ -786,8 +786,15 @@ FlushVariableStats ProxySQL_Admin::flush_tsdb_variables___database_to_runtime(SQ
 #endif
 
 void ProxySQL_Admin::flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ClickHouse variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
-	if (GloVars.global.sqlite3_server == false) {
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing SQLiteServer variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
+	// Admin serves queries before main.cpp creates the SQLite3 server, and a query on
+	// global_variables refreshes every module's runtime variables (#6720). Until the server
+	// exists there is nothing to flush: init_sqliteserver_variables() writes them once it does.
+	if (
+		(GloVars.global.sqlite3_server == false)
+		||
+		( GloSQLite3Server == NULL )
+	) {
 		return;
 	}
 	if (onlyifempty) {

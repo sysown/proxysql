@@ -19,6 +19,7 @@ using json = nlohmann::json;
 
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
+#include "DataStreamOutputPending.h"
 #include "PgSQL_Query_Processor.h"
 #include "PgSQL_PreparedStatement.h"
 #include "Query_Processor_ParserSQL.h"
@@ -3487,8 +3488,7 @@ void PgSQL_Session::note_backend_release(unsigned int hostgroup) {
 // Data this backend stream has queued or started sending: its queue and send buffer, the rest of the
 // message being copied into that buffer, and TLS records not written yet.
 static bool backend_data_unsent(PgSQL_Data_Stream* ds) {
-	return ds->available_data_out() || ds->queueOUT.partial || ds->ssl_write_len ||
-		(ds->encrypted && ds->wbio_ssl && BIO_ctrl_pending(ds->wbio_ssl));
+	return proxysql_stream_output_pending(*ds);
 }
 
 #ifdef PROXYSQL31
@@ -3524,9 +3524,7 @@ int PgSQL_Session::handler() try {
 		// Include encrypted bytes retained after a short write. The normal poll
 		// loop resumes draining on POLLOUT; do not process more client commands.
 		if (client_myds->net_failure) return -1;
-		return (client_myds->available_data_out() || client_myds->queueOUT.partial ||
-			client_myds->ssl_write_len || (client_myds->encrypted &&
-			BIO_ctrl_pending(client_myds->wbio_ssl))) ? 0 : -1;
+		return proxysql_stream_output_pending(*client_myds) ? 0 : -1;
 	}
 	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Processing session %p\n", this->thread, this, this);
 	//unsigned int j;
