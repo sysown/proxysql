@@ -83,6 +83,19 @@ typedef struct _pgsql_queue_t {
 #endif // PROXYSQL31
 #define MY_SSL_BUFFER	8192
 
+/*
+ * Largest TLS record ProxySQL sends to a PostgreSQL client (issue #6721).
+ *
+ * libpq's pqReadData() guarantees 8 KiB of free input buffer, calls SSL_read()
+ * once, and SSL_read() returns data from a single record. A larger record can
+ * leave the end of a response decrypted inside OpenSSL with nothing left on
+ * the socket, and a client that waits on PQsocket() (pgbench, async drivers)
+ * then waits forever. Upstream libpq fixed this in July 2026, backpatched to
+ * 14, but older client libraries stay in use for years. PostgreSQL itself
+ * writes records of about 8 KiB, so this also matches the server.
+ */
+#define PGSQL_TLS_MAX_SEND_FRAGMENT	8192
+
 // this class avoid copying data
 class PgSQL_MyDS_real_query {
 public:
