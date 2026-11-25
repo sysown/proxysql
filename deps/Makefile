@@ -398,7 +398,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-*.tar.gz -C prometheus-cpp/3rdparty/civetweb
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../registry_counters_reset.patch
-	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../fix_old_distros.patch
+#	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../fix_old_distros.patch
 	cd prometheus-cpp/prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 

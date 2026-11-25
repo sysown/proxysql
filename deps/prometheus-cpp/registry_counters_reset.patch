@@ -1,25 +1,8 @@
-diff --git a/core/include/prometheus/counter.h b/core/include/prometheus/counter.h
-index 9b2ad19..4fa1fba 100644
---- a/core/include/prometheus/counter.h
-+++ b/core/include/prometheus/counter.h
-@@ -46,6 +46,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Counter {
-   /// Collect is called by the Registry when collecting metrics.
-   ClientMetric Collect() const;
- 
-+  /// \brief Reset this counter metric to a value of 'zero'.
-+  ///
-+  /// This function shall only be used in case of 'PROXYSQL STOP' operation
-+  /// which invalidates all ProxySQL internal counters for a fresh start.
-+  void Reset();
-+
-  private:
-   Gauge gauge_{0.0};
- };
 diff --git a/core/include/prometheus/family.h b/core/include/prometheus/family.h
 index 0bc0723..4f62fda 100644
 --- a/core/include/prometheus/family.h
 +++ b/core/include/prometheus/family.h
-@@ -141,6 +141,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Family : public Collectable {
+@@ -142,6 +142,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Family : public Collectable {
    /// \return Zero or more samples for each dimensional data.
    std::vector<MetricFamily> Collect() const override;
  
@@ -49,24 +32,11 @@ index 6603f6c..877c085 100644
   private:
    template <typename T>
    friend class detail::Builder;
-diff --git a/core/src/counter.cc b/core/src/counter.cc
-index 2a93463..a12885d 100644
---- a/core/src/counter.cc
-+++ b/core/src/counter.cc
-@@ -13,6 +13,8 @@ void Counter::Increment(const double val) {
- 
- double Counter::Value() const { return gauge_.Value(); }
- 
-+void Counter::Reset() { gauge_.Set(0.0); }
-+
- ClientMetric Counter::Collect() const {
-   ClientMetric metric;
-   metric.counter.value = Value();
 diff --git a/core/src/family.cc b/core/src/family.cc
 index f087586..8f9d276 100644
 --- a/core/src/family.cc
 +++ b/core/src/family.cc
-@@ -122,6 +122,19 @@ ClientMetric Family<T>::CollectMetric(const Labels& metric_labels,
+@@ -121,6 +121,19 @@ ClientMetric Family<T>::CollectMetric(const Labels& metric_labels,
    return collected;
  }
  
