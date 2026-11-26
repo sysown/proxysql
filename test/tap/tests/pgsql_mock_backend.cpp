@@ -512,12 +512,14 @@ void PgSQL_Mock_Backend::accept_loop() {
         }
         int one = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-        conns_accepted_.fetch_add(1);
+        // Take the script before counting the connection: a test that swaps the script as soon as
+        // it sees the count must not hand this connection the next one.
         std::vector<Step> script;
         {
             std::lock_guard<std::mutex> g(script_mtx_);
             script = script_;
         }
+        conns_accepted_.fetch_add(1);
         workers_.emplace_back(&PgSQL_Mock_Backend::handle_conn, this, fd, script);
     }
 }

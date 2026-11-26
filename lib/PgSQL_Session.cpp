@@ -1293,6 +1293,9 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
 bool PgSQL_Session::handler_again___verify_init_connect() {
+	// v3.0 has no SETTING_INIT_CONNECT handler, and sending init_connect would stall the session,
+	// so v3.0 ignores it. It warns when a non-empty value is loaded to runtime instead.
+#ifdef PROXYSQL31
 	if (mybe->server_myds->myconn->options.init_connect_sent == false) {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent = true;
@@ -1304,6 +1307,8 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 			// pgsql_hostgroup_attributes takes priority
 			tmp_init_connect = hg_strings->init_connect.c_str();
 		}
+		// Tracked parameters (search_path, TimeZone, ...) set here are not recorded in this
+		// connection's variable state, so the client's value may or may not be re-applied.
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
 			mybe->server_myds->myconn->options.init_connect = strdup(tmp_init_connect);
@@ -1312,6 +1317,7 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
 	}
+#endif // PROXYSQL31
 	return false;
 }
 
@@ -1338,6 +1344,7 @@ bool PgSQL_Session::handler_again___verify_backend_user_db() {
 	return false;
 }
 
+#ifdef PROXYSQL31
 bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 	bool ret = false;
 	assert(mybe->server_myds->myconn);
@@ -1360,7 +1367,7 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 	else {
 		if (rc == -1 || rc == -2) {
 			// the command failed
-			int myerr = 0; // TODO: fix this mysql_errno(myconn->pgsql);
+			const bool error_present = myconn->is_error_present();
 			PgHGM->p_update_pgsql_error_counter(
 				p_pgsql_error_type::pgsql,
 				myconn->parent->myhgc->hid,
@@ -1368,52 +1375,79 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 				myconn->parent->port,
 				myconn->get_simple_command_error_code_str(rc)
 			);
-			if (myerr >= 2000 || myerr == 0) {
+			// A backend can send class 08 or P0001 itself. Only transport failures without
+			// a backend ErrorResponse are retryable, regardless of their SQLSTATE.
+			const bool backend_error = myconn->has_backend_error();
+			// rc == -2 is PMC-10003: init_connect returned rows. Retrying only repeats the
+			// same reply, so the session is terminated.
+			if (rc == -2 || error_present == false ||
+				(myconn->is_connection_in_reusable_state() == false && backend_error == false)) {
 				bool retry_conn = false;
 				// client error, serious
 				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting INIT CONNECT", myconn);
-				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-				if (rc != -2) { // see PMC-10003
-					if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
+				if (rc != -2) {
+					// init_connect runs before any client statement on this connection, so only a
+					// known transaction blocks the retry. IsActiveTransaction() also counts the
+					// unknown state a broken libpq connection always reports, and would never retry.
+					if ((myds->myconn->reusable == true) && myds->myconn->IsKnownActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
 						myds->myconn->is_pipeline_active() == false) {
 						retry_conn = true;
 					}
 				}
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd = 0;
-				if (rc == -2) {
-					// Here we handle PMC-10003
-					// and we terminate the session
-					retry_conn = false;
-				}
 				if (retry_conn) {
 					myds->DSS = STATE_NOT_INITIALIZED;
-					//previous_status.push(PROCESSING_QUERY);
 					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 				}
 				*_rc = -1;	// an error happened, we should destroy the Session
 				return ret;
 			}
 			else {
-				proxy_warning("Error while setting INIT CONNECT on %s:%d hg %d : %d, %d\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, 9999);
+				// The backend rejected init_connect (the connection may be gone too, e.g. after a FATAL):
+				// a new connection would fail the same way, so report the error instead.
+				proxy_warning("Error while setting INIT CONNECT on %s:%d hg %d: %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myconn->get_error_code_with_message().c_str());
 				// we won't go back to PROCESSING_QUERY
-				st = previous_status.top();
 				previous_status.pop();
-				char sqlstate[10];
-				snprintf(sqlstate, sizeof(sqlstate), "%s", ""/* TODO: fix this mysql_sqlstate(myconn->pgsql)*/);
-				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 9999 /* TODO: fix this mysql_errno(myconn->pgsql)*/, sqlstate, "" /* TODO: fix this mysql_error(myconn->pgsql)*/);
-				myds->destroy_MySQL_Connection_From_Pool(true);
+				const std::string errmsg = myconn->get_error_message();
+				const std::string errcode = myconn->get_error_code_str();
+				// Drop the connection first: no client statement ran on it, so a transaction it holds
+				// (an init_connect such as "BEGIN; ...") is ProxySQL's. Left in place, the client's
+				// transaction state below would count it and poison a client that never opened one.
+				// Initialization already failed: close directly. Graceful destruction would
+				// treat ASYNC_QUERY_END as in-flight work and open a termination connection.
+				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd = 0;
-				status = WAITING_CLIENT_DATA;
-				client_myds->DSS = STATE_SLEEP;
+				client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), errcode.c_str(), false,
+					false, NULL, txn_state_for_local_error(true));
+				// The rest of an extended-query unit goes too: left queued, it would run ahead of
+				// the client's next unit and fail it (as give_up_waiting() does).
+				reset_extended_query_frame();
+				RequestEnd(myds, true);
+				ret = true;
 			}
 		}
+		else if (rc == 2) {
+			// One statement of a multi-statement init_connect is done (libpq only: native
+			// collects every result through ReadyForQuery). Discard its result, as
+			// async_send_simple_command() does at the end; the next one needs a fresh one.
+			if (myconn->query_result) {
+				if (myconn->query_result_reuse) {
+					delete myconn->query_result_reuse;
+				}
+				myconn->query_result->clear();
+				myconn->query_result_reuse = myconn->query_result;
+				myconn->query_result = NULL;
+			}
+			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
+		}
 		else {
-			// rc==1 , nothing to do for now
+			// rc==1 or rc==3 , nothing to do for now
 		}
 	}
 	return ret;
 }
+#endif // PROXYSQL31
 
 bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, 
 	bool no_quote, bool set_transaction) {
@@ -4586,10 +4620,11 @@ bool PgSQL_Session::handler_again___multiple_statuses(int* rc) {
 	case RESETTING_CONNECTION_V2:
 		ret = handler_again___status_RESETTING_CONNECTION(rc);
 		break;
-	// TODO: fix this
-	//case SETTING_INIT_CONNECT:
-	//	ret = handler_again___status_SETTING_INIT_CONNECT(rc);
+#ifdef PROXYSQL31
+	case SETTING_INIT_CONNECT:
+		ret = handler_again___status_SETTING_INIT_CONNECT(rc);
 		break;
+#endif // PROXYSQL31
 	default:
 		break;
 	}

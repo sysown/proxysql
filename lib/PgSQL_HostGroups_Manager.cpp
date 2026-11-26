@@ -4457,6 +4457,11 @@ void PgSQL_HostGroups_Manager::generate_pgsql_hostgroup_attributes_table() {
 		myhgc->attributes.connection_warming           = connection_warming;
 		myhgc->attributes.throttle_connections_per_sec = throttle_connections_per_sec;
 		myhgc->set_attribute_init_connect(init_connect);
+#ifndef PROXYSQL31
+		if (init_connect != NULL && init_connect[0] != '\0') {
+			proxy_warning("pgsql_hostgroup_attributes.init_connect for hostgroup %u is ignored: it requires ProxySQL v3.1 or later\n", hid);
+		}
+#endif // PROXYSQL31
 		if (myhgc->attributes.comment != NULL)
 			free(myhgc->attributes.comment);
 		myhgc->attributes.comment = strdup(comment);

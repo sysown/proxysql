@@ -863,6 +863,9 @@ public:
 	 */
 	void generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track = false, PtrSize_t* _ptr = NULL,
 		char txn_state = 'I');
+	// Preserve backend SQLSTATEs, including codes outside PGSQL_ERROR_CODES.
+	void generate_error_packet(bool send, bool ready, const char* msg, const char* sqlstate, bool fatal, bool track = false, PtrSize_t* _ptr = NULL,
+		char txn_state = 'I');
 
 	/**
 	 * @brief Generates an "OK" packet for the PostgreSQL protocol.

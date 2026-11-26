@@ -2026,6 +2026,11 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 			if (strcmp(value, "(null)"))
 				variables.init_connect = strdup(value);
 		}
+#ifndef PROXYSQL31
+		if (variables.init_connect) {
+			proxy_warning("pgsql-init_connect is ignored: it requires ProxySQL v3.1 or later\n");
+		}
+#endif // PROXYSQL31
 		return true;
 	}
 	if (!strcasecmp(name, "firewall_whitelist_errormsg")) {

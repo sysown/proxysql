@@ -1717,6 +1717,11 @@ bool PgSQL_Protocol::welcome_client() {
 
 void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr,
 	char txn_state) {
+	generate_error_packet(send, ready, msg, PgSQL_Error_Helper::get_error_code(code), fatal, track, _ptr, txn_state);
+}
+
+void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, const char* sqlstate, bool fatal, bool track, PtrSize_t* _ptr,
+	char txn_state) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
 	PgSQL_Data_Stream* ds = myds ? *myds : nullptr;
@@ -1738,7 +1743,7 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 	pgpkt.write_generic('E', "cscscscsc", 
 		'S', fatal ? "FATAL" : "ERROR",
 		'V', fatal ? "FATAL" : "ERROR",
-		'C', PgSQL_Error_Helper::get_error_code(code), 'M', msg, 0);
+		'C', sqlstate, 'M', msg, 0);
 
 	if (ready == true) {
 		pgpkt.write_ReadyForQuery(txn_state);
