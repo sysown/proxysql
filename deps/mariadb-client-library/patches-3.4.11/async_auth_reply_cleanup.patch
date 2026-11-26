@@ -178,7 +178,7 @@
  #else
  #include <winsock2.h>
  #endif
-@@ -300,12 +307,121 @@
+@@ -300,12 +307,123 @@
  }
  
  
@@ -205,6 +205,7 @@
 +  struct sockaddr_in address;
 +  socklen_t address_len= sizeof(address);
 +  int listener= -1, peer= -1, one= 1, status, ready, result= FAIL;
++  uint connect_timeout= 2;
 +  MYSQL *mysql= NULL, *ret= NULL;
 +  struct mysql_async_context *ctxt;
 +  pid_t server= -1;
@@ -251,7 +252,8 @@
 +  listener= -1;
 +
 +  mysql= mysql_init(NULL);
-+  if (!mysql || mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0))
++  if (!mysql || mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0) ||
++      mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &connect_timeout))
 +    goto cleanup;
 +  mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 +  ctxt= mysql->options.extension->async_context;
