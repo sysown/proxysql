@@ -160,7 +160,7 @@
  /**
 --- unittest/libmariadb/async.c
 +++ unittest/libmariadb/async.c
-@@ -16,6 +16,7 @@
+@@ -16,10 +16,17 @@
  */
  #include "my_test.h"
  #include "ma_common.h"
@@ -168,7 +168,17 @@
  
  
  #ifndef _WIN32
-@@ -301,12 +302,49 @@
++#include <arpa/inet.h>
++#include <netinet/in.h>
+ #include <poll.h>
++#include <signal.h>
++#include <sys/socket.h>
++#include <sys/wait.h>
++#include <unistd.h>
+ #else
+ #include <winsock2.h>
+ #endif
+@@ -300,12 +307,121 @@
  }
  
  
@@ -180,30 +190,102 @@
 +*/
 +static int test_auth_reply_cancel_cleanup(MYSQL *unused __attribute__((unused)))
 +{
-+  MYSQL *mysql= mysql_init(NULL);
++#ifdef _WIN32
++  return SKIP;
++#else
++  static const unsigned char greeting[] = {
++    0x0a, '8','.','4','.','8','-','t','e','s','t',0x00,
++    0x01,0x00,0x00,0x00, '1','2','3','4','5','6','7','8',0x00,
++    0x01,0x8a, 0x21, 0x02,0x00, 0x18,0x00, 0x15,
++    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
++    'a','b','c','d','e','f','g','h','i','j','k','l',0x00,
++    'm','y','s','q','l','_','n','a','t','i','v','e','_','p','a','s','s','w','o','r','d',0x00
++  };
++  unsigned char packet[sizeof(greeting) + 4];
++  struct sockaddr_in address;
++  socklen_t address_len= sizeof(address);
++  int listener= -1, peer= -1, one= 1, status, ready, result= FAIL;
++  MYSQL *mysql= NULL, *ret= NULL;
 +  struct mysql_async_context *ctxt;
-+  int rc;
++  pid_t server= -1;
 +
-+  if (!mysql)
-+    return FAIL;
++  listener= socket(AF_INET, SOCK_STREAM, 0);
++  if (listener < 0)
++    goto cleanup;
++  setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
++  memset(&address, 0, sizeof(address));
++  address.sin_family= AF_INET;
++  address.sin_addr.s_addr= htonl(INADDR_LOOPBACK);
++  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) ||
++      listen(listener, 1) ||
++      getsockname(listener, (struct sockaddr *)&address, &address_len))
++    goto cleanup;
 +
-+  rc= mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
-+  if (rc)
++  server= fork();
++  if (server < 0)
++    goto cleanup;
++  if (!server)
 +  {
-+    mysql_close(mysql);
-+    return FAIL;
++    size_t sent= 0;
++    ssize_t count;
++    peer= accept(listener, NULL, NULL);
++    close(listener);
++    if (peer < 0)
++      _exit(1);
++    packet[0]= (unsigned char)(sizeof(greeting) & 0xff);
++    packet[1]= (unsigned char)((sizeof(greeting) >> 8) & 0xff);
++    packet[2]= (unsigned char)((sizeof(greeting) >> 16) & 0xff);
++    packet[3]= 0;
++    memcpy(packet + 4, greeting, sizeof(greeting));
++    while (sent < sizeof(packet))
++    {
++      count= send(peer, packet + sent, sizeof(packet) - sent, 0);
++      if (count <= 0)
++        _exit(1);
++      sent+= (size_t)count;
++    }
++    pause();
++    _exit(0);
 +  }
++  close(listener);
++  listener= -1;
 +
++  mysql= mysql_init(NULL);
++  if (!mysql || mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0))
++    goto cleanup;
++  mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 +  ctxt= mysql->options.extension->async_context;
-+  ctxt->pending_auth_reply= malloc(1024 * 1024);
++  status= mysql_real_connect_start(&ret, mysql, "127.0.0.1", "root", "",
++                                   NULL, ntohs(address.sin_port), NULL, 0);
++  while (status && !ctxt->pending_auth_reply)
++  {
++    ready= wait_for_mysql(mysql, status);
++    status= mysql_real_connect_cont(&ret, mysql, ready);
++  }
 +  if (!ctxt->pending_auth_reply)
 +  {
-+    mysql_close(mysql);
-+    return FAIL;
++    diag("Authentication did not suspend while owning its reply buffer: %s",
++         mysql_error(mysql));
++    goto cleanup;
 +  }
-+  ctxt->suspended= 1;
++
 +  mysql_close(mysql);
-+  return OK;
++  mysql= NULL;
++  result= OK;
++
++cleanup:
++  if (mysql)
++    mysql_close(mysql);
++  if (listener >= 0)
++    close(listener);
++  if (server > 0)
++  {
++    kill(server, SIGTERM);
++    while (waitpid(server, NULL, 0) < 0 && errno == EINTR)
++      ;
++  }
++  return result;
++#endif
 +}
 +
 +

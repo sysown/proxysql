@@ -5,10 +5,15 @@ on:
   pull_request:
     paths:
       - .github/workflows/CI-mariadb-connector-v40.yml
+      - Makefile
       - common_mk/mariadb_connector.mk
       - deps/Makefile
       - deps/mariadb-client-library/**
+      - include/makefiles_paths.mk
+      - include/makefiles_vars.mk
+      - lib/Makefile
       - plugins/duckdb/Makefile
+      - src/Makefile
       - test/PrepStmt/Makefile
       - test/infra/control/test-mariadb-connector-selection.bash
       - test/tap/connector_tier.mk
@@ -45,7 +50,7 @@ jobs:
     timeout-minutes: 45
     services:
       mysql:
-        image: mysql:8.4.8
+        image: mysql:8.4.8@sha256:2952e3be7807f06fc18de50b3ea1a632d5c70d63482ff7d7376fe3aa8999babf
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: test

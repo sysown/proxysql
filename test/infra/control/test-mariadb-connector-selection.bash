@@ -70,19 +70,28 @@ for directory in test/tap/tap test/tap/tests test/tap/tests/unit; do
 done
 
 # Every TAP object compiled with MARIADB_IDIR must be invalidated when the
-# selected connector changes. Keep this list explicit so a new header consumer
-# cannot silently retain objects from the previous tier.
-expected_tap_objects='utils_mariadb.o noise_utils_mariadb.o cluster_simulator.o rds_bgd_simulator.o'
-actual_tap_objects=$(make --no-print-directory -s -C "$repo/test/tap/tap" \
+# selected connector changes. Discover header consumers from their recipes so
+# a new one cannot silently escape the authoritative invalidation list.
+declared_tap_objects=$(make --no-print-directory -s -C "$repo/test/tap/tap" \
 	-f Makefile -f - print-mariadb-header-objects <<'MAKEFILE'
 .PHONY: print-mariadb-header-objects
 print-mariadb-header-objects:
 	@printf '%s\n' '$(MARIADB_HEADER_OBJECTS)'
 MAKEFILE
 )
-[[ "$actual_tap_objects" == "$expected_tap_objects" ]] || {
-	printf 'TAP Connector/C header consumers are [%s], expected [%s]\n' \
-		"$actual_tap_objects" "$expected_tap_objects" >&2
+declared_tap_objects=$(printf '%s\n' "$declared_tap_objects" | \
+	tr ' ' '\n' | sed '/^$/d' | LC_ALL=C sort | paste -sd' ' -)
+actual_tap_objects=$(awk '
+	/^[^[:space:]#][^:]*:/ {
+		targets=$0
+		sub(/:.*/, "", targets)
+	}
+	/^\t/ && /MARIADB_IDIR/ { print targets }
+' "$repo/test/tap/tap/Makefile" | tr ' ' '\n' | sed '/^$/d' | \
+	LC_ALL=C sort -u | paste -sd' ' -)
+[[ "$actual_tap_objects" == "$declared_tap_objects" ]] || {
+	printf 'TAP Connector/C header consumers are [%s], invalidation list is [%s]\n' \
+		"$actual_tap_objects" "$declared_tap_objects" >&2
 	exit 1
 }
 printf '%s\n' 'Connector/C tier selection passed.'
