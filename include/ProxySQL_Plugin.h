@@ -87,13 +87,13 @@ namespace prometheus { class Registry; }
 //          ABI 14 and 15 binaries cannot be converted safely and are rejected
 //          by an ABI-16 core. Generic layouts 1-10 and 13 retain compatible
 //          prefixes and remain loadable; reserved layouts 11 and 12 do not.
-//   ABI 17: ProxySQL_PluginServices appends install_azure_entra_token_source
-//          (#6649): the AWS IAM token-source contract, for the Azure Entra slot.
-//          Additive: every ABI-16 slot keeps its offset, so ABI-16 plugins load.
 //
 //   ABI 17: appends the versioned embedded execution service getter to
 //          ProxySQL_PluginServices. The ABI-16 prefix remains unchanged.
 //          Normal services expose the getter; phase B returns nullptr.
+//   ABI 18: ProxySQL_PluginServices appends install_azure_entra_token_source
+//          (#6649): the AWS IAM token-source contract, for the Azure Entra slot.
+//          Additive: every ABI-17 slot keeps its offset, so ABI-17 plugins load.
 //
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
@@ -112,8 +112,8 @@ namespace prometheus { class Registry; }
 // A plugin built without -DDEBUG, loaded into a core built with
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
-// under the plain ABI 1..17 scheme above (e.g. a release plugin's
-// abi_version=14 is <= a debug core's max=17, so the ordinary
+// under the plain ABI 1..18 scheme above (e.g. a release plugin's
+// abi_version=14 is <= a debug core's max=18, so the ordinary
 // forward-compatibility range check does not catch it).
 //
 // What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
@@ -155,23 +155,23 @@ namespace prometheus { class Registry; }
 //
 // PROXYSQL_PLUGIN_ABI_DEBUG_BIT reserves a high bit that is either set
 // (this build has -DDEBUG) or clear (it doesn't) in `abi_version`, kept
-// in a numeric space (bit 30) the plain layout-version numbers (1..17,
+// in a numeric space (bit 30) the plain layout-version numbers (1..18,
 // and unlikely to reach 2^30 for a long time) never touch, so a
 // DEBUG-tagged and a non-DEBUG-tagged abi_version can never compare as
 // "compatible" via ordinary integer range comparison -- the loader
 // checks this bit for an EXACT match, as a step separate from (and in
-// addition to) the ABI 1..17 forward-compatibility range check below.
+// addition to) the ABI 1..18 forward-compatibility range check below.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_DEBUG_BIT = 0x40000000u;
 
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 17u;
-constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 17u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION = 18u;
+constexpr unsigned int PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX = 18u;
 
 #ifdef DEBUG
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION | PROXYSQL_PLUGIN_ABI_DEBUG_BIT;
 #else
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION;
 #endif
-// Layout-only ceiling used for the ABI 1..17 range check. Callers must mask
+// Layout-only ceiling used for the ABI 1..18 range check. Callers must mask
 // off PROXYSQL_PLUGIN_ABI_DEBUG_BIT before comparing a raw abi_version
 // against this constant -- see lib/ProxySQL_PluginManager.cpp.
 constexpr unsigned int PROXYSQL_PLUGIN_ABI_VERSION_MAX = PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION_MAX;
@@ -586,7 +586,7 @@ struct ProxySQL_PluginServices {
 	ManagedRuntimeResult (*activate_managed_runtime_locked)(ManagedPreparedRuntime&, uint64_t);
 	void (*destroy_managed_prepared_runtime)(ManagedPreparedRuntime*) noexcept;
 	const ProxySQL_Embedded_ServiceV1* (*get_embedded_execution_service)() noexcept;
-	// ABI-17 extension (#6649): the ABI-13 AWS IAM install contract, for the
+	// ABI-18 extension (#6649): the ABI-13 AWS IAM install contract, for the
 	// Azure Entra slot. Install only during init(); core retires the source at
 	// process shutdown.
 	proxysql_plugin_install_aws_iam_token_source_cb install_azure_entra_token_source;

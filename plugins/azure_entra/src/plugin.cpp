@@ -25,7 +25,7 @@ void destroy_source(AwsIamTokenSource *source) {
 }
 
 // An extra reference to this module: core keeps it until every lease has
-// drained and destroy_source() has run (doc/PLUGIN_API.md, ABI 13 and 17).
+// drained and destroy_source() has run (doc/PLUGIN_API.md, ABI 13 and 18).
 void *own_module_handle() {
 	Dl_info info {};
 	if (dladdr(reinterpret_cast<void *>(&destroy_source), &info) == 0 || info.dli_fname == nullptr) {
@@ -37,7 +37,7 @@ void *own_module_handle() {
 bool init(ProxySQL_PluginServices *services) {
 	g_services = services;
 	if (services == nullptr || services->install_azure_entra_token_source == nullptr) {
-		log_line(3, "azure_entra: this ProxySQL core has no Azure Entra token-source service (ABI 17)");
+		log_line(3, "azure_entra: this ProxySQL core has no Azure Entra token-source service (ABI 18)");
 		return false;
 	}
 	EntraConfig cfg;
