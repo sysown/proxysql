@@ -4,6 +4,7 @@
 
 ### Unreleased
 
+- MySQL backend connections with unread reply bytes in the connector buffer, read-ahead cache, TLS, or socket are discarded before pooling or reuse.
 - Prevent replaying a MySQL multi-statement batch on another backend when its backend goes offline after an earlier result was returned to the client.
 - **Gated behind `PROXYSQL31` (v3.1.x and v4.0.x; v3.0.x is unaffected):** output queues no longer copy a packet that does not fit in the ring. The owned output ring stays fixed at 1 KiB, while the input ring stays at 32 KiB; when the ring is empty, an oversized packet is sent directly from its own allocation instead of being copied through it. Compressed MySQL connections raise the output ring back to 32 KiB on the first compressed frame, because every compressed frame is staged through it.
 - **Gated behind `PROXYSQL31`:** result frames (`RESULTSET_BUFLEN`, `PGSQL_RESULTSET_BUFLEN`) are 32 KiB. With jemalloc enabled (the default), 32 KiB stays in the tcache; `NOJEMALLOC=1` builds use the system allocator instead.

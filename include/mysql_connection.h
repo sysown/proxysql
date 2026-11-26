@@ -339,6 +339,7 @@ class MySQL_Connection {
 	 * @return True if the connection is in potentially in an active transaction.
 	 */
 	bool IsActiveTransaction();
+	bool has_unread_bytes();
 	bool IsServerOffline();
 	bool IsAutoCommit();
 	bool AutocommitFalse_AndSavepoint();

@@ -10524,6 +10524,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 #endif // STRESSTEST_POOL
 			}
 		}
+		if (mc && mc->has_unread_bytes()) {
+			mc->send_quit = false;
+			MyHGM->destroy_MyConn_from_pool(mc);
+			mc = NULL;
+		}
 #ifdef STRESSTEST_POOL
 		// Check STRESSTEST_POOL in MySQL_HostGroups_Manager.h
 		// Note: this works only if session_fast_forward==false and create_new_conn is false too
@@ -10549,44 +10554,52 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
             if (acquire_mode == Pool_Acquire_Mode::Normal)
                 thread->return_local_connections(mybe->hostgroup_id);
 #endif
-			if (trxid) {
+			do {
+				if (trxid) {
 #ifdef PROXYSQL31
-				// IAM checkouts may require asynchronous token acquisition or a fresh
-				// connection, so retain their separate waiter FIFO classification.
-				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
-					backend_auth_type == MySQLBackendAuthType::AWS_IAM);
-				last_pool_gtid = true;
-				last_pool_max_lag_ms = -1;
+					// IAM checkouts may require asynchronous token acquisition or a fresh
+					// connection, so retain their separate waiter FIFO classification.
+					last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
+						backend_auth_type == MySQLBackendAuthType::AWS_IAM);
+					last_pool_gtid = true;
+					last_pool_max_lag_ms = -1;
 #endif // PROXYSQL31
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
-					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
-					uuid, trxid, -1, backend_auth_type
+					mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
+						(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
+						uuid, trxid, -1, backend_auth_type
 #ifdef PROXYSQL31
-                    , acquire_mode
+	                    , acquire_mode
 #endif
-                );
-			} else {
+	                );
+				} else {
 #ifdef PROXYSQL31
-				last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
-					backend_auth_type == MySQLBackendAuthType::AWS_IAM);
-				last_pool_gtid = false;
-				last_pool_max_lag_ms = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
+					last_pool_ff = (session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection ||
+						backend_auth_type == MySQLBackendAuthType::AWS_IAM);
+					last_pool_gtid = false;
+					last_pool_max_lag_ms = gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms;
 #endif // PROXYSQL31
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
-					(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
-					NULL, 0, gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms, backend_auth_type
+					mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this,
+						(session_fast_forward || qpo->create_new_conn || force_fresh_iam_connection),
+						NULL, 0, gtid_writer_fallback ? -1 : (int)qpo->max_lag_ms, backend_auth_type
 #ifdef PROXYSQL31
-                    , acquire_mode
+	                    , acquire_mode
 #endif
-                );
-			}
+	                );
+				}
 #ifdef PROXYSQL31
-            if (!mc && acquire_mode == Pool_Acquire_Mode::EstablishedOnly) {
-                established_checkout_unavailable = true;
-                return;
-            }
+				if (!mc && acquire_mode == Pool_Acquire_Mode::EstablishedOnly) {
+					established_checkout_unavailable = true;
+					return;
+				}
 #endif
-			thread->note_pool_attempt(mc == NULL);
+				thread->note_pool_attempt(mc == NULL);
+				if (!mc || !mc->has_unread_bytes()) {
+					break;
+				}
+				mc->send_quit = false;
+				MyHGM->destroy_MyConn_from_pool(mc);
+				mc = NULL;
+			} while (true);
 #ifdef STRESSTEST_POOL
 			if (mc && (loops < NUM_SLOW_LOOPS - 1)) {
 				if (mc->mysql) {

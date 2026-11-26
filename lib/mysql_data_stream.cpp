@@ -2131,6 +2131,11 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 			sess->last_HG_affected_rows = -1;
 		}
 	}
+	if (mc->has_unread_bytes()) {
+		// Do not queue a reset that could consume the unread bytes as its reply.
+		destroy_MySQL_Connection_From_Pool(false);
+		return;
+	}
 
 	if (!mc->reusable) {
 		destroy_MySQL_Connection_From_Pool(true);
