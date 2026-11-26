@@ -4,6 +4,7 @@
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+include $(PROXYSQL_PATH)/test/tap/connector_tier.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
 
@@ -77,7 +78,6 @@ LDIRS += -L$(PROTOBUF_LDIR)
 endif
 
 
-LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
 ODIR := $(PROXYSQL_PATH)/obj
 
@@ -228,20 +228,11 @@ tests:
 	@echo "Removing empty .gcno files ..."
 	find -L . -type f -name '*.gcno' -empty -ls -delete
 
-# test_mysqlx_*-t.cpp reference chassis/plugin types (ProxySQL_PluginServices,
-# mysqlx_config_store.h from plugins/mysqlx/include) that only exist when
-# libproxysql.a was built with -DPROXYSQL40.  Autodetect the flag via a
-# chassis-exclusive symbol in the static lib; under !PROXYSQL40 filter
-# these tests out of the wildcard glob so plain v3.0/v3.1 `make debug`
-# doesn't try to compile them.
-LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
-PROXYSQL40_DETECTED := $(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase)
-
 # Tests that use GNU ld --wrap (unsupported on macOS)
 TESTS_FILTER_DARWIN := test_wexecvp_syscall_failures-t
 TESTS_CPP_FILTER := $(if $(filter Darwin,$(UNAME_S)),$(TESTS_FILTER_DARWIN),)
 
-ifeq ($(PROXYSQL40_DETECTED),0)
+ifneq ($(PROXYSQL40),1)
 TESTS_CPP := $(filter-out test_mysqlx_% test_aws_iam_% test_duckdb_plugin_load-t test_duckdb_bench-t $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
 else
 TESTS_CPP := $(filter-out $(TESTS_CPP_FILTER),$(patsubst %.cpp,%,$(wildcard *-t.cpp)))
@@ -395,13 +386,6 @@ $(DUCKDB_STATIC_LOADER_SRCS): $(DUCKDB_AR)
 	@test -s $@ || { echo "ERROR: missing DuckDB static extension loader: $@; rebuild deps/duckdb" >&2; exit 1; }
 
 ifeq ($(PROXYSQL40),1)
-USE_DUCKDB_BENCH := 1
-endif
-ifneq ($(PROXYSQL40_DETECTED),0)
-USE_DUCKDB_BENCH := 1
-endif
-
-ifeq ($(USE_DUCKDB_BENCH),1)
 test_duckdb_bench-t: test_duckdb_bench-t.cpp $(TAP_LDIR)/libtap$(SHLIB_EXT) $(DUCKDB_AR) $(DUCKDB_STATIC_LOADER_SRCS)
 	$(CXX) $< $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		$(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) \

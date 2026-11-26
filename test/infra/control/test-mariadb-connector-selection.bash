@@ -22,7 +22,8 @@ expect_path() {
 	fi
 }
 
-for directory in deps lib src test/tap/tests test/tap/tests/unit test/PrepStmt; do
+for directory in deps lib src test/tap/tap test/tap/tests test/tap/tests/unit \
+	test/tap/tests_with_deps/deprecate_eof_support test/PrepStmt; do
 	expect_path "$directory" '' '' mariadb_client
 	expect_path "$directory" 0 1 mariadb_client
 	expect_path "$directory" 1 1 mariadb-connector-c-3.4.11-src

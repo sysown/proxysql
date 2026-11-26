@@ -34,16 +34,7 @@ aws_public_provider_boundary-t:
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
-
-# Direct unit builds infer the tier from the built core when the caller
-# leaves it unspecified. Resolve it before selecting any dependency paths.
-LIBPROXYSQLAR ?= $(PROXYSQL_PATH)/lib/libproxysql.a
-ifeq ($(origin PROXYSQL40),undefined)
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase),0)
-PROXYSQL40 := 1
-endif
-endif
-
+include $(PROXYSQL_PATH)/test/tap/connector_tier.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
 
