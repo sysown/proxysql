@@ -37,7 +37,7 @@ jobs:
       - name: Install Connector/C build prerequisites
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake perl zlib1g-dev
       - name: Build and link Stable, v4.0, then Stable again
-        run: test/infra/control/test-mariadb-connector-selection.bash --linked
+        run: bash test/infra/control/test-mariadb-connector-selection.bash --linked
 
   connector-regressions-asan:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
