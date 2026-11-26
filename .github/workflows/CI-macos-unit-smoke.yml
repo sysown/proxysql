@@ -65,6 +65,20 @@ jobs:
             exit 1
           fi
         done
+    - name: Build and smoke test the v4.0 macOS tarball
+      if: ${{ matrix.tier == 'v40' }}
+      run: |
+        set -euo pipefail
+        package_dir=$(mktemp -d "$RUNNER_TEMP/proxysql-package.XXXXXX")
+        cd "$package_dir"
+        archive="proxysql-macos-$(uname -m).tar.gz"
+        tar -C "$GITHUB_WORKSPACE/src" -czf "$archive" proxysql
+        shasum -a 256 "$archive" | tee "$archive.sha256"
+        shasum -a 256 -c "$archive.sha256"
+        test "$(tar -tzf "$archive")" = proxysql
+        tar -xzf "$archive"
+        cmp proxysql "$GITHUB_WORKSPACE/src/proxysql"
+        ./proxysql --version | grep '^ProxySQL version 4\.'
     needs: tier-selection
     strategy:
       fail-fast: false
