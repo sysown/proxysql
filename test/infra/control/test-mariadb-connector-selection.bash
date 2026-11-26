@@ -8,8 +8,11 @@ probe() {
 	local directory=$1 tier40=$2 tier31=$3
 	make --no-print-directory -s -C "$repo/$directory" \
 		PROXYSQL40="$tier40" PROXYSQL31="$tier31" \
-		--eval $'.PHONY: connector-path\nconnector-path:\n\t@printf "%s\\n" "$(MARIADB_PATH)"' \
-		connector-path
+		-f Makefile -f - connector-path <<'MAKEFILE'
+.PHONY: connector-path
+connector-path:
+	@printf '%s\n' '$(MARIADB_PATH)'
+MAKEFILE
 }
 
 expect_path() {

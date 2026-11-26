@@ -16,7 +16,8 @@ MARIADB_V40_PATCHES += mariadb_stmt.c.patch mariadb_lib.c.patch \
 	mariadb_lib.c.collation.patch mariadb_lib.c.ipv6_fix.patch \
 	mariadb_async.c.patch ma_password.c.patch mysql.h.patch tls_server_name.patch \
 	ma_priv.h.patch ma_alloc.c.patch ma_charset.c.patch unittest_basic-t.c.patch \
-	unittest_charset.c.patch mariadb_dyncol.c-multiplication-overflow.patch \
+	unittest_charset.c.patch ed25519_visibility.patch \
+	mariadb_dyncol.c-multiplication-overflow.patch \
 	ma_array.c-multiplication-overflow.patch zutil.c-multiplication-overflow.patch \
 	cr_new_stmt_metadata_removal.patch ps_buffer_stmt_read_all_rows.patch \
 	mariadb_stmt_store_result_err.patch empty_split_compress_packet.patch \

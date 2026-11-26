@@ -25,8 +25,12 @@ test -f "${openssl_root}/libcrypto.a" || fail "vendored libcrypto.a is not built
 if [[ ${PROXYSQL40:-0} == 1 ]]; then
 	# Exercise the archive built by the v4.0 production rules and its patched source.
 	source_dir=$(make -C "${repo_root}/deps" --no-print-directory -s PROXYSQL40=1 \
-		--eval $'.PHONY: connector-path\nconnector-path:\n\t@printf "%s\\n" "$(MARIADB_PATH)"' \
-		connector-path)
+		-f Makefile -f - connector-path <<'MAKEFILE'
+.PHONY: connector-path
+connector-path:
+	@printf '%s\n' '$(MARIADB_PATH)'
+MAKEFILE
+	)
 else
 	tar --no-same-owner -zxf \
 		"${connector_dir}/mariadb-connector-c-3.3.8-src.tar.gz" \

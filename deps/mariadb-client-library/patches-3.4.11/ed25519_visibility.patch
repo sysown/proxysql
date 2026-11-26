@@ -1,0 +1,20 @@
+--- plugins/auth/ref10/crypto_sign.h
++++ plugins/auth/ref10/crypto_sign.h
+@@ -1,3 +1,7 @@
++/* ProxySQL's core and shared TAP library use these two entry points. */
++#if defined(__GNUC__)
++__attribute__((visibility("default")))
++#endif
+ int crypto_sign_keypair(
+   unsigned char *pk,
+   unsigned char *pw, unsigned long long pwlen
+@@ -7,6 +11,9 @@
+   const unsigned char *m, unsigned long long mlen,
+   const unsigned char *pw, unsigned long long pwlen
+ );
++#if defined(__GNUC__)
++__attribute__((visibility("default")))
++#endif
+ int crypto_sign_open(
+   unsigned char *sm, unsigned long long smlen,
+   const unsigned char *pk
