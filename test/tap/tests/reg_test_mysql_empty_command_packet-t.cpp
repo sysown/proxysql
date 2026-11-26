@@ -67,6 +67,10 @@ bool query_works(const char* host, int port, const char* user, const char* pass)
 	bool res = mysql_query(conn, "SELECT 1") == 0;
 	if (res) {
 		MYSQL_RES* r = mysql_store_result(conn);
+		if (r == NULL) {
+			diag("Fetching the result failed: %s", mysql_error(conn));
+			res = false;
+		}
 		mysql_free_result(r);
 	} else {
 		diag("Query failed: %s", mysql_error(conn));
