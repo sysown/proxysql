@@ -97,11 +97,11 @@ variables are unaffected. Session-local `PRAGMA` commands such as
 `PRAGMA enable_optimizer` are allowed; configuration assignments written as
 `PRAGMA name=value` are refused, so use `SET SESSION` for session settings.
 
-Only narrow client-compatibility commands are accepted as no-ops:
-
-- `SET autocommit=0`
-- `SET autocommit=1`
-- a single `SET NAMES ...` command
+On the MySQL listener, `SET autocommit=0` is refused (MySQL error 1235 / SQLSTATE
+`0A000`), because native implicit transactions are not implemented.
+`SET autocommit=1` is accepted when already enabled. A single `SET NAMES`
+command is accepted; use `utf8`, `utf8mb3`, or `utf8mb4` for MySQL prepared
+execution.
 
 Other `SET` statements are not swallowed. A `SET NAMES` packet containing a
 second statement is rejected by the normal one-statement preparation path.
@@ -192,21 +192,37 @@ verify the new database explicitly.
 
 ## Client-library guidance
 
-Choose APIs that issue simple text queries:
+Use `mysql_query`/`mysql_real_query` or `PQexec` for text queries. Native
+prepared reads and writes are available with `PROXYSQL40=1`, including DML
+inside an explicit client transaction. See the
+[protocol compatibility guide](protocol-compatibility.md#prepared-queries) for
+types, encoding and parser limitations. Parameterize untrusted values rather
+than concatenating them into SQL. For example, with an existing typed table
+`t(v BIGINT)`, a MariaDB C API client can bind an integer predicate:
 
-- MySQL: `mysql_query`, `mysql_real_query`, or equivalent non-prepared APIs.
-- PostgreSQL: `PQexec` or a driver mode that uses the simple Query message.
+```c
+MYSQL_STMT *stmt = mysql_stmt_init(conn);
+const char *sql = "SELECT v FROM t WHERE v = ?";
+mysql_stmt_prepare(stmt, sql, strlen(sql));
+long long value = 42;
+MYSQL_BIND bind[1] = {0};
+bind[0].buffer_type = MYSQL_TYPE_LONGLONG;
+bind[0].buffer = &value;
+mysql_stmt_bind_param(stmt, bind);
+mysql_stmt_execute(stmt);
+/* Bind and fetch the result, check every return value, then close stmt. */
+```
 
-Client-side prepared-statement APIs are not available yet. The core framework
-is tracked in [#6298](https://github.com/sysown/proxysql/issues/6298), followed by
-the DuckDB adapter in [#6282](https://github.com/sysown/proxysql/issues/6282).
-New dialect compatibility in [#6284](https://github.com/sysown/proxysql/issues/6284)
-must use vendored ParserSQL; the experimental custom SELECT translator has been
-removed. Use native DuckDB SQL.
-PostgreSQL drivers often choose extended protocol automatically for parameters;
-configure simple-query mode or send fully formed trusted SQL where appropriate.
-Never replace parameter binding with unsafe string concatenation for untrusted
-input.
+With libpq, supply the parameter OID and a resolvable output type:
+
+```c
+Oid types[] = {20}; /* int8 */
+PGresult *r = PQprepare(conn, "by_value", "SELECT CAST($1 AS BIGINT)", 1, types);
+/* Check PQresultStatus(r), then PQclear(r). */
+const char *values[] = {"42"};
+r = PQexecPrepared(conn, "by_value", 1, values, NULL, NULL, 0);
+/* Check, consume and PQclear(r). */
+```
 
 ## Closing sessions
 

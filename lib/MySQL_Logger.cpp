@@ -564,6 +564,10 @@ uint64_t MySQL_Event::write(LogBuffer *f, MySQL_Session *sess) {
 		case PROXYSQL_SQLITE_AUTH_ERR:
 		case PROXYSQL_SQLITE_AUTH_CLOSE:
 		case PROXYSQL_SQLITE_AUTH_QUIT:
+		case PROXYSQL_DUCKDB_AUTH_OK:
+		case PROXYSQL_DUCKDB_AUTH_ERR:
+		case PROXYSQL_DUCKDB_AUTH_CLOSE:
+		case PROXYSQL_DUCKDB_AUTH_QUIT:
 			write_auth(f, sess);
 			break;
 		case PROXYSQL_METADATA:
@@ -674,6 +678,18 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 		case PROXYSQL_SQLITE_AUTH_QUIT:
 			j["event"]="SQLite3_Quit";
 			break;
+		case PROXYSQL_DUCKDB_AUTH_OK:
+			j["event"]="DuckDB_Connect_OK";
+			break;
+		case PROXYSQL_DUCKDB_AUTH_ERR:
+			j["event"]="DuckDB_Connect_ERR";
+			break;
+		case PROXYSQL_DUCKDB_AUTH_CLOSE:
+			j["event"]="DuckDB_Close";
+			break;
+		case PROXYSQL_DUCKDB_AUTH_QUIT:
+			j["event"]="DuckDB_Quit";
+			break;
 		default:
 			break;
 	}
@@ -681,6 +697,7 @@ void MySQL_Event::write_auth(LogBuffer *f, MySQL_Session *sess) {
 		case PROXYSQL_MYSQL_AUTH_CLOSE:
 		case PROXYSQL_ADMIN_AUTH_CLOSE:
 		case PROXYSQL_SQLITE_AUTH_CLOSE:
+		case PROXYSQL_DUCKDB_AUTH_CLOSE:
 			{
 				uint64_t curtime_real=realtime_time();
 				uint64_t curtime_mono=sess->thread->curtime;
@@ -1802,6 +1819,9 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 						break;
 					case PROXYSQL_SESSION_SQLITE:
 						_et = PROXYSQL_SQLITE_AUTH_OK;
+						break;
+					case PROXYSQL_SESSION_DUCKDB:
+						_et = PROXYSQL_DUCKDB_AUTH_OK;
 					default:
 						break;
 				}
@@ -1814,6 +1834,9 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 						break;
 					case PROXYSQL_SESSION_SQLITE:
 						_et = PROXYSQL_SQLITE_AUTH_ERR;
+						break;
+					case PROXYSQL_SESSION_DUCKDB:
+						_et = PROXYSQL_DUCKDB_AUTH_ERR;
 					default:
 						break;
 				}
@@ -1826,6 +1849,9 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 						break;
 					case PROXYSQL_SESSION_SQLITE:
 						_et = PROXYSQL_SQLITE_AUTH_QUIT;
+						break;
+					case PROXYSQL_SESSION_DUCKDB:
+						_et = PROXYSQL_DUCKDB_AUTH_QUIT;
 					default:
 						break;
 				}
@@ -1838,6 +1864,9 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 						break;
 					case PROXYSQL_SESSION_SQLITE:
 						_et = PROXYSQL_SQLITE_AUTH_CLOSE;
+						break;
+					case PROXYSQL_SESSION_DUCKDB:
+						_et = PROXYSQL_DUCKDB_AUTH_CLOSE;
 					default:
 						break;
 				}

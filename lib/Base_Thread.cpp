@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
+#include "DataStreamOutputPending.h"
 #include "Session_Scheduler.h"
 
 
@@ -28,6 +29,11 @@ template void Base_Thread::register_session(MySQL_Thread*, MySQL_Session*, bool)
 template void Base_Thread::register_session(PgSQL_Thread*, PgSQL_Session*, bool);
 template void Base_Thread::run_SetAllSession_ToProcess0<MySQL_Thread, MySQL_Session>();
 template void Base_Thread::run_SetAllSession_ToProcess0<PgSQL_Thread, PgSQL_Session>();
+#ifdef IDLE_THREADS
+// Called directly by the idle-thread move unit test (#6679).
+template bool Base_Thread::move_session_to_idle_mysql_sessions<MySQL_Thread, MySQL_Data_Stream>(MySQL_Data_Stream*, unsigned int);
+template bool Base_Thread::move_session_to_idle_mysql_sessions<PgSQL_Thread, PgSQL_Data_Stream>(PgSQL_Data_Stream*, unsigned int);
+#endif // IDLE_THREADS
 
 Base_Thread::Base_Thread() :
 	curtime(0),
@@ -666,8 +672,10 @@ bool Base_Thread::move_session_to_idle_mysql_sessions(DS * myds, unsigned int n)
 
 	if (_tmp_idle < ( (curtime > (unsigned int)session_idle_ms * 1000) ? (curtime - session_idle_ms * 1000) : 0)) {
 		// make sure data stream has no pending data out and session is not throttled (#1939)
-		// because epoll thread does not handle data stream with data out
-		if (myds->sess->client_myds == myds && !myds->available_data_out() && myds->sess->pause_until <= curtime) {
+		// because epoll thread does not handle data stream with data out: idle threads poll
+		// for EPOLLIN only and never write. For TLS this includes ciphertext kept after a
+		// short write, while the plaintext queues are already empty (#6679).
+		if (myds->sess->client_myds == myds && !proxysql_stream_output_pending(*myds) && myds->sess->pause_until <= curtime) {
 			//unsigned int j;
 			bool has_backends = myds->sess->has_any_backend();
 			if (has_backends==false) {

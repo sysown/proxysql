@@ -38,6 +38,7 @@ public:
 	// Cross-field checks that a per-variable set() cannot make.
 	bool validate(std::string& err) const;
 
+	std::string mysql_dialect() const;
 	std::string database_path() const;
 	std::string memory_limit() const;
 	int threads() const;

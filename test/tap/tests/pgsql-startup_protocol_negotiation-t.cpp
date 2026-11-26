@@ -28,8 +28,7 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
-
-constexpr int TIMEOUT_SEC = 5;
+#include "pgsql_raw_client.h"
 
 constexpr uint32_t PG_PROTOCOL_30 = 0x00030000;  // what ProxySQL speaks
 constexpr uint32_t PG_PROTOCOL_32 = 0x00030002;  // PostgreSQL 18, negotiated down to 3.0
@@ -40,87 +39,6 @@ constexpr uint32_t PG_SSL_REQUEST_CODE = 80877103;
 // The frontend user the probes log in as. None of them completes authentication, but ProxySQL
 // answers with a challenge either way, so the value only has to be the one the harness configured.
 static std::string frontend_user;
-
-static int create_raw_connection(const std::string& host, int port) {
-	struct addrinfo hints {};
-	struct addrinfo* result = nullptr;
-	int sock = -1;
-
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-
-	if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &result) != 0) {
-		return -1;
-	}
-
-	for (struct addrinfo* rp = result; rp != nullptr; rp = rp->ai_next) {
-		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		if (sock < 0) continue;
-
-		struct timeval timeout { TIMEOUT_SEC, 0 };
-		setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-		int flag = 1;
-		setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
-
-		if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0) break;
-		close(sock);
-		sock = -1;
-	}
-
-	freeaddrinfo(result);
-	return sock;
-}
-
-static void put_uint32(std::vector<uint8_t>& pkt, uint32_t val) {
-	pkt.push_back((val >> 24) & 0xFF);
-	pkt.push_back((val >> 16) & 0xFF);
-	pkt.push_back((val >> 8) & 0xFF);
-	pkt.push_back(val & 0xFF);
-}
-
-static uint32_t get_uint32(const std::vector<uint8_t>& buf, size_t off) {
-	return ((uint32_t)buf[off] << 24) | ((uint32_t)buf[off + 1] << 16) |
-		   ((uint32_t)buf[off + 2] << 8) | (uint32_t)buf[off + 3];
-}
-
-static bool send_exact(int sock, const void* buf, size_t len, SSL* tls = nullptr) {
-	const char* p = (const char*)buf;
-	while (len) {
-		ssize_t n = tls ? SSL_write(tls, p, len) : send(sock, p, len, MSG_NOSIGNAL);
-		if (n <= 0) return false;
-		p += n;
-		len -= n;
-	}
-	return true;
-}
-
-static bool recv_exact(int sock, void* buf, size_t len, SSL* tls = nullptr) {
-	char* p = (char*)buf;
-	while (len) {
-		ssize_t n = tls ? SSL_read(tls, p, len) : recv(sock, p, len, 0);
-		if (n <= 0) return false;
-		p += n;
-		len -= n;
-	}
-	return true;
-}
-
-/** Reads one message. Returns false when the peer closed instead of answering. */
-static bool read_message(int sock, char& type, std::vector<uint8_t>& body, SSL* tls = nullptr) {
-	// '?' means nothing came back, so a failed read cannot leave the previous message's type
-	// behind and report a reply that never arrived.
-	type = '?';
-	if (!recv_exact(sock, &type, 1, tls)) return false;
-
-	uint8_t len_buf[4];
-	if (!recv_exact(sock, len_buf, 4, tls)) return false;
-	int32_t len = ((int32_t)len_buf[0] << 24) | ((int32_t)len_buf[1] << 16) |
-				  ((int32_t)len_buf[2] << 8) | (int32_t)len_buf[3];
-	if (len < 4) return false;
-
-	body.resize(len - 4);
-	return body.empty() || recv_exact(sock, body.data(), body.size(), tls);
-}
 
 /**
  * @brief Asks for TLS and completes the handshake, returning the encrypted channel.
@@ -150,23 +68,6 @@ static SSL* tls_connect(int sock, SSL_CTX** out_ctx) {
 	}
 	*out_ctx = ctx;
 	return tls;
-}
-
-/** The startup packet bytes for a given version, used on an already-encrypted connection. */
-static std::vector<uint8_t> startup_packet(uint32_t version) {
-	std::vector<uint8_t> pkt(4);
-	put_uint32(pkt, version);
-	for (const std::string& p : {std::string("user"), frontend_user, std::string("database"), std::string("postgres")}) {
-		pkt.insert(pkt.end(), p.begin(), p.end());
-		pkt.push_back(0);
-	}
-	pkt.push_back(0);
-	const uint32_t len = pkt.size();
-	pkt[0] = (len >> 24) & 0xFF;
-	pkt[1] = (len >> 16) & 0xFF;
-	pkt[2] = (len >> 8) & 0xFF;
-	pkt[3] = len & 0xFF;
-	return pkt;
 }
 
 /** Opens a connection and sends a startup packet asking for `version`. */
@@ -199,20 +100,6 @@ static int send_startup(const std::string& host, int port, uint32_t version,
 		return -1;
 	}
 	return sock;
-}
-
-/** The SQLSTATE carried in an ErrorResponse, or "" when the field is absent. */
-static std::string error_sqlstate(const std::vector<uint8_t>& body) {
-	for (size_t i = 0; i + 1 < body.size() && body[i] != 0;) {
-		const char field = body[i];
-		// Bounded on purpose: a truncated reply must not walk off the end of the buffer.
-		const void* nul = memchr(&body[i + 1], 0, body.size() - (i + 1));
-		if (nul == nullptr) break;
-		const std::string value((const char*)&body[i + 1]);
-		if (field == 'C') return value;
-		i += 1 + value.size() + 1;
-	}
-	return "";
 }
 
 int main(int argc, char** argv) {
@@ -284,7 +171,7 @@ int main(int argc, char** argv) {
 		int sock = send_startup(host, port, PG_PROTOCOL_40, {});
 		bool got = sock >= 0 && read_message(sock, type, body);
 		ok(got && type == 'E', "protocol 4.0: refused with an error packet, not a silent close (got '%c')", type);
-		const std::string sqlstate = got ? error_sqlstate(body) : "";
+		const std::string sqlstate = got ? error_field(body, 'C') : "";
 		ok(sqlstate == "0A000", "protocol 4.0: refused as feature-not-supported (SQLSTATE '%s')", sqlstate.c_str());
 		if (sock >= 0) close(sock);
 	}
@@ -329,7 +216,7 @@ int main(int argc, char** argv) {
 		int sock = create_raw_connection(host, port);
 		SSL* tls = (sock >= 0) ? tls_connect(sock, &ctx) : nullptr;
 
-		const std::vector<uint8_t> pkt = startup_packet(PG_PROTOCOL_32);
+		const std::vector<uint8_t> pkt = startup_packet(PG_PROTOCOL_32, frontend_user);
 		bool got = tls != nullptr && send_exact(sock, pkt.data(), pkt.size(), tls) &&
 				   read_message(sock, type, body, tls);
 		const uint32_t version = (got && type == 'v' && body.size() >= 8) ? get_uint32(body, 0) : 0;
@@ -351,10 +238,10 @@ int main(int argc, char** argv) {
 		int sock = create_raw_connection(host, port);
 		SSL* tls = (sock >= 0) ? tls_connect(sock, &ctx) : nullptr;
 
-		const std::vector<uint8_t> pkt = startup_packet(PG_PROTOCOL_40);
+		const std::vector<uint8_t> pkt = startup_packet(PG_PROTOCOL_40, frontend_user);
 		const bool got = tls != nullptr && send_exact(sock, pkt.data(), pkt.size(), tls) &&
 						 read_message(sock, type, body, tls);
-		const std::string sqlstate = got ? error_sqlstate(body) : "";
+		const std::string sqlstate = got ? error_field(body, 'C') : "";
 		ok(got && type == 'E' && sqlstate == "0A000",
 		   "TLS + protocol 4.0: refused with an error packet over TLS (got '%c', SQLSTATE '%s')",
 		   type, sqlstate.c_str());
@@ -386,7 +273,7 @@ int main(int argc, char** argv) {
 
 		const bool got = tls != nullptr && send_exact(sock, pkt.data(), pkt.size(), tls) &&
 						 read_message(sock, type, body, tls);
-		const std::string sqlstate = got ? error_sqlstate(body) : "";
+		const std::string sqlstate = got ? error_field(body, 'C') : "";
 		ok(got && type == 'E' && sqlstate == "28000",
 		   "TLS + startup with no user name: refused with an error packet (got '%c', SQLSTATE '%s')",
 		   type, sqlstate.c_str());

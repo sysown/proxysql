@@ -205,7 +205,12 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 	this->metrics.p_gauge_array[p_admin_gauge::auth_memory_bytes]->Set(mu);
 
 	// proxysql_query_digest_memory metric
+#ifdef PROXYSQL31
+	const auto& query_digest_t_size = GloMyQPro ?
+		GloMyQPro->get_query_digests_total_size(variables.stats_query_digest_memory_refresh_pct) : 0;
+#else
 	const auto& query_digest_t_size = GloMyQPro ? GloMyQPro->get_query_digests_total_size() : 0;
+#endif
 	this->metrics.p_gauge_array[p_admin_gauge::query_digest_memory_bytes]->Set(query_digest_t_size);
 
 	// mysql_query_rules_memory metric
@@ -348,7 +353,11 @@ void ProxySQL_Admin::stats___memory_metrics() {
 	}
 	{
 		if (GloMyQPro) {
+#ifdef PROXYSQL31
+			unsigned long long mu = GloMyQPro->get_query_digests_total_size(variables.stats_query_digest_memory_refresh_pct);
+#else
 			unsigned long long mu = GloMyQPro->get_query_digests_total_size();
+#endif
 			vn=(char *)"mysql_query_digest_memory";
 			snprintf(bu, sizeof(bu),"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
@@ -366,7 +375,11 @@ void ProxySQL_Admin::stats___memory_metrics() {
 			free(query);
 		}
 		if (GloPgQPro) {
+#ifdef PROXYSQL31
+			unsigned long long mu = GloPgQPro->get_query_digests_total_size(variables.stats_query_digest_memory_refresh_pct);
+#else
 			unsigned long long mu = GloPgQPro->get_query_digests_total_size();
+#endif
 			vn = (char*)"pgsql_query_digest_memory";
 			snprintf(bu, sizeof(bu), "%llu", mu);
 			query = (char*)malloc(strlen(a) + strlen(vn) + strlen(bu) + 16);

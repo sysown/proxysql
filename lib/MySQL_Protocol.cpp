@@ -354,6 +354,7 @@ bool MySQL_Protocol::generate_pkt_EOF(bool send, void **ptr, unsigned int *len, 
 	if (sess) {
 		switch (sess->session_type) {
 			case PROXYSQL_SESSION_SQLITE:
+			case PROXYSQL_SESSION_DUCKDB:
 			case PROXYSQL_SESSION_ADMIN:
 			case PROXYSQL_SESSION_STATS:
 				internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
@@ -510,6 +511,10 @@ MySQLFrontendAuthError MySQL_Protocol::consume_frontend_auth_error() {
 #endif
 
 bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg, bool eof_identifier) {
+	return generate_pkt_OK64(send, ptr, len, sequence_id, affected_rows, last_insert_id, status, warnings, msg, eof_identifier);
+}
+
+bool MySQL_Protocol::generate_pkt_OK64(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg, bool eof_identifier) {
 	if ((*myds)->sess->mirror==true) {
 		return true;
 	}
@@ -575,6 +580,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	if (sess) {
 		switch (sess->session_type) {
 			case PROXYSQL_SESSION_SQLITE:
+			case PROXYSQL_SESSION_DUCKDB:
 			case PROXYSQL_SESSION_ADMIN:
 			case PROXYSQL_SESSION_STATS:
 				internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
@@ -955,6 +961,27 @@ bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len
 // FIXME FIXME function not completed yet!
 // see https://dev.mysql.com/doc/internals/en/com-stmt-prepare-response.html
 bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info, uint32_t _stmt_id) {
+	pthread_rwlock_rdlock(&stmt_info->rwlock_);
+	int Trx_id = (*myds)->sess->FindOneActiveTransaction();
+	int setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0);
+	if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
+	bool result = generate_STMT_PREPARE_RESPONSE(sequence_id,
+		_stmt_id ? _stmt_id : static_cast<uint32_t>(stmt_info->statement_id),
+		stmt_info->num_params, stmt_info->num_columns, stmt_info->fields,
+		stmt_info->warning_count, setStatus);
+	pthread_rwlock_unlock(&stmt_info->rwlock_);
+	return result;
+}
+
+bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, uint32_t stmt_id,
+	uint16_t num_params, uint16_t num_columns, MYSQL_FIELD *const *fields,
+	uint16_t warnings, uint16_t server_status) {
+	if (num_columns && !fields) return false;
+	for (uint16_t i = 0; i < num_columns; ++i) {
+		const MYSQL_FIELD *field = fields[i];
+		if (!field || !field->db || !field->table || !field->org_table ||
+			!field->name || !field->org_name) return false;
+	}
 	uint8_t sid=sequence_id;
 	uint16_t i;
 	char *okpack=(char *)malloc(16); // first packet
@@ -965,42 +992,33 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 	okpack[4]=0;
 	okpack[13]=0;
 	okpack[15]=0;
-	pthread_rwlock_rdlock(&stmt_info->rwlock_);
-	if (_stmt_id) {
-		memcpy(okpack+5,&_stmt_id,sizeof(uint32_t));
-	} else {
-		memcpy(okpack+5,&stmt_info->statement_id,sizeof(uint32_t));
-	}
-	memcpy(okpack+9,&stmt_info->num_columns,sizeof(uint16_t));
-	memcpy(okpack+11,&stmt_info->num_params,sizeof(uint16_t));
-	memcpy(okpack+14,&stmt_info->warning_count,sizeof(uint16_t));
+	memcpy(okpack+5,&stmt_id,sizeof(uint32_t));
+	memcpy(okpack+9,&num_columns,sizeof(uint16_t));
+	memcpy(okpack+11,&num_params,sizeof(uint16_t));
+	memcpy(okpack+14,&warnings,sizeof(uint16_t));
 	(*myds)->PSarrayOUT->add((void *)okpack,16);
 	sid++;
-	int setStatus = 0;
-	unsigned int Trx_id = (*myds)->sess->FindOneActiveTransaction();
-	setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0 );
-	if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 	bool deprecate_eof_active = false;
 	if (*myds && (*myds)->myconn) {
 		if ((*myds)->myconn->options.client_flag & CLIENT_DEPRECATE_EOF) {
 			deprecate_eof_active = true;
 		}
 	}
-	if (stmt_info->num_params) {
-		for (i=0; i<stmt_info->num_params; i++) {
+	if (num_params) {
+		for (i=0; i<num_params; i++) {
 			generate_pkt_field(true,NULL,NULL,sid,
 				(char *)"", (char *)"", (char *)"", (char *)"?", (char *)"",
 				63,0,253,128,0,false,0,NULL); // NOTE: charset is 63 = binary !
 			sid++;
 		}
 		if (!deprecate_eof_active) {
-			generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
+			generate_pkt_EOF(true,NULL,NULL,sid,0,server_status);
 			sid++;
 		}
 	}
-	if (stmt_info->num_columns) {
-		for (i=0; i<stmt_info->num_columns; i++) {
-			MYSQL_FIELD *fd=stmt_info->fields[i];
+	if (num_columns) {
+		for (i=0; i<num_columns; i++) {
+			MYSQL_FIELD *fd=fields[i];
 			generate_pkt_field(true,NULL,NULL,sid,
 				fd->db,
 				fd->table, fd->org_table,
@@ -1009,11 +1027,10 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 			sid++;
 		}
 		if (!deprecate_eof_active) {
-			generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
+			generate_pkt_EOF(true,NULL,NULL,sid,0,server_status);
 			sid++;
 		}
 	}
-	pthread_rwlock_unlock(&stmt_info->rwlock_);
 	return true;
 }
 
@@ -1609,9 +1626,8 @@ bool MySQL_Protocol::verify_user_pass(
 		// EXCHANGE are deliberately two different scopes:
 		//   - Reservation (this denial): applies to every session type that
 		//     consumes GloMyAuth's USERNAME_FRONTEND credential scope, i.e.
-		//     PROXYSQL_SESSION_MYSQL *and* PROXYSQL_SESSION_SQLITE -- the
-		//     SQLite3-server frontend (ProxySQL's own admin-clone SQL port)
-		//     reads the same mysql_users rows. Narrowing this to MYSQL-only
+		//     MySQL, SQLite and DuckDB frontends. The
+		//     SQLite and DuckDB listeners read the same mysql_users rows. Narrowing this to MYSQL-only
 		//     reopened a cleartext fall-through on the SQLite3 port: a stored
 		//     "$ED$short" value would again be compared literally and the
 		//     stored string itself would authenticate there -- exactly what
@@ -1622,7 +1638,7 @@ bool MySQL_Protocol::verify_user_pass(
 		//     MYSQL-only. That is a protocol capability -- only a MySQL-wire
 		//     client can complete a MySQL Auth Switch -- not a trust
 		//     decision, so it is scoped independently of this reservation.
-		if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) && proxysql_ed25519_has_prefix(password)) {
+		if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) && proxysql_ed25519_has_prefix(password)) {
 			ret = false;
 		} else
 #endif
@@ -1637,18 +1653,15 @@ bool MySQL_Protocol::verify_user_pass(
 				ret=true;
 			}
 		} else if (auth_plugin_id == 2) { // caching_sha2_password
-			// ## FIXME: Current limitation
-			// For now, if a 'COM_CHANGE_USER' is received with a hashed 'password' for
-			// 'caching_sha2_password', we fail to authenticate. This is part of the broader limitation of
-			// 'Auth Switch' support for 'caching_sha2_password' (See
-			// https://proxysql.com/documentation/authentication-methods/#limitations).
-			//
-			// ## Future Fix
-			// The right approach is to perform an 'Auth Switch Request' or to accept the hash if the clear
-			// text password is already known and the hash can be verified. This processing is now performed
-			// in 'process_pkt_COM_CHANGE_USER', state at which it should be determine if we can accept the
-			// hash, or if we should prepare the state machine for a 'Auth Switch Request'. Progress for this
-			// is tracked in https://github.com/sysown/proxysql/issues/4618.
+			// Fail closed.
+			// - v3.1+ (PROXYSQL31): process_pkt_COM_CHANGE_USER never sends a
+			//   'caching_sha2_password' response here for the session types that can complete
+			//   an Auth Switch: it answers with an 'Auth Switch Request' and the handshake state
+			//   machine verifies the response (#4618). Only sessions that cannot switch get here.
+			// - v3.0 Stable: COM_CHANGE_USER with inline 'caching_sha2_password' data is a
+			//   documented limitation (https://proxysql.com/documentation/authentication-methods/#limitations).
+			//   The #4618 support is deliberately not backported to keep the Stable
+			//   authentication core unchanged.
 			ret = false;
 #ifdef PROXYSQLED25519
 		} else if (auth_plugin_id == AUTH_MYSQL_ED25519) {
@@ -1667,7 +1680,7 @@ bool MySQL_Protocol::verify_user_pass(
 			// SCRAMBLE_LENGTH (20) bytes, so it needs the same bound as the
 			// cleartext branch above. This is the COMMON path -- stored passwords are
 			// normally hashed ('*'-prefixed).
-			if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) &&
+			if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) &&
 				auth_response_has(pass_len, SCRAMBLE_LENGTH)) {
 				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
 				if (ret) {
@@ -1679,7 +1692,7 @@ bool MySQL_Protocol::verify_user_pass(
 				}
 			}
 		} else {
-			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
 				unsigned char md1_buf[SHA_DIGEST_LENGTH];
 				unsigned char md2_buf[SHA_DIGEST_LENGTH];
@@ -1907,7 +1920,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	#ifdef PROXYSQL31
 		&& !target_policy.has_spiffe_id
 	#endif
-		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE)) {
+		&& (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB)) {
 		// Rationale for the pre-mutation ordering and the two eligible
 		// cases is documented on the doxygen block above this gate.
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
@@ -1991,6 +2004,41 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
+#ifdef PROXYSQL31
+			// v3.1+ only (#4618): the Stable tier keeps the pre-#4618 behaviour below.
+			// A 'caching_sha2_password' client cannot be verified from the COM_CHANGE_USER
+			// packet alone: libmysqlclient-style clients send no auth data and wait for a
+			// scramble, while Connector/J-style clients send a SHA-256 scramble that can
+			// only be checked against a clear-text password, never against a stored
+			// hash. Answer with an 'Auth Switch Request' instead, and let the regular
+			// handshake state machine (process_pkt_handshake_response) authenticate the
+			// response exactly as it would a fresh connection on this transport: fast
+			// auth, full auth over TLS or RSA, stored '*'/'$A$' hashes, additional
+			// password. The switch keeps the plugin advertised in this connection's
+			// initial handshake: 'caching_sha2_password', or 'mysql_native_password'
+			// (same as PPHR_3/PPHR_4auth0 do for a fresh connection). See #4618.
+			const bool client_sha2 =
+				strcmp(client_auth_plugin, plugins[AUTH_MYSQL_CACHING_SHA2_PASSWORD]) == 0;
+			const bool switch_capable_session =
+				session_type == PROXYSQL_SESSION_MYSQL ||
+				session_type == PROXYSQL_SESSION_SQLITE ||
+				session_type == PROXYSQL_SESSION_DUCKDB;
+			if (client_sha2 && switch_capable_session) {
+				(*myds)->switching_auth_type =
+					sent_auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
+						? AUTH_MYSQL_CACHING_SHA2_PASSWORD : AUTH_MYSQL_NATIVE_PASSWORD;
+				// Start a new exchange: the initial login may have left a full-auth stage
+				// (5) behind, which would make the sha2 state machine read the scramble
+				// as a clear-text password.
+				(*myds)->switching_auth_stage = 0;
+				(*myds)->auth_in_progress = 0;
+				(*myds)->sess->change_user_auth_switch = true;
+
+				generate_pkt_auth_switch_request(true, NULL, NULL);
+				(*myds)->myconn->userinfo->set((char *)user, NULL, db, NULL);
+				ret = false;
+			} else
+#endif // PROXYSQL31
 			// If pass not sent within 'COM_CHANGE_USER' packet, an 'Auth Switch Request'
 			// is required. We default to 'mysql_native_password'. See #3504 for more context.
 			if (pass_len == 0) {
@@ -2165,12 +2213,25 @@ int MySQL_Protocol::PPHR_decrypt_caching_sha2_rsa_response(
 	vars1.db = (*myds)->myconn->userinfo->schemaname;
 	vars1.charset = (*myds)->tmp_charset;
 	vars1.capabilities = (*myds)->myconn->options.client_flag;
+	PPHR_keep_compression(vars1);
 	auth_plugin_id = (*myds)->switching_auth_type;
 	(*myds)->switching_auth_stage = 5;
 	frontend_auth_error_ = MySQLFrontendAuthError::NONE;
 	return 2;
 }
 #endif
+
+#ifdef PROXYSQL31
+// A continuation packet of the auth exchange (Auth Switch response, caching_sha2 full
+// auth, RSA) carries no capability or compression data: PPHR_SetConnAttrs would rebuild
+// the compression settings from empty temporaries and clear the zstd choice the first
+// packet negotiated, while the connection keeps compressing. zstd clients would then get
+// zlib frames. Carry the already negotiated zstd choice into the continuation.
+void MySQL_Protocol::PPHR_keep_compression(MyProt_tmp_auth_vars& vars1) {
+	vars1.use_zstd_compression = (*myds)->myconn->options.compression_zstd;
+	vars1.zstd_compression_level = (*myds)->myconn->options.zstd_compression_level;
+}
+#endif // PROXYSQL31
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
 int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 1
@@ -2188,7 +2249,24 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 		(*myds)->switching_auth_stage=5;
 	}
 	(*myds)->auth_in_progress = 0;
+	// Response to a COM_CHANGE_USER 'Auth Switch Request' for 'caching_sha2_password'
+	// (process_pkt_COM_CHANGE_USER): the raw 32-byte SHA-256 scramble, not NUL
+	// terminated, or a single 0x00 when the client has no password. The initial
+	// handshake never switches to 'caching_sha2_password', so stage 0 with this plugin
+	// is only reached from COM_CHANGE_USER. v3.1+ only: the Stable tier never sends that
+	// switch.
+#ifdef PROXYSQL31
+	// Check the stream's own state first: PPHR_1 can run on a stream without a session
+	// (the protocol unit tests build one), so 'sess' is only read when it can matter.
+	const bool change_user_sha2_scramble =
+		(*myds)->switching_auth_stage == 0 &&
+		(*myds)->switching_auth_type == AUTH_MYSQL_CACHING_SHA2_PASSWORD &&
+		(*myds)->sess != nullptr &&
+		(*myds)->sess->change_user_auth_switch;
+	if (len==5 && !(change_user_sha2_scramble && *pkt == '\0')) {
+#else
 	if (len==5) {
+#endif // PROXYSQL31
 		ret = false;
 		vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
 		if ((*myds)->switching_auth_stage == 5 && *pkt == 2) {
@@ -2254,6 +2332,12 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 		return 1;
 #endif
 	}
+#ifdef PROXYSQL31
+	if (change_user_sha2_scramble) {
+		// a lone 0x00 is the empty-password response
+		vars1.pass_len = (payload_length == 1 && *pkt == '\0') ? 0 : payload_length;
+	} else
+#endif // PROXYSQL31
 	if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD
 #ifdef PROXYSQLED25519
 		|| auth_plugin_id == AUTH_MYSQL_ED25519 // raw 64-byte signature, not NUL-terminated
@@ -2287,6 +2371,9 @@ int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyPr
 	vars1.charset=(*myds)->tmp_charset;
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,2,"Session=%p , DS=%p . Encrypted: %d , switching_auth: %d, auth_plugin_id: %d\n", (*myds)->sess, (*myds), (*myds)->encrypted, (*myds)->switching_auth_stage, auth_plugin_id);
 	vars1.capabilities = (*myds)->myconn->options.client_flag;
+#ifdef PROXYSQL31
+	PPHR_keep_compression(vars1);
+#endif // PROXYSQL31
 	return 2;
 }
 
@@ -2538,6 +2625,15 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		vars1.use_zstd_compression = true;
 		vars1.zstd_compression_level = *extra_pkt;
 	}
+#ifdef PROXYSQL31
+	// Record the client's zstd request on the connection now. When this packet is answered
+	// with an Auth Switch, PPHR_SetConnAttrs does not run for it, and the continuation
+	// packets only see what is stored here (PPHR_keep_compression). PPHR_SetConnAttrs
+	// still validates it against the capabilities when authentication completes, and
+	// compression is enabled only after the final OK.
+	(*myds)->myconn->options.compression_zstd = vars1.use_zstd_compression;
+	(*myds)->myconn->options.zstd_compression_level = vars1.zstd_compression_level;
+#endif // PROXYSQL31
 	return true;
 }
 
@@ -2958,7 +3054,7 @@ void MySQL_Protocol::PPHR_6auth2(
 	MyProt_tmp_auth_vars& vars1
 	) {
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
-	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 		if (
 			caching_sha2_fast_auth_verify(
 				vars1.password, (*myds)->myconn->scramble_buff, vars1.pass, vars1.pass_len
@@ -2978,7 +3074,7 @@ void MySQL_Protocol::PPHR_7auth1(
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	// As in verify_user_pass(): proxy_scramble_sha1() reads SCRAMBLE_LENGTH (20)
 	// bytes from 'vars1.pass', which is sized from the client-declared length.
-	if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) &&
+	if ((session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) &&
 		auth_response_has(vars1.pass_len, SCRAMBLE_LENGTH)) {
 		ret=proxy_scramble_sha1((char *)vars1.pass,(*myds)->myconn->scramble_buff,vars1.password+1, reply);
 		if (ret) {
@@ -3001,7 +3097,7 @@ void MySQL_Protocol::PPHR_7auth2(
 	account_details_t& attr1
 ) {
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
-	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, vars1.user, session_type);
 /*
 		uint8_t hash_stage1[SHA_DIGEST_LENGTH];
@@ -3147,7 +3243,7 @@ void MySQL_Protocol::PPHR_sha2full(
 		}
 		if (ret == true) {
 			enum proxysql_session_type session_type = (*myds)->sess->session_type;
-			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 				// currently proxysql doesn't know the clear text password for that specific user, let's set it!
 				GloMyAuth->set_clear_text_password((char *)vars1.user, USERNAME_FRONTEND, (const char *)vars1.pass, passtype);
 				// Update 'vars1' password with 'clear text' one, so session can be later updated with it
@@ -3367,6 +3463,7 @@ void MySQL_Protocol::PPHR_next_auth_stage(MyProt_tmp_auth_vars& vars1, PASSWORD_
 			if (
 				session_type == PROXYSQL_SESSION_MYSQL ||
 				session_type == PROXYSQL_SESSION_SQLITE ||
+				session_type == PROXYSQL_SESSION_DUCKDB ||
 				session_type == PROXYSQL_SESSION_ADMIN ||
 				session_type == PROXYSQL_SESSION_STATS
 			) {
@@ -3486,6 +3583,25 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			ret = false;
 			return ret;
 		}
+
+#ifdef PROXYSQL31
+		// COM_CHANGE_USER never enters pass-through (spec §5.4). process_pkt_COM_CHANGE_USER
+		// rejects a pass-through target, but only for the row it saw when the command
+		// arrived. Since #4618 a caching_sha2_password COM_CHANGE_USER is answered with an
+		// Auth Switch, and its response is verified here against the row as it is now: if
+		// the row became pass-through eligible in between, the probe or cache-hit branch
+		// below must not run. Same generic failure as the COM_CHANGE_USER gate.
+		if (mysql_thread___passthrough_auth_enabled
+			&& (empty_pw_case || unknown_user_case)
+			&& (*myds)->sess->change_user_auth_switch) {
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5,
+				"COM_CHANGE_USER Auth Switch response for pass-through-eligible user '%s' "
+				"rejected (pass-through is not supported via CHANGE_USER, spec §5.4)\n",
+				vars1.user ? (const char*)vars1.user : "(null)");
+			ret = false;
+			return ret;
+		}
+#endif // PROXYSQL31
 
 		if (mysql_thread___passthrough_auth_enabled
 			&& auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
@@ -3722,6 +3838,8 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 	}
 
 	if (vars1.password == NULL) {
+		if ((*myds)->sess->session_type == PROXYSQL_SESSION_DUCKDB)
+			return false;
 		// this is a workaround for bug #603
 		if (
 			((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN)
@@ -3804,7 +3922,7 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			// cleartext/native password comparison below.
 			// Session scope matches the $ED$ reservation rule: MYSQL (the
 			// only session type the ed25519 exchange is offered on) and
-			// SQLITE (shares the USERNAME_FRONTEND credential rows, so the
+			// SQLITE and DUCKDB (share the USERNAME_FRONTEND credential rows, so the
 			// fail-closed reservation must hold there too). ADMIN/STATS are
 			// deliberately excluded: their credentials flow through this
 			// same function under PROXYSQL31, and routing a $ED$-prefixed
@@ -3812,7 +3930,8 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 			// unrecoverable admin-port lockout -- they fall through to the
 			// pre-existing cleartext comparison instead.
 			if (((*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL ||
-				(*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE) &&
+				(*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE ||
+				(*myds)->sess->session_type == PROXYSQL_SESSION_DUCKDB) &&
 				(auth_plugin_id == AUTH_MYSQL_ED25519 || proxysql_ed25519_has_prefix(vars1.password))) {
 				// signature collected by PPHR_1 after the Auth Switch; a stored
 				// "$ED$" key with a non-ed25519 response fails the length check
@@ -4314,6 +4433,7 @@ static bool is_long_data_param_type(enum enum_field_types buffer_type) {
 /** @brief Detects unsupported long-data parameters, including empty entries. */
 static bool has_invalid_long_data(StmtLongDataHandler* handler, uint32_t stmt_id,
 	const MYSQL_BIND* binds, uint16_t num_params) {
+	if (!handler) return false;
 #ifdef PROXYSQL31
 	if (!handler->has_data(stmt_id)) return false;
 #endif
@@ -4333,12 +4453,27 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 	PtrSize_t& pkt, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta,
 	const unsigned char *effective_types
 ) {
+	// Legacy callers may use an uninitialized protocol for short-packet checks.
+	if (pkt.size < 14) return nullptr;
+	return decode_stmt_execute(pkt, stmt_info->num_params,
+		myds && *myds && (*myds)->sess ? (*myds)->sess->SLDH : nullptr,
+		stmt_meta, effective_types, stmt_info->query, stmt_info->username, stmt_info->schemaname);
+}
+
+stmt_execute_metadata_t * MySQL_Protocol::decode_stmt_execute(
+	PtrSize_t& pkt, uint16_t num_params, StmtLongDataHandler *long_data,
+	stmt_execute_metadata_t **stmt_meta, const unsigned char *effective_types,
+	const char *query, const char *username, const char *schemaname
+) {
 	stmt_execute_metadata_t *ret=NULL; //return NULL in case of failure
-	if (pkt.size < 14) {
-		// some error!
-		return ret;
+	if (!stmt_meta || !pkt.ptr || pkt.size < 14) return ret;
+	// Cached bind arrays were allocated for their original parameter count.
+	if (*stmt_meta && (*stmt_meta)->num_params != num_params) return ret;
+	if (num_params && !*stmt_meta && !effective_types) {
+		const size_t flag_offset = 14 + (static_cast<size_t>(num_params) + 7) / 8;
+		if (pkt.size <= flag_offset || !static_cast<unsigned char*>(pkt.ptr)[flag_offset])
+			return ret;
 	}
-	uint16_t num_params=stmt_info->num_params;
 	if (num_params==2) {
 		PROXY_TRACE();
 	}
@@ -4466,7 +4601,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 		// client library read sizeof(type) bytes from the long data buffer and
 		// send them as a binary value of that type (e.g. a whole MYSQL_TIME read
 		// from a shorter buffer). Checked before any bind buffer is allocated.
-		if (has_invalid_long_data((*myds)->sess->SLDH, ret->stmt_id, binds, num_params)) {
+		if (has_invalid_long_data(long_data, ret->stmt_id, binds, num_params)) {
 			// Required to prevent double-free in dtor
 			ret->pkt = NULL;
 			// Only free when metadata not obtained from cache (i.e. first execute)
@@ -4487,7 +4622,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				if (t == MYSQL_TYPE_TIME || t == MYSQL_TYPE_DATE || t == MYSQL_TYPE_TIMESTAMP || t == MYSQL_TYPE_DATETIME) {
 					unsigned long *_l = NULL;
 					my_bool *_is_null = NULL;
-					if (binds[j].buffer && binds[j].buffer != (*myds)->sess->SLDH->get(ret->stmt_id, j, &_l, &_is_null)) {
+					if (binds[j].buffer && binds[j].buffer != (long_data ? long_data->get(ret->stmt_id, j, &_l, &_is_null) : nullptr)) {
 						free(binds[j].buffer);
 					}
 				}
@@ -4502,7 +4637,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 		for (i=0;i<num_params;i++) {
 			unsigned long *_l = 0;
 			my_bool * _is_null = NULL;
-			void *_data = (*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
+			void *_data = long_data ? long_data->get(ret->stmt_id, i, &_l, &_is_null) : nullptr;
 			if (_l) {
 				// Data was sent via STMT_SEND_LONG_DATA so no data in the packet.
 				binds[i].length = _l;
@@ -4633,7 +4768,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(
 				default:
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
-							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
+							buffer_type, i, query, username, schemaname);
 					return malformed(i);
 			}
 		}

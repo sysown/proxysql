@@ -764,6 +764,9 @@ std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
 	else if (session_type == PROXYSQL_SESSION_SQLITE) {
 		return "PROXYSQL_SESSION_SQLITE";
 	}
+	else if (session_type == PROXYSQL_SESSION_DUCKDB) {
+		return "PROXYSQL_SESSION_DUCKDB";
+	}
 	else if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 		return "PROXYSQL_SESSION_CLICKHOUSE";
 	}

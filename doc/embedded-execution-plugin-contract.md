@@ -1,0 +1,45 @@
+# Embedded execution plugin contract, V1
+
+`ProxySQL_EmbeddedExecution.h` defines a versioned native-execution boundary for trusted plugins. It is a standalone C++17 header with C-shaped views and function tables; no C++ containers, strings, variants, virtual interfaces, or session layouts cross this boundary. The existing public C++ `ManagedConfiguration` interface is a precedent for plugin services, but this boundary deliberately uses POD layouts so internal execution types can evolve. The core implements registration, owner-thread teardown, and a bounded adapter from these tables to the shared prepared-statement frontends. Native engine providers remain responsible for enforcing their advertised capabilities.
+
+Runtime discovery uses the tail accessor on `PluginServices` ABI 17, which returns a `ProxySQL_Embedded_ServiceV1` descriptor in the full runtime. Phase B exposes the same accessor with a null result. The manager supports plugin ABI versions 1 through 10, 13, 16, and 17; existing prefixes stay compatible and unsupported newer versions are rejected. No private lexer or frontend wire-protocol implementation is part of this contract.
+
+Every versioned descriptor starts with `abi_version` and `struct_size`; initialize them to `ProxySQL_Embedded_ABI_V1` and `sizeof(descriptor)`. Validate version and minimum size before reading any tail field. Reject unknown versions and truncated descriptors. A larger descriptor of the same version may have an ignored future tail; incompatible type or layout changes require a new version. Core copies the request and callback tables after validation, so their source storage may be released when registration returns. Opaque contexts and assets referenced by callbacks remain borrowed through successful unregister on the same owner thread. The plugin owns the native connection; finalize all statements before disconnecting it or unloading the plugin. An unregister on the wrong owner thread fails and leaves registration alive: the caller must retain the contexts and connection. The current DuckDB integration must guarantee owner-thread cleanup.
+
+The service takes opaque `PROXYSQL_SESSION_DUCKDB` frontend session pointers supplied by trusted plugin code. The caller selects the correct protocol. Failed registration leaves no handles, registry entry, or borrowed contexts behind. No callback runs while the registry mutex is held. The policy and engine have independent contexts. Status is obtained via protocol-specific callbacks and their borrowed contexts.
+MySQL returns its server-status bits; PostgreSQL returns exactly `I`, `T` or `E`.
+The PostgreSQL callback is required even for implicit-cycle registration so
+existing native text transaction state remains visible when a prepared operation
+is refused. Invalid status bytes fail closed.
+
+All callbacks are `noexcept`; providers catch engine and C++ exceptions locally and translate them into an error. Status is exactly zero for success or one for failure; any other return is treated as INTERNAL. An error has a kind, native code, six-byte SQLSTATE buffer (five characters and a terminating NUL), and a borrowed message valid until the next callback on that context; core copies it synchronously. Error kind constants are contract values independent of internal enum ordinals. Unrecognized error kinds or SQLSTATEs receive a typed fallback, not a mapping inferred from the native code. Finalize and guard leave must succeed.
+
+Prepare accepts exactly one SQL statement and must not execute it or produce describe side effects. Authorization runs before native prepare, which is not a sandbox: the provider is responsible for its native connection features. Core owns a returned native statement and finalizes it exactly once, including when prepare fails after returning a handle. Parameter descriptions identify each native slot's original one-based position; zero means unknown and is rejected by PostgreSQL. Result descriptions may advertise dynamic types, whose fetched values still use a defined value kind. UNKNOWN is valid only for parameter metadata; reject UNKNOWN or reserved NULL type metadata in results before execute. Non-decimal metadata has precision and scale zero. Decimal precision is 1 through 1000 and scale is 0 through precision; an engine may impose a smaller bound. Negative precision or scale is invalid. Execute reports `has_result` as 0 or 1 and actual unsigned 64-bit affected-row and last-insert-ID counters, zero when inapplicable.
+
+Metadata, parameter position arrays, fetched values, and their referenced bytes are borrowed until the next callback on that engine context. Core copies them synchronously with bounded counts and payload before any other callback. A fetch receives a payload budget; a done value of one means the returned row is empty. Bind values and SQL views are borrowed only for the synchronous callback: engines must copy or bind them natively and must not retain the arrays. Values use native binding, never SQL interpolation. Text and bytes are length-delimited, including empty values; NULL has its own tag. Decimal is exact ASCII bytes, never a floating conversion. Boolean payloads are 0 or 1. Unknown is for parameter type inference only; undefined value tags are not accepted. SQL and text are UTF-8 as known to the frontend. Advertised types must be supported by the value mask; UNKNOWN parameter metadata needs no value tag. Nested and temporal value tags are unsupported in V1 until defined. Exact wide integers may use DECIMAL with scale zero within the advertised precision and native range; this does not create a new value tag. Reserved payload space does not promise acceptance of future tags.
+
+All engine operations and policy callbacks are required. The optional guard callbacks must both be null or both be non-null. Core acquires the guard before policy and native work for the entire operation and materialization, and releases it before network I/O. Operation tags are contract values, independent of internal enum layouts. Guard SQL views are valid only during the callback. Disconnect guard acquisition must succeed; failure is a fatal provider contract violation.
+
+The engine capability mask has only READ_ONLY (bit 0) and PARAMETER_POSITIONS (bit 1); reject unknown bits in V1. The value mask uses value-kind bit positions 1 through 8, requires NULL, and rejects zero or unknown bits. Text and bytes are represented in that mask, independently of frontend wire formats. Reject unsupported values and capabilities before effects.
+
+READ_ONLY is required for both frontends. MySQL request flags must be exactly READ_ONLY, and `mysql_status` is required. PostgreSQL flags must be exactly READ_ONLY | PG_IMPLICIT_CYCLES and the engine must advertise PARAMETER_POSITIONS. PostgreSQL requires `pgsql_status` and ignores `mysql_status`, which remains optional for PostgreSQL throughout V1. MySQL ignores `pgsql_status`. Reject unknown or otherwise invalid request flags before callbacks. The provider must never write, even if a statement appears safe. READ_ONLY is a provider capability promise, not proof of authorization; policy always runs first. V1 does not claim native DML support, and PostgreSQL read-only implicit cycles are not full transaction support.
+
+The optional MySQL request tail `mysql_select_database` uses `status_context`.
+It runs on the session owner thread before core acknowledges an explicit
+handshake database or `COM_INIT_DB`. Its borrowed byte span is valid for the
+call. The callback returns zero on success or a MySQL error number, and preserves
+the previous namespace on failure. A V1 request whose size ends before this
+field has no namespace selector.
+
+
+The core uses a shared process quota pool for native statement counts and retained SQL, metadata, bind, and result bytes, in addition to per-session limits. Frontends account for their retained copies. MySQL reserves its bounded private response budget before execution; PostgreSQL charges retained encoded rows until portal cleanup. These limits cover logical retained payloads, not allocator capacity, temporary engine allocations, engine RSS, or packets already transferred to the normal network output queue. Provider callback views have separate checked count and payload bounds before copying.
+
+
+Statement RESET releases native results and bindings without ending the client
+transaction. SESSION_RESET is a separate operation: core closes every native
+statement while its guard is held, and guard leave may replace the borrowed native
+connection. A failed reset must fail closed rather than acknowledge a successful
+reset. The DuckDB provider replaces its connection after finalization, discarding
+pending transactions, temporary tables and connection-local settings. Its listener
+marks the session unhealthy if replacement fails; core emits no reset/authentication
+success afterward.

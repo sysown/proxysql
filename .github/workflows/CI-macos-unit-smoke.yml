@@ -40,7 +40,7 @@ jobs:
     - name: Build macOS unit smoke tests
       run: |
         make -C test/tap/tests/unit -j"$(sysctl -n hw.ncpu)" \
-          smoke_test-t query_processor_unit-t
+          smoke_test-t query_processor_unit-t embedded_pgsql_value_unit-t
       env:
         PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
         PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
@@ -48,13 +48,15 @@ jobs:
       run: |
         test/tap/tests/unit/smoke_test-t
         test/tap/tests/unit/query_processor_unit-t
+        test/tap/tests/unit/embedded_pgsql_value_unit-t
     - name: Verify static ProxySQL linkage on macOS
       run: |
         set -euo pipefail
         test ! -e test/tap/tap/libproxysql.so
         for binary in \
           test/tap/tests/unit/smoke_test-t \
-          test/tap/tests/unit/query_processor_unit-t; do
+          test/tap/tests/unit/query_processor_unit-t \
+          test/tap/tests/unit/embedded_pgsql_value_unit-t; do
           file "$binary" | grep -q 'Mach-O'
           if otool -L "$binary" | tail -n +2 | grep -q 'libproxysql'; then
             echo "Unexpected shared ProxySQL dependency in $binary" >&2

@@ -116,12 +116,20 @@ static_assert(offsetof(ProxySQL_PluginServices, post_server_desired_set) ==
 	offsetof(DiscoveryAbi14, post_server_desired_set), "ABI-14 post_server_desired_set slot moved");
 static_assert(offsetof(ProxySQL_PluginServices, lock_configuration) == sizeof(DiscoveryAbi14),
 	"managed-configuration ABI-15 must follow the complete ABI-14 prefix");
-
-// ABI 17 (#6649) appends the Azure Entra token-source install service after the
-// complete ABI-16 layout; nothing before it may move.
+struct ManagedAbi16 {
+    DiscoveryAbi14 discovery;
+    decltype(ProxySQL_PluginServices::lock_configuration) lock_configuration;
+    decltype(ProxySQL_PluginServices::unlock_configuration) unlock_configuration;
+    decltype(ProxySQL_PluginServices::configdb_locked) configdb_locked;
+    decltype(ProxySQL_PluginServices::prepare_managed_runtime_locked) prepare_managed_runtime_locked;
+    decltype(ProxySQL_PluginServices::activate_managed_runtime_locked) activate_managed_runtime_locked;
+    decltype(ProxySQL_PluginServices::destroy_managed_prepared_runtime) destroy_managed_prepared_runtime;
+};
+static_assert(offsetof(ProxySQL_PluginServices, get_embedded_execution_service) ==
+              sizeof(ManagedAbi16), "ABI-17 must follow the complete ABI-16 prefix");
 static_assert(offsetof(ProxySQL_PluginServices, install_azure_entra_token_source) ==
-	offsetof(ProxySQL_PluginServices, destroy_managed_prepared_runtime) + sizeof(void (*)()),
-	"ABI-17 install_azure_entra_token_source must follow the last ABI-16 slot");
+	offsetof(ProxySQL_PluginServices, get_embedded_execution_service) + sizeof(void (*)()),
+	"ABI-17 install_azure_entra_token_source must follow get_embedded_execution_service");
 static_assert(sizeof(ProxySQL_PluginServices) ==
 	offsetof(ProxySQL_PluginServices, install_azure_entra_token_source) + sizeof(void (*)()),
 	"ABI-17 install_azure_entra_token_source must be the tail of ProxySQL_PluginServices");

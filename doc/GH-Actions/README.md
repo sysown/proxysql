@@ -804,7 +804,7 @@ Each *base group* has a directory under `test/tap/groups/`:
 test/tap/groups/
   legacy/
     env.sh            # exports DEFAULT_MYSQL_INFRA, DEFAULT_PGSQL_INFRA, …
-    infras.lst        # infra-mysql57, infra-mariadb10, docker-pgsql16-single
+    infras.lst        # infra-dbdeployer-mysql57, infra-dbdeployer-mariadb10, docker-pgsql16-single
     pre-proxysql.bash # optional pre-hook
     setup-infras.bash # optional post-hook
   mysql84/

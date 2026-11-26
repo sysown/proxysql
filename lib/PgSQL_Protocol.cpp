@@ -589,9 +589,15 @@ bool PgSQL_Protocol::get_header(unsigned char* pkt, unsigned int pkt_len, pgsql_
 		}
 		else if (code == PG_PKT_SSLREQ) {
 			type = PG_PKT_SSLREQ;
+#ifdef PROXYSQL31
+			version = code;
+#endif
 		}
 		else if (code == PG_PKT_GSSENCREQ) {
 			type = PG_PKT_GSSENCREQ;
+#ifdef PROXYSQL31
+			version = code;
+#endif
 		}
 		else if ((code >> 16) == (PG_PROTOCOL_LATEST >> 16)) {
 			// Every minor version of the major we speak is accepted here, including ones we do
@@ -707,6 +713,40 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		return false;
 	}
 
+#ifdef PROXYSQL31
+	// v3.1+ only. One SSLRequest and one GSSENCRequest per connection, as in PostgreSQL's
+	// ProcessStartupPacket() ssl_done / gss_done. A repeat falls through to the refusal below.
+	if (hdr.type == PG_PKT_SSLREQ && !(*myds)->startup_ssl_done) {
+		// Never offer TLS on a connection that is already encrypted.
+		const bool accept_ssl = pgsql_thread___have_ssl && !(*myds)->encrypted;
+		char* ssl_supported = (char*)malloc(1);
+		*ssl_supported = accept_ssl ? 'S' : 'N';
+		(*myds)->PSarrayOUT->add((void*)ssl_supported, 1);
+		(*myds)->sess->writeout();
+		if (accept_ssl) {
+			(*myds)->encrypted = true;
+			(*myds)->startup_gss_done = true;
+		}
+		(*myds)->startup_ssl_done = true;
+		ssl_request = true;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. SSL_REQUEST:'%c'\n", (*myds)->sess, (*myds), accept_ssl ? 'S' : 'N');
+		return true;
+	}
+
+	if (hdr.type == PG_PKT_GSSENCREQ && !(*myds)->startup_gss_done) {
+		// We do not speak GSSAPI encryption. PostgreSQL answers 'N' and lets the client fall back
+		// to SSL or plaintext on the same connection; closing instead strands a client that only
+		// offered it. Reusing ssl_request here means "reply sent, wait for the real startup packet".
+		char* gss_supported = (char*)malloc(1);
+		*gss_supported = 'N';
+		(*myds)->PSarrayOUT->add((void*)gss_supported, 1);
+		(*myds)->sess->writeout();
+		(*myds)->startup_gss_done = true;
+		ssl_request = true;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. GSSENC_REQUEST:'N'\n", (*myds)->sess, (*myds));
+		return true;
+	}
+#else
 	if (hdr.type == PG_PKT_SSLREQ) {
 		const bool have_ssl = pgsql_thread___have_ssl;
 		char* ssl_supported = (char*)malloc(1);
@@ -731,6 +771,7 @@ bool PgSQL_Protocol::process_startup_packet(unsigned char* pkt, unsigned int len
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. GSSENC_REQUEST:'N'\n", (*myds)->sess, (*myds));
 		return true;
 	}
+#endif
 
 	if (hdr.type == PG_PKT_CANCEL) {	
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p. CANCEL_REQUEST packet received. len=%u\n", (*myds)->sess, (*myds), len);
@@ -1676,6 +1717,11 @@ bool PgSQL_Protocol::welcome_client() {
 
 void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, PGSQL_ERROR_CODES code, bool fatal, bool track, PtrSize_t* _ptr,
 	char txn_state) {
+	generate_error_packet(send, ready, msg, PgSQL_Error_Helper::get_error_code(code), fatal, track, _ptr, txn_state);
+}
+
+void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* msg, const char* sqlstate, bool fatal, bool track, PtrSize_t* _ptr,
+	char txn_state) {
 	// to avoid memory leak
 	assert(send == true || _ptr);
 	PgSQL_Data_Stream* ds = myds ? *myds : nullptr;
@@ -1697,7 +1743,7 @@ void PgSQL_Protocol::generate_error_packet(bool send, bool ready, const char* ms
 	pgpkt.write_generic('E', "cscscscsc", 
 		'S', fatal ? "FATAL" : "ERROR",
 		'V', fatal ? "FATAL" : "ERROR",
-		'C', PgSQL_Error_Helper::get_error_code(code), 'M', msg, 0);
+		'C', sqlstate, 'M', msg, 0);
 
 	if (ready == true) {
 		pgpkt.write_ReadyForQuery(txn_state);

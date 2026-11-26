@@ -372,6 +372,9 @@ static char* pgsql_thread_variables_names[] = {
 	(char*)"monitor_wait_timeout",
 */
 	(char*)"monitor_writer_is_also_reader",
+#ifdef PROXYSQL31
+	(char*)"monitor_unshun_on_ping_success",
+#endif
 	(char*)"max_allowed_packet",
 	(char*)"tcp_keepalive_time",
 	(char*)"use_tcp_keepalive",
@@ -1115,6 +1118,14 @@ PgSQL_Threads_Handler::PgSQL_Threads_Handler() {
 	variables.monitor_replication_lag_use_percona_heartbeat = strdup((char*)"");
 	variables.monitor_wait_timeout = true;
 	variables.monitor_writer_is_also_reader = true;
+#ifdef PROXYSQL31
+	// On by default in 4.0, opt-in in 3.1.
+#ifdef PROXYSQL40
+	variables.monitor_unshun_on_ping_success = true;
+#else
+	variables.monitor_unshun_on_ping_success = false;
+#endif
+#endif
 	variables.max_allowed_packet = 64 * 1024 * 1024;
 	variables.automatic_detect_sqli = false;
 	variables.firewall_whitelist_enabled = false;
@@ -1287,6 +1298,18 @@ int PgSQL_Threads_Handler::listener_add(const char* iface) {
 				}
 			}
 			free(perthrsocks);
+		}
+		// Wait until every worker has added the socket to its poll set, as
+		// listener_del() waits for its removal. A worker can leave its bootstrap
+		// spin just before the add is posted and take it only after its next
+		// poll(). A PROXYSQL STOP in that window finds no listener to remove,
+		// closes the socket, and the worker then adds the closed FD and asserts
+		// on POLLNVAL (#6718).
+		for (i = 0; i < num_threads; i++) {
+			PgSQL_Thread* thr = (PgSQL_Thread*)pgsql_threads[i].worker;
+			while (__sync_fetch_and_add(&thr->mypolls.pending_listener_add, 0)) {
+				usleep(std::min(std::max(pgsql_thread___poll_timeout/20, 10000), 40000));
+			}
 		}
 	}
 	return rc;
@@ -2003,6 +2026,11 @@ bool PgSQL_Threads_Handler::set_variable(char* name, const char* value) {	// thi
 			if (strcmp(value, "(null)"))
 				variables.init_connect = strdup(value);
 		}
+#ifndef PROXYSQL31
+		if (variables.init_connect) {
+			proxy_warning("pgsql-init_connect is ignored: it requires ProxySQL v3.1 or later\n");
+		}
+#endif // PROXYSQL31
 		return true;
 	}
 	if (!strcasecmp(name, "firewall_whitelist_errormsg")) {
@@ -2293,6 +2321,9 @@ char** PgSQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"] = make_tuple(&variables.monitor_wait_timeout, false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"] = make_tuple(&variables.monitor_writer_is_also_reader, false);
+#ifdef PROXYSQL31
+		VariablesPointers_bool["monitor_unshun_on_ping_success"] = make_tuple(&variables.monitor_unshun_on_ping_success, false);
+#endif
 		VariablesPointers_bool["multiplexing"] = make_tuple(&variables.multiplexing, false);
 		VariablesPointers_bool["preserve_client_on_broken_backend_in_tx"] = make_tuple(&variables.preserve_client_on_broken_backend_in_tx, false);
 		VariablesPointers_bool["query_cache_stores_empty_result"] = make_tuple(&variables.query_cache_stores_empty_result, false);
@@ -4558,6 +4589,9 @@ void PgSQL_Thread::refresh_variables() {
 	mysql_thread___monitor_wait_timeout = (bool)GloPTH->get_variable_int((char*)"monitor_wait_timeout");
 	*/
 	pgsql_thread___monitor_writer_is_also_reader = (bool)GloPTH->get_variable_int((char*)"monitor_writer_is_also_reader");
+#ifdef PROXYSQL31
+	pgsql_thread___monitor_unshun_on_ping_success = (bool)GloPTH->get_variable_int((char*)"monitor_unshun_on_ping_success");
+#endif
 	pgsql_thread___monitor_enabled = (bool)GloPTH->get_variable_int((char*)"monitor_enabled");
 	pgsql_thread___monitor_history = GloPTH->get_variable_int((char*)"monitor_history");
 	pgsql_thread___monitor_connect_interval = GloPTH->get_variable_int((char*)"monitor_connect_interval");

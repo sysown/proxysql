@@ -1428,7 +1428,8 @@ void execute_locked_session_test(PGconn* admin_conn, PGconn*) {
 
 // set_config() changes a setting in the cache key like SET does. With the ParserSQL SET parser
 // it is tracked, so later SELECTs key on the new value; the call itself is never cached, and a
-// set_config() ProxySQL cannot follow locks the session, which then skips the cache.
+// set_config() ProxySQL does not record locks the session, which then skips the cache. The call
+// that locks skips it too: the lock is taken after the query is handled, the cache check before.
 #define SC_ALGO "3" // the ParserSQL SET parser: the only one that tracks set_config()
 void execute_set_config_test(PGconn* admin_conn, PGconn*) {
     const std::string saved_algo = single_value(admin_conn,
@@ -1449,7 +1450,25 @@ void execute_set_config_test(PGconn* admin_conn, PGconn*) {
     PGConnPtr a = createNewConnection(ConnType::BACKEND, false);
     PGConnPtr b = createNewConnection(ConnType::BACKEND, false);
     PGConnPtr locked = createNewConnection(ConnType::BACKEND, false);
-    if (a && b && locked) {
+    PGConnPtr c = createNewConnection(ConnType::BACKEND, false);
+    PGConnPtr d = createNewConnection(ConnType::BACKEND, false);
+    if (a && b && locked && c && d) {
+        // Recorded: C's later SELECTs key on the new DateStyle, so C reads and stores its own entry.
+        const char* qd = "SELECT DATE '2026-11-05' AS sc3";
+        check_value_hits(admin_conn, c.get(), qd, "2026-11-05", 0, "set_config DateStyle: client C before the call");
+        metrics.before = getQueryCacheMetrics(admin_conn);
+        const std::string vd = single_value(c.get(), "SELECT set_config('DateStyle','SQL, DMY',false)");
+        metrics.after = getQueryCacheMetrics(admin_conn);
+        ok(vd == "SQL, DMY", "set_config DateStyle: the call returns 'SQL, DMY'. Got '%s'", vd.c_str());
+        checkMetricDelta<>("Query_Cache_count_GET", 0, std::equal_to<int>());
+        checkMetricDelta<>("Query_Cache_count_SET", 0, std::equal_to<int>());
+        metrics.swap();
+        check_value_hits(admin_conn, c.get(), qd, "05/11/2026", 0, "set_config DateStyle: client C after the call");
+        check_value_hits(admin_conn, c.get(), qd, "05/11/2026", 1, "set_config DateStyle: client C hits its new entry");
+        check_value_hits(admin_conn, d.get(), qd, "2026-11-05", 1, "set_config DateStyle: client D keeps its own entry");
+
+        // TimeZone is not recorded (ProxySQL cannot prove a zone exists): the bare call is
+        // forwarded and locks A, so the call itself must not look in the cache either.
         check_value_hits(admin_conn, a.get(), q, utc, 0, "set_config: client A before the call");
         metrics.before = getQueryCacheMetrics(admin_conn);
         const std::string v = single_value(a.get(), "SELECT set_config('TimeZone','Asia/Tokyo',false)");
@@ -1544,9 +1563,9 @@ int main(int argc, char** argv) {
 	spawn_internal_noise(cl, internal_noise_rest_prometheus_poller, {{"enable_rest_api", "true"}});
 
 	if (cl.use_noise) {
-		plan(351*2 + 3);
+		plan(362*2 + 3);
 	} else {
-		plan(351*2);
+		plan(362*2);
 	}
 
     execute_tests(false, false);

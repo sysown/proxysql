@@ -91,6 +91,10 @@ namespace prometheus { class Registry; }
 //          (#6649): the AWS IAM token-source contract, for the Azure Entra slot.
 //          Additive: every ABI-16 slot keeps its offset, so ABI-16 plugins load.
 //
+//   ABI 17: appends the versioned embedded execution service getter to
+//          ProxySQL_PluginServices. The ABI-16 prefix remains unchanged.
+//          Normal services expose the getter; phase B returns nullptr.
+//
 // DEBUG-tier tagging (do not remove -- see the certainty breakdown below):
 //
 // A handful of core headers add fields ONLY under `#ifdef DEBUG` --
@@ -109,7 +113,7 @@ namespace prometheus { class Registry; }
 // -DDEBUG (or vice versa), silently disagrees with the core about these
 // offsets while still reporting a numerically "compatible" abi_version
 // under the plain ABI 1..17 scheme above (e.g. a release plugin's
-// abi_version=14 is <= a debug core's max=16, so the ordinary
+// abi_version=14 is <= a debug core's max=17, so the ordinary
 // forward-compatibility range check does not catch it).
 //
 // What is PROVEN (measured, both ways, against MySQL_Data_Stream.h):
@@ -189,6 +193,9 @@ struct ProxySQL_PluginCLIRegistry {
 using proxysql_plugin_register_cli_options_cb =
 	bool (*)(ProxySQL_PluginCLIRegistry*);
 
+#ifdef PROXYSQL40
+#include "ProxySQL_EmbeddedExecution.h"
+#endif
 struct ProxySQL_PluginServices;
 
 struct ProxySQL_PluginRuntimeContext {
@@ -578,6 +585,7 @@ struct ProxySQL_PluginServices {
 		ManagedPreparedRuntime**, std::string&);
 	ManagedRuntimeResult (*activate_managed_runtime_locked)(ManagedPreparedRuntime&, uint64_t);
 	void (*destroy_managed_prepared_runtime)(ManagedPreparedRuntime*) noexcept;
+	const ProxySQL_Embedded_ServiceV1* (*get_embedded_execution_service)() noexcept;
 	// ABI-17 extension (#6649): the ABI-13 AWS IAM install contract, for the
 	// Azure Entra slot. Install only during init(); core retires the source at
 	// process shutdown.

@@ -466,6 +466,11 @@ public:
 	}
 
 	inline
+	bool has_backend_error() const {
+		return is_error_present() && error_from_backend;
+	}
+
+	inline
 	PGSQL_ERROR_SEVERITY get_error_severity() const {
 		return error_info.severity;
 	}
@@ -490,6 +495,37 @@ public:
 		return error_info.code;
 	}
 
+	// The code that labels this connection's error in the pgsql error counter, as the native protocol
+	// reports it. libpq reports its own failures (a lost connection, a refused port, DNS, TLS) without a
+	// SQLSTATE, which set_error_from_PQerrorMessage() fills with P0001; a failure ProxySQL detects itself
+	// can leave no error at all: both are 08006. A P0001 the backend sent keeps it.
+	inline
+	const char* get_counter_error_code_str() const {
+		if (error_info.sqlstate[0] == '\0' ||
+			(error_without_sqlstate && error_info.code == PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION))
+			return PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_CONNECTION_FAILURE);
+		return error_info.sqlstate;
+	}
+
+	// The same for a failed connect, where a timeout leaves no error (08001). A connect ProxySQL fails
+	// itself (the backend's TLS could not be handed to a fast forward session) leaves none either: 08006.
+	inline
+	const char* get_connect_error_code_str() const {
+		if (async_state_machine == ASYNC_CONNECT_TIMEOUT)
+			return PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION);
+		return get_counter_error_code_str();
+	}
+
+	// The same for a failed async_send_simple_command(). Only -1 without an error is an offline server
+	// (the command never ran); -2 is a resultset the backend answered with, which leaves no error either,
+	// and the connection is then destroyed: 08006.
+	inline
+	std::string get_simple_command_error_code_str(int rc) const {
+		if (rc == -1 && is_error_present() == false)
+			return std::to_string(ER_PROXYSQL_OFFLINE_SRV);
+		return get_counter_error_code_str();
+	}
+
 	// PostgreSQL refused a kept statement because its result columns changed since it was prepared
 	// ("cached plan must not change result type"). Only the routine tells it from any other 0A000.
 	inline
@@ -504,10 +540,12 @@ public:
 	}
 
 	void set_error(const char* code, const char* message, bool is_fatal) {
+		error_from_backend = false;
 		PgSQL_Error_Helper::fill_error_info(error_info, code, message, is_fatal ? "FATAL" : "ERROR");
 	}
 
 	void set_error(PGSQL_ERROR_CODES code, const char* message, bool is_fatal) {
+		error_from_backend = false;
 		PgSQL_Error_Helper::fill_error_info(error_info, code, message, is_fatal ? 
 			PGSQL_ERROR_SEVERITY::ERRSEVERITY_FATAL : PGSQL_ERROR_SEVERITY::ERRSEVERITY_ERROR);
 	}
@@ -522,12 +560,13 @@ public:
 	void set_error_from_result(const PGresult* result, uint16_t ext_fields = 0) {
 		if (is_error_result_valid(result)) { 
 			PgSQL_Error_Helper::fill_error_info(error_info, result, ext_fields);
+			error_from_backend = true;
 		} else {
 			set_error_from_PQerrorMessage();
 		}
 	}
 
-	void reset_error() { reset_error_info(error_info, false); }
+	void reset_error() { reset_error_info(error_info, false); error_without_sqlstate = false; error_from_backend = false; }
 
 	bool reset_session_in_txn = false;
 	bool reset_session_in_pipeline = false;
@@ -786,6 +825,10 @@ public:
 
 	PgSQL_Conn_Param conn_params;
 	PgSQL_ErrorInfo error_info;
+	// error_info came from a libpq failure with no SQLSTATE, which set_error_from_PQerrorMessage() fills with P0001
+	bool error_without_sqlstate = false;
+	// Set only when a backend ErrorResponse (native or libpq) supplies the error.
+	bool error_from_backend = false;
 	PGconn* pgsql_conn;
 	bool native_mode = false;          // true → native wire protocol, false → libpq
 	class PgSQL_Backend_Protocol* bp = NULL;  // owned in native mode only; NULL in libpq mode

@@ -31,7 +31,7 @@ ensure_stub() {
 	fi
 }
 
-ensure_stub "${repo_root}/deps/curl/curl-8.16.0"
+ensure_stub "${repo_root}/deps/curl/curl-8.23.0"
 ensure_stub "${repo_root}/deps/mariadb-client-library/mariadb-connector-c-3.3.8-src"
 ensure_stub "${repo_root}/deps/postgresql/postgres-REL_16_10/src/interfaces/libpq"
 ensure_stub "${repo_root}/deps/libusual/libusual-f8d49e2"

@@ -83,6 +83,19 @@ typedef struct _pgsql_queue_t {
 #endif // PROXYSQL31
 #define MY_SSL_BUFFER	8192
 
+/*
+ * Largest TLS record ProxySQL sends to a PostgreSQL client (issue #6721).
+ *
+ * libpq's pqReadData() guarantees 8 KiB of free input buffer, calls SSL_read()
+ * once, and SSL_read() returns data from a single record. A larger record can
+ * leave the end of a response decrypted inside OpenSSL with nothing left on
+ * the socket, and a client that waits on PQsocket() (pgbench, async drivers)
+ * then waits forever. Upstream libpq fixed this in July 2026, backpatched to
+ * 14, but older client libraries stay in use for years. PostgreSQL itself
+ * writes records of about 8 KiB, so this also matches the server.
+ */
+#define PGSQL_TLS_MAX_SEND_FRAGMENT	8192
+
 // this class avoid copying data
 class PgSQL_MyDS_real_query {
 public:
@@ -129,6 +142,13 @@ private:
 	int array2buffer();
 	int buffer2array();
 	enum pgsql_sslstatus do_ssl_handshake();
+#ifdef PROXYSQL31
+	/**
+	 * @brief Best-effort send of any pending TLS output (e.g. a failure alert) to the client.
+	 * Call only right before shutting the stream down: its TLS output state is dead afterwards.
+	 */
+	void flush_tls_output_on_failure();
+#endif
 	void queue_encrypted_bytes(const char* buf, size_t len);
 public:
 	void* operator new(size_t);
@@ -201,6 +221,15 @@ public:
 	AUTHENTICATION_METHOD auth_method = AUTHENTICATION_METHOD::NO_PASSWORD;
 	uint32_t auth_next_pkt_type = 0;
 	bool auth_received_startup = false;
+#ifdef PROXYSQL31
+	// An SSLRequest and a GSSENCRequest are each honoured once per connection (see PgSQL_Protocol).
+	bool startup_ssl_done = false;
+	bool startup_gss_done = false;
+	// The first byte of a client connection is checked once, to spot a direct TLS ClientHello.
+	bool first_byte_checked = false;
+	// TLS started on a ClientHello with no SSLRequest first; ALPN postgresql is then required.
+	bool direct_tls = false;
+#endif
 	unsigned char tmp_login_salt[4];
 	ScramState* scram_state;
 	// The stored secret of a login still in progress. SCRAM takes two packets and the credential is
@@ -258,6 +287,16 @@ public:
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(PgSQL_DS_type, PgSQL_Session*, int); // initialize with arguments
+#ifdef PROXYSQL31
+	/**
+	 * @brief Begins the server-side TLS handshake on this client stream.
+	 * Needs a valid fd and no SSL object or BIOs yet; call it at most once per stream
+	 * (after an SSLRequest, or on a direct TLS ClientHello).
+	 * @return false when the TLS objects cannot be created (out of memory); the stream then
+	 * holds no SSL object or BIOs and is not marked encrypted, and the caller must close it.
+	 */
+	bool start_client_tls();
+#endif
 	void shut_soft();
 	void shut_hard();
 #ifdef PROXYSQL31
@@ -354,4 +393,30 @@ public:
 
 	void reset_connection();
 };
+
+#ifdef PROXYSQL31
+/**
+ * @brief Index of the SSL ex_data slot that marks a TLS object as a PgSQL client (owner: its PgSQL_Data_Stream).
+ * @return The ex_data index.
+ */
+int pgsql_client_ssl_ex_index();
+/**
+ * @brief ALPN selection as PostgreSQL's alpn_cb(): objects not marked as PgSQL clients (MySQL) get NOACK;
+ * marked ones must offer "postgresql" or receive a fatal alert.
+ * @param ssl TLS object being negotiated.
+ * @param out Receives the selected protocol.
+ * @param outlen Receives the selected protocol length.
+ * @param in Client's ALPN protocol list (wire format).
+ * @param inlen Length of @p in.
+ * @param arg Unused.
+ * @return SSL_TLSEXT_ERR_OK, SSL_TLSEXT_ERR_NOACK or SSL_TLSEXT_ERR_ALERT_FATAL.
+ */
+int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
+	const unsigned char* in, unsigned int inlen, void* arg);
+/**
+ * @brief Installs pgsql_alpn_select_cb on a context; a null context is ignored.
+ * @param ctx Context to install it on.
+ */
+void pgsql_install_alpn(SSL_CTX* ctx);
+#endif // PROXYSQL31
 #endif /* PROXYSQL_PGSQL_DATA_STREAM_H */

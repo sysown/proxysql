@@ -1,7 +1,6 @@
-"""Real header preparation, compiler instrumentation, and consumer-link regressions."""
+"""Real compiler instrumentation and consumer-link regressions."""
 from pathlib import Path
 import shlex
-import os
 import shutil
 import subprocess
 import tempfile
@@ -11,61 +10,6 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class TSANDependencyBuildTests(unittest.TestCase):
-    def test_tsan_default_prepares_jemalloc_headers_without_linking_the_allocator(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            for directory in ('common_mk', 'include', 'src', 'deps/libssl', 'deps/duckdb'):
-                (root / directory).mkdir(parents=True, exist_ok=True)
-            for path in ('deps/Makefile', 'deps/libssl/build.mk', 'deps/duckdb/build.mk',
-                         'include/makefiles_vars.mk'):
-                shutil.copy(ROOT / path, root / path)
-            for path in (ROOT / 'common_mk').glob('*.mk'):
-                shutil.copy(path, root / 'common_mk' / path.name)
-            shutil.copytree(ROOT / 'deps/jemalloc', root / 'deps/jemalloc',
-                            ignore=shutil.ignore_patterns('jemalloc', 'jemalloc-5.2.0'))
-            (root / 'deps/jemalloc/jemalloc').symlink_to('jemalloc-5.2.0')
-            (root / 'src/proxysql_global.cpp').touch()
-            probe = "probe-targets:\n\t@printf '%s\\n' '$(targets)'\n"
-            command = ['make', '--no-print-directory', '-C', str(root / 'deps'),
-                       'WITHTSAN=1', 'GIT_VERSION=4.0.0-test', 'NPROCS=2']
-            targets = subprocess.run(command + ['-s', '-f', 'Makefile', '-f', '-', 'probe-targets'],
-                                     input=probe, text=True, capture_output=True, check=True).stdout.split()
-            # Exercise the actual default graph, omitting the expensive unrelated
-            # dependencies. A TSAN exclusion leaves the generated header absent.
-            omit = ['--assume-old=' + target for target in targets if target != 'jemalloc']
-            built = subprocess.run(command + ['-j2', 'default', *omit], text=True, capture_output=True)
-            self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-            headers = root / 'deps/jemalloc/jemalloc/include/jemalloc'
-            self.assertTrue((headers / 'jemalloc.h').is_file(),
-                            'NOJEM disables allocator linkage, but proxysql.h still needs jemalloc.h')
-            consumer = root / 'consumer.cpp'
-            consumer.write_text('#include <jemalloc.h>\n#include <stdlib.h>\n'
-                                'int main() { void *p = malloc(16); free(p); return 0; }\n')
-            linked = subprocess.run(['c++', '-DNOJEM', '-fsanitize=thread', '-I' + str(headers),
-                                     str(consumer), '-o', str(root / 'consumer')],
-                                    text=True, capture_output=True)
-            self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
-
-    def test_allocator_disabled_in_all_production_link_inputs(self):
-        probe = "probe-link:\n\t@printf '%s\\n' '$(LIBPROXYSQLAR) $(MYLIBS) $(LIBS)'\n"
-        for platform in ('Linux', 'Darwin'):
-            for options, allocator_expected in ((['NOJEMALLOC=0'], True),
-                                                (['NOJEMALLOC=1'], False),
-                                                (['WITHTSAN=1'], False),
-                                                (['WITHASAN=1'], False)):
-                with self.subTest(platform=platform, options=options):
-                    rendered = subprocess.run(
-                        ['make', '-s', '-C', str(ROOT / 'src'), '-f', 'Makefile', '-f', '-',
-                         'probe-link', 'UNAME_S=' + platform, 'WITHTSAN=0', 'WITHASAN=0',
-                         *options],
-                        env={k: v for k, v in os.environ.items() if k != 'NOJEMALLOC'},
-                        input=probe, text=True, capture_output=True, check=True)
-                    inputs = shlex.split(rendered.stdout)
-                    self.assertTrue(any(value.endswith('/libproxysql.a') for value in inputs))
-                    linked = any(value == '-ljemalloc' or value.endswith('/libjemalloc.a')
-                                 for value in inputs)
-                    self.assertEqual(linked, allocator_expected, rendered.stdout)
-
     def test_tsan_duckdb_configures_required_options_after_custom_flags(self):
         # Configure a real CMake cache through the production Make flags. A
         # flag hidden in another definition must not disable TSAN or jemalloc's

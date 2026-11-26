@@ -15,7 +15,7 @@ Before running tests, ensure:
 # 1. Set required environment variables
 export INFRA_ID="dev-$USER"
 export TAP_GROUP="legacy-binlog-g1"  # or your target group
-export INFRA_TYPE="infra-mysql57-binlog"  # optional, inferred from group
+export INFRA_TYPE="infra-dbdeployer-mysql57-binlog"  # optional, inferred from group
 
 # 2. Run the full pipeline (starts infra + runs tests)
 ./test/infra/control/ensure-infras.bash
@@ -43,15 +43,12 @@ source test/infra/common/env.sh
 ### Step 2: Start Infrastructure
 
 ```bash
-# Option A: Use the helper (recommended)
 ./test/infra/control/ensure-infras.bash
-
-# Option B: Manual per-infrastructure startup
-cd test/infra/infra-mysql57-binlog
-export INFRA_ID="dev-$USER"
-./docker-compose-init.bash
-cd ../../../
 ```
+
+Do not run an infra's `docker-compose-init.bash` directly: it ends by configuring
+ProxySQL through `bin/docker-proxy-post.bash`, which needs the ProxySQL container
+that `ensure-infras.bash` starts.
 
 ### Step 3: Start ProxySQL
 
@@ -68,7 +65,7 @@ docker logs proxysql.${INFRA_ID}
 ### Step 4: Configure ProxySQL Backend
 
 ```bash
-cd test/infra/infra-mysql57-binlog
+cd test/infra/infra-dbdeployer-mysql57-binlog
 export INFRA_ID="dev-$USER"
 ./bin/docker-proxy-post.bash
 ```
@@ -101,12 +98,15 @@ export TEST_PY_TAP_INCL="test_binlog.*"
 
 **Solution:**
 ```bash
-# Destroy existing infrastructure first
-cd test/infra/infra-mysql57-binlog
+# Destroy existing infrastructure first (from the repository root)
 export INFRA_ID="dev-$USER"
-./docker-compose-destroy.bash
-sudo rm -rf ./logs/infra-mysql57-binlog-${INFRA_ID}
-sudo rm -rf ../../ci_infra_logs/${INFRA_ID}
+export TAP_GROUP="<group>"  # replace with the group whose infras failed to start
+./test/infra/control/destroy-infras.bash
+# ProxySQL/test logs (always under ci_infra_logs), plus the data directory of
+# each plain Docker infra of the group (here infra-mysql57), which follows
+# INFRA_LOGS_PATH when set. Set INFRA_LOGS_PATH to an absolute path: the init
+# script resolves a relative one from the infra directory, not from here.
+sudo rm -rf "ci_infra_logs/${INFRA_ID}" "${INFRA_LOGS_PATH:-ci_infra_logs}/infra-mysql57-${INFRA_ID}"
 ```
 
 ### Issue: "Access denied for user 'root'"
@@ -128,7 +128,7 @@ sudo rm -rf ../../ci_infra_logs/${INFRA_ID}
 **Solution:**
 ```bash
 # Check container status
-docker ps --format "table {{.Names}}\t{{.Status}}" | grep infra-mysql57-binlog
+docker ps --format "table {{.Names}}\t{{.Status}}" | grep infra-dbdeployer-mysql57-binlog
 
 # Check network aliases
 docker network inspect ${INFRA_ID}_backend
@@ -192,10 +192,10 @@ zcat ci_infra_logs/${INFRA_ID}/tests/proxysql-tester.py/tests/test_name-t.log.gz
 ```bash
 # From ProxySQL container, test MySQL connection
 docker exec -it proxysql.${INFRA_ID} bash
-mysql -h mysql1.infra-mysql57-binlog -P 3306 -u root -p
+mysql -h dbdeployer1.infra-dbdeployer-mysql57-binlog -P 3306 -u root -p
 
 # Test reader connection
-telnet mysql1.infra-mysql57-binlog 6020
+telnet dbdeployer1.infra-dbdeployer-mysql57-binlog 6020
 ```
 
 ### 2. Monitor ProxySQL Runtime
@@ -232,12 +232,11 @@ docker rm -f test-runner.${INFRA_ID}
 # Stop ProxySQL
 ./test/infra/control/stop-proxysql-isolated.bash
 
-# Destroy infrastructure
-cd test/infra/infra-mysql57-binlog
-export INFRA_ID="dev-$USER"
-./docker-compose-destroy.bash
+# Destroy infrastructure (uses TAP_GROUP to find the group's infras)
+./test/infra/control/destroy-infras.bash
 
-# Clean up logs (optional)
+# Clean up logs (optional): ProxySQL/test logs, plus ci_infra_logs/<infra>-${INFRA_ID}
+# for each plain Docker infra the group used (dbdeployer infras keep theirs in the container)
 sudo rm -rf ci_infra_logs/${INFRA_ID}
 ```
 

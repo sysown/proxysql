@@ -31,6 +31,7 @@ using json = nlohmann::json;
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_Logger.hpp"
 #include "PgSQL_Logger.hpp"
+#include "PgSQL_Data_Stream.h"
 
 #include "SQLite3_Server.h"
 #include "MySQL_Query_Processor.h"
@@ -223,6 +224,8 @@ static char * main_check_latest_version() {
 	// Set timeout and connect timeout for the HTTP request
 	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 10);
 	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
+	// Do not wait for a DNS lookup that is still running: shutdown joins this thread.
+	curl_easy_setopt(curl_handle, CURLOPT_QUICK_EXIT, 1L);
 
 	// Perform the HTTP request
 	res = curl_easy_perform(curl_handle);
@@ -424,6 +427,9 @@ void ProxySQL_Main_init_SSL_module() {
 		proxy_error("Unable to initialize SSL. SSL_set_min_proto_version failed. Shutting down...\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
+#ifdef PROXYSQL31
+	pgsql_install_alpn(GloVars.global.ssl_ctx);
+#endif
 	//SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_SSLv3); // no necessary, because of previous SSL_CTX_set_min_proto_version
 #ifdef DEBUG
 #if 0
@@ -2876,6 +2882,9 @@ void watchdog_main_loop() {
 
 	unsigned int inner_loops = 0;
 	unsigned long long time_next_version_check = 0;
+	// The version check thread is joinable: it must not be inside curl/OpenSSL when the process exits.
+	pthread_t version_check_thr;
+	bool version_check_started = false;
 	unsigned long long loop_prev_time = monotonic_time();
 	while (glovars.shutdown == 0) {
 		std::this_thread::sleep_for(std::chrono::microseconds(200000));
@@ -2885,15 +2894,15 @@ void watchdog_main_loop() {
 		const unsigned long long curtime = monotonic_time();
 
 		// Version check handling
-		if (GloVars.global.version_check && curtime > time_next_version_check) {
-			pthread_attr_t attr;
-			pthread_attr_init(&attr);
-			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-			pthread_t thr;
-			if (pthread_create(&thr, &attr, main_check_latest_version_thread, NULL) != 0) {
+		if (GloVars.global.version_check && curtime > time_next_version_check && glovars.shutdown == 0) {
+			if (version_check_started) {
+				pthread_join(version_check_thr, NULL); // started 24h ago, long finished
+			}
+			if (pthread_create(&version_check_thr, NULL, main_check_latest_version_thread, NULL) != 0) {
 				perror("Thread creation");
 				exit(EXIT_FAILURE);
 			}
+			version_check_started = true;
 			if (time_next_version_check == 0)
 				time_next_version_check = curtime;
 			time_next_version_check += (24ULL * 3600 * 1000000); // 24h in microseconds
@@ -3020,6 +3029,10 @@ void watchdog_main_loop() {
 				group.missed_heartbeats = 0;
 			}
 		}
+	}
+	// Bounded by the curl timeouts of the version check (10s)
+	if (version_check_started) {
+		pthread_join(version_check_thr, NULL);
 	}
 }
 

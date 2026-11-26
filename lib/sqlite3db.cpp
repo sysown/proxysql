@@ -1196,7 +1196,11 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_bind_null = NULL;
 	proxy_sqlite3_bind_text = NULL;
 	proxy_sqlite3_bind_blob = NULL;
+	proxy_sqlite3_bind_parameter_count = NULL;
+	proxy_sqlite3_bind_parameter_name = NULL;
 	proxy_sqlite3_column_name = NULL;
+	proxy_sqlite3_column_blob = NULL;
+	proxy_sqlite3_column_decltype = NULL;
 	proxy_sqlite3_column_text = NULL;
 	proxy_sqlite3_column_bytes = NULL;
 	proxy_sqlite3_column_type = NULL;
@@ -1215,6 +1219,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_clear_bindings = NULL;
 	proxy_sqlite3_close_v2 = NULL;
 	proxy_sqlite3_get_autocommit = NULL;
+	proxy_sqlite3_set_authorizer = NULL;
 	proxy_sqlite3_free = NULL;
 	proxy_sqlite3_status = NULL;
 	proxy_sqlite3_status64 = NULL;
@@ -1225,6 +1230,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_prepare_v2 = NULL;
 	proxy_sqlite3_open_v2 = NULL;
 	proxy_sqlite3_exec = NULL;
+	proxy_sqlite3_stmt_readonly = NULL;
 	if (plugin_name && allow_load_plugin == true) {
 		int fd = -1;
 		fd = ::open(plugin_name, O_RDONLY);
@@ -1270,6 +1276,21 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 			proxy_load_sqlite3 = (int (*)()) dlsym(handle_sqlite3_plugin, "proxy_load_sqlite3"); dlsym_error = dlerror();
 			if (dlsym_error!=NULL) { cerr << "Cannot load symbol proxy_load_sqlite3: " << dlsym_error << '\n'; exit(EXIT_FAILURE); }
 			(*proxy_load_sqlite3)();
+#ifdef PROXYSQL40
+			// An older SQLite plugin may not expose this optional capability.
+			// Preserve a pointer supplied by its loader and consume optional lookup
+			// errors so they cannot contaminate later required symbol checks.
+			if (!proxy_sqlite3_bind_parameter_name) {
+				dlerror();
+				proxy_sqlite3_bind_parameter_name = reinterpret_cast<decltype(proxy_sqlite3_bind_parameter_name)>(dlsym(handle_sqlite3_plugin, "sqlite3_bind_parameter_name"));
+				dlerror();
+			}
+			if (!proxy_sqlite3_set_authorizer) {
+				dlerror();
+				proxy_sqlite3_set_authorizer = reinterpret_cast<decltype(proxy_sqlite3_set_authorizer)>(dlsym(handle_sqlite3_plugin, "sqlite3_set_authorizer"));
+				dlerror();
+			}
+#endif
 		}
 		if (handle_sqlite3_plugin==NULL || dlsym_error) {
 			proxy_error("Unable to load SQLite3 plugin from %s\n", plugin_name);
@@ -1284,7 +1305,11 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_bind_null = sqlite3_bind_null;
 		proxy_sqlite3_bind_text = sqlite3_bind_text;
 		proxy_sqlite3_bind_blob = sqlite3_bind_blob;
+		proxy_sqlite3_bind_parameter_count = sqlite3_bind_parameter_count;
+		proxy_sqlite3_bind_parameter_name = sqlite3_bind_parameter_name;
 		proxy_sqlite3_column_name = sqlite3_column_name;
+		proxy_sqlite3_column_blob = sqlite3_column_blob;
+		proxy_sqlite3_column_decltype = sqlite3_column_decltype;
 		proxy_sqlite3_column_text = sqlite3_column_text;
 		proxy_sqlite3_column_bytes = sqlite3_column_bytes;
 		proxy_sqlite3_column_type = sqlite3_column_type; /* signature matches */
@@ -1303,6 +1328,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_clear_bindings = sqlite3_clear_bindings;
 		proxy_sqlite3_close_v2 = sqlite3_close_v2;
 		proxy_sqlite3_get_autocommit = sqlite3_get_autocommit;
+		proxy_sqlite3_set_authorizer = sqlite3_set_authorizer;
 		proxy_sqlite3_free = sqlite3_free;
 		proxy_sqlite3_status = sqlite3_status;
 		proxy_sqlite3_status64 = sqlite3_status64;
@@ -1313,6 +1339,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 		proxy_sqlite3_prepare_v2 = sqlite3_prepare_v2;
 		proxy_sqlite3_open_v2 = sqlite3_open_v2;
 		proxy_sqlite3_exec = sqlite3_exec;
+		proxy_sqlite3_stmt_readonly = sqlite3_stmt_readonly;
 		proxy_info("Loaded built-in SQLite3\n");
 	}
 	assert(proxy_sqlite3_config);
@@ -1351,6 +1378,12 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	assert(proxy_sqlite3_prepare_v2);
 	assert(proxy_sqlite3_open_v2);
 	assert(proxy_sqlite3_exec);
+#ifdef PROXYSQL40
+	assert(proxy_sqlite3_bind_parameter_count);
+	assert(proxy_sqlite3_column_blob);
+	assert(proxy_sqlite3_column_decltype);
+	assert(proxy_sqlite3_stmt_readonly);
+#endif
 	{
 		/* moved here, so if needed by multiple modules it applies to all of them */
 		int i=(*proxy_sqlite3_config)(SQLITE_CONFIG_URI, 1);

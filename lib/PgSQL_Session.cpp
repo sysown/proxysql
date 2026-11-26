@@ -1,3 +1,8 @@
+#include "Embedded_Plugin_Service.h"
+#ifdef PROXYSQL40
+#include "Embedded_Admin_PgSQL_Prepared.h"
+#endif
+#include "Embedded_PgSQL_Frontend.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -14,6 +19,7 @@ using json = nlohmann::json;
 
 #include "PgSQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
+#include "DataStreamOutputPending.h"
 #include "PgSQL_Query_Processor.h"
 #include "PgSQL_PreparedStatement.h"
 #include "Query_Processor_ParserSQL.h"
@@ -470,6 +476,16 @@ PgSQL_Session::PgSQL_Session() {
 }
 
 void PgSQL_Session::reset() {
+#ifdef PROXYSQL40
+	if (admin_prepared_registered) {
+		embedded::unregister_admin_pgsql_prepared(*this);
+		admin_prepared_registered = false;
+	}
+#endif
+	if (session_type == PROXYSQL_SESSION_DUCKDB) {
+		embedded::teardown_plugin_pgsql(*this);
+		embedded::unregister_pgsql_prepared(*this);
+	}
 	autocommit = true;
 	autocommit_handled = false;
 	sending_set_autocommit = false;
@@ -484,7 +500,7 @@ void PgSQL_Session::reset() {
 	}
 	mybe = NULL;
 
-	if (session_type == PROXYSQL_SESSION_SQLITE) {
+	if (session_type == PROXYSQL_SESSION_SQLITE && thread) {
 		SQLite3_Session* sqlite_sess = (SQLite3_Session*)thread->gen_args;
 		if (sqlite_sess && sqlite_sess->sessdb) {
 			sqlite3* db = sqlite_sess->sessdb->get_db();
@@ -1074,9 +1090,8 @@ int PgSQL_Session::handler_again___status_PINGING_SERVER() {
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_PING_TIMEOUT);
 			}
 			else { // rc==-1
-				int myerr = 0; // TODO: fix this mysql_errno(myconn->pgsql);
 				detected_broken_connection(__FILE__, __LINE__, __func__, "during ping", myconn,  true);
-				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
+				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
@@ -1131,7 +1146,7 @@ int PgSQL_Session::handler_again___status_RESETTING_CONNECTION() {
 					myconn->parent->myhgc->hid,
 					myconn->parent->address,
 					myconn->parent->port,
-					(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
+					error_present ? std::string(myconn->get_counter_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
 				);
 				if (error_present) {
 					proxy_error("Detected an error during Reset Session on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myconn->get_error_code_with_message().c_str());
@@ -1183,7 +1198,7 @@ int PgSQL_Session::handler_again___status_RESYNCHRONIZING_CONNECTION() {
 			PgSQL_Result_to_PgSQL_wire(myconn, myds);
 			if (failed) {
 				PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid,
-					myconn->parent->address, myconn->parent->port, 9999);
+					myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 				handler_minus1_LogErrorDuringQuery(myconn);
 				RequestEnd(myds, true);
 				handler_minus1_HandleBackendConnection(myds);
@@ -1213,7 +1228,7 @@ int PgSQL_Session::handler_again___status_RESYNCHRONIZING_CONNECTION() {
 			proxy_error("Detected an error during Resynchronization on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %s , %s\n", 
 				myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, code, msg);
 
-			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, 9999);
+			PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd = 0;
@@ -1278,6 +1293,9 @@ void PgSQL_Session::handler_again___new_thread_to_cancel_query() {
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
 bool PgSQL_Session::handler_again___verify_init_connect() {
+	// v3.0 has no SETTING_INIT_CONNECT handler, and sending init_connect would stall the session,
+	// so v3.0 ignores it. It warns when a non-empty value is loaded to runtime instead.
+#ifdef PROXYSQL31
 	if (mybe->server_myds->myconn->options.init_connect_sent == false) {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent = true;
@@ -1289,6 +1307,8 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 			// pgsql_hostgroup_attributes takes priority
 			tmp_init_connect = hg_strings->init_connect.c_str();
 		}
+		// Tracked parameters (search_path, TimeZone, ...) set here are not recorded in this
+		// connection's variable state, so the client's value may or may not be re-applied.
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
 			mybe->server_myds->myconn->options.init_connect = strdup(tmp_init_connect);
@@ -1297,6 +1317,7 @@ bool PgSQL_Session::handler_again___verify_init_connect() {
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
 	}
+#endif // PROXYSQL31
 	return false;
 }
 
@@ -1323,6 +1344,7 @@ bool PgSQL_Session::handler_again___verify_backend_user_db() {
 	return false;
 }
 
+#ifdef PROXYSQL31
 bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 	bool ret = false;
 	assert(mybe->server_myds->myconn);
@@ -1345,60 +1367,87 @@ bool PgSQL_Session::handler_again___status_SETTING_INIT_CONNECT(int* _rc) {
 	else {
 		if (rc == -1 || rc == -2) {
 			// the command failed
-			int myerr = 0; // TODO: fix this mysql_errno(myconn->pgsql);
+			const bool error_present = myconn->is_error_present();
 			PgHGM->p_update_pgsql_error_counter(
 				p_pgsql_error_type::pgsql,
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV)
+				myconn->get_simple_command_error_code_str(rc)
 			);
-			if (myerr >= 2000 || myerr == 0) {
+			// A backend can send class 08 or P0001 itself. Only transport failures without
+			// a backend ErrorResponse are retryable, regardless of their SQLSTATE.
+			const bool backend_error = myconn->has_backend_error();
+			// rc == -2 is PMC-10003: init_connect returned rows. Retrying only repeats the
+			// same reply, so the session is terminated.
+			if (rc == -2 || error_present == false ||
+				(myconn->is_connection_in_reusable_state() == false && backend_error == false)) {
 				bool retry_conn = false;
 				// client error, serious
 				detected_broken_connection(__FILE__, __LINE__, __func__, "while setting INIT CONNECT", myconn);
-				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-				if (rc != -2) { // see PMC-10003
-					if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
+				if (rc != -2) {
+					// init_connect runs before any client statement on this connection, so only a
+					// known transaction blocks the retry. IsActiveTransaction() also counts the
+					// unknown state a broken libpq connection always reports, and would never retry.
+					if ((myds->myconn->reusable == true) && myds->myconn->IsKnownActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false &&
 						myds->myconn->is_pipeline_active() == false) {
 						retry_conn = true;
 					}
 				}
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd = 0;
-				if (rc == -2) {
-					// Here we handle PMC-10003
-					// and we terminate the session
-					retry_conn = false;
-				}
 				if (retry_conn) {
 					myds->DSS = STATE_NOT_INITIALIZED;
-					//previous_status.push(PROCESSING_QUERY);
 					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 				}
 				*_rc = -1;	// an error happened, we should destroy the Session
 				return ret;
 			}
 			else {
-				proxy_warning("Error while setting INIT CONNECT on %s:%d hg %d : %d, %d\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, 9999);
+				// The backend rejected init_connect (the connection may be gone too, e.g. after a FATAL):
+				// a new connection would fail the same way, so report the error instead.
+				proxy_warning("Error while setting INIT CONNECT on %s:%d hg %d: %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myconn->get_error_code_with_message().c_str());
 				// we won't go back to PROCESSING_QUERY
-				st = previous_status.top();
 				previous_status.pop();
-				char sqlstate[10];
-				snprintf(sqlstate, sizeof(sqlstate), "%s", ""/* TODO: fix this mysql_sqlstate(myconn->pgsql)*/);
-				client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, 9999 /* TODO: fix this mysql_errno(myconn->pgsql)*/, sqlstate, "" /* TODO: fix this mysql_error(myconn->pgsql)*/);
-				myds->destroy_MySQL_Connection_From_Pool(true);
+				const std::string errmsg = myconn->get_error_message();
+				const std::string errcode = myconn->get_error_code_str();
+				// Drop the connection first: no client statement ran on it, so a transaction it holds
+				// (an init_connect such as "BEGIN; ...") is ProxySQL's. Left in place, the client's
+				// transaction state below would count it and poison a client that never opened one.
+				// Initialization already failed: close directly. Graceful destruction would
+				// treat ASYNC_QUERY_END as in-flight work and open a termination connection.
+				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd = 0;
-				status = WAITING_CLIENT_DATA;
-				client_myds->DSS = STATE_SLEEP;
+				client_myds->myprot.generate_error_packet(true, true, errmsg.c_str(), errcode.c_str(), false,
+					false, NULL, txn_state_for_local_error(true));
+				// The rest of an extended-query unit goes too: left queued, it would run ahead of
+				// the client's next unit and fail it (as give_up_waiting() does).
+				reset_extended_query_frame();
+				RequestEnd(myds, true);
+				ret = true;
 			}
 		}
+		else if (rc == 2) {
+			// One statement of a multi-statement init_connect is done (libpq only: native
+			// collects every result through ReadyForQuery). Discard its result, as
+			// async_send_simple_command() does at the end; the next one needs a fresh one.
+			if (myconn->query_result) {
+				if (myconn->query_result_reuse) {
+					delete myconn->query_result_reuse;
+				}
+				myconn->query_result->clear();
+				myconn->query_result_reuse = myconn->query_result;
+				myconn->query_result = NULL;
+			}
+			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
+		}
 		else {
-			// rc==1 , nothing to do for now
+			// rc==1 or rc==3 , nothing to do for now
 		}
 	}
 	return ret;
 }
+#endif // PROXYSQL31
 
 bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, const char* var_name, const char* var_value, 
 	bool no_quote, bool set_transaction) {
@@ -1481,7 +1530,7 @@ bool PgSQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int* _rc, co
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
+				myconn->get_simple_command_error_code_str(rc)
 			);
 			if (error_present == false || (error_present == true && myconn->is_connection_in_reusable_state() == false)) {
 				bool retry_conn = false;
@@ -1753,7 +1802,7 @@ bool PgSQL_Session::handler_again___status_CONNECTING_SERVER(int* _rc) {
 				p_pgsql_error_type::pgsql, 
 				myconn->parent->myhgc->hid, 
 				myconn->parent->address, 
-				myconn->parent->port, 9999 /* TODO: fix this mysql_errno(myconn->pgsql)*/);
+				myconn->parent->port, myconn->get_connect_error_code_str());
 
 			if (myds->connect_retries_on_failure > 0) {
 				myds->connect_retries_on_failure--;
@@ -1866,7 +1915,7 @@ bool PgSQL_Session::handler_again___status_RESETTING_CONNECTION(int* _rc) {
 				myconn->parent->myhgc->hid,
 				myconn->parent->address,
 				myconn->parent->port,
-				(error_present ? 9999 : ER_PROXYSQL_OFFLINE_SRV) // TOFIX: 9999 is a placeholder for the actual error code
+				error_present ? std::string(myconn->get_counter_error_code_str()) : std::to_string(ER_PROXYSQL_OFFLINE_SRV)
 			);
 			if (error_present == false || (error_present == true && myconn->is_connection_in_reusable_state() == false)) {
 				bool retry_conn = false;
@@ -1938,6 +1987,10 @@ void PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		break;
 	case PROXYSQL_SESSION_SQLITE:
 		handler_function(this, (void*)GloSQLite3Server, &pkt);
+		l_free(pkt.size, pkt.ptr);
+		break;
+	case PROXYSQL_SESSION_DUCKDB:
+		handler_function(this, nullptr, &pkt);
 		l_free(pkt.size, pkt.ptr);
 		break;
 #ifdef PROXYSQLCLICKHOUSE
@@ -2086,7 +2139,27 @@ int PgSQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 			break;
 		}
 
-		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE) {
+		// A simple-query COPY takes CopyData, CopyDone and CopyFail from the client, and PostgreSQL ignores a
+		// Flush during it. None of them gets a reply of its own once the COPY is over, so they are relayed.
+		// Anything else waits here like a query pipelined behind any other: its reply would come after the
+		// COPY's ReadyForQuery, which ends fast forward and can give the backend to the pool. That includes a
+		// Sync, which PostgreSQL ignores during a COPY FROM but answers once the COPY is over. Sent before
+		// CopyDone, a held message holds the COPY data behind it too, so that COPY ends only when the client
+		// leaves (a Query there is a protocol error, which PostgreSQL refuses). The fast forward read limit
+		// counts only what is queued for the backend: data held here is buffered without it, as messages
+		// pipelined behind a query are in normal mode.
+		// Only a well-formed Flush (no body, 5 bytes) is relayed. One with a body, sent after CopyDone,
+		// reaches a backend that has ended the COPY: it refuses it and then ignores everything until a Sync,
+		// with no ReadyForQuery, on a backend that may already be back in the pool. Held, normal mode
+		// takes it as a Flush and the backend never sees it.
+		bool copy_hold = false;
+		if (session_fast_forward == SESSION_FORWARD_TYPE_COPY_FROM_STDIN_STDOUT) {
+			const PtrSize_t* nxt = client_myds->PSarrayIN->index(0);
+			const char t = *static_cast<const char*>(nxt->ptr);
+			copy_hold = t != 'd' && t != 'c' && t != 'f' && (t != 'H' || nxt->size != 5);
+		}
+
+		if (session_fast_forward == SESSION_FORWARD_TYPE_NONE || copy_hold) {
 			// If the client sends a new packet while a query is still executing,
 			// we no longer treat this as an error. Previously, such packets were
 			// considered unexpected and the session was terminated.
@@ -2247,22 +2320,21 @@ __implicit_flush:
 				}
 				c = *((unsigned char*)pkt.ptr);
 				if (client_myds != NULL) {
-					// PROXYSQL_SESSION_SQLITE is included here alongside ADMIN/STATS
-					// because plugin session handlers that serve the PgSQL protocol
-					// (e.g. the duckdb plugin's DuckDBListener) use this session type
-					// for their own client-facing sessions -- there is no backend
-					// connection to route a query to, only the plugin's own
-					// handler_function. handler___status_WAITING_CLIENT_DATA___
-					// STATE_SLEEP___MYSQL_COM_QUERY___not_mysql() (below) already has
-					// an explicit `case PROXYSQL_SESSION_SQLITE:` arm that dispatches
-					// to GloSQLite3Server/the session's handler_function; without this
-					// session type in this gate, that arm was unreachable dead code --
-					// a 'Q' packet on such a session fell through untouched, leaking
-					// pkt.ptr and leaving the client waiting forever for a response
-					// that was never generated.
+					// Local listeners dispatch to their handler without a backend.
 					if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS ||
-						session_type == PROXYSQL_SESSION_SQLITE) {
+						session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) {
 						c = *((unsigned char*)pkt.ptr);
+						if (session_type == PROXYSQL_SESSION_DUCKDB &&
+						    embedded::handle_pgsql_prepared(*this, pkt)) continue;
+#ifdef PROXYSQL40
+						if ((session_type == PROXYSQL_SESSION_ADMIN ||
+						     session_type == PROXYSQL_SESSION_STATS) &&
+						    !admin_extq_rejected && (c != 'Q' || admin_prepared_registered) &&
+						    embedded::handle_admin_pgsql_prepared(
+						        *this, pkt, admin_extq_rejected, admin_prepared_registered)) {
+							continue;
+						}
+#endif
 						// Recovery discards every message, including simple Query,
 						// until Sync. Terminate must still close the connection.
 						if (admin_extq_rejected && c != 'S' && c != 'X') {
@@ -2278,7 +2350,7 @@ __implicit_flush:
 							handler_ret = -1;
 							return handler_ret;
 						} else if (c == 'P' || c == 'B' || c == 'C' || c == 'D' || c == 'E' || c == 'H' || c == 'S') {
-							if (session_type == PROXYSQL_SESSION_SQLITE) {
+							if (session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB) {
 								// Plugin-backed sessions get the message so the plugin can
 								// return its protocol-specific error and transaction state.
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
@@ -3206,7 +3278,7 @@ bool PgSQL_Session::handler_minus1_HandleErrorCodes(PgSQL_Data_Stream* myds, int
 	case PGSQL_ERROR_CODES::ERRCODE_ADMIN_SHUTDOWN: // Server shutdown in progress. Requested by Admin
 	case PGSQL_ERROR_CODES::ERRCODE_CRASH_SHUTDOWN: // Server shutdown in progress
 	case PGSQL_ERROR_CODES::ERRCODE_CANNOT_CONNECT_NOW: // Server in initialization mode and not ready to handle new connections
-		myconn->parent->connect_error(9999);
+		myconn->parent->connect_error(myconn->get_error_code());
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
 			retry_conn = query_retry_allowed(myds);
@@ -3450,8 +3522,7 @@ void PgSQL_Session::note_backend_release(unsigned int hostgroup) {
 // Data this backend stream has queued or started sending: its queue and send buffer, the rest of the
 // message being copied into that buffer, and TLS records not written yet.
 static bool backend_data_unsent(PgSQL_Data_Stream* ds) {
-	return ds->available_data_out() || ds->queueOUT.partial || ds->ssl_write_len ||
-		(ds->encrypted && ds->wbio_ssl && BIO_ctrl_pending(ds->wbio_ssl));
+	return proxysql_stream_output_pending(*ds);
 }
 
 #ifdef PROXYSQL31
@@ -3487,9 +3558,7 @@ int PgSQL_Session::handler() try {
 		// Include encrypted bytes retained after a short write. The normal poll
 		// loop resumes draining on POLLOUT; do not process more client commands.
 		if (client_myds->net_failure) return -1;
-		return (client_myds->available_data_out() || client_myds->queueOUT.partial ||
-			client_myds->ssl_write_len || (client_myds->encrypted &&
-			BIO_ctrl_pending(client_myds->wbio_ssl))) ? 0 : -1;
+		return proxysql_stream_output_pending(*client_myds) ? 0 : -1;
 	}
 	proxy_debug(PROXY_DEBUG_NET, 1, "Thread=%p, Session=%p -- Processing session %p\n", this->thread, this, this);
 	//unsigned int j;
@@ -3629,15 +3698,15 @@ handler_again:
 			}
 		}
 		if (is_copy_ready_packet) {
-			// The backend has ended the COPY, so it ignores any client COPY message still queued for
-			// it, such as a CopyDone that arrived with its error. Sent after the TLS is given back,
-			// that message goes out unencrypted and the backend drops the connection. Discard them,
-			// as normal mode discards the ones that arrive later.
+			// The backend has ended the COPY, so it ignores any client COPY message or Flush still
+			// queued for it, such as a CopyDone that arrived with its error. Sent after the TLS is
+			// given back, that message goes out unencrypted and the backend drops the connection.
+			// Discard them, as normal mode discards the ones that arrive later.
 			PtrSizeArray* out = mybe->server_myds->PSarrayOUT;
 			unsigned int n = 0;
 			for (; n < out->len; n++) {
 				const char type = *(const char*)out->index(n)->ptr;
-				if (type != 'd' && type != 'c' && type != 'f') break;
+				if (type != 'd' && type != 'c' && type != 'f' && type != 'H') break;
 				l_free(out->index(n)->size, out->index(n)->ptr);
 			}
 			out->remove_index_range(0, n);
@@ -4302,7 +4371,6 @@ handler_again:
 				if (rc == -1) {
 					// the query failed
 					//bool is_error_present = myconn->is_error_present(); // false means failure is due to server being in OFFLINE state
-					PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, 9999); // TOFIX
 					//CurrentQuery.mysql_stmt = NULL; // immediately reset mysql_stmt
 					int rc1 = handler_ProcessingQueryError_CheckBackendConnectionStatus(myds);
 					if (rc1 == -1) {
@@ -4313,6 +4381,10 @@ handler_again:
 						if (rc1 == 1)
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
 					}
+					// The backend failed the query. An offline server returned above, already counted as
+					// ER_PROXYSQL_OFFLINE_SRV: async_query() then fails before clearing the connection's
+					// error, so its SQLSTATE would be a previous query's.
+					PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 					if (myconn->is_connection_in_reusable_state() == false) {
 						if (handler_minus1_ClientLibraryError(myds)) {
 							NEXT_IMMEDIATE(CONNECTING_SERVER);
@@ -4548,10 +4620,11 @@ bool PgSQL_Session::handler_again___multiple_statuses(int* rc) {
 	case RESETTING_CONNECTION_V2:
 		ret = handler_again___status_RESETTING_CONNECTION(rc);
 		break;
-	// TODO: fix this
-	//case SETTING_INIT_CONNECT:
-	//	ret = handler_again___status_SETTING_INIT_CONNECT(rc);
+#ifdef PROXYSQL31
+	case SETTING_INIT_CONNECT:
+		ret = handler_again___status_SETTING_INIT_CONNECT(rc);
 		break;
+#endif // PROXYSQL31
 	default:
 		break;
 	}
@@ -4621,18 +4694,26 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		) {
 			// use SSL
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 8, "Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
+#ifdef PROXYSQL31
+			if (!client_myds->start_client_tls()) {
+				*wrong_pass = true; // forcefully close the connection
+				client_myds->setDSS_STATE_QUERY_SENT_NET();
+			}
+#else
 			client_myds->DSS = STATE_SSL_INIT;
 			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-#ifdef PROXYSQL31
-			client_myds->tls13_handshake_complete = false;
-#endif
 			client_myds->ssl = GloVars.get_SSL_new();
+			// Keep records within libpq's guaranteed read window. See PGSQL_TLS_MAX_SEND_FRAGMENT.
+			SSL_set_max_send_fragment(client_myds->ssl, PGSQL_TLS_MAX_SEND_FRAGMENT);
 			SSL_set_fd(client_myds->ssl, client_myds->fd);
 			SSL_set_accept_state(client_myds->ssl);
 			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
+#endif
 			l_free(pkt->size, pkt->ptr);
+#ifndef PROXYSQL31
 			proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+#endif
 			return;
 	}
 
@@ -4650,9 +4731,11 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			(default_hostgroup == 0 && session_type == PROXYSQL_SESSION_CLICKHOUSE)
 			||
 			//(default_hostgroup>=0 && session_type == PROXYSQL_SESSION_PGSQL)
-			(default_hostgroup >= 0 && (session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_SQLITE))
+			(default_hostgroup >= 0 && (session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB))
 			||
 			(
+				session_type != PROXYSQL_SESSION_DUCKDB
+				&&
 				client_myds->encrypted == false
 				&&
 				strncmp(client_myds->myconn->userinfo->username, pgsql_thread___monitor_username, strlen(pgsql_thread___monitor_username)) == 0
@@ -4675,12 +4758,13 @@ void PgSQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		if (
 			(max_connections_reached == false)
 			&&
-			(session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE || session_type == PROXYSQL_SESSION_SQLITE)
+			(session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_DUCKDB)
 			) {
 			//if (session_type == PROXYSQL_SESSION_PGSQL || session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 			client_authenticated = true;
 			switch (session_type) {
 			case PROXYSQL_SESSION_SQLITE:
+			case PROXYSQL_SESSION_DUCKDB:
 				//#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 				free_users = 1;
 				break;
@@ -6290,7 +6374,9 @@ PgSQL_Local_Reply PgSQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SL
 	// Query cache handling. A session locked on a hostgroup ran a change ProxySQL could not
 	// track (SET SCHEMA, SET LOCAL, a SET inside a multi-statement query, ...), so the key
 	// does not describe its settings: a cached entry may not fit it. Same rule as the extended cache.
-	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && locked_on_hostgroup < 0) {
+	// *lock_hostgroup: this query asked for the lock, which the caller takes only after we return.
+	if (qpo->cache_ttl > 0 && stmt_type == PGSQL_EXTENDED_QUERY_TYPE_NOT_SET && locked_on_hostgroup < 0 &&
+		*lock_hostgroup == false) {
 		CurrentQuery.simple_cache_seed = simple_query_cache_seed(client_myds->myconn);
 		const std::shared_ptr<PgSQL_QC_entry_t> pgsql_qc_entry = GloPgQC->get(
 			CurrentQuery.simple_cache_seed,
@@ -10055,7 +10141,7 @@ int PgSQL_Session::extq_unit_done(PgSQL_Data_Stream* myds) {
 	if (backend_error) {
 		// The error reached the client in its place in the batch, and the backend has concluded it.
 		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, myconn->parent->myhgc->hid,
-			myconn->parent->address, myconn->parent->port, 9999);
+			myconn->parent->address, myconn->parent->port, myconn->get_counter_error_code_str());
 		myconn->reset_error();
 	}
 	if (active_transactions != 0 && myconn->IsKnownActiveTransaction() == false && myconn->is_pipeline_active() == false) {

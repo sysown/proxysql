@@ -605,23 +605,21 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	backend_unplug_unit-t \
 	worker_timeout_unit-t \
 	mysql_tls_write_retry_unit-t \
-	mysql_compressed_output_ring_unit-t \
-	mysql_output_span_unit-t \
-	pgsql_output_span_unit-t \
 	pgsql_stable_io_unit-t \
 	cacert_load_and_verify_duration_parser_unit-t \
 	str_ends_with_unit-t \
 	query_cache_unit-t pgsql_query_cache_allocation_unit-t pgsql_result_flush_allocation_unit-t pgsql_scheduler_contract_unit-t query_processor_unit-t digest_stats_unit-t \
 	gtid_local_cache_unit-t gtid_writer_fallback_route_unit-t mysql_resultset_add_row2_unit-t \
-	protocol_unit-t auth_unit-t aws_locality_policy_unit-t aws_locality_manager_unit-t connection_pool_unit-t \
+	protocol_unit-t auth_unit-t connection_pool_unit-t \
 	stmt_execute_short_packet_unit-t \
+	stmt_execute_shared_decoder_unit-t \
+	stmt_prepare_shared_response_unit-t \
 	stmt_long_data_param_type_unit-t \
 	mysql_replication_pipeline_unit-t \
 	rule_matching_unit-t rule_matching_missing_digest_unit-t query_processor_regex_default_unit-t pcre1_query_rule_limits_unit-t hostgroups_unit-t hgc_attribute_strings_unit-t hgm_mapping_commit_sentinel_unit-t monitor_health_unit-t \
 	pgsql_backend_framing-t pgsql_backend_auth-t pgsql_backend_extq-t \
 	pgsql_command_complete_unit-t \
 	pgsql_extq_batch_unit-t \
-	ffto_protocol_unit-t \
 	server_selection_unit-t \
   hostgroup_routing_unit-t \
 	transaction_state_unit-t \
@@ -656,6 +654,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_native_send_failure_unit-t \
 	pgsql_native_startup_params_reset_unit-t \
 	pgsql_native_teardown_state_unit-t \
+	pgsql_init_connect_unit-t \
 	pgsql_native_unread_reply_unit-t \
 	pgsql_named_portal_teardown_unit-t \
 	pgsql_native_tls_verify_modes_unit-t \
@@ -665,6 +664,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_native_affected_rows_unit-t \
 	pgsql_listen_pin_unit-t \
 	pgsql_dns_cache_all_ips_unit-t \
+	pgsql_login_refusal_shun_unit-t \
 	pgsql_native_tls_handover_unit-t \
 	charset_find_unit-t \
 	config_validation_unit-t \
@@ -694,7 +694,6 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	connection_unhealthy_unit-t \
 	connection_max_age_unit-t latency_awareness_selection_unit-t \
 	cluster_sync_unit-t cluster_admin_lock_order_unit-t \
-	genai_sql_readonly_unit-t \
 	parsersql_unit-t parsersql_v30_flow_unit-t parsersql_digest_fallback_unit-t parsersql_first_comment_unit-t \
 	parsersql_set_transaction_digest_unit-t parsersql_command_type_unit-t \
 	parsersql_in_values_digest_unit-t \
@@ -703,25 +702,26 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	mysql_set_transaction_characteristics_unit-t \
 	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
-	mysql_resultset_framer_unit-t \
-	mysql_resultset_framer_traffic_unit-t \
-	pgsql_response_framer_unit-t \
-	pgsql_response_framer_traffic_unit-t \
 	pgsql_reconcile_unit-t \
-	ffto_state_machine_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \
 	restapi_tls_config_unit-t \
-	mcp_client_unit-t \
 	pgsql_waiter_list_unit-t
 
 # Keep group entries discoverable everywhere; unsupported platforms emit TAP skips.
-UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t module_lifecycle_unit-t module_startup_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
+UNIT_TESTS += startup_permissions_layout_unit-t admin_response_drain_unit-t idle_thread_tls_pending_output_unit-t admin_sqliteserver_flush_startup_unit-t module_lifecycle_unit-t module_startup_unit-t worker_load_unit-t worker_waiter_unit-t server_runtime_load_unit-t startup_tls_ownership_unit-t mysql_set_variable_tracking_unit-t
 UNIT_TESTS += worker_scheduler_cost_unit-t
 
 ifeq ($(PROXYSQL31),1)
+# Tagged @proxysql_min_version:3.1 in groups.json.
+UNIT_TESTS += \
+	ffto_protocol_unit-t ffto_state_machine_unit-t mysql_compressed_output_ring_unit-t \
+	mysql_output_span_unit-t mysql_resultset_framer_traffic_unit-t mysql_resultset_framer_unit-t \
+	pgsql_alpn_unit-t pgsql_output_span_unit-t pgsql_response_framer_traffic_unit-t \
+	pgsql_response_framer_unit-t pgsql_start_client_tls_unit-t
 UNIT_TESTS += caching_sha2_rsa_unit-t hostgroup_pool_stats_unit-t mysql_server_version_by_interface_unit-t
+UNIT_TESTS += digest_memory_size_unit-t
 endif
 
 ifeq ($(PROXYSQLED25519),1)
@@ -738,6 +738,16 @@ include $(PROXYSQL_PATH)/test/tap/ai_genai_unit_tests.mk
 # mysqlx plugin source references chassis types, so none of these are
 # compilable under !PROXYSQL40.
 ifeq ($(PROXYSQL40),1)
+# Tagged @proxysql_min_version:4.0 in groups.json: the embedded engines and DuckDB (reached only
+# through the plugin chassis), AWS locality, GenAI and MCP.
+UNIT_TESTS += embedded_mysql_prepared_unit-t \
+	aws_locality_manager_unit-t aws_locality_policy_unit-t duckdb_mysql_set_unit-t \
+	duckdb_prepared_adapter_unit-t duckdb_prepared_provider_unit-t embedded_mysql_result_unit-t \
+	embedded_parameter_positions_unit-t embedded_pgsql_frontend_unit-t embedded_pgsql_prepared_unit-t \
+	embedded_pgsql_result_unit-t embedded_pgsql_value_unit-t embedded_plugin_adapter_unit-t \
+	embedded_plugin_service_unit-t embedded_prepared_unit-t embedded_quota_unit-t \
+	embedded_sqlite_adapter_unit-t embedded_sqlite_pg_profile_unit-t genai_sql_readonly_unit-t \
+	mcp_client_unit-t
 # AWS IAM backend authentication is compiled only with PROXYSQL40.
 UNIT_TESTS += aws_iam_policy_unit-t aws_iam_connection_config_unit-t \
 	aws_iam_provider_boundary_unit-t aws_iam_completion_queue_unit-t \
@@ -793,6 +803,10 @@ UNIT_TESTS += \
 	test_mysqlx_plugin_load-t \
 	test_duckdb_plugin_load-t \
 	duckdb_config_unit-t \
+	duckdb_mysql_select_compat_unit-t \
+	duckdb_mysql_select_translation_unit-t \
+	duckdb_mysql_select_context_unit-t \
+	duckdb_mysql_select_metadata_unit-t \
 	duckdb_replica_unit-t \
 	duckdb_replica_storage_unit-t \
 	duckdb_engine_unit-t \
@@ -1112,6 +1126,43 @@ test_duckdb_plugin_load-t: ../test_duckdb_plugin_load-t.cpp $(TEST_HELPERS_OBJ) 
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
+embedded_plugin_adapter_unit-t: embedded_plugin_adapter_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Plugin_Adapter.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/include/Embedded_Plugin_Adapter.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/ProxySQL_EmbeddedExecution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Plugin_Adapter.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+embedded_quota_unit-t: embedded_quota_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/include/Embedded_Quota.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+embedded_prepared_unit-t: embedded_prepared_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/include/Embedded_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+# Engine proof without a running endpoint or the shared core class layouts.
+embedded_pgsql_value_unit-t: embedded_pgsql_value_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Value.cpp $(PROXYSQL_PATH)/include/Embedded_PgSQL_Value.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Value.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+embedded_pgsql_result_unit-t: embedded_pgsql_result_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Value.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Result.cpp $(PROXYSQL_PATH)/include/Embedded_PgSQL_Value.h $(PROXYSQL_PATH)/include/Embedded_PgSQL_Result.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Value.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Result.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+embedded_pgsql_prepared_unit-t: embedded_pgsql_prepared_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Value.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Result.cpp $(PROXYSQL_PATH)/include/Embedded_PgSQL_Value.h $(PROXYSQL_PATH)/include/Embedded_PgSQL_Result.h $(PROXYSQL_PATH)/include/Embedded_PgSQL_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Value.cpp $(PROXYSQL_PATH)/lib/Embedded_PgSQL_Result.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+# Characterize the vendored parser independently of engine and core runtime.
+duckdb_mysql_select_compat_unit-t: duckdb_mysql_select_compat_unit-t.cpp $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PARSERSQL_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a -lpthread -o $@
+
 duckdb_config_unit-t: duckdb_config_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
@@ -1146,7 +1197,9 @@ $(DUCKDB_AR):
 $(DUCKDB_STATIC_LOADER_SRCS): $(DUCKDB_AR)
 	@test -s $@ || { echo "ERROR: missing DuckDB static extension loader: $@; rebuild deps/duckdb" >&2; exit 1; }
 
-duckdb_engine_unit-t duckdb_result_unit-t duckdb_session_unit-t duckdb_listener_unit-t duckdb_admin_schema_unit-t duckdb_replica_storage_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
+duckdb_mysql_select_metadata_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
+
+duckdb_prepared_adapter_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
 
 DUCKDB_LINK_GROUP_START :=
 DUCKDB_LINK_GROUP_END :=
@@ -1165,10 +1218,42 @@ duckdb_engine_unit-t: duckdb_engine_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/s
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
+duckdb_prepared_adapter_unit-t: duckdb_prepared_adapter_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_adapter.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(DUCKDB_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) -lpthread -ldl -lm -o $@
+
+# Pure analytical admission, with native preparation only in the test.
+duckdb_mysql_select_translation_unit-t: duckdb_mysql_select_translation_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_compat.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_compat.h $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR) $(DUCKDB_STATIC_LOADER_SRCS)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_compat.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(PARSERSQL_IDIR) -I$(DUCKDB_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) -lpthread -ldl -lm -o $@
+
+# Native read-only catalog facts for the analytical translator.
+duckdb_mysql_select_context_unit-t: duckdb_mysql_select_context_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_context.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_context.h $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_compat.h $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_metadata.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR) $(DUCKDB_STATIC_LOADER_SRCS)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_context.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(DUCKDB_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) -lpthread -ldl -lm -o $@
+
+# Metadata API test; intentionally independent of the SQL parser.
+duckdb_mysql_select_metadata_unit-t: duckdb_mysql_select_metadata_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_metadata.h $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(DUCKDB_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) -lpthread -ldl -lm -o $@
+
 duckdb_result_unit-t: duckdb_result_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+# Shared by unit targets that compile the session handler or listener.
+DUCKDB_SESSION_SUPPORT_SRCS := $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_set.cpp \
+	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_compat.cpp \
+	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_context.cpp \
+	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp
+DUCKDB_LISTENER_SUPPORT_SRCS := $(DUCKDB_SESSION_SUPPORT_SRCS) \
+	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp \
+	$(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_provider.cpp
 
 # duckdb_session.cpp pulls in MySQL_Session.h / PgSQL_Session.h / *_Protocol.h
 # for the templated handler, but this test exercises only the two pure
@@ -1176,8 +1261,8 @@ duckdb_result_unit-t: duckdb_result_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/s
 # socket-bound handler is covered end-to-end in later tasks. The result,
 # engine, and configuration sources provide the session handler's result
 # conversion and managed-SET dependencies.
-duckdb_session_unit-t: duckdb_session_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+duckdb_session_unit-t: duckdb_session_unit-t.cpp $(DUCKDB_SESSION_SUPPORT_SRCS) $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(DUCKDB_SESSION_SUPPORT_SRCS) $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
@@ -1192,8 +1277,8 @@ duckdb_session_unit-t: duckdb_session_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb
 # These tests link the plugin context, which owns the replica lifecycle.
 DUCKDB_REPLICA_SRCS := $(wildcard $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_replica*.cpp)
 
-duckdb_listener_unit-t: duckdb_listener_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+duckdb_listener_unit-t: duckdb_listener_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(DUCKDB_LISTENER_SUPPORT_SRCS) $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(DUCKDB_LISTENER_SUPPORT_SRCS) $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
 
@@ -1205,10 +1290,12 @@ duckdb_listener_unit-t: duckdb_listener_unit-t.cpp $(PROXYSQL_PATH)/plugins/duck
 # the DuckDBEngine/DuckDBListener destructor symbols transitively -- hence
 # the same DUCKDB_IDIR/DUCKDB_ARS additions duckdb_listener_unit-t needs,
 # even though this test never calls duckdb_start()/duckdb_stop() itself.
-duckdb_admin_schema_unit-t: duckdb_admin_schema_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
-	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
+duckdb_admin_schema_unit-t: duckdb_admin_schema_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(DUCKDB_LISTENER_SUPPORT_SRCS) $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(DUCKDB_AR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_admin_schema.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_config.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_plugin.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_engine.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_listener.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_session.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_result.cpp $(DUCKDB_LISTENER_SUPPORT_SRCS) $(DUCKDB_REPLICA_SRCS) $(TEST_HELPERS_OBJ) $(IDIRS) -I$(DUCKDB_IDIR) $(LDIRS) $(OPT) \
 		-I$(PROXYSQL_PATH)/plugins/duckdb/include \
 		$(WHOLE_LIBPROXYSQL) $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) $(STATIC_LIBS) $(MYLIBS) $(ALLOW_MULTI_DEF) -o $@
+
+duckdb_engine_unit-t duckdb_result_unit-t duckdb_session_unit-t duckdb_listener_unit-t duckdb_admin_schema_unit-t duckdb_replica_storage_unit-t: $(DUCKDB_STATIC_LOADER_SRCS)
 
 mysqlx_config_store_unit-t: mysqlx_config_store_unit-t.cpp $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(PROXYSQL_PATH)/plugins/mysqlx/src/mysqlx_config_store.cpp $(TEST_HELPERS_OBJ) $(IDIRS) $(LDIRS) $(OPT) \
@@ -1688,3 +1775,34 @@ genai_sql_readonly_unit-t: genai_sql_readonly_unit-t.cpp $(PROXYSQL_PATH)/plugin
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/genai/include -I$(PARSERSQL_IDIR) \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
+
+duckdb_prepared_provider_unit-t: duckdb_prepared_provider_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_provider.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_adapter.h $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_prepared_provider.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/ProxySQL_EmbeddedExecution.h $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(DUCKDB_AR) $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_compat.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_compat.h $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_context.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_context.h $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_select_metadata.h
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_adapter.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_prepared_provider.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_compat.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_context.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_select_metadata.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(DUCKDB_IDIR) -I$(PARSERSQL_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a $(DUCKDB_STATIC_LOADER_SRCS) $(DUCKDB_LINK_GROUP_START) $(DUCKDB_ARS) $(DUCKDB_LINK_GROUP_END) -lpthread -ldl -lm -o $@
+
+duckdb_mysql_set_unit-t: duckdb_mysql_set_unit-t.cpp $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_set.cpp $(PROXYSQL_PATH)/plugins/duckdb/include/duckdb_mysql_set.h $(PARSERSQL_LDIR)/libsqlparser.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/plugins/duckdb/src/duckdb_mysql_set.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/plugins/duckdb/include -I$(PARSERSQL_IDIR) $(STDCPP) -O0 -ggdb \
+		$(WGCOV) $(LWGCOV) $(WASAN) $(PARSERSQL_LDIR)/libsqlparser.a -lpthread -o $@
+
+embedded_sqlite_adapter_unit-t: embedded_sqlite_adapter_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp $(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp $(PROXYSQL_PATH)/include/Embedded_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/Embedded_SQLite_Adapter.h $(PROXYSQL_PATH)/include/sqlite3db.h $(SQLITE3_LDIR)/sqlite3.o $(SSL_LDIR)/libcrypto.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp \
+		$(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp \
+		$(SQLITE3_LDIR)/sqlite3.o $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@
+
+embedded_sqlite_pg_profile_unit-t: embedded_sqlite_pg_profile_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp $(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp $(PROXYSQL_PATH)/include/Embedded_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/Embedded_SQLite_Adapter.h $(PROXYSQL_PATH)/include/sqlite3db.h $(SQLITE3_LDIR)/sqlite3.o $(SSL_LDIR)/libcrypto.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp \
+		$(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp \
+		$(SQLITE3_LDIR)/sqlite3.o $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@
+
+embedded_parameter_positions_unit-t: embedded_parameter_positions_unit-t.cpp $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp $(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp $(PROXYSQL_PATH)/include/Embedded_Prepared.h $(PROXYSQL_PATH)/include/Embedded_Execution.h $(PROXYSQL_PATH)/include/Embedded_SQLite_Adapter.h $(PROXYSQL_PATH)/include/sqlite3db.h $(SQLITE3_LDIR)/sqlite3.o $(SSL_LDIR)/libcrypto.a $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+	$(CXX) $< $(PROXYSQL_PATH)/lib/Embedded_Prepared.cpp $(PROXYSQL_PATH)/lib/Embedded_Quota.cpp $(PROXYSQL_PATH)/lib/Embedded_SQLite_Adapter.cpp \
+		$(PROXYSQL_PATH)/lib/proxy_sqlite3_symbols.cpp $(PROXYSQL_PATH)/lib/sha256crypt.cpp \
+		$(SQLITE3_LDIR)/sqlite3.o $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include -I$(SQLITE3_IDIR) -I$(SSL_IDIR) \
+		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) $(SSL_LDIR)/libcrypto.a -ldl -lpthread -lm -o $@

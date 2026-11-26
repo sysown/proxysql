@@ -1,0 +1,806 @@
+diff --git a/include/sql_parser/compound_query_parser.h b/include/sql_parser/compound_query_parser.h
+index 3e46449..9ce2ff4 100644
+--- a/include/sql_parser/compound_query_parser.h
++++ b/include/sql_parser/compound_query_parser.h
+@@ -24,6 +24,8 @@ public:
+     // The classifier normally consumes SELECT. Pass the consumed keyword for
+     // TABLE/VALUES/'(', or TK_EOF to start at an unconsumed query operand.
+     AstNode* parse(TokenType first = TokenType::TK_SELECT) {
++        ParseDepthGuard<D> depth(tok_);
++        if (!depth) return nullptr;
+         const bool require_operands = require_complete_operands_ ||
+             first == TokenType::TK_VALUES || first == TokenType::TK_TABLE;
+         AstNode* result = parse_compound_expr(0, first);
+diff --git a/include/sql_parser/expression_parser.h b/include/sql_parser/expression_parser.h
+index ceb71ce..2635de4 100644
+--- a/include/sql_parser/expression_parser.h
++++ b/include/sql_parser/expression_parser.h
+@@ -261,6 +261,8 @@ public:
+ 
+     // Parse an expression with minimum precedence 0
+     AstNode* parse(Precedence min_prec = Precedence::NONE) {
++        ParseDepthGuard<D> depth(tok_);
++        if (!depth) return nullptr;
+         // b_expr restrictions apply to this operator chain; parenthesized
+         // expressions and function arguments parsed by the atom remain a_expr.
+         bool restricted = json_xml_restricted_;
+@@ -483,6 +485,30 @@ private:
+         Token t = tok_.peek();
+         if constexpr (D == Dialect::MySQL) {
+             if (mysql_charset_introducer(t)) return parse_mysql_charset_literal();
++            if (keyword(t, "DATE") || keyword(t, "TIME") || keyword(t, "TIMESTAMP") ||
++                keyword(t, "N") || keyword(t, "BINARY")) {
++                auto look = tok_;
++                look.skip();
++                Token next = look.peek();
++                const bool temporal = keyword(t, "DATE") || keyword(t, "TIME") ||
++                                      keyword(t, "TIMESTAMP");
++                const bool national = keyword(t, "N") && next.type == TokenType::TK_STRING &&
++                    t.source.ptr + t.source.len == next.source.ptr && next.source.ptr[0] == '\'';
++                const bool binary = keyword(t, "BINARY") &&
++                    ((mysql_identifier_word(next) && next.type != TokenType::TK_AS) ||
++                     next.type == TokenType::TK_STRING ||
++                     next.type == TokenType::TK_INTEGER || next.type == TokenType::TK_FLOAT ||
++                     next.type == TokenType::TK_HEX_LITERAL || next.type == TokenType::TK_BIT_LITERAL ||
++                     next.type == TokenType::TK_LPAREN || next.type == TokenType::TK_PLUS ||
++                     next.type == TokenType::TK_MINUS || next.type == TokenType::TK_TILDE ||
++                     next.type == TokenType::TK_EXCLAIM || next.type == TokenType::TK_QUESTION ||
++                     next.type == TokenType::TK_USER_VARIABLE || next.type == TokenType::TK_DOUBLE_AT ||
++                     next.type == TokenType::TK_NULL || next.type == TokenType::TK_TRUE ||
++                     next.type == TokenType::TK_FALSE || next.type == TokenType::TK_CASE ||
++                     next.type == TokenType::TK_INTERVAL || next.type == TokenType::TK_NOT);
++                if ((temporal && next.type == TokenType::TK_STRING) || national || binary)
++                    return syntax_error();
++            }
+         }
+         if constexpr (D == Dialect::PostgreSQL) {
+             if ((t.type == TokenType::TK_IDENTIFIER || t.type == TokenType::TK_INTERVAL) &&
+@@ -1467,6 +1493,8 @@ private:
+         }
+         if constexpr (D == Dialect::MySQL) {
+             if (type == TokenType::TK_COLLATE) return Precedence::POSTFIX;
++            if (type == TokenType::TK_MYSQL_NULL_SAFE_EQUAL) return Precedence::COMPARISON;
++            if (type == TokenType::TK_MYSQL_LOGICAL_AND) return Precedence::AND;
+         }
+         switch (type) {
+             case TokenType::TK_OR:             return Precedence::OR;
+diff --git a/include/sql_parser/parse_result.h b/include/sql_parser/parse_result.h
+index 796be3b..6c31cf7 100644
+--- a/include/sql_parser/parse_result.h
++++ b/include/sql_parser/parse_result.h
+@@ -42,6 +42,8 @@ struct ParseResult {
+     StringRef remaining;
+     bool full_input = false;
+     bool has_user_variables = false;
++    bool has_executable_comments = false;
++    bool has_comments = false; // Recognized comments, including optimizer hints.
+ 
+     StringRef table_name;
+     StringRef schema_name;
+diff --git a/include/sql_parser/parser.h b/include/sql_parser/parser.h
+index 61d6a50..aefea73 100644
+--- a/include/sql_parser/parser.h
++++ b/include/sql_parser/parser.h
+@@ -15,6 +15,7 @@ struct ParserConfig {
+     size_t arena_block_size = 65536;    // 64KB
+     size_t arena_max_size = 1048576;    // 1MB
+     size_t stmt_cache_capacity = 128;
++    size_t max_parse_depth = 128; // Capped at 128 to bound recursive parser stack use.
+ };
+ 
+ template <Dialect D>
+diff --git a/include/sql_parser/select_parser.h b/include/sql_parser/select_parser.h
+index 9ea6c69..9145016 100644
+--- a/include/sql_parser/select_parser.h
++++ b/include/sql_parser/select_parser.h
+@@ -43,7 +43,7 @@ public:
+             }
+         }
+ 
+-        // SELECT options: DISTINCT, ALL, SQL_CALC_FOUND_ROWS
++        // SELECT options precede the select item list.
+         AstNode* opts = parse_select_options();
+         if (opts) root->add_child(opts);
+ 
+@@ -189,6 +189,18 @@ private:
+                     }
+                 }
+                 opts->add_child(make_node(arena_, NodeType::NODE_IDENTIFIER, ExpressionParser<D>::canonical_keyword(t)));
++            } else if (D == Dialect::MySQL &&
++                       (ExpressionParser<D>::keyword(t, "HIGH_PRIORITY") ||
++                        ExpressionParser<D>::keyword(t, "STRAIGHT_JOIN") ||
++                        ExpressionParser<D>::keyword(t, "SQL_SMALL_RESULT") ||
++                        ExpressionParser<D>::keyword(t, "SQL_BIG_RESULT") ||
++                        ExpressionParser<D>::keyword(t, "SQL_BUFFER_RESULT") ||
++                        ExpressionParser<D>::keyword(t, "SQL_CACHE") ||
++                        ExpressionParser<D>::keyword(t, "SQL_NO_CACHE") ||
++                        ExpressionParser<D>::keyword(t, "DISTINCTROW"))) {
++                if (!opts) opts = make_node(arena_, NodeType::NODE_SELECT_OPTIONS);
++                tok_.skip();
++                opts->add_child(make_node(arena_, NodeType::NODE_IDENTIFIER, t.source));
+             } else if (t.type == TokenType::TK_SQL_CALC_FOUND_ROWS) {
+                 if (!opts) opts = make_node(arena_, NodeType::NODE_SELECT_OPTIONS);
+                 tok_.skip();
+@@ -244,8 +256,11 @@ private:
+         AstNode* item = make_node(arena_, NodeType::NODE_SELECT_ITEM);
+         if (!item) return nullptr;
+ 
++        const char* expression_start = tok_.peek().source.ptr;
+         AstNode* expr = expr_parser_.parse();
+         if (!expr) return nullptr;
++        // Original expression spelling; like other source refs, input must outlive the AST.
++        item->set_source({expression_start, static_cast<uint32_t>(tok_.consumed_token_end() - expression_start)});
+ 
+         // Check for * EXCEPT(...) or * REPLACE(...)
+         bool is_star = (expr->type == NodeType::NODE_ASTERISK);
+diff --git a/include/sql_parser/token.h b/include/sql_parser/token.h
+index 4483ed1..bf15a97 100644
+--- a/include/sql_parser/token.h
++++ b/include/sql_parser/token.h
+@@ -137,6 +137,8 @@ enum class TokenType : uint16_t {
+     TK_NAMED_ARGUMENT, // =>, reserved for PostgreSQL named function arguments
+     TK_MYSQL_JSON_ARROW, // -> and ->>; spelling distinguishes unquoting
+     TK_MYSQL_OPTIMIZER_HINT, // complete comment in a native hint position
++    TK_MYSQL_NULL_SAFE_EQUAL,
++    TK_MYSQL_LOGICAL_AND,
+ };
+ 
+ struct Token {
+diff --git a/include/sql_parser/tokenizer.h b/include/sql_parser/tokenizer.h
+index 820ee84..c837a3a 100644
+--- a/include/sql_parser/tokenizer.h
++++ b/include/sql_parser/tokenizer.h
+@@ -13,18 +13,38 @@ public:
+     void reset(const char* input, size_t len) {
+         start_ = input;
+         cursor_ = input;
++        consumed_token_end_ = input;
+         end_ = input + len;
+         has_peeked_ = false;
+         has_error_ = false;
+         has_fatal_error_ = false;
+         has_user_variables_ = false;
++        has_executable_comments_ = false;
++        has_comments_ = false;
+         hint_allowed_ = false;
+         after_dot_ = false;
++        parse_depth_ = 0;
++        parse_depth_exceeded_ = false;
+         paren_depth_ = 0;
+         first_open_paren_ = nullptr;
+         error_source_ = {};
+     }
+ 
++    // Shared by expression and query parsers using this tokenizer. Lookahead
++    // copies retain a snapshot; parsing continues on the original tokenizer.
++    void set_max_parse_depth(size_t depth) { max_parse_depth_ = depth < 128 ? depth : 128; }
++    bool enter_parse() {
++        if (parse_depth_ >= max_parse_depth_) {
++            parse_depth_exceeded_ = true;
++            flag_fatal_error_at(peek().source);
++            return false;
++        }
++        ++parse_depth_;
++        return true;
++    }
++    void leave_parse() { --parse_depth_; }
++    bool parse_depth_exceeded() const { return parse_depth_exceeded_; }
++
+     // True iff the tokenizer has emitted at least one TK_ERROR token since
+     // the last reset(). Lets callers distinguish "couldn't build an AST"
+     // from "the input was syntactically invalid" and surface the latter
+@@ -32,6 +52,12 @@ public:
+     bool has_error() const { return has_error_; }
+     bool has_fatal_error() const { return has_fatal_error_; }
+     bool has_user_variables() const { return has_user_variables_; }
++    bool has_executable_comments() const { return has_executable_comments_; }
++    // Sticky since reset, including optimizer hints and executable comments.
++    bool has_comments() const { return has_comments_; }
++    // End of the last consumed token, or input_begin() before any consumption.
++    // Peeking and consuming EOF do not change this boundary.
++    const char* consumed_token_end() const { return consumed_token_end_; }
+     StringRef error_source() const { return error_source_; }
+ 
+     // Hook for parser-level (non-tokenizer) errors -- when the parser
+@@ -49,11 +75,16 @@ public:
+     }
+ 
+     Token next_token() {
++        Token token;
+         if (has_peeked_) {
+             has_peeked_ = false;
+-            return peeked_;
++            token = peeked_;
++        } else {
++            token = scan_token();
+         }
+-        return scan_token();
++        if (token.type != TokenType::TK_EOF)
++            consumed_token_end_ = token.source.ptr + token.source.len;
++        return token;
+     }
+ 
+     Token peek() {
+@@ -64,13 +95,7 @@ public:
+         return peeked_;
+     }
+ 
+-    void skip() {
+-        if (has_peeked_) {
+-            has_peeked_ = false;
+-        } else {
+-            scan_token();
+-        }
+-    }
++    void skip() { (void)next_token(); }
+ 
+     // Expose start/end of input for remaining-input calculation and for
+     // safe lookback (e.g. detecting whether an identifier token was source-
+@@ -81,6 +106,7 @@ public:
+ private:
+     const char* start_ = nullptr;
+     const char* cursor_ = nullptr;
++    const char* consumed_token_end_ = nullptr;
+     const char* end_ = nullptr;
+     Token peeked_;
+     bool has_peeked_ = false;
+@@ -89,6 +115,11 @@ private:
+     bool has_error_ = false;
+     bool has_fatal_error_ = false;
+     bool has_user_variables_ = false;
++    bool has_executable_comments_ = false;
++    bool has_comments_ = false;
++    bool parse_depth_exceeded_ = false;
++    size_t parse_depth_ = 0;
++    size_t max_parse_depth_ = 128;
+     uint32_t paren_depth_ = 0;
+     const char* first_open_paren_ = nullptr;
+     StringRef error_source_;
+@@ -126,6 +157,7 @@ private:
+                   (static_cast<unsigned char>(peek_char(2)) <= 0x20 ||
+                    static_cast<unsigned char>(peek_char(2)) == 0x7f)));
+             if (dash_comment) {
++                has_comments_ = true;
+                 hint_allowed_ = false;
+                 cursor_ += 2;
+                 while (cursor_ < end_ && *cursor_ != '\n') ++cursor_;
+@@ -135,6 +167,7 @@ private:
+             // # line comment (MySQL only)
+             if constexpr (D == Dialect::MySQL) {
+                 if (c == '#') {
++                    has_comments_ = true;
+                     hint_allowed_ = false;
+                     ++cursor_;
+                     while (cursor_ < end_ && *cursor_ != '\n') ++cursor_;
+@@ -144,6 +177,7 @@ private:
+ 
+             // /* block comment */
+             if (c == '/' && peek_char(1) == '*') {
++                has_comments_ = true;
+                 if constexpr (D == Dialect::MySQL) {
+                     if (hint_allowed_ && peek_char(2) == '+') return;
+                 }
+@@ -173,6 +207,7 @@ private:
+                     const bool executable = cursor_ < end_ &&
+                         (*cursor_ == '!' ||
+                          (cursor_ + 1 < end_ && cursor_[0] == 'M' && cursor_[1] == '!'));
++                    if (executable) has_executable_comments_ = true;
+                     bool has_user_variable_marker = false;
+                     bool closed = false;
+                     while (cursor_ < end_) {
+@@ -735,6 +770,16 @@ private:
+             char c2 = peek_char(1);
+ 
+             if constexpr (D == Dialect::MySQL) {
++                if (c == '<' && c2 == '=' && peek_char(2) == '>') {
++                    const char* start = cursor_;
++                    cursor_ += 3;
++                    return make_token(TokenType::TK_MYSQL_NULL_SAFE_EQUAL, start, 3);
++                }
++                if (c == '&' && c2 == '&') {
++                    const char* start = cursor_;
++                    cursor_ += 2;
++                    return make_token(TokenType::TK_MYSQL_LOGICAL_AND, start, 2);
++                }
+                 if (c == '-' && c2 == '>') {
+                     const char* start = cursor_;
+                     cursor_ += 2;
+@@ -791,6 +836,20 @@ private:
+     }
+ };
+ 
++template <Dialect D>
++class ParseDepthGuard {
++public:
++    explicit ParseDepthGuard(Tokenizer<D>& tokenizer)
++        : tokenizer_(tokenizer), entered_(tokenizer.enter_parse()) {}
++    ~ParseDepthGuard() { if (entered_) tokenizer_.leave_parse(); }
++    explicit operator bool() const { return entered_; }
++    ParseDepthGuard(const ParseDepthGuard&) = delete;
++    ParseDepthGuard& operator=(const ParseDepthGuard&) = delete;
++private:
++    Tokenizer<D>& tokenizer_;
++    bool entered_;
++};
++
+ } // namespace sql_parser
+ 
+ #endif // SQL_PARSER_TOKENIZER_H
+diff --git a/src/sql_parser/parser.cpp b/src/sql_parser/parser.cpp
+index 6ad9af3..721c131 100644
+--- a/src/sql_parser/parser.cpp
++++ b/src/sql_parser/parser.cpp
+@@ -20,7 +20,9 @@ namespace sql_parser {
+ template <Dialect D>
+ Parser<D>::Parser(const ParserConfig& config)
+     : arena_(config.arena_block_size, config.arena_max_size),
+-      stmt_cache_(config.stmt_cache_capacity) {}
++      stmt_cache_(config.stmt_cache_capacity) {
++    tokenizer_.set_max_parse_depth(config.max_parse_depth);
++}
+ 
+ template <Dialect D>
+ void Parser<D>::reset() {
+@@ -36,15 +38,21 @@ ParseResult Parser<D>::parse(const char* sql, size_t len) {
+         return result;
+     }
+     bool has_user_variables = false;
+-    if constexpr (D == Dialect::MySQL) {
++    bool has_executable_comments = false;
++    bool has_comments = false;
++    {
+         Tokenizer<D> detector;
+         detector.reset(sql, len);
+         while (detector.next_token().type != TokenType::TK_EOF) {}
+         has_user_variables = detector.has_user_variables();
++        has_executable_comments = detector.has_executable_comments();
++        has_comments = detector.has_comments();
+     }
+     tokenizer_.reset(sql, len);
+     ParseResult result = classify_and_dispatch();
+     result.has_user_variables = has_user_variables || tokenizer_.has_user_variables();
++    result.has_executable_comments = has_executable_comments || tokenizer_.has_executable_comments();
++    result.has_comments = has_comments || tokenizer_.has_comments();
+     return result;
+ }
+ 
+@@ -63,6 +71,23 @@ BatchParseResult Parser<D>::parse_all(const char* sql, size_t len) {
+         Tokenizer<D> scanner;
+         scanner.reset(sql + cursor, len - cursor);
+         Token first = scanner.next_token();
++        if ((first.type == TokenType::TK_SEMICOLON || first.type == TokenType::TK_EOF) &&
++            scanner.has_executable_comments()) {
++            const char* end = first.type == TokenType::TK_SEMICOLON
++                ? first.source.ptr + first.source.len : sql + len;
++            ParsedStatement statement;
++            statement.offset = static_cast<uint32_t>(cursor);
++            statement.source = StringRef{sql + cursor, static_cast<uint32_t>(end - (sql + cursor))};
++            statement.result.status = ParseResult::ERROR;
++            statement.result.has_executable_comments = true;
++            statement.result.has_comments = scanner.has_comments();
++            statement.result.has_user_variables = scanner.has_user_variables();
++            statement.result.error.message = {"Executable comment without a parsed statement", 45};
++            statement.result.error.offset = statement.offset;
++            batch.statements.push_back(statement);
++            cursor = static_cast<size_t>(end - sql);
++            continue;
++        }
+         if (first.type == TokenType::TK_SEMICOLON) {
+             cursor = static_cast<size_t>(first.source.ptr - sql) + first.source.len;
+             continue;
+@@ -109,6 +134,8 @@ BatchParseResult Parser<D>::parse_all(const char* sql, size_t len) {
+                     ? static_cast<uint32_t>(at - sql) : statement.offset;
+             }
+         }
++        statement.result.has_executable_comments = scanner.has_executable_comments();
++        statement.result.has_comments = scanner.has_comments();
+         batch.statements.push_back(statement);
+         cursor = static_cast<size_t>(end - sql);
+     }
+@@ -964,6 +991,13 @@ Token Parser<D>::read_table_name(StringRef& schema_out) {
+ 
+ template <Dialect D>
+ void Parser<D>::scan_to_end(ParseResult& result) {
++    if (tokenizer_.parse_depth_exceeded()) {
++        result.status = ParseResult::ERROR;
++        result.full_input = false;
++        result.remaining = tokenizer_.error_source();
++        result.error.message = {"SQL parse depth limit exceeded", 30};
++        return;
++    }
+     Token first = tokenizer_.next_token();
+     if (first.type == TokenType::TK_EOF) {
+         StringRef error_source = tokenizer_.error_source();
+diff --git a/tests/test_emitter.cpp b/tests/test_emitter.cpp
+index 770c68b..799515d 100644
+--- a/tests/test_emitter.cpp
++++ b/tests/test_emitter.cpp
+@@ -381,3 +381,15 @@ TEST(PgSQLEmitterTest, SelectBasic) {
+     std::string out(result.ptr, result.len);
+     EXPECT_EQ(out, "SELECT * FROM users WHERE id = 1");
+ }
++
++TEST_F(MySQLEmitterTest, PreservesMySqlNullSafeEqualityAndLogicalAnd) {
++    EXPECT_EQ(round_trip("SELECT a <=> b FROM t"), "SELECT a <=> b FROM t");
++    EXPECT_EQ(round_trip("SELECT a && b FROM t"), "SELECT a && b FROM t");
++    EXPECT_EQ(round_trip("SELECT a && b = c FROM t"), "SELECT a && b = c FROM t");
++}
++
++TEST_F(MySQLEmitterTest, PreservesMySqlSelectModifiers) {
++    EXPECT_EQ(round_trip("SELECT high_priority SQL_NO_CACHE a FROM t"),
++              "SELECT high_priority SQL_NO_CACHE a FROM t");
++    EXPECT_EQ(round_trip("SELECT `SQL_NO_CACHE` FROM t"), "SELECT `SQL_NO_CACHE` FROM t");
++}
+diff --git a/tests/test_expression.cpp b/tests/test_expression.cpp
+index 9d825f0..fc176f8 100644
+--- a/tests/test_expression.cpp
++++ b/tests/test_expression.cpp
+@@ -457,3 +457,15 @@ TEST_F(ExpressionTest, ZeroArgFunction) {
+     EXPECT_EQ(node->type, NodeType::NODE_FUNCTION_CALL);
+     EXPECT_EQ(node->first_child, nullptr); // no args
+ }
++
++TEST_F(ExpressionTest, MySqlLogicalAndAndNullSafeEqualityPrecedence) {
++    AstNode* node = parse_expr("a && b <=> c");
++    ASSERT_NE(node, nullptr);
++    ASSERT_EQ(node->type, NodeType::NODE_BINARY_OP);
++    EXPECT_EQ(std::string(node->value_ptr, node->value_len), "&&");
++    ASSERT_NE(node->first_child, nullptr);
++    AstNode* right = node->first_child->next_sibling;
++    ASSERT_NE(right, nullptr);
++    ASSERT_EQ(right->type, NodeType::NODE_BINARY_OP);
++    EXPECT_EQ(std::string(right->value_ptr, right->value_len), "<=>");
++}
+diff --git a/tests/test_parse_all.cpp b/tests/test_parse_all.cpp
+index e43a762..bdad8af 100644
+--- a/tests/test_parse_all.cpp
++++ b/tests/test_parse_all.cpp
+@@ -65,3 +65,73 @@ TEST(ParseAll, UnknownStatementsDoNotMakeSuccessfulBatch) {
+     EXPECT_FALSE(batch.ok());
+     EXPECT_EQ(batch.statements[1].result.stmt_type, StmtType::UNKNOWN);
+ }
++
++TEST(ParseAll, ExecutableCommentProvenanceIsPerStatementEvenOnErrors) {
++    Parser<Dialect::MySQL> parser;
++    std::string sql = "/*! lead */ SELECT 1; SELECT 2 /*M! + 1 */; SELECT 3; SELECT ) /*! trailing */; SELECT 4";
++    auto batch = parser.parse_all(sql.data(), sql.size());
++    ASSERT_EQ(batch.statements.size(), 5u);
++    EXPECT_TRUE(batch.statements[0].result.has_executable_comments);
++    EXPECT_TRUE(batch.statements[1].result.has_executable_comments);
++    EXPECT_FALSE(batch.statements[2].result.has_executable_comments);
++    EXPECT_TRUE(batch.statements[3].result.has_executable_comments);
++    EXPECT_FALSE(batch.statements[4].result.has_executable_comments);
++}
++
++TEST(ParseAll, SingleParseExecutableCommentProvenanceIncludesRemainder) {
++    Parser<Dialect::MySQL> parser;
++    for (const std::string sql : {"/*! lead */ SELECT 1", "SELECT 1 /*! + 1 */", "SELECT ) /*! trailing */", "SELECT 1 /*! @x */"}) {
++        EXPECT_TRUE(parser.parse(sql.data(), sql.size()).has_executable_comments) << sql;
++    }
++    for (const std::string sql : {"SELECT '/*! x */', `/*M! x */`", "SELECT 1 /* ordinary */"}) {
++        EXPECT_FALSE(parser.parse(sql.data(), sql.size()).has_executable_comments) << sql;
++    }
++    Parser<Dialect::PostgreSQL> pg;
++    std::string sql = "SELECT 1 /* outer /*! nested */ end */";
++    EXPECT_FALSE(pg.parse(sql.data(), sql.size()).has_executable_comments);
++}
++
++TEST(ParseAll, ExecutableCommentProvenanceSurvivesLexicalError) {
++    Parser<Dialect::MySQL> parser;
++    std::string sql = "SELECT 1 /*! @x */; SELECT 2; SELECT 3 /*M! unterminated";
++    auto batch = parser.parse_all(sql.data(), sql.size());
++    ASSERT_EQ(batch.statements.size(), 3u);
++    EXPECT_EQ(batch.statements[0].result.status, ParseResult::ERROR);
++    EXPECT_TRUE(batch.statements[0].result.has_executable_comments);
++    EXPECT_FALSE(batch.statements[1].result.has_executable_comments);
++    EXPECT_EQ(batch.statements[2].result.status, ParseResult::ERROR);
++    EXPECT_TRUE(batch.statements[2].result.has_executable_comments);
++}
++
++TEST(ParseAll, ExecutableCommentOnlyFragmentsAreReported) {
++    Parser<Dialect::MySQL> parser;
++    for (const std::string comment : {"/*! SELECT ? */", "/*M! SELECT ? */", "/*! SET @a=1 */", "/*M! SET @a=1 */"}) {
++        for (const std::string sql : {comment, comment + "; SELECT 1", "SELECT 1; " + comment}) {
++            auto batch = parser.parse_all(sql.data(), sql.size());
++            const bool leading_statement = sql.compare(0, 6, "SELECT") == 0;
++            const size_t index = leading_statement ? 1 : 0;
++            ASSERT_EQ(batch.statements.size(), sql == comment ? 1u : 2u) << sql;
++            EXPECT_FALSE(batch.ok()) << sql;
++            const auto& fragment = batch.statements[index];
++            EXPECT_EQ(fragment.result.status, ParseResult::ERROR) << sql;
++            EXPECT_TRUE(fragment.result.has_executable_comments) << sql;
++            EXPECT_EQ(fragment.source.ptr, sql.data() + fragment.offset);
++            const std::string source(fragment.source.ptr, fragment.source.len);
++            EXPECT_EQ(fragment.offset, leading_statement ? 9u : 0u) << sql;
++            EXPECT_EQ(source, leading_statement ? " " + comment :
++                (sql == comment ? comment : comment + ";")) << sql;
++            EXPECT_EQ(fragment.result.has_user_variables, comment.find('@') != std::string::npos) << sql;
++            if (batch.statements.size() == 2)
++                EXPECT_FALSE(batch.statements[1 - index].result.has_executable_comments) << sql;
++        }
++    }
++}
++
++TEST(ParseAll, OrdinaryCommentOnlyFragmentsRemainIgnored) {
++    Parser<Dialect::MySQL> parser;
++    const std::string sql = "/* ordinary */; SELECT 1; /* trailing */";
++    auto batch = parser.parse_all(sql.data(), sql.size());
++    ASSERT_EQ(batch.statements.size(), 1u);
++    EXPECT_TRUE(batch.ok());
++    EXPECT_FALSE(batch.statements[0].result.has_executable_comments);
++}
+diff --git a/tests/test_select.cpp b/tests/test_select.cpp
+index 4df7a51..9bef0a1 100644
+--- a/tests/test_select.cpp
++++ b/tests/test_select.cpp
+@@ -460,3 +460,226 @@ TEST_F(PgSQLSelectTest, ForUpdate) {
+     auto r = parser.parse("SELECT * FROM users FOR UPDATE", 30);
+     EXPECT_EQ(r.status, ParseResult::OK);
+ }
++
++TEST_F(MySQLSelectTest, MySqlModifiersAreExplicitOptionsWithOriginalSpelling) {
++    for (const std::string option : {"high_priority", "SQL_NO_CACHE", "SQL_CACHE", "SQL_SMALL_RESULT", "SQL_BIG_RESULT", "SQL_BUFFER_RESULT", "STRAIGHT_JOIN", "DISTINCTROW"}) {
++        const std::string sql = "SELECT " + option + " a FROM t";
++        auto r = parser.parse(sql.data(), sql.size());
++        ASSERT_EQ(r.status, ParseResult::OK) << sql;
++        ASSERT_TRUE(r.full_input) << sql;
++        ASSERT_NE(r.ast, nullptr);
++        const auto* opts = find_child(r.ast, NodeType::NODE_SELECT_OPTIONS);
++        ASSERT_NE(opts, nullptr) << sql;
++        ASSERT_NE(opts->first_child, nullptr);
++        EXPECT_EQ(std::string(opts->first_child->value().ptr, opts->first_child->value().len), option);
++        const auto* items = find_child(r.ast, NodeType::NODE_SELECT_ITEM_LIST);
++        ASSERT_NE(items, nullptr);
++        ASSERT_NE(items->first_child, nullptr);
++        EXPECT_EQ(find_child(items->first_child, NodeType::NODE_ALIAS), nullptr) << sql;
++    }
++}
++
++TEST_F(MySQLSelectTest, QuotedMySqlModifierNamesRemainColumns) {
++    for (const std::string option : {"HIGH_PRIORITY", "SQL_NO_CACHE", "SQL_CACHE", "SQL_SMALL_RESULT", "SQL_BIG_RESULT", "SQL_BUFFER_RESULT", "STRAIGHT_JOIN", "DISTINCTROW"}) {
++        const std::string sql = "SELECT `" + option + "` FROM t";
++        auto r = parser.parse(sql.data(), sql.size());
++        ASSERT_EQ(r.status, ParseResult::OK) << sql;
++        ASSERT_TRUE(r.full_input) << sql;
++        ASSERT_NE(r.ast, nullptr);
++        EXPECT_EQ(find_child(r.ast, NodeType::NODE_SELECT_OPTIONS), nullptr) << sql;
++        const auto* items = find_child(r.ast, NodeType::NODE_SELECT_ITEM_LIST);
++        ASSERT_NE(items, nullptr);
++        ASSERT_NE(items->first_child, nullptr);
++        ASSERT_NE(items->first_child->first_child, nullptr);
++        EXPECT_EQ(std::string(items->first_child->first_child->value().ptr,
++                              items->first_child->first_child->value().len), option);
++    }
++}
++
++TEST_F(MySQLSelectTest, UnsupportedMySqlTypedLiteralsAndBinaryExpressionsAreNotComplete) {
++    for (const std::string expr : {"DATE '2020-01-01'", "TIME '12:34:56'", "TIMESTAMP '2020-01-01 12:34:56'", "N'hello'", "BINARY 'hello'", "BINARY col", "BINARY(col)", "BINARY CURRENT_DATE", "BINARY @x"}) {
++        for (const std::string sql : {"SELECT " + expr, "SELECT 1 FROM t WHERE a = " + expr}) {
++            auto r = parser.parse(sql.data(), sql.size());
++            EXPECT_EQ(r.stmt_type, StmtType::SELECT) << sql;
++            EXPECT_FALSE(r.ok() && r.full_input) << sql;
++        }
++    }
++}
++
++TEST_F(MySQLSelectTest, TypedLiteralRefusalPreservesValidColumnsFunctionsAndAliases) {
++    for (const std::string sql : {"SELECT `DATE` 'label' FROM t", "SELECT `TIME` 'label' FROM t", "SELECT `TIMESTAMP` 'label' FROM t", "SELECT `BINARY` 'label' FROM t", "SELECT `N` 'label' FROM t", "SELECT N 'label' FROM t", "SELECT date_col AS 'date' FROM t", "SELECT DATE AS 'date' FROM t", "SELECT DATE('2020-01-01'), TIME('12:34:56'), TIMESTAMP('2020-01-01')", "SELECT date_col, time_col, timestamp_col, binary_col FROM t"}) {
++        auto r = parser.parse(sql.data(), sql.size());
++        EXPECT_EQ(r.status, ParseResult::OK) << sql;
++        EXPECT_TRUE(r.full_input) << sql;
++    }
++}
++
++TEST_F(MySQLSelectTest, SelectItemExpressionSource) {
++    const char* sql = "SELECT /*lead*/ 1, (1 + 2) AS `x`, COUNT( * ) c, t.col /*end*/ FROM t";
++    auto r = parser.parse(sql, strlen(sql));
++    ASSERT_TRUE(r.ok());
++    ASSERT_TRUE(r.has_comments);
++    auto* items = find_child(r.ast, NodeType::NODE_SELECT_ITEM_LIST);
++    ASSERT_NE(items, nullptr);
++    const char* expected[] = {"1", "(1 + 2)", "COUNT( * )", "t.col"};
++    auto* item = items->first_child;
++    for (auto value : expected) {
++        ASSERT_NE(item, nullptr);
++        EXPECT_EQ(std::string(item->source().ptr, item->source().len), value);
++        item = item->next_sibling;
++    }
++    EXPECT_EQ(item, nullptr);
++}
++
++TEST_F(MySQLSelectTest, BatchCommentsAndSource) {
++    const char* sql = "SELECT 1; /*lead*/ SELECT (2 + 3) x; SELECT '/*no*/'";
++    auto batch = parser.parse_all(sql, strlen(sql));
++    ASSERT_EQ(batch.statements.size(), 3u);
++    EXPECT_FALSE(batch.statements[0].result.has_comments);
++    EXPECT_TRUE(batch.statements[1].result.has_comments);
++    EXPECT_FALSE(batch.statements[2].result.has_comments);
++    auto* items = find_child(batch.statements[1].result.ast, NodeType::NODE_SELECT_ITEM_LIST);
++    ASSERT_NE(items, nullptr);
++    auto span = items->first_child->source();
++    EXPECT_EQ(std::string(span.ptr, span.len), "(2 + 3)");
++    EXPECT_EQ(span.ptr, strstr(sql, "(2 + 3)"));
++}
++
++TEST_F(MySQLSelectTest, NestedSelectItemSources) {
++    const char* sql = "SELECT (SELECT f( 1 )) AS `nested`, 1 /*inside*/ + 2 /*tail*/";
++    auto r = parser.parse(sql, strlen(sql));
++    ASSERT_TRUE(r.ok());
++    auto* outer = find_child(r.ast, NodeType::NODE_SELECT_ITEM_LIST);
++    ASSERT_NE(outer, nullptr);
++    auto* first = outer->first_child;
++    ASSERT_NE(first, nullptr);
++    EXPECT_EQ(std::string(first->source().ptr, first->source().len), "(SELECT f( 1 ))");
++    auto* second = first->next_sibling;
++    ASSERT_NE(second, nullptr);
++    EXPECT_EQ(std::string(second->source().ptr, second->source().len), "1 /*inside*/ + 2");
++    const AstNode* inner = nullptr;
++    auto search = [&](auto&& self, const AstNode* n) -> void {
++        if (n->type == NodeType::NODE_SELECT_ITEM && n != first && n != second) inner = n;
++        for (auto* c = n->first_child; c; c = c->next_sibling) self(self, c);
++    };
++    search(search, first);
++    ASSERT_NE(inner, nullptr);
++    EXPECT_EQ(std::string(inner->source().ptr, inner->source().len), "f( 1 )");
++}
++
++TEST_F(MySQLSelectTest, CommentsMetadataOnErrorsAndHints) {
++    for (const char* sql : {"SELECT /*+ BKA(t) */ 1", "SELECT 1 /*!50000 + 2 */", "SELECT 1 /* unterminated"}) {
++        auto r = parser.parse(sql, strlen(sql));
++        EXPECT_TRUE(r.has_comments) << sql;
++        auto batch = parser.parse_all(sql, strlen(sql));
++        ASSERT_EQ(batch.statements.size(), 1u);
++        EXPECT_TRUE(batch.statements[0].result.has_comments) << sql;
++    }
++    const char* quoted = "SELECT '/* no */', `-- no`";
++    EXPECT_FALSE(parser.parse(quoted, strlen(quoted)).has_comments);
++}
++
++TEST(PostgreSQLSelectProvenance, CommentsAndQuotedControls) {
++    Parser<Dialect::PostgreSQL> parser;
++    const char* commented = "SELECT 1 /* outer /* inner */ end */";
++    EXPECT_TRUE(parser.parse(commented, strlen(commented)).has_comments);
++    auto batch = parser.parse_all(commented, strlen(commented));
++    ASSERT_EQ(batch.statements.size(), 1u);
++    EXPECT_TRUE(batch.statements[0].result.has_comments);
++    const char* quoted = "SELECT '/* no */', \"-- no\"";
++    EXPECT_FALSE(parser.parse(quoted, strlen(quoted)).has_comments);
++}
++
++TEST(MySQLSelectDepth, BoundsRecursiveExpressionsAndSubqueries) {
++    for (const std::string kind : {"paren", "not", "function", "select"}) {
++        for (int depth : {16, 512}) {
++            std::string sql = "SELECT ";
++            for (int i = 0; i < depth; ++i) {
++                if (kind == "paren") sql += "(";
++                else if (kind == "not") sql += "NOT ";
++                else if (kind == "function") sql += "ABS(";
++                else sql += "(SELECT ";
++            }
++            sql += "1";
++            if (kind != "not") sql.append(depth, ')');
++            Parser<Dialect::MySQL> parser;
++            auto result = parser.parse(sql.data(), sql.size());
++            if (depth == 16) EXPECT_TRUE(result.ok() && result.full_input) << kind;
++            else EXPECT_EQ(result.status, ParseResult::ERROR) << kind;
++            auto next = parser.parse("SELECT 1", 8);
++            EXPECT_TRUE(next.ok() && next.full_input) << kind;
++        }
++    }
++}
++
++TEST(MySQLSelectDepth, ConfigBatchAndFlatLists) {
++    ParserConfig config;
++    config.max_parse_depth = 8;
++    Parser<Dialect::MySQL> parser(config);
++    const std::string nested = "SELECT " + std::string(16, '(') + "1" + std::string(16, ')');
++    auto rejected = parser.parse(nested.data(), nested.size());
++    EXPECT_EQ(rejected.status, ParseResult::ERROR);
++    EXPECT_FALSE(rejected.full_input);
++    EXPECT_EQ(std::string(rejected.error.message.ptr, rejected.error.message.len),
++              "SQL parse depth limit exceeded");
++    const std::string batch_sql = nested + "; SELECT 1";
++    auto batch = parser.parse_all(batch_sql.data(), batch_sql.size());
++    ASSERT_EQ(batch.statements.size(), 2u);
++    EXPECT_EQ(batch.statements[0].result.status, ParseResult::ERROR);
++    EXPECT_FALSE(batch.statements[0].result.full_input);
++    EXPECT_TRUE(batch.statements[1].result.ok());
++    EXPECT_TRUE(batch.statements[1].result.full_input);
++    std::string flat = "SELECT 1";
++    for (int i = 0; i < 200; ++i) flat += ", 1";
++    auto result = parser.parse(flat.data(), flat.size());
++    EXPECT_TRUE(result.ok() && result.full_input);
++    auto control = parser.parse("SELECT ((1 + 2))", 16);
++    EXPECT_TRUE(control.ok() && control.full_input);
++}
++
++TEST(PostgreSQLSelectDepth, BoundsRecursiveExpressionsAndSubqueries) {
++    for (const std::string kind : {"paren", "not", "function", "select"}) {
++        for (int depth : {16, 512}) {
++            std::string sql = "SELECT ";
++            for (int i = 0; i < depth; ++i) {
++                if (kind == "paren") sql += "(";
++                else if (kind == "not") sql += "NOT ";
++                else if (kind == "function") sql += "ABS(";
++                else sql += "(SELECT ";
++            }
++            sql += "1";
++            if (kind != "not") sql.append(depth, ')');
++            Parser<Dialect::PostgreSQL> parser;
++            auto result = parser.parse(sql.data(), sql.size());
++            if (depth == 16) EXPECT_TRUE(result.ok() && result.full_input) << kind;
++            else {
++                EXPECT_EQ(result.status, ParseResult::ERROR) << kind;
++                EXPECT_FALSE(result.full_input) << kind;
++            }
++            auto next = parser.parse("SELECT 1", 8);
++            EXPECT_TRUE(next.ok() && next.full_input) << kind;
++        }
++    }
++}
++
++TEST(MySQLSelectDepth, ConfigurationBoundaries) {
++    const std::string nested = "SELECT " + std::string(256, '(') + "1" + std::string(256, ')');
++    ParserConfig config;
++    config.max_parse_depth = 100000;
++    Parser<Dialect::MySQL> capped(config);
++    auto result = capped.parse(nested.data(), nested.size());
++    EXPECT_EQ(result.status, ParseResult::ERROR);
++    EXPECT_FALSE(result.full_input);
++    config.max_parse_depth = 0;
++    Parser<Dialect::MySQL> zero(config);
++    result = zero.parse("SELECT 1", 8);
++    EXPECT_EQ(result.status, ParseResult::ERROR);
++    EXPECT_FALSE(result.full_input);
++    config.max_parse_depth = 4;
++    Parser<Dialect::MySQL> lower(config);
++    result = lower.parse("SELECT 1", 8);
++    EXPECT_TRUE(result.ok() && result.full_input);
++    result = lower.parse(nested.data(), nested.size());
++    EXPECT_EQ(result.status, ParseResult::ERROR);
++    EXPECT_FALSE(result.full_input);
++}
+diff --git a/tests/test_tokenizer.cpp b/tests/test_tokenizer.cpp
+index 032c751..612c366 100644
+--- a/tests/test_tokenizer.cpp
++++ b/tests/test_tokenizer.cpp
+@@ -376,3 +376,39 @@ static void check_utf8_identifiers() {
+ }
+ TEST_F(MySQLTokenizerTest, Utf8Identifiers) { check_utf8_identifiers<Dialect::MySQL>(); }
+ TEST_F(PgSQLTokenizerTest, Utf8Identifiers) { check_utf8_identifiers<Dialect::PostgreSQL>(); }
++
++TEST_F(MySQLTokenizerTest, ExecutableCommentProvenanceAndReset) {
++    for (const std::string sql : {"/*!40101 SELECT 1 */ SELECT 1", "SELECT 1 /*M! + 1 */"}) {
++        tok.reset(sql.data(), sql.size());
++        while (tok.next_token().type != TokenType::TK_EOF) {}
++        EXPECT_TRUE(tok.has_executable_comments()) << sql;
++    }
++    for (const std::string sql : {"SELECT '/*! x */', `/*M! x */`", "SELECT 1 /* ordinary */"}) {
++        tok.reset(sql.data(), sql.size());
++        while (tok.next_token().type != TokenType::TK_EOF) {}
++        EXPECT_FALSE(tok.has_executable_comments()) << sql;
++    }
++    Tokenizer<Dialect::PostgreSQL> pg;
++    const std::string sql = "SELECT 1 /* outer /*! nested */ end */";
++    pg.reset(sql.data(), sql.size());
++    while (pg.next_token().type != TokenType::TK_EOF) {}
++    EXPECT_FALSE(pg.has_executable_comments());
++}
++
++TEST_F(MySQLTokenizerTest, ConsumedEndAndCommentTracking) {
++    const char* sql = "  1 /*c*/ + 2";
++    tok.reset(sql, strlen(sql));
++    EXPECT_EQ(tok.consumed_token_end(), sql);
++    tok.peek();
++    EXPECT_EQ(tok.consumed_token_end(), sql);
++    tok.skip();
++    EXPECT_EQ(tok.consumed_token_end(), sql + 3);
++    tok.peek();
++    EXPECT_EQ(tok.consumed_token_end(), sql + 3);
++    EXPECT_TRUE(tok.has_comments());
++    tok.next_token();
++    EXPECT_EQ(tok.consumed_token_end(), strstr(sql, "+") + 1);
++    tok.reset(sql, strlen(sql));
++    EXPECT_EQ(tok.consumed_token_end(), sql);
++    EXPECT_FALSE(tok.has_comments());
++}

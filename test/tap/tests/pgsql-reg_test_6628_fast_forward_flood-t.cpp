@@ -75,9 +75,12 @@ static const std::string NOTICE_PAYLOAD(16, 'n');
 // The client sends these far faster than the backend runs them, so the queue builds well before the cap. It
 // also bounds the backend's statement log.
 static const long MAX_NOTICE_QUERIES = 5000;
-static const int FLOOD_S = 3;
 // The client counts as held back once nothing more went out for this long.
 static const double HELD_S = 1.5;
+// The flood ends once the client is held back. How long the socket buffers take to fill depends on the
+// kernel's buffer autotuning and the CPU (TLS), so it is not a fixed time: this only caps a client that is
+// never held back.
+static const int FLOOD_MAX_S = 30;
 // Beyond the ProxySQL limit, the client's send buffer, ProxySQL's receive and send buffers and the
 // backend's receive buffer can each hold several MB.
 static const long long KERNEL_BUFFERS = 128LL << 20;
@@ -201,13 +204,14 @@ static bool flush_all(PGconn* c, Clock::time_point stop) {
 
 struct Flood { long sent = 0; double idle_s = 0; };
 
-// Queues a message at a time, once libpq has sent the previous ones, for FLOOD_S seconds. idle_s is how
-// long, at the end, nothing went out.
+// Queues a message at a time, once libpq has sent the previous ones, until nothing went out for HELD_S
+// (or FLOOD_MAX_S). idle_s is how long, at the end, nothing went out.
 static Flood flood(PGconn* c, const std::function<bool()>& queue_one) {
-	const auto stop = Clock::now() + std::chrono::seconds(FLOOD_S);
+	const auto stop = Clock::now() + std::chrono::seconds(FLOOD_MAX_S);
+	const auto held = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(HELD_S));
 	auto last = Clock::now();
 	Flood f;
-	while (Clock::now() < stop && flush_all(c, stop)) {
+	while (Clock::now() < stop && flush_all(c, std::min(stop, last + held))) {
 		last = Clock::now();
 		if (PQconsumeInput(c) == 0 || !queue_one()) break;
 		f.sent++;

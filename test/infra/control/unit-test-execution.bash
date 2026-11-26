@@ -5,6 +5,12 @@ if ! [[ "${UNIT_TEST_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
     echo "UNIT_TEST_TIMEOUT_SECONDS must be a positive integer" >&2
     return 1
 fi
+# Grace period between TERM and KILL for a test that outlives its timeout.
+UNIT_TEST_KILL_AFTER_SECONDS="${UNIT_TEST_KILL_AFTER_SECONDS:-10}"
+if ! [[ "${UNIT_TEST_KILL_AFTER_SECONDS}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "UNIT_TEST_KILL_AFTER_SECONDS must be a positive integer" >&2
+    return 1
+fi
 UNIT_TEST_TIMEOUT_COMMAND=
 # Process-group cleanup below relies on GNU timeout's --kill-after behavior.
 # Ubuntu 26 can put uutils timeout first on PATH; its GNU alternative is
@@ -38,7 +44,7 @@ proxysql_run_unit_test() {
     # inherited output pipe open after the test parent accepts TERM. Catch
     # TERM in the supervisor (so tests retain their normal signal disposition)
     # and ignore it only in tee, keeping the KILL deadline active until EOF.
-    "${UNIT_TEST_TIMEOUT_COMMAND}" --signal=TERM --kill-after=10s "${UNIT_TEST_TIMEOUT_SECONDS}s" \
+    "${UNIT_TEST_TIMEOUT_COMMAND}" --signal=TERM --kill-after="${UNIT_TEST_KILL_AFTER_SECONDS}s" "${UNIT_TEST_TIMEOUT_SECONDS}s" \
         bash -c '
             trap : TERM
             "$1" 2>&1 | (trap "" TERM; exec tee "$2")

@@ -182,6 +182,23 @@ void PgSQL_Data_Stream::queue_encrypted_bytes(const char* buf, size_t len) {
 	//proxy_info("New ssl_write_len size: %u\n", ssl_write_len);
 }
 
+#ifdef PROXYSQL31
+// Best effort: the stream is about to be shut down, so push any pending alert
+// to the client now instead of leaving it in the queue.
+void PgSQL_Data_Stream::flush_tls_output_on_failure() {
+	char buf[MY_SSL_BUFFER];
+	if (ssl_write_len > 0) {
+		ssize_t w = send(fd, ssl_write_buf, ssl_write_len, MSG_NOSIGNAL | MSG_DONTWAIT);
+		if (w < 0 || (size_t)w < ssl_write_len) return; // ssl_write_len stays stale: TLS output state is dead, callers always shut_soft()
+		ssl_write_len = 0;
+	}
+	int n;
+	while ((n = BIO_read(wbio_ssl, buf, sizeof(buf))) > 0) {
+		if (send(fd, buf, n, MSG_NOSIGNAL | MSG_DONTWAIT) != n) return;
+	}
+}
+#endif // PROXYSQL31
+
 enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 	char buf[MY_SSL_BUFFER];
 	enum pgsql_sslstatus status;
@@ -232,6 +249,18 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 			}
 		}
 #ifdef PROXYSQL31
+		// As PostgreSQL: with no SSLRequest first, only ALPN says the client speaks its protocol.
+		if (direct_tls) {
+			const unsigned char* alpn = nullptr;
+			unsigned int alpn_len = 0;
+			SSL_get0_alpn_selected(ssl, &alpn, &alpn_len);
+			if (alpn == nullptr) {
+				proxy_error("received direct SSL connection request without ALPN protocol negotiation extension. Client %s:%d\n", addr.addr, addr.port);
+				// With TLS 1.2 our Finished is still queued: send it, so the client sees the handshake complete.
+				flush_tls_output_on_failure();
+				return PGSQL_SSLSTATUS_FAIL;
+			}
+		}
 		// Publish the fast path only after the certificate checks above.
 		tls13_handshake_complete = myds_type == MYDS_FRONTEND &&
 			SSL_version(ssl) == TLS1_3_VERSION;
@@ -255,6 +284,11 @@ enum pgsql_sslstatus PgSQL_Data_Stream::do_ssl_handshake() {
 			}
 		} while (n > 0);
 	}
+#ifdef PROXYSQL31
+	else if (status == PGSQL_SSLSTATUS_FAIL && myds_type == MYDS_FRONTEND) {
+		flush_tls_output_on_failure();
+	}
+#endif
 	return status;
 }
 
@@ -604,6 +638,39 @@ int PgSQL_Data_Stream::read_from_net(bool allow_recv) {
 				// we are reading the very first packet
 				// to avoid issue with SSL, we will only read the header and eventually the first packet
 				r = recv(fd, queue_w_ptr(queueIN), 5, 0);
+#ifdef PROXYSQL31
+				// v3.1+ only: on the Stable tier these bytes still read as a packet and close the connection, as before.
+				// Direct TLS (PostgreSQL 17+ sslnegotiation=direct): the client opens with a TLS handshake record
+				// (0x16) instead of a startup packet. Spotted in this read, so no extra syscall: as PostgreSQL's
+				// raw_buf, the bytes already read are replayed into OpenSSL. EOF and EAGAIN are left to the code below.
+				// The Unix socket refusal matches PostgreSQL; an SSLRequest on a Unix socket still gets 'S' here,
+				// where PostgreSQL answers 'N' (unchanged ProxySQL behaviour, outside direct TLS).
+				if (r > 0 && myds_type == MYDS_FRONTEND && !first_byte_checked) {
+					first_byte_checked = true;
+					const unsigned char* first = (const unsigned char*)queue_w_ptr(queueIN);
+					if (first[0] == 0x16) {
+						const char* refusal = !pgsql_thread___have_ssl ? "pgsql-have_ssl is false" :
+							(client_addr && client_addr->sa_family == AF_UNIX) ? "not supported on a Unix socket" : nullptr;
+						if (refusal) {
+							proxy_error("Direct TLS connection from %s:%d refused: %s\n", addr.addr, addr.port, refusal);
+							shut_soft();
+							return -1;
+						}
+						if (!start_client_tls()) {
+							shut_soft();
+							return -1;
+						}
+						direct_tls = true;
+						// TLS bytes, not a packet: never committed to queueIN. The handshake is driven here, as
+						// the TLS branch does, so it cannot complete inside SSL_read() past do_ssl_handshake()'s checks.
+						if (BIO_write(rbio_ssl, first, r) <= 0 || do_ssl_handshake() == PGSQL_SSLSTATUS_FAIL) {
+							shut_soft();
+							return -1;
+						}
+						return 0; // the rest of the ClientHello is read by the TLS branch on the next POLLIN
+					}
+				}
+#endif // PROXYSQL31
 				if (r == 5) {
 					// let's try to read a whole packet
 					unsigned int read_pos = 0;
@@ -1789,3 +1856,57 @@ int PgSQL_Data_Stream::buffer2array() {
 	}
 	return ret;
 }
+
+#ifdef PROXYSQL31
+bool PgSQL_Data_Stream::start_client_tls() {
+	rbio_ssl = BIO_new(BIO_s_mem());
+	wbio_ssl = BIO_new(BIO_s_mem());
+	ssl = GloVars.get_SSL_new();
+	if (rbio_ssl == nullptr || wbio_ssl == nullptr || ssl == nullptr) {
+		// The BIOs are not attached to ssl yet, so SSL_free() would not free them.
+		if (rbio_ssl) BIO_free(rbio_ssl);
+		if (wbio_ssl) BIO_free(wbio_ssl);
+		if (ssl) SSL_free(ssl);
+		rbio_ssl = nullptr;
+		wbio_ssl = nullptr;
+		ssl = nullptr;
+		// The SSLRequest path has set encrypted already: left set, writeout() would use the null ssl.
+		encrypted = false;
+		proxy_error("Cannot start TLS for client %s:%d: out of memory\n", addr.addr, addr.port);
+		return false;
+	}
+	// Keep records within libpq's guaranteed read window. See PGSQL_TLS_MAX_SEND_FRAGMENT.
+	SSL_set_max_send_fragment(ssl, PGSQL_TLS_MAX_SEND_FRAGMENT);
+	DSS = STATE_SSL_INIT;
+#ifdef PROXYSQL31
+	tls13_handshake_complete = false;
+#endif
+	SSL_set_ex_data(ssl, pgsql_client_ssl_ex_index(), this);
+	SSL_set_fd(ssl, fd);
+	SSL_set_accept_state(ssl);
+	SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
+	encrypted = true; // the SSLRequest path has already set it, the direct TLS path has not
+	proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+	return true;
+}
+
+int pgsql_client_ssl_ex_index() {
+	static const int idx = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+	return idx;
+}
+
+int pgsql_alpn_select_cb(SSL* ssl, const unsigned char** out, unsigned char* outlen,
+	const unsigned char* in, unsigned int inlen, void*) {
+	if (SSL_get_ex_data(ssl, pgsql_client_ssl_ex_index()) == nullptr) return SSL_TLSEXT_ERR_NOACK;
+	static const unsigned char pg_alpn[] = { 10, 'p','o','s','t','g','r','e','s','q','l' };
+	if (SSL_select_next_proto(const_cast<unsigned char**>(out), outlen, pg_alpn, sizeof(pg_alpn), in, inlen)
+		!= OPENSSL_NPN_NEGOTIATED) {
+		return SSL_TLSEXT_ERR_ALERT_FATAL;
+	}
+	return SSL_TLSEXT_ERR_OK;
+}
+
+void pgsql_install_alpn(SSL_CTX* ctx) {
+	if (ctx) SSL_CTX_set_alpn_select_cb(ctx, pgsql_alpn_select_cb, nullptr);
+}
+#endif // PROXYSQL31

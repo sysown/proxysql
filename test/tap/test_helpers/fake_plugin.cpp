@@ -201,6 +201,11 @@ bool fake_install_server_discovery_controller(ProxySQL_PluginServices *services,
 //                              lifecycle contract says they must be null).
 bool fake_register_schemas(ProxySQL_PluginServices *services) {
 	fake_services = services;
+	if (env("PROBE_EMBEDDED_SERVICE") != nullptr) {
+		const bool unavailable = services && services->get_embedded_execution_service &&
+			services->get_embedded_execution_service() == nullptr;
+		fake_log_event(unavailable ? "phase_b_embedded_null" : "phase_b_embedded_invalid");
+	}
 	// _PHASE_B_PARTIAL_THEN_FAIL: register a table first, then return
 	// false.  Tests that the loader rolls back the registration so a
 	// retry doesn't trip on the leftover.
@@ -366,6 +371,13 @@ bool fake_install_entra_source(ProxySQL_PluginServices *services) {
 
 bool fake_init(ProxySQL_PluginServices *services) {
 	fake_services = services;
+	if (env("PROBE_EMBEDDED_SERVICE") != nullptr) {
+		const auto *service = services && services->get_embedded_execution_service
+			? services->get_embedded_execution_service() : nullptr;
+		const bool valid = service && service->abi_version == ProxySQL_Embedded_ABI_V1 &&
+			service->struct_size == sizeof(ProxySQL_Embedded_ServiceV1);
+		fake_log_event(valid ? "init_embedded_v1" : "init_embedded_invalid");
+	}
 	if (env("INIT_FAIL") != nullptr) {
 		fake_log_event("init_fail");
 		return false;

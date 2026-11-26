@@ -26,15 +26,19 @@ struct ABI14Descriptor {
 };
 }
 int main() {
- plan(10); test_init_minimal();
- ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 17u, "abi16_debug_prefix_compatible: layout is ABI17");
+ plan(11); test_init_minimal();
+ ok(PROXYSQL_PLUGIN_ABI_LAYOUT_VERSION == 17u, "current plugin layout is ABI17");
  ok((PROXYSQL_PLUGIN_ABI_VERSION & ~PROXYSQL_PLUGIN_ABI_DEBUG_BIT) == 17u,
-    "ABI16 retains independent DEBUG tagging");
+    "ABI17 retains independent DEBUG tagging");
  ok(offsetof(ProxySQL_PluginDescriptor, managed_configuration_service) == sizeof(ABI14Descriptor),
     "ABI14 descriptor prefix remains byte-compatible");
  ok(offsetof(ProxySQL_PluginServices, lock_configuration) ==
     offsetof(ProxySQL_PluginServices, post_server_desired_set) + sizeof(proxysql_plugin_post_server_desired_set_cb),
     "ABI16 retains the complete ABI15 service-table prefix");
+ ok(offsetof(ProxySQL_PluginServices, get_embedded_execution_service) ==
+    offsetof(ProxySQL_PluginServices, destroy_managed_prepared_runtime) +
+        sizeof(decltype(ProxySQL_PluginServices::destroy_managed_prepared_runtime)),
+    "ABI17 appends the execution service after the complete ABI16 prefix");
  ProxySQL_ManagedConfigurationServiceV1 service {PROXYSQL_MANAGED_CONFIGURATION_ABI,
   sizeof(ProxySQL_ManagedConfigurationServiceV1), nullptr, verify, invoke, bootstrap, restore};
  std::string error;

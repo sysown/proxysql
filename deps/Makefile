@@ -170,7 +170,7 @@ curl/curl/lib/.libs/libcurl.a: $(OPENSSL_BUILD_STAMP) Makefile
 	cd curl && tar -zxf curl-*.tar.gz
 	cd curl/curl && autoreconf -fi
 ifeq ($(UNAME_S),Darwin)
-	cd curl/curl && sed -i '' 's/as_fn_error \$$? "one or more libs available at link-time are not available run-time/echo "Skipped check: one or more libs available at link-time are not available run-time/' configure
+	cd curl/curl && sed -i '' 's/as_fn_error \$$? "one or more libs available at link-time are not available runtime/echo "Skipped check: one or more libs available at link-time are not available runtime/' configure
 	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
 else
 	cd curl/curl && CFLAGS="$(CFLAGS) -fPIC" CPPFLAGS="-I$(SSL_IDIR)" LDFLAGS="$(OPENSSL_SANITIZER_LDFLAGS) -L$(SSL_LDIR)" LIBS="$(OPENSSL_STATIC_LIBS)" ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-openssl=$(SSL_PATH) --disable-symbol-hiding --disable-shared --enable-static
@@ -501,11 +501,12 @@ libscram/lib/libscram.a: postgresql/postgresql/src/interfaces/libpq/libpq.a $(OP
 libscram: libscram/lib/libscram.a
 
 
-parsersql/parsersql/libsqlparser.a: parsersql/utf8-identifiers.patch
+parsersql/parsersql/libsqlparser.a: $(wildcard parsersql/parsersql-*.tar.gz) parsersql/utf8-identifiers.patch parsersql/mysql-analytical-ast.patch
 	cd parsersql && rm -rf parsersql-*/ ParserSQL-*/ || true
 	cd parsersql && tar -zxf parsersql-*.tar.gz
 	cd parsersql && for d in ParserSQL-*/; do [ -d "$$d" ] && mv "$$d" "parsersql-$${d#ParserSQL-}"; done || true
 	cd parsersql/parsersql && patch -p1 < ../utf8-identifiers.patch
+	cd parsersql/parsersql && patch -p1 < ../mysql-analytical-ast.patch
 	cd parsersql/parsersql && CC=${CC} CXX=${CXX} ${MAKE} lib
 
 parsersql: parsersql/parsersql/libsqlparser.a

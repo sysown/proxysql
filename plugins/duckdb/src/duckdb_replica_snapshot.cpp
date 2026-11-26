@@ -405,7 +405,7 @@ bool load_columns(MYSQL* mysql, const DuckDBReplicaTable& table,
                   std::vector<std::string>& data_types, std::string& err) {
 	const std::string sql =
 		"SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, "
-		"IFNULL(CHARACTER_SET_NAME, ''), COLUMN_KEY "
+		"IFNULL(CHARACTER_SET_NAME, ''), COLUMN_KEY, IFNULL(COLLATION_NAME, '') "
 		"FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = " + sql_literal(table.schema_name) +
 		" AND TABLE_NAME = " + sql_literal(table.table_name) + " ORDER BY ORDINAL_POSITION";
 	if (!query_mysql(mysql, sql, err)) return false;
@@ -424,7 +424,8 @@ bool load_columns(MYSQL* mysql, const DuckDBReplicaTable& table,
 			row[4] != nullptr ? row[4] : "",
 			row[5] != nullptr ? row[5] : "",
 			row[3] != nullptr && std::string(row[3]) == "YES",
-			column);
+			column,
+			row[6] != nullptr ? row[6] : "");
 		if (!mapped.empty()) {
 			err = table.schema_name + "." + table.table_name + ": " + mapped;
 			return false;
@@ -513,6 +514,7 @@ std::string duckdb_replica_drop_snapshot(DuckDBEngine& engine) {
 	if (!duckdb_replica_current_catalog(conn, catalog, err)) return err;
 	const std::string manifest = duckdb_replica_qualified_name(catalog, "proxysql_replica", "tables");
 	const std::string position = duckdb_replica_qualified_name(catalog, "proxysql_replica", "position");
+	const std::string column_facts = duckdb_replica_qualified_name(catalog, "proxysql_replica", "columns");
 	if (!exec_duckdb(conn, "BEGIN TRANSACTION", err)) return err;
 	auto fail = [&](const std::string& message) {
 		std::string ignored;
@@ -554,7 +556,8 @@ std::string duckdb_replica_drop_snapshot(DuckDBEngine& engine) {
 		const std::string target = duckdb_replica_qualified_name(catalog, table.first, table.second);
 		if (!exec_duckdb(conn, "DROP TABLE IF EXISTS " + target, err)) return fail(err);
 	}
-	if (!exec_duckdb(conn, "DROP TABLE IF EXISTS " + position, err) ||
+	if (!exec_duckdb(conn, "DROP TABLE IF EXISTS " + column_facts, err) ||
+	    !exec_duckdb(conn, "DROP TABLE IF EXISTS " + position, err) ||
 	    !exec_duckdb(conn, "DROP TABLE IF EXISTS " + manifest, err) ||
 	    !exec_duckdb(conn, "COMMIT", err)) return fail(err);
 	return "";
@@ -602,6 +605,7 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 	if (!duckdb_replica_current_catalog(conn, catalog, err)) return failed(err);
 	const std::string position_table = duckdb_replica_qualified_name(catalog, "proxysql_replica", "position");
 	const std::string tables_table = duckdb_replica_qualified_name(catalog, "proxysql_replica", "tables");
+	const std::string columns_table = duckdb_replica_qualified_name(catalog, "proxysql_replica", "columns");
 	{
 		duckdb_result result;
 		const std::string catalog_sql =
@@ -753,7 +757,17 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 	                 "source_id VARCHAR, schema_name VARCHAR, table_name VARCHAR, "
 	                 "primary_key VARCHAR, PRIMARY KEY (source_id, schema_name, table_name))",
 	                 err) ||
+	    !exec_duckdb(conn,
+	                 "CREATE TABLE IF NOT EXISTS " + columns_table + " ("
+	                 "source_id VARCHAR, schema_name VARCHAR, table_name VARCHAR, column_name VARCHAR, "
+	                 "ordinal INTEGER, mysql_data_type VARCHAR, mysql_column_type VARCHAR, "
+	                 "character_set_name VARCHAR, collation_name VARCHAR, duckdb_type VARCHAR, "
+	                 "PRIMARY KEY (source_id, schema_name, table_name, column_name))",
+	                 err) ||
 	    !exec_duckdb(conn, "DELETE FROM " + tables_table + " WHERE source_id = " +
+	                           sql_literal(source.source_id),
+	                 err) ||
+	    !exec_duckdb(conn, "DELETE FROM " + columns_table + " WHERE source_id = " +
 	                           sql_literal(source.source_id),
 	                 err)) {
 		rollback();
@@ -797,6 +811,20 @@ DuckDBReplicaLoadResult duckdb_replica_load_snapshot(
 		                 err)) {
 			rollback();
 			return failed(err);
+		}
+		for (size_t i = 0; i < columns.size(); ++i) {
+			const auto& column = columns[i];
+			if (!exec_duckdb(conn,
+			                 "INSERT INTO " + columns_table + " VALUES (" + sql_literal(source.source_id) + ", " +
+			                     sql_literal(table.schema_name) + ", " + sql_literal(table.table_name) + ", " +
+			                     sql_literal(column.name) + ", " + std::to_string(i + 1) + ", " +
+			                     sql_literal(column.mysql_data_type) + ", " + sql_literal(column.mysql_column_type) + ", " +
+			                     sql_literal(column.charset) + ", " + sql_literal(column.collation) + ", " +
+			                     sql_literal(column.duckdb_type) + ")",
+			                 err)) {
+				rollback();
+				return failed(err);
+			}
 		}
 
 		std::string select = "SELECT ";

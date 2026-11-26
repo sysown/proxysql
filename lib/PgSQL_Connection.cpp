@@ -471,8 +471,8 @@ handler_again:
 		if (native_mode && fd >= 0) {
 			native_teardown();
 		}
-		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, 9999 /* TODO: fix this mysql_errno(pgsql) */);
-		parent->connect_error(9999 /* TODO: fix this mysql_errno(pgsql)*/);
+		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, get_connect_error_code_str());
+		parent->connect_error(get_error_code(), get_error_message().c_str());
 		break;
 	case ASYNC_CONNECT_TIMEOUT:
 		// to fix
@@ -485,8 +485,9 @@ handler_again:
 			native_teardown();
 		}
 		proxy_error("Connect timeout on %s:%d : exceeded by %lluus\n", parent->address, parent->port, myds->sess->thread->curtime - myds->wait_until);
-		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, 9999/* TODO: fix this mysql_errno(pgsql)*/);
-		parent->connect_error(9999 /* TODO: fix this mysql_errno(pgsql)*/);
+		PgHGM->p_update_pgsql_error_counter(p_pgsql_error_type::pgsql, parent->myhgc->hid, parent->address, parent->port, get_connect_error_code_str());
+		// The backend never answered, so this is not a refused login: it counts toward shunning.
+		parent->connect_error(PGSQL_ERROR_CODES::ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION);
 		break;
 	case ASYNC_QUERY_START:
 		query_start();
@@ -1829,16 +1830,17 @@ void PgSQL_Connection::native_result_fatal(const char* code, const char* message
 	native_result_complete = true;   // nothing more will come from this connection
 }
 
-// A killed backend sends its FATAL (57P01, 57P05) just before it closes. Keep that as the
-// reason; the close on its own only says the backend went away.
+// Keep any recorded backend error when EOF follows it before ReadyForQuery.
+// The close on its own only says the backend went away.
 void PgSQL_Connection::native_result_backend_closed() {
 	if (!is_error_present()) {
 		native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed the connection");
 		return;
 	}
-	const std::string code = get_error_code_str();
-	const std::string message = get_error_message();
-	native_result_fatal(code.c_str(), message.c_str());
+	// Teardown must not replace the error or its origin and severity.
+	native_result_aborted = true;
+	native_teardown();
+	native_result_complete = true;
 }
 
 // A failed send() after login means the socket is dead (ECONNRESET / EPIPE), so it gets the
@@ -2890,6 +2892,7 @@ void PgSQL_Connection::native_fill_error_from_E(const unsigned char* payload, ui
 		}
 	}
 	PgSQL_Error_Helper::fill_error_info(error_info, sqlstate.c_str(), message.c_str(), severity.c_str());
+	error_from_backend = true;
 }
 
 void PgSQL_Connection::native_drive_auth(short /*event*/) {
@@ -3652,7 +3655,7 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 	} else {
 		int r = native_recv_into_framer();
 		if (r < 0) {
-			native_result_fatal(PGSQL_GET_ERROR_CODE_STR(ERRCODE_CONNECTION_FAILURE), "backend closed during result fetch");
+			native_result_backend_closed();
 			return;
 		}
 		if (r == 0) {
@@ -4013,6 +4016,15 @@ void PgSQL_Connection::native_fetch_result_cont(short /*event*/, uint64_t* proce
 				count_bytes(query_result->add_native_data_rows(msg.payload - 5, row_size + extra, rows));
 				if (pause_after('D')) return;
 				continue;
+			}
+
+			// A killed backend (57P01, 57P05) sends its FATAL and closes, with no ReadyForQuery.
+			// Record it, so the close above reports it instead of a bare connection failure.
+			if (msg.type == 'E') {
+				const PgSQLErrorResult e = pgsql_parse_error_response(msg.payload, msg.payload_len);
+				if (e.severity_len == 5 && (memcmp(e.severity, "FATAL", 5) == 0 || memcmp(e.severity, "PANIC", 5) == 0)) {
+					native_fill_error_from_E(msg.payload, msg.payload_len);
+				}
 			}
 
 			// Native simple queries collect all results through ReadyForQuery.
@@ -6442,6 +6454,7 @@ std::map<std::string, std::vector<std::string>> PgSQL_Connection::parse_pq_error
 }
 
 void PgSQL_Connection::set_error_from_PQerrorMessage() {
+	error_from_backend = false;
 	const char* raw_msg = PQerrorMessage(pgsql_conn);
 	if (raw_msg == nullptr) {
 		PgSQL_Error_Helper::fill_error_info(error_info, PGSQL_ERROR_CODES::ERRCODE_INTERNAL_ERROR, "Unknown error",
@@ -6468,10 +6481,18 @@ void PgSQL_Connection::set_error_from_PQerrorMessage() {
 	std::string_view sqlstate = lookup("C", PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_RAISE_EXCEPTION));
 	std::string_view primary_msg = lookup("M", "");
 	std::string_view lib_errmsg = lookup("LE", "");
+	error_without_sqlstate = lookup("C", "").empty();
+	error_from_backend = !error_without_sqlstate;
 
 	// we are currently distinguishing between server errors and library-generated errors. 
 	// A library-generated error is only set when a server error is not available.
 	const std::string_view& full_msg = !primary_msg.empty() ? primary_msg : lib_errmsg;
+	// libpq refused to log in without a password (PQnoPasswordSupplied), which carries no SQLSTATE.
+	// The native protocol reports the same login as 28P01: so does this, or it would count toward
+	// shunning the server and reach the client as P0001.
+	if (primary_msg.empty() && lib_errmsg.find("no password supplied") != std::string_view::npos) {
+		sqlstate = PgSQL_Error_Helper::get_error_code(PGSQL_ERROR_CODES::ERRCODE_INVALID_PASSWORD);
+	}
 	PgSQL_Error_Helper::fill_error_info(error_info, sqlstate.data(), full_msg.data(), severity.data());
 }
 

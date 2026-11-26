@@ -508,6 +508,53 @@ static void test_digest_backtick_identifiers() {
 		"digest: backtick-quoted identifiers preserved");
 }
 
+/**
+ * @brief Savepoint names are replaced with '?' so that savepoint statements group in a single digest
+ *   regardless of the name, while the statement keywords are preserved (#6671).
+ */
+static void test_digest_savepoint_names() {
+	// Defaults used by the issue reproducer: no lowercase, no digit replacement
+	auto d = [](const char* q) {
+		return digest_query(q, false, false, false, 3, 10, false, 65000);
+	};
+
+	ok(d("SAVEPOINT `before_edit`") == "SAVEPOINT ?", "savepoint: backtick name replaced");
+	ok(d("SAVEPOINT `after_edit`") == d("SAVEPOINT before_edit"),
+		"savepoint: quoted and unquoted names share a digest");
+	ok(d("SAVEPOINT after_edit") == "SAVEPOINT ?", "savepoint: unquoted name replaced");
+	ok(d("  savepoint   sp1 ;") == "savepoint ?", "savepoint: spaces and trailing ';' handled");
+	ok(d("SAVEPOINT `a``b c`") == "SAVEPOINT ?", "savepoint: escaped backticks and spaces in name");
+	ok(d("RELEASE SAVEPOINT sp_1") == "RELEASE SAVEPOINT ?", "savepoint: RELEASE SAVEPOINT name replaced");
+	ok(d("ROLLBACK TO SAVEPOINT `x`") == "ROLLBACK TO SAVEPOINT ?",
+		"savepoint: ROLLBACK TO SAVEPOINT name replaced");
+	ok(d("ROLLBACK TO x") == "ROLLBACK TO ?", "savepoint: ROLLBACK TO name replaced");
+	ok(d("ROLLBACK WORK TO SAVEPOINT x") == "ROLLBACK WORK TO SAVEPOINT ?",
+		"savepoint: ROLLBACK WORK TO SAVEPOINT name replaced");
+	// A quoted name can follow the keyword without whitespace
+	ok(d("SAVEPOINT`before_edit`") == "SAVEPOINT ?", "savepoint: quoted name adjacent to SAVEPOINT replaced");
+	ok(d("RELEASE SAVEPOINT`sp 1`") == "RELEASE SAVEPOINT ?",
+		"savepoint: quoted name adjacent to RELEASE SAVEPOINT replaced");
+	ok(d("ROLLBACK TO SAVEPOINT`x`") == "ROLLBACK TO SAVEPOINT ?",
+		"savepoint: quoted name adjacent to ROLLBACK TO SAVEPOINT replaced");
+	ok(d("ROLLBACK TO`x`") == "ROLLBACK TO ?", "savepoint: quoted name adjacent to ROLLBACK TO replaced");
+	ok(d("SAVEPOINTx") == "SAVEPOINTx", "savepoint: keyword glued to an unquoted word unchanged");
+	ok(d("SAVEPOINT x") != d("RELEASE SAVEPOINT x") && d("SAVEPOINT x") != d("ROLLBACK TO SAVEPOINT x"),
+		"savepoint: distinct operations keep distinct digests");
+
+	// Statements that are not a single savepoint statement are left untouched
+	ok(d("ROLLBACK") == "ROLLBACK", "savepoint: plain ROLLBACK unchanged");
+	ok(d("ROLLBACK TO SAVEPOINT") == "ROLLBACK TO SAVEPOINT", "savepoint: missing name unchanged");
+	ok(d("SAVEPOINT") == "SAVEPOINT", "savepoint: bare SAVEPOINT unchanged");
+	ok(d("SAVEPOINT a;COMMIT") == "SAVEPOINT a;COMMIT", "savepoint: trailing statement unchanged");
+	ok(d("SAVEPOINT `unterminated") == "SAVEPOINT `unterminated", "savepoint: unterminated quote unchanged");
+	ok(d("SELECT savepoint FROM t") == "SELECT savepoint FROM t", "savepoint: column named savepoint unchanged");
+
+	// Interaction with the digest options
+	ok(digest_query("SAVEPOINT Sp1") == "savepoint ?", "savepoint: lowercase + no_digits");
+	ok(digest_query("/* c */ SAVEPOINT x", false, false, false, 3, 10, true) == "/* c */ SAVEPOINT ?",
+		"savepoint: keep_comment leading comment skipped");
+}
+
 static void test_digest_scientific_notation() {
 	std::string d = digest_query("SELECT * FROM t WHERE val=1E10");
 	ok(d == "select * from t where val=?",
@@ -533,14 +580,14 @@ static void test_digest_in_clause_grouping() {
 // ============================================================================
 
 int main() {
-	plan(59);
+	plan(82);
 	int rc = test_init_minimal();
 	ok(rc == 0, "test_init_minimal() succeeds");
 
 	// Set thread-local variables for functions that read them
 	setup_digest_defaults();
 
-	// tokenizer tests (19 tests)
+	// tokenizer tests (18 tests)
 	test_tokenizer_basic();            // 4
 	test_tokenizer_empties_ok();       // 4
 	test_tokenizer_no_empties();       // 3
@@ -597,15 +644,16 @@ int main() {
 	test_strip_comments_inline();      // 2
 	// subtotal: 5
 
-	// edge cases (7 tests)
+	// edge cases (30 tests)
 	test_digest_empty_query();          // 1
 	test_digest_whitespace_only();      // 1
 	test_digest_multiple_spaces();      // 1
 	test_digest_backtick_identifiers(); // 1
+	test_digest_savepoint_names();      // 23
 	test_digest_scientific_notation();  // 1
 	test_digest_in_clause();            // 1
 	test_digest_in_clause_grouping();   // 1
-	// Total: 1 + 18 + 8 + 9 + 5 + 2 + 1 + 2 + 1 + 5 + 7 = 59
+	// Total: 1 + 18 + 8 + 9 + 5 + 2 + 1 + 2 + 1 + 5 + 30 = 82
 
 	test_cleanup_minimal();
 	return exit_status();

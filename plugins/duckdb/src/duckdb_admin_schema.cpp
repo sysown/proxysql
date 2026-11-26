@@ -176,7 +176,7 @@ ProxySQL_PluginCommandResult load_variables(SQLite3DB& db) {
 	if (!read_candidate(db, effective, candidate, err)) return command_failure(err);
 
 	std::vector<std::string> startup_only;
-	for (const char* name : {"mysql_ifaces", "pgsql_ifaces", "database_path", "read_only"}) {
+	for (const char* name : {"mysql_ifaces", "pgsql_ifaces", "database_path", "read_only", "mysql_dialect"}) {
 		if (candidate.get(name) != effective.get(name)) startup_only.emplace_back(name);
 	}
 	if (!startup_only.empty()) return command_failure(lifecycle_error(startup_only));

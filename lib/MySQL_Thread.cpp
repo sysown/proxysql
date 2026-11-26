@@ -452,6 +452,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"resolution_family",
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
+#ifdef PROXYSQL31
+	(char *)"monitor_unshun_on_ping_success",
+#endif
 	(char *)"max_allowed_packet",
 	(char *)"tcp_keepalive_time",
 	(char *)"use_tcp_keepalive",
@@ -1414,6 +1417,14 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
 	variables.monitor_wait_timeout=true;
 	variables.monitor_writer_is_also_reader=true;
+#ifdef PROXYSQL31
+	// On by default in 4.0, opt-in in 3.1.
+#ifdef PROXYSQL40
+	variables.monitor_unshun_on_ping_success = true;
+#else
+	variables.monitor_unshun_on_ping_success = false;
+#endif
+#endif
 	variables.max_allowed_packet=64*1024*1024;
 	variables.automatic_detect_sqli=false;
 	variables.firewall_whitelist_enabled=false;
@@ -1642,6 +1653,18 @@ int MySQL_Threads_Handler::listener_add(const char *iface) {
 				}
 			}
 			free(perthrsocks);
+		}
+		// Wait until every worker has added the socket to its poll set, as
+		// listener_del() waits for its removal. A worker can leave its bootstrap
+		// spin just before the add is posted and take it only after its next
+		// poll(). A PROXYSQL STOP in that window finds no listener to remove,
+		// closes the socket, and the worker then adds the closed FD and asserts
+		// on POLLNVAL (#6718).
+		for (i=0;i<num_threads;i++) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			while(__sync_fetch_and_add(&thr->mypolls.pending_listener_add,0)) {
+				usleep(std::min(std::max(mysql_thread___poll_timeout/20, 10000), 40000));
+			}
 		}
 	}
 	return rc;
@@ -3023,6 +3046,9 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"]            = make_tuple(&variables.monitor_wait_timeout,            false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"]   = make_tuple(&variables.monitor_writer_is_also_reader,   false);
+#ifdef PROXYSQL31
+		VariablesPointers_bool["monitor_unshun_on_ping_success"]  = make_tuple(&variables.monitor_unshun_on_ping_success,  false);
+#endif
 		VariablesPointers_bool["multiplexing"]                    = make_tuple(&variables.multiplexing,                    false);
 		VariablesPointers_bool["query_cache_stores_empty_result"] = make_tuple(&variables.query_cache_stores_empty_result, false);
 		VariablesPointers_bool["query_digests"]                   = make_tuple(&variables.query_digests,                   false);
@@ -5490,6 +5516,9 @@ void MySQL_Thread::refresh_variables() {
 
 	REFRESH_VARIABLE_BOOL(monitor_wait_timeout);
 	REFRESH_VARIABLE_BOOL(monitor_writer_is_also_reader);
+#ifdef PROXYSQL31
+	REFRESH_VARIABLE_BOOL(monitor_unshun_on_ping_success);
+#endif
 	REFRESH_VARIABLE_BOOL(monitor_enabled);
 	REFRESH_VARIABLE_INT(monitor_history);
 	REFRESH_VARIABLE_INT(monitor_connect_interval);

@@ -253,8 +253,10 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	// TODO: This test now only checks support for 'mysql_native_password'. This should be changed once
-	// 'COM_CHANGE_USER' is supported for 'caching_sha2_password'. See #4618.
+	// This test covers ProxySQL advertising 'mysql_native_password'. COM_CHANGE_USER with ProxySQL
+	// advertising 'caching_sha2_password' (#4618) is covered by
+	// 'reg_test_4618-change_user_caching_sha2_libmysql-t' and
+	// 'reg_test_4618-change_user_caching_sha2_inline-t'.
 	MYSQL_QUERY(admin, "SET mysql-default_authentication_plugin='mysql_native_password'");
 	MYSQL_QUERY(admin, "SET mysql-have_ssl='true'");
 	MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
