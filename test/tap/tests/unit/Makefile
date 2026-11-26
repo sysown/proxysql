@@ -1408,9 +1408,14 @@ mysql_resolution_unit-t: mysql_resolution_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_n
 		-I$(TAP_IDIR) -I$(PROXYSQL_PATH)/include \
 		$(STDCPP) -O0 -ggdb $(WGCOV) $(LWGCOV) $(WASAN) -lpthread -o $@
 
-mariadb_tls_server_name_unit-t: mariadb_tls_server_name_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
+$(ODIR)/.mariadb-connector-selection: FORCE | $(ODIR)
+	@printf '%s\n' '$(MARIADB_SOURCE)' | cmp -s - "$@" || \
+		printf '%s\n' '$(MARIADB_SOURCE)' > "$@"
+
+mariadb_tls_server_name_unit-t: mariadb_tls_server_name_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o \
+		$(ODIR)/.mariadb-connector-selection $(MARIADB_LDIR)/libmariadbclient.a
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(LDIRS) $(OPT) \
-		-Wl,-Bstatic -lmariadbclient -Wl,-Bdynamic -lssl -lcrypto -lz -lpthread -ldl -lm \
+		$(MARIADB_LDIR)/libmariadbclient.a -lssl -lcrypto -lz -lpthread -ldl -lm \
 		$(LWGCOV) -o $@
 
 plugin_query_hook_unit-t: plugin_query_hook_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)

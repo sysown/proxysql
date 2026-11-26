@@ -994,15 +994,22 @@
    check_mysql_rc(rc, mysql);
    return OK;
  }
-@@ -510,6 +562,8 @@
-   {"test_sp_reset1", test_sp_reset1, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
-   {"test_sp_reset2", test_sp_reset2, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
-   {"test_multi_result", test_multi_result, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
+@@ -507,7 +559,9 @@
+-  {"test_query", test_query, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_RESULTS , NULL , NULL},
++  {"test_query", test_query, TEST_CONNECTION_NEW, CLIENT_MULTI_RESULTS | CLIENT_PS_MULTI_RESULTS, NULL , NULL},
+-  {"test_sp_params", test_sp_params, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
++  {"test_sp_params", test_sp_params, TEST_CONNECTION_NEW, CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS, NULL , NULL},
+-  {"test_sp_reset", test_sp_reset, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL}, 
++  {"test_sp_reset", test_sp_reset, TEST_CONNECTION_NEW, CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS, NULL , NULL},
+-  {"test_sp_reset1", test_sp_reset1, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
++  {"test_sp_reset1", test_sp_reset1, TEST_CONNECTION_NEW, CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS, NULL , NULL},
+-  {"test_sp_reset2", test_sp_reset2, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
++  {"test_sp_reset2", test_sp_reset2, TEST_CONNECTION_NEW, CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS, NULL , NULL},
+-  {"test_multi_result", test_multi_result, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
++  {"test_multi_result", test_multi_result, TEST_CONNECTION_NEW, CLIENT_DEPRECATE_EOF | CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS | CLIENT_PS_MULTI_RESULTS, NULL , NULL},
 +  {"test_reexecute_with_unread_results", test_reexecute_with_unread_results,
-+   TEST_CONNECTION_NEW, CLIENT_DEPRECATE_EOF | CLIENT_PS_MULTI_RESULTS, NULL, NULL},
++   TEST_CONNECTION_NEW, CLIENT_DEPRECATE_EOF | CLIENT_MULTI_RESULTS | CLIENT_PS_MULTI_RESULTS, NULL, NULL},
    {NULL, NULL, 0, 0, NULL, NULL}
- };
- 
 --- unittest/libmariadb/connection.c
 +++ unittest/libmariadb/connection.c
 @@ -2462,10 +2462,9 @@
