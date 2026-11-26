@@ -57,13 +57,15 @@ fi
 
 # ---- Detect whether this package ships plugins ----
 # Check the package metadata for .so files under /usr/lib/proxysql/.
+# Consume the full listing so pipefail can distinguish a broken package
+# listing from a successful match.
 HAS_PLUGINS=false
 if [[ "$PKG_TYPE" == deb ]]; then
-    if dpkg -c "$PKG_PATH" 2>/dev/null | grep -q 'usr/lib/proxysql/.*\.so'; then
+    if dpkg -c "$PKG_PATH" 2>/dev/null | grep 'usr/lib/proxysql/.*\.so' >/dev/null; then
         HAS_PLUGINS=true
     fi
 else
-    if rpm -qpl "$PKG_PATH" 2>/dev/null | grep -q '/usr/lib/proxysql/.*\.so'; then
+    if rpm -qpl "$PKG_PATH" 2>/dev/null | grep '/usr/lib/proxysql/.*\.so' >/dev/null; then
         HAS_PLUGINS=true
     fi
 fi
@@ -193,7 +195,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> Starting clean container from $IMAGE ..."
-if ! docker run -d --name "$CID" "$IMAGE" sleep 120 >/dev/null 2>&1; then
+# Dependency installation can outlast a fixed keepalive. The EXIT trap owns
+# the container lifetime and removes it when verification finishes.
+if ! docker run -d --name "$CID" "$IMAGE" sleep infinity >/dev/null 2>&1; then
     echo "ERROR: could not start container from $IMAGE" >&2
     exit 1
 fi
