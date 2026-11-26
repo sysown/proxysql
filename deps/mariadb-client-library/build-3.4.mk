@@ -72,3 +72,9 @@ $(MARIADB_V40_TREE)/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP) \
 	cd $(MARIADB_V40_TREE) && CC="$(CC)" CXX="$(CXX)" cmake . $(MARIADB_V40_CMAKE)
 	$(MAKE) -C $(MARIADB_V40_TREE) mariadbclient
 	test -f "$@"
+
+.PHONY: mariadb_client_regressions
+mariadb_client_regressions: $(MARIADB_V40_TREE)/libmariadb/libmariadbclient.a
+	$(MAKE) -C $(MARIADB_V40_TREE) ps_new async
+	test -x "$(MARIADB_V40_TREE)/unittest/libmariadb/ps_new"
+	test -x "$(MARIADB_V40_TREE)/unittest/libmariadb/async"

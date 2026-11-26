@@ -158,3 +158,63 @@
  }
  
  /**
+--- unittest/libmariadb/async.c
++++ unittest/libmariadb/async.c
+@@ -16,6 +16,7 @@
+ */
+ #include "my_test.h"
+ #include "ma_common.h"
++#include "ma_context.h"
+ 
+ 
+ #ifndef _WIN32
+@@ -301,12 +302,49 @@
+ }
+ 
+ 
++/*
++  A suspended async authentication call owns its reply buffer on the
++  coroutine stack. Closing the connection abandons that stack, so the async
++  context must release the retained buffer. LeakSanitizer turns this focused
++  lifecycle check into a regression test for that cancellation path.
++*/
++static int test_auth_reply_cancel_cleanup(MYSQL *unused __attribute__((unused)))
++{
++  MYSQL *mysql= mysql_init(NULL);
++  struct mysql_async_context *ctxt;
++  int rc;
++
++  if (!mysql)
++    return FAIL;
++
++  rc= mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
++  if (rc)
++  {
++    mysql_close(mysql);
++    return FAIL;
++  }
++
++  ctxt= mysql->options.extension->async_context;
++  ctxt->pending_auth_reply= malloc(1024 * 1024);
++  if (!ctxt->pending_auth_reply)
++  {
++    mysql_close(mysql);
++    return FAIL;
++  }
++  ctxt->suspended= 1;
++  mysql_close(mysql);
++  return OK;
++}
++
++
+ struct my_tests_st my_tests[] = {
+   {"test_async", test_async, TEST_CONNECTION_DEFAULT, 0,  NULL,  NULL},
+   {"async1", async1, TEST_CONNECTION_DEFAULT, 0,  NULL,  NULL},
+   {"test_conc131", test_conc131, TEST_CONNECTION_NONE, 0,  NULL,  NULL},
+   {"test_conc129", test_conc129, TEST_CONNECTION_NONE, 0,  NULL,  NULL},
+   {"test_conc622", test_conc622, TEST_CONNECTION_NONE, 0,  NULL,  NULL},
++  {"test_auth_reply_cancel_cleanup", test_auth_reply_cancel_cleanup,
++   TEST_CONNECTION_NONE, 0, NULL, NULL},
+   {NULL, NULL, 0, 0, NULL, NULL}
+ };
+ 

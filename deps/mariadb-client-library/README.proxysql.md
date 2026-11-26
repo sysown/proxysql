@@ -38,7 +38,18 @@ zero fuzz. All 3.3.8 patches stay in place for lower tiers.
 Run `bash test/infra/control/test-mariadb-connector-selection.bash --linked`
 to build and link probes across Stable, v4.0 and v3.1 in one checkout. The
 probe checks both the compile-time and linked version. It also checks that
-switching tiers preserves both archives.
+switching tiers preserves both archives. The lightweight form also verifies
+standalone TAP tier inference and the complete set of TAP objects invalidated
+when Connector/C headers change. `CI-mariadb-connector-v40` runs the linked
+bidirectional switch on Linux for every connector change.
+
+Run `PROXYSQL40=1 WITHASAN=1 make -C deps mariadb_client_regressions` to
+build the focused upstream regressions. With `MARIADB_CC_TEST=1` and the
+standard `MYSQL_TEST_*` connection variables set, run `ps_new` and `async`
+from the extracted tree's `unittest/libmariadb` directory. They cover
+deprecated-EOF resynchronization after unread prepared-statement results and
+cleanup when an async authentication coroutine is cancelled. The v4.0
+connector workflow runs both under AddressSanitizer against MySQL 8.4.
 
 Run `PROXYSQL40=1 test/infra/control/test-mariadb-default-trust-store.bash`
 after building the production connector to exercise its CA trust and cache

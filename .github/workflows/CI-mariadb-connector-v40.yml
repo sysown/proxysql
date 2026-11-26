@@ -1,0 +1,84 @@
+name: CI-mariadb-connector-v40
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/CI-mariadb-connector-v40.yml
+      - common_mk/mariadb_connector.mk
+      - deps/Makefile
+      - deps/mariadb-client-library/**
+      - plugins/duckdb/Makefile
+      - test/PrepStmt/Makefile
+      - test/infra/control/test-mariadb-connector-selection.bash
+      - test/tap/connector_tier.mk
+      - test/tap/tap/Makefile
+      - test/tap/tests/Makefile
+      - test/tap/tests/unit/Makefile
+      - test/tap/tests_with_deps/deprecate_eof_support/Makefile
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linked-tier-switch:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Connector/C build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake perl zlib1g-dev
+      - name: Build and link Stable, v4.0, then Stable again
+        run: test/infra/control/test-mariadb-connector-selection.bash --linked
+
+  connector-regressions-asan:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci:skip') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      mysql:
+        image: mysql:8.4.8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Connector/C build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake perl zlib1g-dev
+      - name: Keep AddressSanitizer shadow memory in range
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+      - name: Build patched Connector/C regressions with AddressSanitizer
+        env:
+          PROXYSQL40: '1'
+          WITHASAN: '1'
+        run: make -C deps mariadb_client_regressions
+      - name: Run unread-result and async-auth cancellation regressions
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
+          MARIADB_CC_TEST: '1'
+          MYSQL_TEST_HOST: 127.0.0.1
+          MYSQL_TEST_PORT: '3306'
+          MYSQL_TEST_USER: root
+          MYSQL_TEST_PASSWD: root
+          MYSQL_TEST_DB: test
+        run: |
+          deps/mariadb-client-library/mariadb-connector-c-3.4.11-src/unittest/libmariadb/ps_new
+          deps/mariadb-client-library/mariadb-connector-c-3.4.11-src/unittest/libmariadb/async

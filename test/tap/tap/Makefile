@@ -59,7 +59,10 @@ force-connector-selection:
 	@printf '%s\n' '$(MARIADB_SOURCE)' | cmp -s - "$@" || \
 		printf '%s\n' '$(MARIADB_SOURCE)' > "$@"
 
-utils_mariadb.o noise_utils_mariadb.o: .mariadb-connector-selection
+MARIADB_HEADER_OBJECTS := utils_mariadb.o noise_utils_mariadb.o \
+	cluster_simulator.o rds_bgd_simulator.o
+
+$(MARIADB_HEADER_OBJECTS): .mariadb-connector-selection
 
 command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a $(CURL_LDIR)/libcurl.a libcpp_dotenv$(SHLIB_EXT)
 	$(CXX) -fPIC -c command_line.cpp $(IDIRS) $(OPT)

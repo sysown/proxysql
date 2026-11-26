@@ -15,6 +15,17 @@ connector-path:
 MAKEFILE
 }
 
+probe_auto() {
+	local directory=$1 archive=$2
+	env -u PROXYSQL40 make --no-print-directory -s -C "$repo/$directory" \
+		PROXYSQL31= LIBPROXYSQLAR="$archive" \
+		-f Makefile -f - connector-path <<'MAKEFILE'
+.PHONY: connector-path
+connector-path:
+	@printf '%s\n' '$(MARIADB_PATH)'
+MAKEFILE
+}
+
 expect_path() {
 	local directory=$1 tier40=$2 tier31=$3 expected=$4 actual
 	actual=$(probe "$directory" "$tier40" "$tier31")
@@ -35,6 +46,45 @@ for directory in deps lib src test/tap/tap test/tap/tests test/tap/tests/unit \
 done
 
 expect_path plugins/duckdb 1 1 mariadb-connector-c-3.4.11-src
+
+# Standalone TAP builds infer the v4.0 tier from an already-built core when
+# callers do not provide PROXYSQL40 explicitly. Exercise both sides of that
+# branch with tiny representative core objects.
+probe_dir=$(mktemp -d)
+trap 'rm -rf "$probe_dir"' EXIT
+printf '%s\n' 'void legacy_core_symbol(void) {}' | \
+	"${CC:-cc}" -x c -c -o "$probe_dir/legacy.o" -
+printf '%s\n' 'void invoke_register_schemas_phase(void) {}' | \
+	"${CC:-cc}" -x c -c -o "$probe_dir/v40.o" -
+for directory in test/tap/tap test/tap/tests test/tap/tests/unit; do
+	actual=$(probe_auto "$directory" "$probe_dir/legacy.o")
+	[[ "$actual" == "$connector/mariadb_client" ]] || {
+		printf '%s auto-selected %s for a legacy core\n' "$directory" "$actual" >&2
+		exit 1
+	}
+	actual=$(probe_auto "$directory" "$probe_dir/v40.o")
+	[[ "$actual" == "$connector/mariadb-connector-c-3.4.11-src" ]] || {
+		printf '%s auto-selected %s for a v4.0 core\n' "$directory" "$actual" >&2
+		exit 1
+	}
+done
+
+# Every TAP object compiled with MARIADB_IDIR must be invalidated when the
+# selected connector changes. Keep this list explicit so a new header consumer
+# cannot silently retain objects from the previous tier.
+expected_tap_objects='utils_mariadb.o noise_utils_mariadb.o cluster_simulator.o rds_bgd_simulator.o'
+actual_tap_objects=$(make --no-print-directory -s -C "$repo/test/tap/tap" \
+	-f Makefile -f - print-mariadb-header-objects <<'MAKEFILE'
+.PHONY: print-mariadb-header-objects
+print-mariadb-header-objects:
+	@printf '%s\n' '$(MARIADB_HEADER_OBJECTS)'
+MAKEFILE
+)
+[[ "$actual_tap_objects" == "$expected_tap_objects" ]] || {
+	printf 'TAP Connector/C header consumers are [%s], expected [%s]\n' \
+		"$actual_tap_objects" "$expected_tap_objects" >&2
+	exit 1
+}
 printf '%s\n' 'Connector/C tier selection passed.'
 
 if [[ ${1:-} != --linked ]]; then
@@ -44,7 +94,7 @@ fi
 # Run the production connector build for each tier in one checkout, then
 # compile against the selected headers and link the corresponding archive.
 temporary=$(mktemp -d)
-trap 'rm -rf "$temporary"' EXIT
+trap 'rm -rf "$probe_dir" "$temporary"' EXIT
 cat > "$temporary/linked-version.c" <<'EOF'
 #include <mysql.h>
 #include <stdio.h>
