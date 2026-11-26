@@ -338,7 +338,7 @@ ProxySQL_PluginEarlyActionResult fake_early_action(
 #endif /* PROXYSQL40 */
 
 #ifdef PROXYSQL40
-// #6649: an ABI-17 plugin installs an Azure Entra token source.
+// #6649: an ABI-18 plugin installs an Azure Entra token source.
 class FakeEntraSource final : public AwsIamTokenSource {
 public:
 	AwsIamRequestHandle request(const AwsIamTokenKey&, uint64_t,
