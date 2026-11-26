@@ -738,7 +738,7 @@
        stmt->result_cursor= result->data;
        return(0);
      }
-@@ -414,38 +425,30 @@
+@@ -414,38 +425,37 @@
  /* flush one result set */
  void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
  {
@@ -781,10 +781,17 @@
 +  {
 +    uchar *pos= mysql->net.read_pos;
 +
-+    if (!in_resultset && *pos == 0)
++    if (!in_resultset)
 +    {
-+      ma_read_ok_packet(mysql, pos + 1, packet_len);
-+      break;
++      if (*pos == 0)
++      {
++        ma_read_ok_packet(mysql, pos + 1, packet_len);
++        break;
++      }
++      /* With deprecated EOF, the column count starts the result set and
++         no metadata EOF separates the definitions from binary rows. */
++      if (mysql->server_capabilities & CLIENT_DEPRECATE_EOF)
++        in_resultset= 1;
 +    }
 +    if (!is_data_packet)
 +    {
@@ -926,7 +933,7 @@
  
    FAIL_IF(mysql_stmt_next_result(stmt) != 0, "expected more results");
    rc= mysql_stmt_bind_result(stmt, rs_bind);
-@@ -124,7 +129,9 @@
+@@ -124,12 +129,59 @@
    FAIL_IF(mysql_stmt_field_count(stmt) != 2, "expected 2 fields");
    FAIL_IF(int_data[0] != 200 || int_data[1] != 300,
            "expected 200 300");
@@ -936,6 +943,65 @@
 +
    FAIL_IF(mysql_stmt_next_result(stmt) != 0, "expected more results");
    FAIL_IF(mysql_stmt_field_count(stmt) != 0, "expected 0 fields");
+ 
+   rc= mysql_stmt_close(stmt);
+   rc = mysql_query(mysql, "DROP PROCEDURE IF EXISTS p1");
++  check_mysql_rc(rc, mysql);
++  return OK;
++}
++
++static int test_reexecute_with_unread_results(MYSQL *mysql)
++{
++  const char *call= "CALL proxysql_eof_unread_results()";
++  const char *drop= "DROP PROCEDURE IF EXISTS proxysql_eof_unread_results";
++  MYSQL_STMT *stmt;
++  int rc, i;
++
++  FAIL_IF(!mysql, "could not establish test connection");
++  if (!(mysql->server_capabilities & CLIENT_DEPRECATE_EOF))
++    return SKIP;
++
++  rc= mysql_query(mysql, drop);
++  check_mysql_rc(rc, mysql);
++  rc= mysql_query(mysql, "CREATE PROCEDURE proxysql_eof_unread_results() "
++                         "BEGIN SELECT CAST(1 AS SIGNED); SELECT CAST(3 AS SIGNED); END");
++  check_mysql_rc(rc, mysql);
++
++  stmt= mysql_stmt_init(mysql);
++  FAIL_IF(!stmt, "could not allocate statement");
++  rc= mysql_stmt_prepare(stmt, SL(call));
++  check_stmt_rc(rc, stmt);
++  rc= mysql_stmt_execute(stmt);
++  check_stmt_rc(rc, stmt);
++
++  /* Re-executing must discard both pending result sets and the final OK. */
++  rc= mysql_stmt_execute(stmt);
++  check_stmt_rc(rc, stmt);
++  for (i= 0; i < 2; i++)
++  {
++    rc= mysql_stmt_store_result(stmt);
++    check_stmt_rc(rc, stmt);
++    FAIL_IF(mysql_stmt_num_rows(stmt) != 1, "expected one row from each result set");
++    rc= mysql_stmt_free_result(stmt);
++    check_stmt_rc(rc, stmt);
++    rc= mysql_stmt_next_result(stmt);
++    check_stmt_rc(rc, stmt);
++  }
++  FAIL_IF(mysql_stmt_field_count(stmt) != 0, "expected final OK packet");
++  FAIL_IF(mysql_stmt_close(stmt), "could not close statement");
++
++  rc= mysql_query(mysql, drop);
+   check_mysql_rc(rc, mysql);
+   return OK;
+ }
+@@ -510,6 +562,8 @@
+   {"test_sp_reset1", test_sp_reset1, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
+   {"test_sp_reset2", test_sp_reset2, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
+   {"test_multi_result", test_multi_result, TEST_CONNECTION_DEFAULT, CLIENT_MULTI_STATEMENTS, NULL , NULL},
++  {"test_reexecute_with_unread_results", test_reexecute_with_unread_results,
++   TEST_CONNECTION_NEW, CLIENT_DEPRECATE_EOF | CLIENT_PS_MULTI_RESULTS, NULL, NULL},
+   {NULL, NULL, 0, 0, NULL, NULL}
+ };
  
 --- unittest/libmariadb/connection.c
 +++ unittest/libmariadb/connection.c

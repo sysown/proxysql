@@ -22,7 +22,8 @@ MARIADB_V40_PATCHES += mariadb_stmt.c.patch mariadb_lib.c.patch \
 	cr_new_stmt_metadata_removal.patch ps_buffer_stmt_read_all_rows.patch \
 	mariadb_stmt_store_result_err.patch empty_split_compress_packet.patch \
 	sslkeylogfile.patch client_deprecate_eof.patch mariadb_com.h.patch x509cache.patch \
-	mariadb_rpl.patch mariadb_rpl_rows.patch mariadb_lib.c.metadata_column_check.patch
+	mariadb_rpl.patch mariadb_rpl_rows.patch mariadb_lib.c.metadata_column_check.patch \
+	async_auth_reply_cleanup.patch
 
 MARIADB_V40_CMAKE := -Wno-dev -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 	-DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF \
