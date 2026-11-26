@@ -1,0 +1,295 @@
+--- include/ma_common.h
++++ include/ma_common.h
+@@ -91,6 +91,8 @@
+   int (*tls_verification_callback)(MARIADB_TLS *ctls, unsigned int flags);
+   unsigned char zstd_compression_level;
+   unsigned int max_columns;
++  char *tls_server_name;
++  my_bool tls_verify_server_cert;
+ };
+ 
+ typedef struct st_connection_handler
+--- include/ma_tls.h
++++ include/ma_tls.h
+@@ -162,6 +162,7 @@
+ void ma_tls_set_connection(MYSQL *mysql);
+ 
+ /* Function prototypes */
++const char *ma_tls_get_server_name(MYSQL *mysql);
+ MARIADB_TLS *ma_pvio_tls_init(MYSQL *mysql);
+ my_bool ma_pvio_tls_connect(MARIADB_TLS *ctls);
+ ssize_t ma_pvio_tls_read(MARIADB_TLS *ctls, const uchar *buffer, size_t length);
+--- include/mysql.h
++++ include/mysql.h
+@@ -263,6 +263,7 @@
+     MARIADB_OPT_BULK_UNIT_RESULTS,
+     MARIADB_OPT_TLS_VERIFICATION_CALLBACK,
+     MARIADB_OPT_MAX_COLUMNS,
++    MARIADB_OPT_TLS_SERVER_NAME = MARIADB_OPT_MAX_COLUMNS + 2,
+   };
+ 
+   enum mariadb_value {
+--- libmariadb/ma_tls.c
++++ libmariadb/ma_tls.c
+@@ -54,6 +54,13 @@
+ my_bool ma_tls_initialized= FALSE;
+ unsigned int mariadb_deinitialize_ssl= 1;
+ 
++const char *ma_tls_get_server_name(MYSQL *mysql)
++{
++  const char *server_name= OPT_EXT_VAL(mysql, tls_server_name);
++
++  return server_name && *server_name ? server_name : mysql->host;
++}
++
+ const char *tls_protocol_version[]=
+   {"SSLv3", "TLSv1.0", "TLSv1.1", "TLSv1.2", "TLSv1.3", "Unknown"};
+ 
+@@ -113,8 +120,11 @@
+ 
+   mysql= ctls->pvio->mysql;
+ 
+-  /* Skip peer certificate verification */
++  /* A configured CA must still validate the chain when hostname
++     verification is disabled. */
+   if (mysql->options.extension->tls_allow_invalid_server_cert &&
++      !mysql->options.ssl_ca && !mysql->options.ssl_capath &&
++      !(flags & MARIADB_TLS_VERIFY_REVOKED) &&
+       (!mysql->options.extension->tls_fp &&
+        !mysql->options.extension->tls_fp_list))
+   {
+@@ -137,7 +147,8 @@
+     }
+ #ifdef HAVE_OPENSSL
+     /* verification already happened via callback */
+-    if (!(mysql->net.tls_verify_status & (flags | MARIADB_TLS_VERIFY_UNKNOWN)))
++    if (!(flags & MARIADB_TLS_VERIFY_HOST) &&
++        !(mysql->net.tls_verify_status & (flags | MARIADB_TLS_VERIFY_UNKNOWN)))
+     {
+       mysql->extension->tls_validation= mysql->net.tls_verify_status;
+       mysql->net.tls_verify_status= MARIADB_TLS_VERIFY_OK;
+--- libmariadb/mariadb_lib.c
++++ libmariadb/mariadb_lib.c
+@@ -2514,6 +2514,7 @@
+     free(mysql->options.extension->tls_fp_list);
+     free(mysql->options.extension->tls_pw);
+     free(mysql->options.extension->tls_version);
++    free(mysql->options.extension->tls_server_name);
+     free(mysql->options.extension->url);
+     free(mysql->options.extension->connection_handler);
+     free(mysql->options.extension->proxy_header);
+@@ -3773,7 +3774,8 @@
+     mysql->options.use_ssl= (*(my_bool *)arg1);
+     break;
+   case MYSQL_OPT_SSL_VERIFY_SERVER_CERT:
+-    mysql->options.extension->tls_allow_invalid_server_cert=  !*(my_bool *)arg1;
++    mysql->options.extension->tls_allow_invalid_server_cert= !*(my_bool *)arg1;
++    mysql->options.extension->tls_verify_server_cert= *(my_bool *)arg1;
+     break;
+   case MYSQL_OPT_SSL_KEY:
+     if (opt_set_value_str((void **)&mysql->options.ssl_key, (char *)arg1))
+@@ -4025,6 +4027,10 @@
+     if (opt_set_value_str((void **)&mysql->options.extension->tls_version, (char *)arg1))
+       goto mem_error;
+     break;
++  case MARIADB_OPT_TLS_SERVER_NAME:
++    if (opt_set_value_str((void **)&mysql->options.extension->tls_server_name, (char *)arg1))
++      goto mem_error;
++    break;
+   case MARIADB_OPT_IO_WAIT:
+     mysql->options.extension->io_wait = (int(*)(my_socket, my_bool, int))arg1;
+     break;
+@@ -4208,6 +4214,9 @@
+   case MARIADB_OPT_TLS_VERSION:
+   case MYSQL_OPT_TLS_VERSION:
+     *((char **)arg)= mysql->options.extension ? mysql->options.extension->tls_version : NULL;
++    break;
++  case MARIADB_OPT_TLS_SERVER_NAME:
++    *((char **)arg)= OPT_EXT_VAL(mysql, tls_server_name);
+     break;
+   case MYSQL_OPT_CONNECT_ATTRS:
+     /* mysql_get_optionsv(mysql, MYSQL_OPT_CONNECT_ATTRS, keys, vals, elements) */
+--- libmariadb/secure/gnutls.c
++++ libmariadb/secure/gnutls.c
+@@ -1136,6 +1136,7 @@
+ void *ma_tls_init(MYSQL *mysql)
+ {
+   gnutls_session_t ssl= NULL;
++  const char *server_name= ma_tls_get_server_name(mysql);
+   gnutls_certificate_credentials_t ctx;
+   int ssl_error= 0;
+ 
+@@ -1163,8 +1164,9 @@
+   if ((ssl_error= gnutls_credentials_set(ssl, GNUTLS_CRD_CERTIFICATE, ctx)) < 0)
+     goto error;
+ 
+-  if (mysql->host && !ma_is_ip_address(mysql->host))
+-    if ((ssl_error = gnutls_server_name_set(ssl, GNUTLS_NAME_DNS, mysql->host, strlen(mysql->host))) < 0)
++  if (server_name && *server_name && !ma_is_ip_address(server_name))
++    if ((ssl_error= gnutls_server_name_set(ssl, GNUTLS_NAME_DNS,
++                                       server_name, strlen(server_name))) < 0)
+       goto error;
+ 
+   pthread_mutex_unlock(&LOCK_gnutls_config);
+@@ -1526,6 +1528,7 @@
+   if (flags & MARIADB_TLS_VERIFY_HOST)
+   {
+     gnutls_x509_crt_t cert= ma_get_cert(ctls);
++    const char *server_name= ma_tls_get_server_name(mysql);
+     int rc;
+ 
+     if (!cert)
+@@ -1537,7 +1540,8 @@
+       goto end;
+     }
+ 
+-    rc= gnutls_x509_crt_check_hostname2(cert, mysql->host, 0);
++    rc= server_name && *server_name &&
++        gnutls_x509_crt_check_hostname2(cert, server_name, 0);
+     gnutls_x509_crt_deinit(cert);
+ 
+     if (!rc)
+--- libmariadb/secure/ma_schannel.c
++++ libmariadb/secure/ma_schannel.c
+@@ -86,6 +86,7 @@
+   MARIADB_TLS     *ctls= pvio->ctls;
+   MYSQL *mysql=   pvio->mysql;
+   SC_CTX          *sctx= (SC_CTX *)ctls->ssl;
++  const char      *server_name= ma_tls_get_server_name(mysql);
+   char            *sni_host= NULL;
+ 
+ 
+@@ -96,8 +97,8 @@
+                 ISC_REQ_ALLOCATE_MEMORY |
+                 ISC_REQ_STREAM;
+ 
+-  if (mysql->host && !ma_is_ip_address(mysql->host))
+-    sni_host= mysql->host;
++  if (server_name && *server_name && !ma_is_ip_address(server_name))
++    sni_host= (char *)server_name;
+ 
+   /* Allocate data buffer */
+   if (!(IoBuffer = malloc(SC_IO_BUFFER_SIZE)))
+@@ -311,7 +312,7 @@
+ 
+   sRet = InitializeSecurityContext(&sctx->CredHdl,
+                                     NULL,
+-                                    pvio->mysql->host,
++                                    (SEC_CHAR *)ma_tls_get_server_name(pvio->mysql),
+                                     SFlags,
+                                     0,
+                                     SECURITY_NATIVE_DREP,
+@@ -531,7 +532,7 @@
+   status = schannel_verify_server_certificate(
+       pServerCert,
+       store,
+-      mysql->host,
++      ma_tls_get_server_name(mysql),
+       verify_flags,
+       errmsg, sizeof(errmsg));
+ 
+--- libmariadb/secure/openssl.c
++++ libmariadb/secure/openssl.c
+@@ -540,6 +540,9 @@
+                         SSL_OP_NO_SSLv3 |
+                         SSL_OP_NO_TLSv1;
+   long options= 0;
++#if !defined(OPENSSL_NO_TLSEXT)
++  const char *server_name= ma_tls_get_server_name(mysql);
++#endif
+   pthread_mutex_lock(&LOCK_openssl_config);
+ 
+   #if OPENSSL_VERSION_NUMBER >= 0x10100000L
+@@ -561,9 +564,12 @@
+     goto error;
+ 
+ #if !defined(OPENSSL_NO_TLSEXT)
+-  if (mysql->host && !ma_is_ip_address(mysql->host))
+-    if (!SSL_set_tlsext_host_name(ssl, mysql->host))
++  if (server_name && *server_name && !ma_is_ip_address(server_name))
++    if (!SSL_set_tlsext_host_name(ssl, server_name))
++    {
++      ma_tls_set_error(mysql);
+       goto error;
++    }
+ #endif
+ 
+   if (!SSL_set_app_data(ssl, mysql))
+@@ -866,7 +872,9 @@
+ 
+   if (verify_flags & MARIADB_TLS_VERIFY_HOST)
+   {
+-    if (!mysql->host)
++    const char *server_name= ma_tls_get_server_name(mysql);
++
++    if (!server_name || !*server_name)
+     {
+       pvio->set_error(mysql, CR_SSL_CONNECTION_ERROR, SQLSTATE_UNKNOWN,
+                       ER(CR_SSL_CONNECTION_ERROR), "Invalid (empty) hostname");
+@@ -883,8 +891,8 @@
+     }
+ 
+   #ifdef HAVE_OPENSSL_CHECK_HOST
+-    if (X509_check_host(cert, mysql->host, strlen(mysql->host), 0, 0) != 1
+-       && X509_check_ip_asc(cert, mysql->host, 0) != 1)
++    if (X509_check_host(cert, server_name, strlen(server_name), 0, 0) != 1
++       && X509_check_ip_asc(cert, server_name, 0) != 1)
+     {
+       mysql->net.tls_verify_status|= MARIADB_TLS_VERIFY_HOST;
+       goto error;
+@@ -919,7 +927,7 @@
+       goto error;
+     }
+ 
+-    if (strcmp(cn_str, mysql->host))
++    if (strcmp(cn_str, server_name))
+     {
+       mysql->net.tls_verify_status|= MARIADB_TLS_VERIFY_HOST;
+       goto error;
+--- plugins/auth/my_auth.c
++++ plugins/auth/my_auth.c
+@@ -335,7 +335,8 @@
+        mysql->net.pvio->type == PVIO_TYPE_SHAREDMEM))
+   {
+     mysql->server_capabilities &= ~(CLIENT_SSL);
+-    mysql->options.extension->tls_allow_invalid_server_cert= 1;
++    if (!mysql->options.extension->tls_verify_server_cert)
++      mysql->options.extension->tls_allow_invalid_server_cert= 1;
+   }
+ 
+   /* if server doesn't support SSL and verification of server certificate
+@@ -466,23 +467,28 @@
+     }
+ 
+     if (have_fingerprint(mysql))
+-    {
+       verify_flags|= MARIADB_TLS_VERIFY_FINGERPRINT;
+-    } else {
++
++    if (mysql->options.extension->tls_verify_server_cert)
++      verify_flags|= MARIADB_TLS_VERIFY_HOST | MARIADB_TLS_VERIFY_TRUST;
++    else if (!mysql->options.extension->tls_allow_invalid_server_cert &&
++             !(verify_flags & MARIADB_TLS_VERIFY_FINGERPRINT))
++    {
+       /*
+         Don't check host name on local (non globally resolvable) addresses
+         For local connections, only check CA if CA is given.
+       */
+       if (!is_local_connection(mysql->net.pvio))
+         verify_flags |= MARIADB_TLS_VERIFY_HOST|MARIADB_TLS_VERIFY_TRUST;
+-      else if (mysql->options.ssl_ca || mysql->options.ssl_capath)
+-        verify_flags |= MARIADB_TLS_VERIFY_TRUST;
+-    }
++    }
++    if (mysql->options.ssl_ca || mysql->options.ssl_capath)
++      verify_flags|= MARIADB_TLS_VERIFY_TRUST;
+ 
+     if (mysql->options.extension->tls_verification_callback(mysql->net.pvio->ctls, verify_flags))
+     {
+       if (mysql->net.tls_verify_status > MARIADB_TLS_VERIFY_AUTO ||
+-          (mysql->options.ssl_ca || mysql->options.ssl_capath))
++          mysql->options.extension->tls_verify_server_cert ||
++          mysql->options.ssl_ca || mysql->options.ssl_capath)
+         goto error;
+       if (!password_and_hashing(mysql, mpvio->plugin))
+         goto error;

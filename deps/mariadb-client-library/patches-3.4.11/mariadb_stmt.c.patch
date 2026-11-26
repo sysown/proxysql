@@ -1,0 +1,18 @@
+--- libmariadb/mariadb_stmt.c
++++ libmariadb/mariadb_stmt.c
+@@ -172,6 +172,7 @@
+   case MYSQL_TYPE_TIMESTAMP:
+   case MYSQL_TYPE_TINY:
+   case MYSQL_TYPE_TINY_BLOB:
++  case MYSQL_TYPE_VARCHAR:
+   case MYSQL_TYPE_VAR_STRING:
+   case MYSQL_TYPE_YEAR:
+   case MYSQL_TYPE_VECTOR:
+@@ -1448,6 +1449,7 @@
+         break;
+       case MYSQL_TYPE_STRING:
+       case MYSQL_TYPE_JSON:
++      case MYSQL_TYPE_VARCHAR:
+       case MYSQL_TYPE_VAR_STRING:
+       case MYSQL_TYPE_BLOB:
+       case MYSQL_TYPE_VECTOR:

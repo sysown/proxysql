@@ -201,23 +201,10 @@ DuckDBReplicaValue decode_value(const MARIADB_RPL_VALUE& value,
 		out.text = datetime_text(value.val.tm);
 		break;
 	case MYSQL_TYPE_TIMESTAMP:
+	case MYSQL_TYPE_TIMESTAMP2:
 		out.kind = DuckDBReplicaValue::Kind::datetime;
-		out.text = epoch_text(value.val.ull, 0);
+		out.text = epoch_text(value.val.ts.second, value.val.ts.second_part);
 		break;
-	case MYSQL_TYPE_TIMESTAMP2: {
-		// The connector renders TIMESTAMP2 as "<seconds>.<microseconds>".
-		std::string raw(value.val.str.str != nullptr ? value.val.str.str : "", value.val.str.length);
-		unsigned long long seconds = 0;
-		unsigned micros = 0;
-		if (std::sscanf(raw.c_str(), "%llu.%u", &seconds, &micros) != 2) {
-			out.kind = DuckDBReplicaValue::Kind::text;
-			out.text = raw;
-		} else {
-			out.kind = DuckDBReplicaValue::Kind::datetime;
-			out.text = epoch_text(seconds, micros);
-		}
-		break;
-	}
 	case MYSQL_TYPE_TIME:
 	case MYSQL_TYPE_TIME2:
 		out.kind = DuckDBReplicaValue::Kind::text;

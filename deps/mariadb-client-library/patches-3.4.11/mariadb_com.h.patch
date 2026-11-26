@@ -1,0 +1,20 @@
+--- include/mariadb_com.h
++++ include/mariadb_com.h
+@@ -188,8 +188,6 @@
+ 
+ #define MARIADB_CLIENT_SUPPORTED_FLAGS (MARIADB_CLIENT_PROGRESS |\
+                                        MARIADB_CLIENT_STMT_BULK_OPERATIONS|\
+-                                       MARIADB_CLIENT_EXTENDED_METADATA|\
+-                                       MARIADB_CLIENT_CACHE_METADATA|\
+                                        MARIADB_CLIENT_BULK_UNIT_RESULTS)
+ 
+ #define CLIENT_SUPPORTED_FLAGS  (CLIENT_MYSQL |\
+@@ -228,8 +226,6 @@
+                                  CLIENT_LONG_FLAG |\
+                                  CLIENT_TRANSACTIONS |\
+                                  CLIENT_SECURE_CONNECTION |\
+-                                 CLIENT_MULTI_RESULTS | \
+-                                 CLIENT_PS_MULTI_RESULTS |\
+                                  CLIENT_PROTOCOL_41 |\
+                                  CLIENT_PLUGIN_AUTH |\
+                                  CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA | \

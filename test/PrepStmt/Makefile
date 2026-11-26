@@ -4,11 +4,6 @@ PROXYSQL_PATH := $(abspath ../..)
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
-MARIADB_PATH=$(DEPS_PATH)/mariadb-client-library/mariadb_client
-MARIADB_IDIR=$(MARIADB_PATH)/include
-MARIADB_LDIR=$(MARIADB_PATH)/libmariadb
-
-
 DAEMONPATH=$(DEPS_PATH)/libdaemon/libdaemon
 DAEMONPATH_IDIR=$(DAEMONPATH)
 DAEMONPATH_LDIR=$(DAEMONPATH)/libdaemon/.libs

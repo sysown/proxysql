@@ -1,0 +1,27 @@
+--- libmariadb/mariadb_stmt.c
++++ libmariadb/mariadb_stmt.c
+@@ -245,6 +245,24 @@
+ 
+   while ((packet_len = ma_net_safe_read(stmt->mysql)) != packet_error)
+   {
++    // This change is required due to the new algorithm introduced in ProxySQL in #3295.
++    // ********************************************************************************
++    // DETAILS:
++    // Since #3295 ProxySQL performs a buffering on the resulset received by a prepared
++    // statement. This way ProxySQL doesn't require to retain the whole result of the
++    // prepared statement in memory. For this purpose it's required to free the memory
++    // allocated in 'MYSQL_STMT' via 'ma_free_root'. Because of this, local pointers
++    // within this function pointing to the result data gets invalidated due to stack
++    // swapping. Reinitializing then to the current values pointing to the new allocated
++    // memory for 'MYSQL_STMT' is required. Since this only happens when we force
++    // 'stmt->result.rows' to be '1', it's the only case in which these variables
++    // need a reset.
++    if (stmt->result.rows == 1) {
++      result= &stmt->result;
++      pprevious= &result->data->next;
++    }
++    // ********************************************************************************
++
+     p= stmt->mysql->net.read_pos;
+     if (packet_len > 7 || p[0] != 254)
+     {

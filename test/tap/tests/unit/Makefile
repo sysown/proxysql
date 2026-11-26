@@ -34,6 +34,16 @@ aws_public_provider_boundary-t:
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+
+# Direct unit builds infer the tier from the built core when the caller
+# leaves it unspecified. Resolve it before selecting any dependency paths.
+LIBPROXYSQLAR ?= $(PROXYSQL_PATH)/lib/libproxysql.a
+ifeq ($(origin PROXYSQL40),undefined)
+ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase),0)
+PROXYSQL40 := 1
+endif
+endif
+
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
 
@@ -65,7 +75,7 @@ IDIRS :=	-I$(TAP_IDIR) \
 			-I$(PROXYSQL_PATH)/include \
 			-I$(PROXYSQL_PATH)/test/tap/test_helpers
 
-ifdef PROXYSQL40
+ifeq ($(PROXYSQL40),1)
 IDIRS += -I$(PROXYSQL_PATH)/plugins/genai/include
 
 # ProxySQL vendors protobuf 3.21.12 under deps/protobuf/ and builds it
@@ -148,7 +158,7 @@ endif
 #
 # LDIRS still picks up PROTOBUF_LDIR for transitive deps that may use
 # pkg-config or autotools-driven search.
-ifdef PROXYSQL40
+ifeq ($(PROXYSQL40),1)
 LDIRS += -L$(PROTOBUF_LDIR)
 endif
 
@@ -163,13 +173,6 @@ CLICKHOUSE_CPP_LDIR := $(CLICKHOUSE_CPP_PATH)/clickhouse
 LZ4_LDIR := $(DEPS_PATH)/lz4/lz4/lib
 
 IDIRS += -I$(CLICKHOUSE_CPP_IDIR)
-
-# ===========================================================================
-# libproxysql.a — the core library under test
-# ===========================================================================
-
-LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
-
 
 # ===========================================================================
 # Static libraries required at link time
@@ -354,17 +357,9 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c MySQLFFTO),0)
 endif
 endif
 
-# PROXYSQL40 — detected via a chassis-exclusive symbol that only exists
-# when libproxysql.a was built with -DPROXYSQL40 (the four-phase plugin
-# lifecycle). `invoke_register_schemas_phase` is the canonical probe.
 PSQL40 :=
 ifeq ($(PROXYSQL40),1)
 	PSQL40 := -DPROXYSQL40
-else
-ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c invoke_register_schemas_phase),0)
-	PROXYSQL40 := 1
-	PSQL40 := -DPROXYSQL40
-endif
 endif
 PSQLTSDB :=
 ifeq ($(PROXYSQLTSDB),1)
@@ -399,7 +394,7 @@ ifneq ($(shell nm $(LIBPROXYSQLAR) 2>/dev/null | grep -c SQL3_Hostgroup_Connecti
 endif
 endif
 
-ifneq ($(PROXYSQL40),)
+ifeq ($(PROXYSQL40),1)
 ifneq ($(wildcard $(SQLITE3_LDIR)/vec.o),)
 	STATIC_LIBS += $(SQLITE3_LDIR)/vec.o
 endif
@@ -1424,7 +1419,7 @@ mysql_resolution_unit-t: mysql_resolution_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_n
 
 mariadb_tls_server_name_unit-t: mariadb_tls_server_name_unit-t.cpp $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/tap_noise_stubs.o $(IDIRS) $(LDIRS) $(OPT) \
-		-Wl,-Bstatic -lmariadbclient -Wl,-Bdynamic -lssl -lcrypto -lz -lpthread -ldl \
+		-Wl,-Bstatic -lmariadbclient -Wl,-Bdynamic -lssl -lcrypto -lz -lpthread -ldl -lm \
 		$(LWGCOV) -o $@
 
 plugin_query_hook_unit-t: plugin_query_hook_unit-t.cpp $(FAKE_PLUGIN_SO) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)

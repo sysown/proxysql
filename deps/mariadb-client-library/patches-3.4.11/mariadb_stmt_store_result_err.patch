@@ -1,0 +1,12 @@
+--- libmariadb/mariadb_stmt.c
++++ libmariadb/mariadb_stmt.c
+@@ -2025,6 +2025,9 @@
+     stmt->result.data= NULL;
+     stmt->result.rows= 0;
+     stmt->mysql->status= MYSQL_STATUS_READY;
++    /* In case of error, stmt internal state needs to be reset. Otherwise state machine could be left in an
++      inconsistent state and further calls to 'mysql_stmt_execute' will halt. */
++    stmt->state= MYSQL_STMT_FETCH_DONE;
+     return(1);
+   }
+ 

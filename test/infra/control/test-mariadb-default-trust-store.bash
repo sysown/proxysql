@@ -22,67 +22,74 @@ test -x "${openssl_root}/apps/openssl" || fail "vendored OpenSSL CLI is not buil
 test -f "${openssl_root}/libssl.a" || fail "vendored libssl.a is not built"
 test -f "${openssl_root}/libcrypto.a" || fail "vendored libcrypto.a is not built"
 
-tar --no-same-owner -zxf \
-	"${connector_dir}/mariadb-connector-c-3.3.8-src.tar.gz" \
-	-C "${tmp_dir}"
-source_dir="${tmp_dir}/mariadb-connector-c-3.3.8-src"
-apply_connector_patch plugin_auth_CMakeLists.txt.patch
-if [[ $(uname -s) == Darwin ]]; then
-	# Match the production connector patch sequence on Apple SDKs.
-	apply_connector_patch zutil.c.patch
-	apply_connector_patch zutil.h.patch
-fi
+if [[ ${PROXYSQL40:-0} == 1 ]]; then
+	# Exercise the archive built by the v4.0 production rules and its patched source.
+	source_dir=$(make -C "${repo_root}/deps" --no-print-directory -s PROXYSQL40=1 \
+		--eval $'.PHONY: connector-path\nconnector-path:\n\t@printf "%s\\n" "$(MARIADB_PATH)"' \
+		connector-path)
+else
+	tar --no-same-owner -zxf \
+		"${connector_dir}/mariadb-connector-c-3.3.8-src.tar.gz" \
+		-C "${tmp_dir}"
+	source_dir="${tmp_dir}/mariadb-connector-c-3.3.8-src"
+	apply_connector_patch plugin_auth_CMakeLists.txt.patch
+	if [[ $(uname -s) == Darwin ]]; then
+		# Match the production connector patch sequence on Apple SDKs.
+		apply_connector_patch zutil.c.patch
+		apply_connector_patch zutil.h.patch
+	fi
 
-if ! cmake -S "${source_dir}" -B "${source_dir}" -Wno-dev \
-		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
-		-DCMAKE_C_FLAGS="-Wno-error=declaration-after-statement ${CA_CACHE_SANITIZER_FLAGS:-}" \
-		-DOPENSSL_ROOT_DIR="${openssl_root}" \
-		-DOPENSSL_INCLUDE_DIR="${openssl_root}/include" \
-		-DOPENSSL_SSL_LIBRARY="${openssl_root}/libssl.a" \
-		-DOPENSSL_CRYPTO_LIBRARY="${openssl_root}/libcrypto.a" \
-		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-		>"${tmp_dir}/connector-configure.log" 2>&1; then
-	tail -100 "${tmp_dir}/connector-configure.log" >&2
-	fail "Connector/C fixture configuration failed"
-fi
+	if ! cmake -S "${source_dir}" -B "${source_dir}" -Wno-dev \
+			-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+			-DCMAKE_C_FLAGS="-Wno-error=declaration-after-statement ${CA_CACHE_SANITIZER_FLAGS:-}" \
+			-DOPENSSL_ROOT_DIR="${openssl_root}" \
+			-DOPENSSL_INCLUDE_DIR="${openssl_root}/include" \
+			-DOPENSSL_SSL_LIBRARY="${openssl_root}/libssl.a" \
+			-DOPENSSL_CRYPTO_LIBRARY="${openssl_root}/libcrypto.a" \
+			-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+			>"${tmp_dir}/connector-configure.log" 2>&1; then
+		tail -100 "${tmp_dir}/connector-configure.log" >&2
+		fail "Connector/C fixture configuration failed"
+	fi
 
-for patch_name in \
-	mariadb_stmt.c.patch \
-	mariadb_lib.c.patch \
-	mariadb_lib.c.collation.patch \
-	mariadb_lib.c.ipv6_fix.patch \
-	mariadb_async.c.patch \
-	ma_password.c.patch \
-	mysql.h.patch \
-	tls_server_name.patch \
-	ma_priv.h.patch \
-	ma_alloc.c.patch \
-	ma_charset.c.patch \
-	unittest_basic-t.c.patch \
-	unittest_charset.c.patch \
-	mariadb_dyncol.c-multiplication-overflow.patch \
-	ma_array.c-multiplication-overflow.patch \
-	zutil.c-multiplication-overflow.patch \
-	cr_new_stmt_metadata_removal.patch \
-	ps_buffer_stmt_read_all_rows.patch \
-	mariadb_stmt_store_result_err.patch \
-	empty_split_compress_packet.patch \
-	sslkeylogfile.patch \
-	client_deprecate_eof.patch \
-	mariadb_com.h.patch \
-	x509cache.patch \
-	mariadb_rpl.patch \
-	cmakelists.txt.patch \
-	mariadb_lib.c.metadata_column_check.patch \
-	bool_keyword.patch
-do
-	apply_connector_patch "${patch_name}"
-done
+	for patch_name in \
+		mariadb_stmt.c.patch \
+		mariadb_lib.c.patch \
+		mariadb_lib.c.collation.patch \
+		mariadb_lib.c.ipv6_fix.patch \
+		mariadb_async.c.patch \
+		ma_password.c.patch \
+		mysql.h.patch \
+		tls_server_name.patch \
+		ma_priv.h.patch \
+		ma_alloc.c.patch \
+		ma_charset.c.patch \
+		unittest_basic-t.c.patch \
+		unittest_charset.c.patch \
+		mariadb_dyncol.c-multiplication-overflow.patch \
+		ma_array.c-multiplication-overflow.patch \
+		zutil.c-multiplication-overflow.patch \
+		cr_new_stmt_metadata_removal.patch \
+		ps_buffer_stmt_read_all_rows.patch \
+		mariadb_stmt_store_result_err.patch \
+		empty_split_compress_packet.patch \
+		sslkeylogfile.patch \
+		client_deprecate_eof.patch \
+		mariadb_com.h.patch \
+		x509cache.patch \
+		mariadb_rpl.patch \
+		cmakelists.txt.patch \
+		mariadb_lib.c.metadata_column_check.patch \
+		bool_keyword.patch
+	do
+		apply_connector_patch "${patch_name}"
+	done
 
-if ! cmake --build "${source_dir}" --target mariadbclient --parallel 2 \
-		>"${tmp_dir}/connector-build.log" 2>&1; then
-	tail -100 "${tmp_dir}/connector-build.log" >&2
-	fail "patched Connector/C mariadbclient build failed"
+	if ! cmake --build "${source_dir}" --target mariadbclient --parallel 2 \
+			>"${tmp_dir}/connector-build.log" 2>&1; then
+		tail -100 "${tmp_dir}/connector-build.log" >&2
+		fail "patched Connector/C mariadbclient build failed"
+	fi
 fi
 test -f "${source_dir}/libmariadb/libmariadbclient.a" || \
 	fail "patched Connector/C archive was not produced"
@@ -130,11 +137,15 @@ if [[ $(uname -s) == Linux ]]; then
 		"${script_dir}/fixtures/mariadb-thread-ctx-allocation.c" \
 		"${source_dir}/libmariadb/libmariadbclient.a" \
 		"${openssl_root}/libssl.a" "${openssl_root}/libcrypto.a" \
-		-Wl,--wrap=SSL_CTX_new -pthread -ldl \
+		-Wl,--wrap=SSL_CTX_new -pthread -ldl -lz -lm \
 		-o "${tmp_dir}/mariadb-thread-ctx-allocation"
 	"${tmp_dir}/mariadb-thread-ctx-allocation" "${fixture_dir}/one.pem"
 fi
 
+iconv_libs=()
+if [[ $(uname -s) == Darwin ]]; then
+	iconv_libs+=(-liconv)
+fi
 ${CC:-cc} -std=gnu99 -Wall -Wextra -Werror \
 	${CA_CACHE_SANITIZER_FLAGS:-} \
 	-DHAVE_OPENSSL -DHAVE_TLS -DLIBMARIADB -DTHREAD \
@@ -143,7 +154,7 @@ ${CC:-cc} -std=gnu99 -Wall -Wextra -Werror \
 	"${script_dir}/fixtures/mariadb-ca-cache.c" \
 	"${source_dir}/libmariadb/libmariadbclient.a" \
 	"${openssl_root}/libssl.a" "${openssl_root}/libcrypto.a" \
-	-pthread -ldl -lz -o "${tmp_dir}/mariadb-ca-cache"
+	-pthread -ldl -lz -lm "${iconv_libs[@]}" -o "${tmp_dir}/mariadb-ca-cache"
 cache_status=0
 cache_modes=(isolation capath rotation retry new-retry lifecycle hit crl thread-exit)
 # Optional integration check against the host's installed default CA bundle.

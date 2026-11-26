@@ -35,6 +35,7 @@ jobs:
         PROXYSQL31: ${{ matrix.tier == 'v31' && '1' || '' }}
     - name: Verify MariaDB default CA caching and trust isolation
       env:
+        PROXYSQL40: ${{ matrix.tier == 'v40' && '1' || '' }}
         CA_CACHE_TEST_SYSTEM_DEFAULTS: '1'
       run: test/infra/control/test-mariadb-default-trust-store.bash
     - name: Build macOS unit smoke tests
