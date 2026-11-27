@@ -282,6 +282,95 @@ char* get_password(account_details_t& ad, PASSWORD_TYPE::E passtype) {
 	return ret;
 }
 
+/**
+ * @brief User attribute that makes sessions use the backend entry password towards the backends.
+ * @details By default a session connects to the backends with the password it authenticated with:
+ *   the primary password or the 'additional_password'. That requires the backend to accept both
+ *   passwords (e.g. MySQL 8.0.14+ dual passwords, or MariaDB 10.4 with two authentication methods joined
+ *   by 'OR'). Backends with a single password per account (e.g. MySQL 5.7) need every session of the
+ *   user, whichever password it authenticated with, to use the password of the user's backend entry
+ *   ('backend=1') instead; so the frontend passwords can be rotated independently of the backend one.
+ */
+static const char USE_BACKEND_PASSWORD_ATTR[] { "use_backend_password" };
+
+/**
+ * @brief Checks if the user attributes enable 'use_backend_password'.
+ * @param attributes The user 'attributes' JSON; it may be NULL or empty.
+ * @return True only if the attribute is present and is the JSON boolean 'true'.
+ */
+static bool user_uses_backend_password(const char* attributes) {
+	if (attributes == nullptr || attributes[0] == '\0') {
+		return false;
+	}
+	const nlohmann::json attrs = nlohmann::json::parse(attributes, nullptr, false);
+	if (attrs.is_discarded() || !attrs.is_object()) {
+		return false;
+	}
+	return get_nested_elem_val(attrs, { USE_BACKEND_PASSWORD_ATTR }, false);
+}
+
+/**
+ * @brief Gets a copy of the clear-text password of the backend entry for the supplied user.
+ * @details Only clear-text passwords are usable: ProxySQL can't authenticate against a backend with a
+ *   stored hash ('mysql_native_password', 'caching_sha2_password', 'ed25519') unless it has learned
+ *   the matching secret from a client that authenticated with that same password.
+ * @param username The user to lookup in the backend ('backend=1') credentials.
+ * @return A copy of the password, to be freed by the caller, or 'nullptr' if the user has no backend
+ *   entry or its password isn't stored in clear text.
+ */
+static char* get_backend_clear_text_password(char* username) {
+	account_details_t ad {
+		GloMyAuth->lookup(username, USERNAME_BACKEND, { false, false, false })
+	};
+	char* ret = nullptr;
+
+	if (ad.password != nullptr) {
+		const char* pass = ad.password;
+		const bool is_hashed =
+			pass[0] == '*'
+			|| (strnlen(pass, 71) == 70 && strncasecmp(pass, "$A$0", 4) == 0)
+#ifdef PROXYSQLED25519
+			|| proxysql_ed25519_has_prefix(pass)
+#endif
+			;
+		if (!is_hashed) {
+			ret = strdup(pass);
+		}
+	}
+	free_account_details(ad);
+
+	return ret;
+}
+
+/**
+ * @brief Resolves the backend password of a session for a user that enables 'use_backend_password'.
+ * @details To be called once the session authenticated, with the primary or the additional password.
+ * @param user The authenticated user.
+ * @param attributes The user 'attributes' JSON; it may be NULL or empty.
+ * @param backend_password Set to a copy of the backend entry clear-text password (to be freed by the
+ *   caller) when the user enables the attribute and it exists; left untouched otherwise.
+ * @return 'false' if the user enables the attribute but has no backend entry with a clear-text password,
+ *   in which case the session must be rejected; 'true' otherwise.
+ */
+static bool resolve_backend_password(char* user, const char* attributes, char*& backend_password) {
+	if (!user_uses_backend_password(attributes)) {
+		return true;
+	}
+
+	cleanse_and_free_password(backend_password);
+	backend_password = get_backend_clear_text_password(user);
+
+	if (backend_password == nullptr) {
+		proxy_error(
+			"User '%s' has '%s' enabled but no backend entry with a clear-text password. Rejecting connection\n",
+			user, USE_BACKEND_PASSWORD_ATTR
+		);
+		return false;
+	}
+
+	return true;
+}
+
 #ifdef DEBUG
 void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
 	if (attributes!=NULL && strlen(attributes)) {
@@ -2060,6 +2149,13 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			}
 		}
 	}
+	// 'use_backend_password': same as in 'process_pkt_handshake_response', LDAP sessions excluded likewise
+	char* backend_password = nullptr;
+	if (ret == true && session_type == PROXYSQL_SESSION_MYSQL && (*myds)->sess->use_ldap_auth == false) {
+		ret = resolve_backend_password(
+			reinterpret_cast<char*>(user), (*myds)->sess->user_attributes, backend_password
+		);
+	}
 	cleanse_and_free_auth_response(pass, pass_len + 1);
 	if (userinfo->username) free(userinfo->username);
 	userinfo->clear_password();
@@ -2067,7 +2163,17 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
 		userinfo->username=strdup((const char *)user);
-		userinfo->password=strdup((const char *)password);
+		if (backend_password) {
+			// clear-text password: the SHA1 learned verifying the client password must not be used
+			userinfo->password = backend_password;
+			backend_password = nullptr;
+			if (userinfo->sha1_pass) {
+				free(userinfo->sha1_pass);
+				userinfo->sha1_pass = nullptr;
+			}
+		} else {
+			userinfo->password=strdup((const char *)password);
+		}
 		if (db) userinfo->set_schemaname(db,strlen(db), charset);
 	} else {
 		// we always duplicate username and password, or crashes happen
@@ -4022,6 +4128,8 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	MyProt_tmp_auth_vars vars1;
 	account_details_t account_details {};
 	dup_account_details_t dup_details { true, true, true };
+	// backend entry password for the session; see 'USE_BACKEND_PASSWORD_ATTR'
+	char* backend_password = nullptr;
 
 	vars1._ptr = pkt;
 	mysql_hdr hdr;
@@ -4180,6 +4288,21 @@ __do_auth:
 		}
 	}
 
+	// 'use_backend_password': the session reaches the backends with the backend entry password, whichever
+	// password (primary or additional) it authenticated with. Resolved before accounting the connection;
+	// without a usable password the session is rejected instead of connecting to the backends with the
+	// password the client authenticated with. LDAP sessions already map to their own backend user.
+	if (
+		ret &&
+		(*myds)->auth_in_progress == 0 &&
+		session_type == PROXYSQL_SESSION_MYSQL &&
+		(*myds)->sess->use_ldap_auth == false
+	) {
+		ret = resolve_backend_password(
+			reinterpret_cast<char*>(vars1.user), account_details.attributes, backend_password
+		);
+	}
+
 	if (
 		ret &&
 		(*myds)->auth_in_progress == 0 &&
@@ -4219,7 +4342,17 @@ __exit_do_auth:
 		if (!userinfo->username) // if set already, ignore
 			userinfo->username=strdup((const char *)vars1.user);
 		userinfo->clear_password();
-		userinfo->password=strdup((const char *)vars1.password);
+		if (backend_password) {
+			// clear-text password: the SHA1 learned verifying the client password must not be used
+			userinfo->password = backend_password;
+			backend_password = nullptr;
+			if (userinfo->sha1_pass) {
+				free(userinfo->sha1_pass);
+				userinfo->sha1_pass = nullptr;
+			}
+		} else {
+			userinfo->password=strdup((const char *)vars1.password);
+		}
 		if (vars1.db) {
 			const uint32_t schema_charset = (*myds)->sess->change_user_auth_switch
 				? userinfo->schemaname_charset : vars1.charset;
@@ -4277,6 +4410,7 @@ __exit_process_pkt_handshake_response:
 #endif
 	free(vars1.pass);
 	cleanse_and_free_password(vars1.password);
+	cleanse_and_free_password(backend_password);
 	if (vars1.db_tmp) {
 		free(vars1.db_tmp);
 		vars1.db_tmp=NULL;
