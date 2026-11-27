@@ -411,6 +411,16 @@ class Query_Processor_Output {
 };
 
 /**
+ * @brief Describes a regex runtime failure found while evaluating a query rule (#6510).
+ */
+struct QP_regex_failure {
+	/** 0 when no failure, 1 for match_digest, 2 for match_pattern. */
+	int regex_index = 0;
+	/** true for a match/recursion/heap/depth limit, false for another match error. */
+	bool resource_limit = false;
+};
+
+/**
  * @brief Frees the supplied query rules and cleans the vector.
  */
 void __reset_rules(std::vector<QP_rule_t*>* qrs);
@@ -443,6 +453,12 @@ void __reset_rules(std::vector<QP_rule_t*>* qrs);
  * @param rewritten_query Rewritten query text produced by a previous rule, if any.
  * @param query_processor_regex Regex engine selector: PCRE (1), RE2 (2) or
  *   PCRE2 (3, available only when PROXYSQL31 is defined -- issue #6411).
+ * @param regex_failure Optional output. Filled when a regex runtime failure
+ *   (match/recursion/heap/depth limit or another match error) stopped the
+ *   evaluation, and left untouched otherwise. It tells which criterion failed
+ *   and whether a resource limit was hit. A failure returns false, which is not
+ *   the same as a completed no-match: the caller must reject the request
+ *   instead of continuing with other rules or the default route (#6510).
  * @return true when all rule criteria match, otherwise false.
  */
 bool rule_matches_query(
@@ -459,7 +475,8 @@ bool rule_matches_query(
 	const char* digest_text,
 	const char* query_text,
 	const char* rewritten_query,
-	int query_processor_regex
+	int query_processor_regex,
+	QP_regex_failure* regex_failure = nullptr
 );
 
 /**
