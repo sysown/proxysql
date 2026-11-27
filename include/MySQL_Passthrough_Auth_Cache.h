@@ -242,12 +242,18 @@ class MySQL_Passthrough_Auth_Cache {
 		/**
 		 * @brief Value stored in @c userinfo->password for a session that
 		 * authenticated with an ephemeral credential while a standing backend
-		 * credential is configured. It is never sent to a backend as is:
-		 * every place that hands a password to the client library goes
-		 * through @c resolve_backend_password(). It starts with a control
-		 * byte so it cannot collide with a real password.
+		 * credential is configured. It is never sent to a backend as is: every
+		 * place that hands a password to the client library replaces it with
+		 * the standing credential first.
+		 *
+		 * The value is generated once per process from random bytes, so a
+		 * client cannot know it and cannot present it as its own credential
+		 * (pass-through additionally rejects a cleartext equal to it).
 		 */
-		static const char *EPHEMERAL_BACKEND_MARKER;
+		static const char *ephemeral_backend_marker();
+
+		/** @brief Whether @p password is the marker (NULL-safe). */
+		static bool is_ephemeral_backend_marker(const char *password);
 
 		/**
 		 * @brief Set the file that holds the standing backend credential
@@ -260,20 +266,23 @@ class MySQL_Passthrough_Auth_Cache {
 		static bool ephemeral_backend_credential_configured();
 
 		/**
-		 * @brief Password to present to a backend for @p password.
+		 * @brief Copy the standing backend credential into @p out.
 		 *
-		 * Returns @p password unchanged unless it is
-		 * @c EPHEMERAL_BACKEND_MARKER. For the marker it returns the first
-		 * line of the configured file, read at call time (re-read only when
-		 * the file changes), so the credential can be rotated without
-		 * touching existing frontend sessions. The returned pointer is a
-		 * thread-local buffer valid until the next call on the same thread.
-		 * If the file is unset, unreadable or empty the marker itself is
-		 * returned and the backend rejects it (fail closed).
+		 * The credential is the first line of the configured file. The file
+		 * is stat()ed on every call and re-read only when it changed, so the
+		 * credential can be rotated without touching existing frontend
+		 * sessions. File I/O happens outside the internal lock.
+		 *
+		 * The caller owns @p out and must keep it alive until the backend
+		 * operation that uses it has completed (connects are asynchronous).
+		 *
+		 * @return @c false, with @p out empty, when no file is configured or
+		 *         it is unreadable or empty. Callers then send the marker and
+		 *         the backend rejects it (fail closed).
 		 *
 		 * Callable from any thread.
 		 */
-		static char *resolve_backend_password(char *password);
+		static bool read_ephemeral_backend_credential(std::string& out);
 
 		void print_version();
 };

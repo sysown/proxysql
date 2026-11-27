@@ -2769,6 +2769,16 @@ bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	
 		return true;
 	}
 	if (!strcasecmp(name,"passthrough_auth_ephemeral_pattern")) {
+		if (vallen) {
+			// A pattern that does not compile would silently turn ephemeral
+			// credentials into cached ones: refuse it.
+			re2::RE2::Options re_opts(re2::RE2::Quiet);
+			re2::RE2 re_check(value, re_opts);
+			if (!re_check.ok()) {
+				proxy_error("Invalid regex for mysql-passthrough_auth_ephemeral_pattern: %s\n", re_check.error().c_str());
+				return false;
+			}
+		}
 		if (variables.passthrough_auth_ephemeral_pattern) free(variables.passthrough_auth_ephemeral_pattern);
 		variables.passthrough_auth_ephemeral_pattern = strdup(vallen ? value : "");
 		return true;

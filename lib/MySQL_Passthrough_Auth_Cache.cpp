@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 #include <openssl/crypto.h>
+#include <openssl/rand.h>
+#include <random>
 #include <sys/stat.h>
 
 namespace {
@@ -26,13 +28,37 @@ std::string eph_file_path;
 std::string eph_file_value;
 bool eph_file_loaded = false;
 struct timespec eph_file_mtime = {0, 0};
+struct timespec eph_file_ctime = {0, 0};
 off_t eph_file_size = -1;
 ino_t eph_file_ino = 0;
 
+std::string make_ephemeral_backend_marker() {
+	unsigned char rnd[16];
+	if (RAND_bytes(rnd, sizeof(rnd)) != 1) {
+		std::random_device rd;
+		for (size_t i = 0; i < sizeof(rnd); i++) {
+			rnd[i] = static_cast<unsigned char>(rd());
+		}
+	}
+	static const char hex[] = "0123456789abcdef";
+	std::string m("\x01proxysql-ephemeral-backend-");
+	for (size_t i = 0; i < sizeof(rnd); i++) {
+		m.push_back(hex[rnd[i] >> 4]);
+		m.push_back(hex[rnd[i] & 0x0f]);
+	}
+	return m;
+}
+
 } // namespace
 
-const char *MySQL_Passthrough_Auth_Cache::EPHEMERAL_BACKEND_MARKER =
-	"\x01proxysql-passthrough-ephemeral-backend";
+const char *MySQL_Passthrough_Auth_Cache::ephemeral_backend_marker() {
+	static const std::string marker = make_ephemeral_backend_marker();
+	return marker.c_str();
+}
+
+bool MySQL_Passthrough_Auth_Cache::is_ephemeral_backend_marker(const char *password) {
+	return password != NULL && strcmp(password, ephemeral_backend_marker()) == 0;
+}
 
 MySQL_Passthrough_Auth_Cache::entry_t::~entry_t() {
 	cleanse_string(cleartext_password);
@@ -537,61 +563,81 @@ bool MySQL_Passthrough_Auth_Cache::ephemeral_backend_credential_configured() {
 	return ret;
 }
 
-char *MySQL_Passthrough_Auth_Cache::resolve_backend_password(char *password) {
-	if (password == NULL || strcmp(password, EPHEMERAL_BACKEND_MARKER) != 0) {
-		return password;
-	}
-	static thread_local std::string out;
+bool MySQL_Passthrough_Auth_Cache::read_ephemeral_backend_credential(std::string& out) {
 	cleanse_string(out);
 
+	// Snapshot the configuration and the cached metadata, then do the
+	// stat()/read without holding the lock.
+	std::string path;
+	bool loaded = false;
+	struct timespec mtime = {0, 0};
+	struct timespec ctime_ = {0, 0};
+	off_t size = -1;
+	ino_t ino = 0;
 	pthread_mutex_lock(&eph_file_lock);
-	if (!eph_file_path.empty()) {
-		struct stat st;
-		if (stat(eph_file_path.c_str(), &st) == 0) {
-			const bool changed = !eph_file_loaded
-				|| st.st_mtim.tv_sec != eph_file_mtime.tv_sec
-				|| st.st_mtim.tv_nsec != eph_file_mtime.tv_nsec
-				|| st.st_size != eph_file_size
-				|| st.st_ino != eph_file_ino;
-			if (changed) {
-				cleanse_string(eph_file_value);
-				FILE *f = fopen(eph_file_path.c_str(), "r");
-				if (f) {
-					char *line = NULL;
-					size_t cap = 0;
-					const ssize_t n = getline(&line, &cap, f);
-					if (n > 0) {
-						eph_file_value.assign(line, static_cast<size_t>(n));
-						while (!eph_file_value.empty()
-							&& (eph_file_value.back() == '\n' || eph_file_value.back() == '\r')) {
-							eph_file_value.pop_back();
-						}
-					}
-					if (line) {
-						OPENSSL_cleanse(line, cap);
-						free(line);
-					}
-					fclose(f);
-					eph_file_mtime = st.st_mtim;
-					eph_file_size = st.st_size;
-					eph_file_ino = st.st_ino;
-					eph_file_loaded = true;
-				} else {
-					eph_file_loaded = false;
+	path = eph_file_path;
+	loaded = eph_file_loaded;
+	mtime = eph_file_mtime;
+	ctime_ = eph_file_ctime;
+	size = eph_file_size;
+	ino = eph_file_ino;
+	pthread_mutex_unlock(&eph_file_lock);
+	if (path.empty()) return false;
+
+	struct stat st;
+	const bool stat_ok = (stat(path.c_str(), &st) == 0);
+	const bool unchanged = stat_ok && loaded
+		&& st.st_mtim.tv_sec == mtime.tv_sec && st.st_mtim.tv_nsec == mtime.tv_nsec
+		&& st.st_ctim.tv_sec == ctime_.tv_sec && st.st_ctim.tv_nsec == ctime_.tv_nsec
+		&& st.st_size == size && st.st_ino == ino;
+
+	if (unchanged) {
+		pthread_mutex_lock(&eph_file_lock);
+		if (eph_file_path == path && eph_file_loaded) out = eph_file_value;
+		pthread_mutex_unlock(&eph_file_lock);
+		return !out.empty();
+	}
+
+	std::string value;
+	bool read_ok = false;
+	if (stat_ok) {
+		FILE *f = fopen(path.c_str(), "r");
+		if (f) {
+			char *line = NULL;
+			size_t cap = 0;
+			const ssize_t n = getline(&line, &cap, f);
+			if (n > 0) {
+				value.assign(line, static_cast<size_t>(n));
+				while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+					value.pop_back();
 				}
 			}
-			out = eph_file_value;
-		} else {
-			cleanse_string(eph_file_value);
-			eph_file_loaded = false;
+			if (line) {
+				OPENSSL_cleanse(line, cap);
+				free(line);
+			}
+			fclose(f);
+			read_ok = true;
+		}
+	}
+
+	pthread_mutex_lock(&eph_file_lock);
+	if (eph_file_path == path) {
+		cleanse_string(eph_file_value);
+		eph_file_loaded = read_ok;
+		if (read_ok) {
+			eph_file_value = value;
+			eph_file_mtime = st.st_mtim;
+			eph_file_ctime = st.st_ctim;
+			eph_file_size = st.st_size;
+			eph_file_ino = st.st_ino;
 		}
 	}
 	pthread_mutex_unlock(&eph_file_lock);
 
-	if (out.empty()) {
-		return password;
-	}
-	return &out[0];
+	if (read_ok) out = value;
+	cleanse_string(value);
+	return !out.empty();
 }
 
 void MySQL_Passthrough_Auth_Cache::bump_probes_attempted() {

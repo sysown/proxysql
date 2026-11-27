@@ -441,20 +441,24 @@ Two variables address this. Both default to empty, which leaves pass-through exa
 
 Nothing is ever inserted for such a user, so the lookup path in §8.2 is unchanged: it simply never hits. Credentials that do not match are cached as before. A pattern that fails to compile matches nothing.
 
-**`mysql-passthrough_auth_ephemeral_backend_credential_file`** — a file whose first line is a *standing* backend credential. When it is set, a session that authenticated with an ephemeral credential does not keep the client's credential as its backend password. `userinfo->password` holds a marker instead (`MySQL_Passthrough_Auth_Cache::EPHEMERAL_BACKEND_MARKER`), and every place that hands a password to the client library resolves it through `MySQL_Passthrough_Auth_Cache::resolve_backend_password()`:
+**`mysql-passthrough_auth_ephemeral_backend_credential_file`** — a file whose first line is a *standing* backend credential. When it is set, a session that authenticated with an ephemeral credential does not keep the client's credential as its backend password. `userinfo->password` holds a marker instead (`MySQL_Passthrough_Auth_Cache::ephemeral_backend_marker()`), and every place that hands a password to the client library replaces the marker with the standing credential first:
 
-- `MySQL_Connection::connect_start()` and `change_user_start()`,
-- the connection-reset `mysql_change_user_start()` in `MySQL_HostGroups_Manager.cpp`,
+- `MySQL_Connection::connect_start()` and `change_user_start()`, through `MySQL_Connection::backend_auth_password()`,
+- the connection-reset `mysql_change_user_start()` in `MySQL_HostGroups_Manager.cpp`, through the same method,
 - the KILL helper in `MySQL_Session.cpp`.
 
-The file is read at backend-connect time and re-read only when it changes (`stat()` per call), so the credential can be rotated — write a new file and rename it over the old one — without touching existing frontend sessions. If the file is unset, unreadable or empty, the marker itself is sent and the backend rejects it: fail closed. The backend is expected to accept the standing credential for the accounts that use ephemeral credentials.
+Backend connects are asynchronous and the client library keeps the password pointer until they complete, so the resolved credential is copied into a buffer owned by the `MySQL_Connection` (the KILL helper is synchronous and uses a local).
+
+The file is `stat()`ed at backend-connect time and re-read only when it changed (mtime, ctime, size or inode), outside the internal lock, so the credential can be rotated — write a new file and rename it over the old one — without touching existing frontend sessions. If the file is unset, unreadable or empty, the marker itself is sent and the backend rejects it: fail closed. The backend is expected to accept the standing credential for the accounts that use ephemeral credentials.
 
 When the pattern is set but the file is not, the session keeps the client's credential, as with any pass-through session. Later backend connections for that session then fail once the credential expires.
 
-The marker starts with a control byte, so it cannot collide with a real password, and because all ephemeral sessions of a user carry the same marker they share backend connections like any other sessions of that user.
+The marker is generated once per process from random bytes. A client therefore cannot know it, and pass-through additionally rejects a client cleartext equal to it before any backend connect: otherwise a client could present the marker and have ProxySQL authenticate to the backend with the standing credential on its behalf. Because all ephemeral sessions of a user carry the same marker they share backend connections like any other sessions of that user.
 
-Limitations:
+Notes and limitations:
 
+- A user is either ephemeral or not. A cached (non-ephemeral) credential is checked first, from the fast-auth scramble, before any cleartext is available to classify. An entry whose cached credential matches the pattern (learned before the pattern was set) is evicted on the next lookup.
+- `mysql-passthrough_auth_ephemeral_pattern` is validated when it is set; a pattern that does not compile is refused.
 - `COM_CHANGE_USER` to a user whose session carries the marker is not special-cased.
 - The standing credential is process-wide, not per user or per hostgroup.
 
