@@ -3345,7 +3345,12 @@ void MySQL_Protocol::PPHR_ed25519_switch(bool& ret, MyProt_tmp_auth_vars& vars1)
 	(*myds)->switching_auth_stage = 1;
 	(*myds)->auth_in_progress = 1;
 	generate_pkt_auth_switch_request(true, NULL, NULL);
-	(*myds)->myconn->userinfo->set((char *)vars1.user, NULL, vars1.db, NULL);
+	MySQL_Connection_userinfo *userinfo = (*myds)->myconn->userinfo;
+	// vars1.db may borrow userinfo->schemaname: set() frees and replaces the stored
+	// schema when given a non-NULL value, which would invalidate this pointer. Use the
+	// no-update sentinel to keep the live schema (and its charset) in that case.
+	char *schema_to_set = vars1.db == userinfo->schemaname ? nullptr : vars1.db;
+	userinfo->set((char *)vars1.user, NULL, schema_to_set, NULL);
 	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Sent client_ed25519 Auth Switch\n",
 		(*myds)->sess, (*myds), vars1.user);
 }
