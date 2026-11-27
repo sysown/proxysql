@@ -1,4 +1,5 @@
 #include "Embedded_MySQL_Result.h"
+#include "Embedded_Float_Text.h"
 
 #include <charconv>
 #include <cstring>
@@ -74,9 +75,7 @@ Status integer_text_size(Integer value, size_t& length) {
 
 Status double_text_size(double value, size_t& length) {
     char text[64];
-    // The default overload emits the shortest representation that round-trips
-    // to the same binary64 value; it is locale-independent.
-    const auto result = std::to_chars(text, text + sizeof(text), value);
+    const auto result = format_embedded_double(text, text + sizeof(text), value);
     if (result.ec != std::errc{}) {
         return fail(ErrorKind::internal, "could not render floating-point text");
     }
@@ -159,7 +158,7 @@ Status append_dynamic(std::vector<unsigned char>& out, const Value& value) {
             } else if constexpr (std::is_same_v<T, double>) {
                 char text[64];
                 const auto result =
-                    std::to_chars(text, text + sizeof(text), item);
+                    format_embedded_double(text, text + sizeof(text), item);
                 if (result.ec != std::errc{}) {
                     return fail(ErrorKind::internal,
                                 "could not render floating-point text");

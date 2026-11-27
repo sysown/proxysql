@@ -28,6 +28,9 @@ duckdb/duckdb/.proxysql-source-complete: duckdb/duckdb-$(DUCKDB_VERSION).tar.xz 
 	# Keep the rewrite in this recipe so its contents are included in the dependency cache key.
 	perl -pi -e '$$changes += s/equivalence_set_map\[right_expr\]/equivalence_set_map[std::cref(right_expr.get())]/; END { die "Expected one DuckDB optimizer compatibility rewrite\n" unless $$changes == 1 }' \
 		duckdb/duckdb/src/optimizer/filter_combiner.cpp
+	# GCC 8 needs the explicit callback type when comparing these function templates.
+	perl -pi -e '$$changes += s/== (CMIntegralDeserialize<GetIntegral(?:Compress|Decompress)FunctionInputSwitch>)/== static_cast<function_deserialize_t>(&$$1)/; END { die "Expected two DuckDB callback compatibility rewrites\n" unless $$changes == 2 }' \
+		duckdb/duckdb/src/function/scalar/compressed_materialization/compress_integral.cpp
 	# Force DuckDB's version: git describe in this bare extraction finds ProxySQL's tags.
 	cd duckdb/duckdb && cmake -S . -B build/release $(DUCKDB_CMAKE_FLAGS) $(DUCKDB_TSAN_CMAKE_FLAGS)
 	cd duckdb/duckdb && CC=${CC} CXX=${CXX} cmake --build build/release -j$(NPROCS)

@@ -1,4 +1,5 @@
 #include "Embedded_PgSQL_Result.h"
+#include "Embedded_Float_Text.h"
 
 #include <charconv>
 #include <cmath>
@@ -244,7 +245,7 @@ Status pgsql_encode_field(const PgSQLColumn& c, int16_t f, const Value& v,
                     s = append(reinterpret_cast<const unsigned char*>(special.data()),
                                special.size());
                 else {
-                    auto r = std::to_chars(buf, buf + sizeof(buf), *x);
+                    auto r = format_embedded_double(buf, buf + sizeof(buf), *x);
                     if (r.ec != std::errc())
                         return fail(invalid());
                     s = append(reinterpret_cast<unsigned char*>(buf), r.ptr - buf);
