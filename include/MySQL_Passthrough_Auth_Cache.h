@@ -271,7 +271,9 @@ class MySQL_Passthrough_Auth_Cache {
 		 * The credential is the first line of the configured file. The file
 		 * is stat()ed on every call and re-read only when it changed, so the
 		 * credential can be rotated without touching existing frontend
-		 * sessions. File I/O happens outside the internal lock.
+		 * sessions. Re-reads are serialized, and a cached value is returned
+		 * only for the file state it was read from, so a reader never gets
+		 * a value older than the file it checked.
 		 *
 		 * The caller owns @p out and must keep it alive until the backend
 		 * operation that uses it has completed (connects are asynchronous).

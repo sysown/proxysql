@@ -24,6 +24,9 @@ void cleanse_string(std::string& value) {
 // members) so the static accessors work from any thread and regardless of
 // the cache object's lifetime.
 pthread_mutex_t eph_file_lock = PTHREAD_MUTEX_INITIALIZER;
+// Serializes re-reads of the credential file, so a slower reader can never
+// publish older content over a newer one. Taken before eph_file_lock.
+pthread_mutex_t eph_reload_lock = PTHREAD_MUTEX_INITIALIZER;
 std::string eph_file_path;
 std::string eph_file_value;
 bool eph_file_loaded = false;
@@ -31,6 +34,17 @@ struct timespec eph_file_mtime = {0, 0};
 struct timespec eph_file_ctime = {0, 0};
 off_t eph_file_size = -1;
 ino_t eph_file_ino = 0;
+
+// Whether the cached credential was read from the file state described by
+// @p st. Caller holds eph_file_lock.
+bool eph_cache_matches(const std::string& path, const struct stat& st) {
+	return eph_file_loaded && eph_file_path == path
+		&& st.st_mtim.tv_sec == eph_file_mtime.tv_sec
+		&& st.st_mtim.tv_nsec == eph_file_mtime.tv_nsec
+		&& st.st_ctim.tv_sec == eph_file_ctime.tv_sec
+		&& st.st_ctim.tv_nsec == eph_file_ctime.tv_nsec
+		&& st.st_size == eph_file_size && st.st_ino == eph_file_ino;
+}
 
 std::string make_ephemeral_backend_marker() {
 	unsigned char rnd[16];
@@ -566,43 +580,45 @@ bool MySQL_Passthrough_Auth_Cache::ephemeral_backend_credential_configured() {
 bool MySQL_Passthrough_Auth_Cache::read_ephemeral_backend_credential(std::string& out) {
 	cleanse_string(out);
 
-	// Snapshot the configuration and the cached metadata, then do the
-	// stat()/read without holding the lock.
 	std::string path;
-	bool loaded = false;
-	struct timespec mtime = {0, 0};
-	struct timespec ctime_ = {0, 0};
-	off_t size = -1;
-	ino_t ino = 0;
 	pthread_mutex_lock(&eph_file_lock);
 	path = eph_file_path;
-	loaded = eph_file_loaded;
-	mtime = eph_file_mtime;
-	ctime_ = eph_file_ctime;
-	size = eph_file_size;
-	ino = eph_file_ino;
 	pthread_mutex_unlock(&eph_file_lock);
 	if (path.empty()) return false;
 
+	// Fast path: the file is unchanged. The cached value is returned only if
+	// it was read from exactly the file state this stat() describes.
 	struct stat st;
-	const bool stat_ok = (stat(path.c_str(), &st) == 0);
-	const bool unchanged = stat_ok && loaded
-		&& st.st_mtim.tv_sec == mtime.tv_sec && st.st_mtim.tv_nsec == mtime.tv_nsec
-		&& st.st_ctim.tv_sec == ctime_.tv_sec && st.st_ctim.tv_nsec == ctime_.tv_nsec
-		&& st.st_size == size && st.st_ino == ino;
-
-	if (unchanged) {
+	if (stat(path.c_str(), &st) == 0) {
+		bool hit = false;
 		pthread_mutex_lock(&eph_file_lock);
-		if (eph_file_path == path && eph_file_loaded) out = eph_file_value;
+		if (eph_cache_matches(path, st)) {
+			out = eph_file_value;
+			hit = true;
+		}
 		pthread_mutex_unlock(&eph_file_lock);
-		return !out.empty();
+		if (hit) return !out.empty();
 	}
+
+	// Slow path: (re)read the file. Re-reads are serialized; the file I/O
+	// happens outside eph_file_lock, so unrelated fast-path readers and
+	// set_ephemeral_backend_credential_file() are not blocked by it.
+	pthread_mutex_lock(&eph_reload_lock);
 
 	std::string value;
 	bool read_ok = false;
-	if (stat_ok) {
-		FILE *f = fopen(path.c_str(), "r");
-		if (f) {
+	bool reuse = false;
+	struct stat fst;
+	FILE *f = fopen(path.c_str(), "r");
+	if (f && fstat(fileno(f), &fst) == 0) {
+		// Another reader may have just loaded this very file state.
+		pthread_mutex_lock(&eph_file_lock);
+		if (eph_cache_matches(path, fst)) {
+			out = eph_file_value;
+			reuse = true;
+		}
+		pthread_mutex_unlock(&eph_file_lock);
+		if (!reuse) {
 			char *line = NULL;
 			size_t cap = 0;
 			const ssize_t n = getline(&line, &cap, f);
@@ -616,27 +632,32 @@ bool MySQL_Passthrough_Auth_Cache::read_ephemeral_backend_credential(std::string
 				OPENSSL_cleanse(line, cap);
 				free(line);
 			}
-			fclose(f);
 			read_ok = true;
 		}
 	}
+	if (f) fclose(f);
 
-	pthread_mutex_lock(&eph_file_lock);
-	if (eph_file_path == path) {
-		cleanse_string(eph_file_value);
-		eph_file_loaded = read_ok;
-		if (read_ok) {
-			eph_file_value = value;
-			eph_file_mtime = st.st_mtim;
-			eph_file_ctime = st.st_ctim;
-			eph_file_size = st.st_size;
-			eph_file_ino = st.st_ino;
+	if (!reuse) {
+		// Publish what was read together with the metadata of the file it was
+		// read from (fstat on the open descriptor, not a separate stat()).
+		pthread_mutex_lock(&eph_file_lock);
+		if (eph_file_path == path) {
+			cleanse_string(eph_file_value);
+			eph_file_loaded = read_ok;
+			if (read_ok) {
+				eph_file_value = value;
+				eph_file_mtime = fst.st_mtim;
+				eph_file_ctime = fst.st_ctim;
+				eph_file_size = fst.st_size;
+				eph_file_ino = fst.st_ino;
+			}
 		}
+		pthread_mutex_unlock(&eph_file_lock);
+		if (read_ok) out = value;
+		cleanse_string(value);
 	}
-	pthread_mutex_unlock(&eph_file_lock);
 
-	if (read_ok) out = value;
-	cleanse_string(value);
+	pthread_mutex_unlock(&eph_reload_lock);
 	return !out.empty();
 }
 
