@@ -24,6 +24,10 @@ duckdb/duckdb/.proxysql-source-complete: duckdb/duckdb-$(DUCKDB_VERSION).tar.xz 
 	cd duckdb && ./verify-source.bash
 	cd duckdb && rm -rf duckdb-*/ duckdb || true
 	cd duckdb && tar -xf duckdb-$(DUCKDB_VERSION).tar.xz && mv duckdb-$(DUCKDB_VERSION)/ duckdb
+	# DuckDB 2.0: libstdc++ 8 cannot convert reference_wrapper<T> to reference_wrapper<const T>.
+	# Keep the rewrite in this recipe so its contents are included in the dependency cache key.
+	perl -pi -e '$$changes += s/equivalence_set_map\[right_expr\]/equivalence_set_map[std::cref(right_expr.get())]/; END { die "Expected one DuckDB optimizer compatibility rewrite\n" unless $$changes == 1 }' \
+		duckdb/duckdb/src/optimizer/filter_combiner.cpp
 	# Force DuckDB's version: git describe in this bare extraction finds ProxySQL's tags.
 	cd duckdb/duckdb && cmake -S . -B build/release $(DUCKDB_CMAKE_FLAGS) $(DUCKDB_TSAN_CMAKE_FLAGS)
 	cd duckdb/duckdb && CC=${CC} CXX=${CXX} cmake --build build/release -j$(NPROCS)
