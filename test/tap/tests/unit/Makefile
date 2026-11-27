@@ -651,6 +651,7 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	pgsql_native_tier_policy_unit-t \
 	pgsql_native_read_burst_unit-t \
 	pgsql_native_scram_order_unit-t \
+	pgsql_scram_client_final_unit-t \
 	pgsql_native_send_failure_unit-t \
 	pgsql_native_startup_params_reset_unit-t \
 	pgsql_native_teardown_state_unit-t \
@@ -699,10 +700,12 @@ UNIT_TESTS := smoke_test-t vendored_openssl_version_unit-t \
 	parsersql_in_values_digest_unit-t \
 	query_digest_parser_parity_unit-t \
 	mysql_set_parser_jdbc_unit-t \
+	mysql_client_packet_size_unit-t \
 	mysql_set_transaction_characteristics_unit-t \
 	pgsql_query_processor_unit-t pgsql_parser_command_type_unit-t \
 	http_server_unit-t \
 	pgsql_reconcile_unit-t \
+	pgsql_sasl_initial_response_unit-t \
 	pgsql_conninfo_credentials_unit-t \
 	re2_vendor_unit-t \
 	restapi_server_unit-t \

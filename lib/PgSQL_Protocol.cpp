@@ -657,6 +657,34 @@ unsigned int get_string(const char* data, unsigned int len, const char** dst_p)
 	return (nul + 1 - data);
 }
 
+bool pgsql_parse_sasl_initial_response(const unsigned char* data, uint32_t size, const char** mech,
+	const unsigned char** response, uint32_t* response_len) {
+	if (data == NULL || size == 0) {
+		return false;
+	}
+	// Mechanism name, NUL-terminated. get_string() returns the offset just past the NUL, which
+	// can be 'size' when the NUL is the last byte of the message.
+	const uint32_t pos = get_string((const char*)data, size, mech);
+	if (pos == 0) {
+		return false;
+	}
+	// The 4-byte length must lie inside the message: get_uint32be() reads 4 bytes
+	// unconditionally (GHSA-5xv5-24pg-gmq8).
+	if (size - pos < 4) {
+		return false;
+	}
+	uint32_t len = 0;
+	get_uint32be(data + pos, &len);
+	const uint32_t avail = size - pos - 4;
+	// Also rejects -1 ("no initial response"): SCRAM needs the client-first-message.
+	if (len > avail) {
+		return false;
+	}
+	*response = data + pos + 4;
+	*response_len = len;
+	return true;
+}
+
 bool PgSQL_Protocol::load_conn_parameters(pgsql_hdr* pkt)
 {
 	uint32_t offset = 0;
@@ -1239,7 +1267,6 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 			const char* mech;
 			uint32_t length;
 			const unsigned char* data;
-			int read_pos = 0;
 			using_password = true;
 
 			if ((*myds)->scram_state == NULL) {
@@ -1257,14 +1284,12 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 
 			if (!(*myds)->scram_state->server_nonce) {
 				/* process as SASLInitialResponse */
-				int pos = get_string((const char*)hdr.data.ptr, hdr.data.size, &mech);
-
-				if (pos == 0) {
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL mechanism not found.\n", (*myds)->sess, (*myds), user);
+				const unsigned char* initial_response = NULL;
+				if (!pgsql_parse_sasl_initial_response((const unsigned char*)hdr.data.ptr, hdr.data.size,
+					&mech, &initial_response, &length)) {
+					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Malformed SASLInitialResponse.\n", (*myds)->sess, (*myds), user);
 					break;
 				}
-
-				read_pos = pos;
 
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Selected SASL mechanism: %s.\n", (*myds)->sess, (*myds), user, mech);
 				if (strcmp(mech, "SCRAM-SHA-256") != 0) {
@@ -1274,21 +1299,7 @@ EXECUTION_STATE PgSQL_Protocol::process_handshake_response_packet(unsigned char*
 					break;
 				}
 
-				if (get_uint32be(((unsigned char*)hdr.data.ptr) + read_pos, &length) == false) {
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Malformed packet.\n", (*myds)->sess, (*myds), user);
-					break;
-				}
-
-				read_pos += 4;
-
-				if ((hdr.data.size - read_pos) < length) {
-					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. Malformed packet.\n", (*myds)->sess, (*myds), user);
-					break;
-				}
-
-				// check mem boundry
-
-				if (!scram_handle_client_first((*myds)->scram_state, &stored_user_info, ((const unsigned char*)hdr.data.ptr) + read_pos, length)) {
+				if (!scram_handle_client_first((*myds)->scram_state, &stored_user_info, initial_response, length)) {
 					proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s'. SASL authentication failed\n", (*myds)->sess, (*myds),  user);
 					generate_error_packet(true, false, "SASL authentication failed", PGSQL_ERROR_CODES::ERRCODE_PROTOCOL_VIOLATION, true);
 					break;

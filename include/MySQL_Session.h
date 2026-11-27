@@ -888,5 +888,27 @@ private:
 
 void * kill_query_thread(void *arg);
 
+/**
+ * @brief Largest MySQL message ProxySQL reassembles from 16MiB-1 continuation packets: 1GiB, the
+ *   maximum value of 'max_allowed_packet' on any MySQL server (and of mysql-max_allowed_packet).
+ */
+constexpr uint64_t MYSQL_MAX_MULTI_PACKET_SIZE = 1024ULL * 1024 * 1024;
+
+/**
+ * @brief Returns true if appending a packet of 'pkt_size' bytes (header included) to a message
+ *   being reassembled, currently 'accumulated_size' bytes (one header included), keeps the message
+ *   within MYSQL_MAX_MULTI_PACKET_SIZE. Computed in 64 bits: the 32-bit 'PtrSize_t::size' wrapped
+ *   after ~256 continuation packets (GHSA-w9p8-gf9c-hffr).
+ */
+bool mysql_multi_packet_append_ok(uint64_t accumulated_size, uint64_t pkt_size);
+
+/**
+ * @brief Returns true if a packet received while the session waits for a command is large enough
+ *   to hold the command byte: the 4-byte header plus at least 1 byte of payload.
+ */
+inline bool mysql_command_packet_size_ok(uint64_t pkt_size) {
+	return pkt_size >= sizeof(mysql_hdr) + 1;
+}
+
 #endif /* PROXYSQL_MYSQL_SESSION_H */
 #endif // CLASS_BASE_SESSION_H
