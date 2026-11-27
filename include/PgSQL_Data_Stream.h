@@ -150,6 +150,50 @@ private:
 	void flush_tls_output_on_failure();
 #endif
 	void queue_encrypted_bytes(const char* buf, size_t len);
+
+	/**
+	 * @brief Report whether the pending output is worth sending over the direct
+	 *        write path instead of the buffered writer.
+	 *
+	 * Always returns true while write_head_partial is non-zero: a direct
+	 * write has already handed the front of PSarrayOUT[0] to the kernel, and the
+	 * buffered path does not pick a partially sent packet up, so that transfer
+	 * must be resumed by the direct path. Otherwise this is purely a batching
+	 * heuristic and returns true only when at least two packets are pending, or
+	 * when a single pending packet would not fit in QUEUE_T_DEFAULT_SIZE.
+	 *
+	 * This answers "is it worthwhile", not "is it safe" — combine it with
+	 * can_writev_direct() before taking the direct path.
+	 *
+	 * @return true when the direct path should be used, false to leave the data
+	 *         to the buffered writer.
+	 */
+	bool writev_batch_ready() const;
+
+	/**
+	 * @brief Send pending PSarrayOUT packets straight to the socket with one
+	 *        sendmsg(), skipping every safety and batching check.
+	 *
+	 * The caller must have already established that direct sending is safe for
+	 * this stream through can_writev_direct(). Nothing is re-verified
+	 * here, so calling this on an encrypted stream, a backend stream, a stream
+	 * that still holds buffered queueOUT bytes, or another unsafe state emits
+	 * bytes out of order and corrupts the client stream.
+	 *
+	 * On success the fully sent packets are retired from PSarrayOUT, pkts_sent
+	 * and bytes_info are advanced, and write_head_partial records how far
+	 * into the first surviving packet a short write reached. pollout is re-armed
+	 * on every outcome that leaves the socket usable.
+	 *
+	 * @param byte_budget  Maximum number of bytes to offer the kernel in this
+	 *                     call; 0 means QUEUE_T_DEFAULT_SIZE.
+	 * @return  > 0 the number of bytes the kernel accepted; -1 the write would
+	 *          block (EINTR/EAGAIN/EWOULDBLOCK) and pollout has been re-armed;
+	 *          0 either nothing could be sent or the write failed fatally, in
+	 *          which case shut_soft() has already run — check net_failure rather
+	 *          than retrying.
+	 */
+	int writev_to_net_poll_unchecked(size_t byte_budget);
 public:
 	void* operator new(size_t);
 	void operator delete(void*);
@@ -308,6 +352,52 @@ public:
 	int read_from_net(bool allow_recv = true);
 	int write_to_net();
 	int write_to_net_poll();
+
+	/**
+	 * @brief Report whether the writev direct path may be used on this stream.
+	 *
+	 * This is the complete synchronous direct-send safety gate, including the
+	 * pgsql-writev_direct admin variable. While write_head_partial is non-zero
+	 * the variable is ignored and only the safety gate applies. A direct write
+	 * that already put part of a packet on the wire has to be finished on the
+	 * direct path even if an operator turns the knob off mid-stream.
+	 *
+	 * @return true when a writev direct send is permitted, false otherwise.
+	 */
+	bool can_writev_direct() const;
+
+	/**
+	 * @brief Report whether write_to_net_poll() should take the writev direct
+	 *        path for the currently pending output.
+	 *
+	 * Combines the two separate questions: worthwhile (writev_batch_ready())
+	 * and safe (can_writev_direct()). Both must hold.
+	 *
+	 * @return true when the direct path should be taken, false to fall through to
+	 *         the buffered writer.
+	 */
+	bool should_writev_direct() const;
+
+	/**
+	 * @brief Send pending output over the writev direct path, checking first that
+	 *        it is both worthwhile and safe.
+	 *
+	 * Re-checks writev_batch_ready() and can_writev_direct() and declines if
+	 * either fails, then forwards to writev_to_net_poll_unchecked(). On success
+	 * completed packets are retired from PSarrayOUT, pkts_sent and bytes_info
+	 * advance, and a short write leaves write_head_partial pointing into the
+	 * first surviving packet.
+	 *
+	 * @param byte_budget  Maximum number of bytes to offer the kernel; 0 selects
+	 *                     QUEUE_T_DEFAULT_SIZE.
+	 * @return  > 0 the number of bytes the kernel accepted; -1 the write would
+	 *          block and pollout has been re-armed; 0 either declined (fall back
+	 *          to the buffered path) or a fatal write error, in which case
+	 *          shut_soft() has already run. Callers seeing 0 must re-check
+	 *          net_failure instead of assuming the buffered path is still viable.
+	 */
+	int writev_to_net_poll(size_t byte_budget);
+
 	bool available_data_out();
 	void remove_pollout();
 	void set_pollout();
@@ -325,6 +415,11 @@ public:
 
 	void check_data_flow();
 	int assign_fd_from_pgsql_conn();
+
+	// Offset of the first unsent byte inside PSarrayOUT[0] after a short
+	// direct writev send. Non-zero while the direct path owes the remainder
+	// of that packet; the buffered writer must not touch it in that state.
+	size_t write_head_partial;
 
 	static unsigned char* copy_array_to_buffer(PtrSizeArray* resultset, size_t resultset_length, bool del);
 	static void copy_buffer_to_resultset(PtrSizeArray* resultset, unsigned char* ptr, uint64_t size, 
