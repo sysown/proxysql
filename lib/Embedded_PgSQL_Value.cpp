@@ -434,9 +434,10 @@ Status decode_float_text(const unsigned char* data, size_t length,
         return fail(ErrorKind::invalid_parameter, "22P02",
                     "invalid floating-point text for parameter type");
     }
-#if defined(__APPLE__) || defined(EMBEDDED_PGSQL_TEST_C_LOCALE_FLOAT)
-    // Apple libc++ does not provide floating-point from_chars on all supported
-    // versions. Use a private C locale, leaving the process locale untouched.
+#if defined(__APPLE__) || defined(EMBEDDED_PGSQL_TEST_C_LOCALE_FLOAT) || \
+    (defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE < 11)
+    // Apple libc++ and libstdc++ before GCC 11 may lack floating-point
+    // from_chars. Use a private C locale without changing the process locale.
     const size_t number_begin = begin - (hexadecimal ? 2 : 0);
     const std::string number(reinterpret_cast<const char*>(data + number_begin),
                              end - number_begin);

@@ -12,8 +12,8 @@
 //  * TypeKind::dynamic describes engines such as SQLite whose prepare-time
 //    result metadata has no fixed wire type. Dynamic columns advertise
 //    MYSQL_TYPE_VAR_STRING with BINARY_FLAG. Every non-NULL dynamic value is
-//    rendered as its exact text representation: integers and floating-point
-//    values through std::to_chars (shortest round-trippable form for doubles),
+//    rendered as its exact text representation: integers through std::to_chars
+//    and doubles as locale-independent, round-trippable text,
 //    Text/Bytes as their raw bytes, Decimal as its exact text, and bool as 0/1. This keeps
 //    SQLite's value-preserving text view without silently choosing a numeric
 //    wire encoding from the runtime value.

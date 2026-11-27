@@ -24,6 +24,26 @@ duckdb/duckdb/.proxysql-source-complete: duckdb/duckdb-$(DUCKDB_VERSION).tar.xz 
 	cd duckdb && ./verify-source.bash
 	cd duckdb && rm -rf duckdb-*/ duckdb || true
 	cd duckdb && tar -xf duckdb-$(DUCKDB_VERSION).tar.xz && mv duckdb-$(DUCKDB_VERSION)/ duckdb
+	# DuckDB 2.0: libstdc++ 8 cannot convert reference_wrapper<T> to reference_wrapper<const T>.
+	# Keep the rewrite in this recipe so its contents are included in the dependency cache key.
+	perl -pi -e '$$changes += s/equivalence_set_map\[right_expr\]/equivalence_set_map[std::cref(right_expr.get())]/; END { die "Expected one DuckDB optimizer compatibility rewrite\n" unless $$changes == 1 }' \
+		duckdb/duckdb/src/optimizer/filter_combiner.cpp
+	perl -pi -e '$$changes += s/non_repeatable_operators\.find\(op\)/non_repeatable_operators.find(std::cref(op.get()))/; END { die "Expected one DuckDB recursive CTE compatibility rewrite\n" unless $$changes == 1 }' \
+		duckdb/duckdb/src/execution/operator/set/physical_recursive_cte_runtime.cpp
+	# GCC 8 needs the explicit callback type when comparing these function templates.
+	perl -pi -e '$$changes += s/== (CMIntegralDeserialize<GetIntegral(?:Compress|Decompress)FunctionInputSwitch>)/== static_cast<function_deserialize_t>(&$$1)/; END { die "Expected two DuckDB callback compatibility rewrites\n" unless $$changes == 2 }' \
+		duckdb/duckdb/src/function/scalar/compressed_materialization/compress_integral.cpp
+	# GCC 8 rejects the out-of-line defaulted noexcept move constructor.
+	# Spell out the member moves to retain the declared noexcept contract.
+	perl -pi \
+		-e 'my $$replacement = "SerializationData::SerializationData(SerializationData &&other) noexcept\n" .' \
+		-e '"    : contexts(std::move(other.contexts)), databases(std::move(other.databases)), catalogs(std::move(other.catalogs)),\n" .' \
+		-e '"      enums(std::move(other.enums)), parameter_data(std::move(other.parameter_data)), types(std::move(other.types)),\n" .' \
+		-e '"      function_children(std::move(other.function_children)), compression_infos(std::move(other.compression_infos)),\n" .' \
+		-e '"      customs(std::move(other.customs)) {\n}";' \
+		-e '$$changes += s/^\QSerializationData::SerializationData(SerializationData &&) noexcept = default;\E$$/$$replacement/;' \
+		-e 'END { die "Expected one DuckDB serialization compatibility rewrite\n" unless $$changes == 1 }' \
+		duckdb/duckdb/src/common/serializer/serialization_data.cpp
 	# Force DuckDB's version: git describe in this bare extraction finds ProxySQL's tags.
 	cd duckdb/duckdb && cmake -S . -B build/release $(DUCKDB_CMAKE_FLAGS) $(DUCKDB_TSAN_CMAKE_FLAGS)
 	cd duckdb/duckdb && CC=${CC} CXX=${CXX} cmake --build build/release -j$(NPROCS)
