@@ -8,8 +8,10 @@ using json = nlohmann::json;
 //#include "SpookyV2.h"
 #include <fcntl.h>
 #include <sstream>
+#include <sys/ioctl.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <errmsg.h>
 
 #include "MySQL_PreparedStatement.h"
@@ -2940,6 +2942,28 @@ bool MySQL_Connection::IsActiveTransaction() {
 		// in MultiplexDisabled()
 	}
 	return ret;
+}
+
+bool MySQL_Connection::has_unread_bytes() {
+	if (mysql == NULL || mysql->net.pvio == NULL) {
+		return false;
+	}
+	if (mysql->net.remain_in_buf > 0) {
+		return true;
+	}
+	auto *pvio = mysql->net.pvio;
+	if (pvio->cache && pvio->cache_pos < pvio->cache + pvio->cache_size) {
+		return true;
+	}
+	if (pvio->ctls) {
+		auto *tls = static_cast<P_MARIADB_TLS *>(pvio->ctls);
+		if (tls->ssl && SSL_pending(static_cast<SSL *>(tls->ssl)) > 0) {
+			return true;
+		}
+	}
+	int bytes_available = 0;
+	const int fd = mysql_get_socket(mysql);
+	return fd >= 0 && ioctl(fd, FIONREAD, &bytes_available) == 0 && bytes_available > 0;
 }
 
 
