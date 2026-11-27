@@ -1,3 +1,4 @@
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -1151,7 +1152,7 @@ void MySQL_Connection::connect_start() {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
 			auth_password=userinfo->sha1_pass;
 		} else {
-			auth_password=userinfo->password;
+			auth_password=MySQL_Passthrough_Auth_Cache::resolve_backend_password(userinfo->password);
 		}
 	}
 #ifdef PROXYSQLED25519
@@ -1272,7 +1273,7 @@ void MySQL_Connection::change_user_start() {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
 			auth_password=userinfo->sha1_pass;
 		} else {
-			auth_password=userinfo->password;
+			auth_password=MySQL_Passthrough_Auth_Cache::resolve_backend_password(userinfo->password);
 		}
 	}
 	// we first reset the charset to a default one.
