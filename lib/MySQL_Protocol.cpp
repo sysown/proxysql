@@ -4223,7 +4223,13 @@ __exit_do_auth:
 		if (vars1.db) {
 			const uint32_t schema_charset = (*myds)->sess->change_user_auth_switch
 				? userinfo->schemaname_charset : vars1.charset;
+			// vars1.db may borrow userinfo->schemaname; set_schemaname can free and
+			// replace it, so refresh the borrowed pointer before the debug log uses it.
+			const bool borrows_schema = vars1.db == userinfo->schemaname;
 			userinfo->set_schemaname(vars1.db, strlen(vars1.db), schema_charset);
+			if (borrows_schema) {
+				vars1.db = userinfo->schemaname;
+			}
 		}
 		userinfo->passtype = vars1.passtype;
 	} else {
