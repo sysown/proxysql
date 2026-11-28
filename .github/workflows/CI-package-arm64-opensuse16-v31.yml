@@ -1,152 +1,59 @@
 name: CI-package-arm64-opensuse16-v31
-run-name: '${{ github.ref_name }} ${{ github.workflow }} ${{ github.sha }}'
+run-name: openSUSE recovery opensuse16-3.1.13-arm64 from e49994f4ab7a31ba1c70c98b4ac20ea51eaf4fd9
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  checks: write
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  init_release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    # No concurrency group: GitHub's "1 running + 1 pending" rule causes
-    # mass cancellations when many workflows share a group. Instead we
-    # run all init jobs in parallel and converge via a race-tolerant
-    # find-or-create loop; all workers deterministically pick the
-    # lowest-id draft matching this SHA+tag.
-    outputs:
-      release_id: ${{ steps.release.outputs.release_id }}
-      release_name: ${{ steps.release.outputs.release_name }}
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        repository: ${{ github.repository }}
-        ref: ${{ github.sha }}
-        fetch-depth: 0
-
-    - name: Find or create draft release
-      id: release
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        set -euo pipefail
-        GIT_DESC=$(git describe --long --abbrev=7 --tags)
-        TAG_NAME="${{ github.ref_name }}-head"
-        RELEASE_NAME="${TAG_NAME} - ${GIT_DESC}"
-        REPO="${{ github.repository }}"
-        SHA="${{ github.sha }}"
-        echo "Target: $RELEASE_NAME (sha $SHA)"
-
-        # Stagger start to reduce the thundering-herd on first create
-        sleep $(( RANDOM % 10 ))
-
-        RELEASE_ID=""
-        for attempt in 1 2 3 4 5 6; do
-          IDS=$(gh api "repos/${REPO}/releases" --paginate \
-            --jq ".[] | select(.draft==true and .target_commitish==\"${SHA}\" and .tag_name==\"${TAG_NAME}\") | .id" \
-            | sort -n)
-          if [ -n "$IDS" ]; then
-            RELEASE_ID=$(echo "$IDS" | head -1)
-            NDUPES=$(echo "$IDS" | wc -l)
-            echo "attempt ${attempt}: found ${NDUPES} draft(s); using lowest id=${RELEASE_ID}"
-            break
-          fi
-          echo "attempt ${attempt}: no matching draft; creating"
-          gh api -X POST "repos/${REPO}/releases" \
-            -f tag_name="${TAG_NAME}" \
-            -f name="${RELEASE_NAME}" \
-            -f target_commitish="${SHA}" \
-            -F draft=true -F prerelease=true >/dev/null 2>&1 || true
-          sleep $(( (RANDOM % 4) + 2 ))
-        done
-
-        if [ -z "$RELEASE_ID" ]; then
-          echo "ERROR: could not find or create draft release after retries" >&2
-          exit 1
-        fi
-
-        echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
-        echo "release_name=${RELEASE_NAME}" >> "$GITHUB_OUTPUT"
-
   build:
-    needs: init_release
+    if: github.ref_name == 'release-3.0.13-opensuse-recovery-e49994f'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
-    env:
-      ARCH: arm64
-      DIST: opensuse16
-      MAKE_TARGET: opensuse16
-      MATRIX: '(arm64,opensuse16-v31)'
-      BRANCH: ${{ github.ref_name }}
-      RELEASE_ID: ${{ needs.init_release.outputs.release_id }}
-
     steps:
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      id: checks
-      if: always()
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        name: '${{ github.workflow }} / ${{ github.job }} ${{ env.MATRIX }}'
-        repo: ${{ github.repository }}
-        sha: ${{ github.sha }}
-        status: 'in_progress'
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+      - name: Check out pinned package source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: e49994f4ab7a31ba1c70c98b4ac20ea51eaf4fd9
+          fetch-depth: 0
+          persist-credentials: false
 
-    - name: Checkout repository
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      with:
-        repository: ${{ github.repository }}
-        ref: ${{ github.sha }}
-        fetch-depth: 0
-        persist-credentials: false
+      - name: Build RPM from pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = e49994f4ab7a31ba1c70c98b4ac20ea51eaf4fd9
+          test "$(git describe --long --abbrev=7)" = 3.0.13-613-ge49994f
+          git diff --exit-code HEAD
+          GITHUB_ACTIONS=false PROXYSQL31=1 make opensuse16
+          cd binaries
+          test -s proxysql-3.1.13-1-opensuse16.aarch64.rpm
+          test -s proxysql-3.1.13-1-opensuse16.aarch64.id-hash
+          sha256sum proxysql-3.1.13-1-opensuse16.aarch64.rpm proxysql-3.1.13-1-opensuse16.aarch64.id-hash > SHA256SUMS
+          printf '%s\n' e49994f4ab7a31ba1c70c98b4ac20ea51eaf4fd9 > PACKAGE-SOURCE
 
-    - name: Build package
-      run: |
-        PROXYSQL31=1 make ${{ env.MAKE_TARGET }}
+      - name: Save RPM and build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: opensuse16-3.1.13-arm64
+          path: |
+            binaries/proxysql-3.1.13-1-opensuse16.aarch64.rpm
+            binaries/proxysql-3.1.13-1-opensuse16.aarch64.id-hash
+            binaries/SHA256SUMS
+            binaries/PACKAGE-SOURCE
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
 
-    - name: Upload to release
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        set -euo pipefail
-        shopt -s nullglob
-        uploaded=0
-        for f in binaries/*[mb] binaries/*.id-hash; do
-          FNAME=$(basename "$f")
-          EXISTING=$(gh api --paginate "repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?per_page=100" \
-            --jq ".[] | select(.name==\"${FNAME}\") | .id" | head -1)
-          if [ -n "$EXISTING" ]; then
-            echo "Replacing existing asset ${FNAME} (id=${EXISTING})"
-            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/${EXISTING}"
-          fi
-          echo "Uploading ${FNAME}"
-          gh api --method POST \
-            "https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets?name=${FNAME}" \
-            --header "Content-Type: application/octet-stream" \
-            --input "$f"
-          uploaded=$((uploaded+1))
-        done
-        if [ "$uploaded" -eq 0 ]; then
-          echo "ERROR: no package files matched binaries/*[mb] or binaries/*.id-hash" >&2
-          ls -la binaries/ || true
-          exit 1
-        fi
-        echo "Uploaded $uploaded asset(s) to release id=${RELEASE_ID}"
-
-    - uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
-      if: always()
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        check_id: ${{ steps.checks.outputs.check_id }}
-        repo: ${{ github.repository }}
-        sha: ${{ github.sha }}
-        conclusion: ${{ job.status }}
-        details_url: 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+      - name: Install and smoke-test on clean openSUSE
+        shell: bash
+        run: |
+          set -euo pipefail
+          original=test/infra/control/verify-package-install.bash
+          verifier="$RUNNER_TEMP/verify-package-install.bash"
+          test "$(grep -Fc 'sleep 120' "$original")" -eq 1
+          sed 's/sleep 120/sleep infinity/' "$original" > "$verifier"
+          bash -n "$verifier"
+          timeout --kill-after=15s 15m bash "$verifier" "binaries/proxysql-3.1.13-1-opensuse16.aarch64.rpm"
