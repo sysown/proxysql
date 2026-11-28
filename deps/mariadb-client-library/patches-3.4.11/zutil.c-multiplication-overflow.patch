@@ -1,0 +1,11 @@
+--- external/zlib/zutil.c
++++ external/zlib/zutil.c
+@@ -285,7 +285,7 @@
+ 
+ voidpf ZLIB_INTERNAL zcalloc(voidpf opaque, unsigned items, unsigned size) {
+     (void)opaque;
+-    return sizeof(uInt) > 2 ? (voidpf)malloc(items * size) :
++    return sizeof(uInt) > 2 ? (voidpf)malloc((long) items * size) :
+                               (voidpf)calloc(items, size);
+ }
+ 

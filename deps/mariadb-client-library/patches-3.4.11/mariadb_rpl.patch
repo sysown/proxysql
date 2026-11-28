@@ -1,0 +1,22 @@
+--- include/mariadb_rpl.h
++++ include/mariadb_rpl.h
+@@ -134,6 +134,7 @@
+   VIEW_CHANGE_EVENT= 37,
+   XA_PREPARE_LOG_EVENT= 38,
+   PARTIAL_UPDATE_ROWS_EVENT = 39,
++  HEARTBEAT_LOG_EVENT_V2 = 41,
+
+   /*
+     Add new events here - right above this comment!
+--- libmariadb/mariadb_rpl.c
++++ libmariadb/mariadb_rpl.c
+@@ -2613,6 +2613,9 @@
+       }
+       break;
+     }
++    case ROWS_QUERY_LOG_EVENT:
++    case HEARTBEAT_LOG_EVENT_V2:
++      break;
+     default:
+       /* We need to report an error if this event can't be ignored */
+       if (!(rpl_event->flags & LOG_EVENT_IGNORABLE_F))

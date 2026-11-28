@@ -327,6 +327,7 @@ class PreparationTests(unittest.TestCase):
         for name in ('makefiles_vars.mk', 'makefiles_paths.mk'):
             (self.root / 'include').mkdir(exist_ok=True)
             shutil.copy(ROOT / 'include' / name, self.root / 'include' / name)
+        shutil.copy(ROOT / 'common_mk/mariadb_connector.mk', self.root / 'common_mk')
         archive = self.root / 'deps/duckdb/duckdb/build/release/src/libduckdb_static.a'
         with (self.root / 'deps/Makefile').open('a') as stream:
             stream.write('\n.PHONY: duckdb\nduckdb:\n\t@echo "$(CXXFLAGS)" >> ../dependency-flags\n'

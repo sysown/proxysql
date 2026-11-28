@@ -1,0 +1,304 @@
+--- include/ma_context.h
++++ include/ma_context.h
+@@ -310,6 +310,9 @@
+    * has not been established. */
+   struct addrinfo* pending_gai_res;
+ 
++  /* Authentication reply retained until the operation exits or is closed. */
++  char *pending_auth_reply;
++
+   /*
+     This is used to save the execution contexts so that we can suspend an
+     operation and switch back to the application context, to resume the
+--- libmariadb/mariadb_lib.c
++++ libmariadb/mariadb_lib.c
+@@ -2583,6 +2583,16 @@
+ ** If handle is allocated by mysql connect free it.
+ *************************************************************************/
+ 
++static void mysql_destroy_async_context(struct st_mysql_options *options)
++{
++  struct mysql_async_context *ctxt= options->extension->async_context;
++
++  my_context_destroy(&ctxt->async_context);
++  free(ctxt->pending_auth_reply);
++  free(ctxt);
++  options->extension->async_context= NULL;
++}
++
+ static void mysql_close_options(MYSQL *mysql)
+ {
+   if (mysql->options.init_command)
+@@ -2614,13 +2624,8 @@
+ 
+   if (mysql->options.extension)
+   {
+-    struct mysql_async_context *ctxt;
+-    if ((ctxt = mysql->options.extension->async_context))
+-    {
+-      my_context_destroy(&ctxt->async_context);
+-      free(ctxt);
+-      mysql->options.extension->async_context= 0;
+-    }
++    if (mysql->options.extension->async_context)
++      mysql_destroy_async_context(&mysql->options);
+     free(mysql->options.extension->plugin_dir);
+     free(mysql->options.extension->default_auth);
+     free(mysql->options.extension->db_driver);
+@@ -3927,8 +3932,7 @@
+       */
+       if (ctxt->suspended)
+         goto end;
+-      my_context_destroy(&ctxt->async_context);
+-      free(ctxt);
++      mysql_destroy_async_context(&mysql->options);
+     }
+     if (!(ctxt= (struct mysql_async_context *)
+           calloc(1, sizeof(*ctxt))))
+--- plugins/auth/my_auth.c
++++ plugins/auth/my_auth.c
+@@ -3,6 +3,8 @@
+ #include <errmsg.h>
+ #include <string.h>
+ #include <ma_common.h>
++#include <ma_context.h>
++#include <ma_pvio.h>
+ #include <ma_crypt.h>
+ #include <mysql/client_plugin.h>
+ 
+@@ -287,15 +289,22 @@
+ {
+   MYSQL *mysql= mpvio->mysql;
+   NET *net= &mysql->net;
++  struct mysql_async_context *async_context= IS_MYSQL_ASYNC_ACTIVE(mysql) ?
++      mysql->options.extension->async_context : NULL;
+   char *buff, *end;
++  int result= 1;
+   size_t conn_attr_len= (mysql->options.extension) ? 
+                          mysql->options.extension->connect_attrs_len : 0;
+   /* see end= buff+32 below, fixed size of the packet is 32 bytes */
+   if (!(buff= malloc(33 + USERNAME_LENGTH + data_len + NAME_LEN + NAME_LEN + conn_attr_len + 9)))
+   {
+     my_set_error(mysql, CR_OUT_OF_MEMORY, SQLSTATE_UNKNOWN, 0);
+-    goto error;
+-  }
++    goto out;
++  }
++  /* Closing a suspended connection discards the coroutine stack without
++     returning to this function. Let the async context track the buffer. */
++  if (async_context)
++    async_context->pending_auth_reply= buff;
+   end= buff; // @infer-ignore DEAD_STORE
+ 
+   mysql->client_flag|= mysql->options.client_flag;
+@@ -344,7 +353,7 @@
+       my_set_error(mysql, CR_SSL_CONNECTION_ERROR, SQLSTATE_UNKNOWN,
+                           ER(CR_SSL_CONNECTION_ERROR), 
+                           "SSL is required, but the server does not support it");
+-      goto error;
++      goto out;
+     }
+   }
+ 
+@@ -437,11 +446,11 @@
+                           ER(CR_SERVER_LOST_EXTENDED),
+                           "sending connection information to server",
+                           errno);
+-      goto error;
++      goto out;
+     }
+     mysql->net.tls_verify_status = 0;
+     if (ma_pvio_start_ssl(mysql->net.pvio))
+-      goto error;
++      goto out;
+ 
+     verify_flags= MARIADB_TLS_VERIFY_PERIOD;
+ 
+@@ -475,9 +484,9 @@
+       if (mysql->net.tls_verify_status > MARIADB_TLS_VERIFY_AUTO ||
+           mysql->options.extension->tls_verify_server_cert ||
+           mysql->options.ssl_ca || mysql->options.ssl_capath)
+-        goto error;
++        goto out;
+       if (!password_and_hashing(mysql, mpvio->plugin))
+-        goto error;
++        goto out;
+     }
+   }
+ #endif /* HAVE_TLS */
+@@ -502,7 +511,7 @@
+         /* Without CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA capability password
+            length is limited up to 255 chars */
+         if (data_len > 0xFF)
+-          goto error;
++          goto out;
+         *end++= data_len;
+       }
+       memcpy(end, data, data_len);
+@@ -553,14 +562,15 @@
+                         ER(CR_SERVER_LOST_EXTENDED),
+                         "sending authentication information",
+                         errno);
+-    goto error;
+-  }
++    goto out;
++  }
++  result= 0;
++
++out:
++  if (async_context)
++    async_context->pending_auth_reply= NULL;
+   free(buff);
+-  return 0;
+-
+-error:
+-  free(buff);
+-  return 1;
++  return result;
+ }
+ 
+ /**
+--- unittest/libmariadb/async.c
++++ unittest/libmariadb/async.c
+@@ -16,10 +16,17 @@
+ */
+ #include "my_test.h"
+ #include "ma_common.h"
++#include "ma_context.h"
+ 
+ 
+ #ifndef _WIN32
++#include <arpa/inet.h>
++#include <netinet/in.h>
+ #include <poll.h>
++#include <signal.h>
++#include <sys/socket.h>
++#include <sys/wait.h>
++#include <unistd.h>
+ #else
+ #include <winsock2.h>
+ #endif
+@@ -300,12 +307,123 @@
+ }
+ 
+ 
++/*
++  A suspended async authentication call owns its reply buffer on the
++  coroutine stack. Closing the connection abandons that stack, so the async
++  context must release the retained buffer. LeakSanitizer turns this focused
++  lifecycle check into a regression test for that cancellation path.
++*/
++static int test_auth_reply_cancel_cleanup(MYSQL *unused __attribute__((unused)))
++{
++#ifdef _WIN32
++  return SKIP;
++#else
++  static const unsigned char greeting[] = {
++    0x0a, '8','.','4','.','8','-','t','e','s','t',0x00,
++    0x01,0x00,0x00,0x00, '1','2','3','4','5','6','7','8',0x00,
++    0x01,0x8a, 0x21, 0x02,0x00, 0x18,0x00, 0x15,
++    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
++    'a','b','c','d','e','f','g','h','i','j','k','l',0x00,
++    'm','y','s','q','l','_','n','a','t','i','v','e','_','p','a','s','s','w','o','r','d',0x00
++  };
++  unsigned char packet[sizeof(greeting) + 4];
++  struct sockaddr_in address;
++  socklen_t address_len= sizeof(address);
++  int listener= -1, peer= -1, one= 1, status, ready, result= FAIL;
++  uint connect_timeout= 2;
++  MYSQL *mysql= NULL, *ret= NULL;
++  struct mysql_async_context *ctxt;
++  pid_t server= -1;
++
++  listener= socket(AF_INET, SOCK_STREAM, 0);
++  if (listener < 0)
++    goto cleanup;
++  setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
++  memset(&address, 0, sizeof(address));
++  address.sin_family= AF_INET;
++  address.sin_addr.s_addr= htonl(INADDR_LOOPBACK);
++  if (bind(listener, (struct sockaddr *)&address, sizeof(address)) ||
++      listen(listener, 1) ||
++      getsockname(listener, (struct sockaddr *)&address, &address_len))
++    goto cleanup;
++
++  server= fork();
++  if (server < 0)
++    goto cleanup;
++  if (!server)
++  {
++    size_t sent= 0;
++    ssize_t count;
++    peer= accept(listener, NULL, NULL);
++    close(listener);
++    if (peer < 0)
++      _exit(1);
++    packet[0]= (unsigned char)(sizeof(greeting) & 0xff);
++    packet[1]= (unsigned char)((sizeof(greeting) >> 8) & 0xff);
++    packet[2]= (unsigned char)((sizeof(greeting) >> 16) & 0xff);
++    packet[3]= 0;
++    memcpy(packet + 4, greeting, sizeof(greeting));
++    while (sent < sizeof(packet))
++    {
++      count= send(peer, packet + sent, sizeof(packet) - sent, 0);
++      if (count <= 0)
++        _exit(1);
++      sent+= (size_t)count;
++    }
++    pause();
++    _exit(0);
++  }
++  close(listener);
++  listener= -1;
++
++  mysql= mysql_init(NULL);
++  if (!mysql || mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0) ||
++      mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &connect_timeout))
++    goto cleanup;
++  mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
++  ctxt= mysql->options.extension->async_context;
++  status= mysql_real_connect_start(&ret, mysql, "127.0.0.1", "root", "",
++                                   NULL, ntohs(address.sin_port), NULL, 0);
++  while (status && !ctxt->pending_auth_reply)
++  {
++    ready= wait_for_mysql(mysql, status);
++    status= mysql_real_connect_cont(&ret, mysql, ready);
++  }
++  if (!ctxt->pending_auth_reply)
++  {
++    diag("Authentication did not suspend while owning its reply buffer: %s",
++         mysql_error(mysql));
++    goto cleanup;
++  }
++
++  mysql_close(mysql);
++  mysql= NULL;
++  result= OK;
++
++cleanup:
++  if (mysql)
++    mysql_close(mysql);
++  if (listener >= 0)
++    close(listener);
++  if (server > 0)
++  {
++    kill(server, SIGTERM);
++    while (waitpid(server, NULL, 0) < 0 && errno == EINTR)
++      ;
++  }
++  return result;
++#endif
++}
++
++
+ struct my_tests_st my_tests[] = {
+   {"test_async", test_async, TEST_CONNECTION_DEFAULT, 0,  NULL,  NULL},
+   {"async1", async1, TEST_CONNECTION_DEFAULT, 0,  NULL,  NULL},
+   {"test_conc131", test_conc131, TEST_CONNECTION_NONE, 0,  NULL,  NULL},
+   {"test_conc129", test_conc129, TEST_CONNECTION_NONE, 0,  NULL,  NULL},
+   {"test_conc622", test_conc622, TEST_CONNECTION_NONE, 0,  NULL,  NULL},
++  {"test_auth_reply_cancel_cleanup", test_auth_reply_cancel_cleanup,
++   TEST_CONNECTION_NONE, 0, NULL, NULL},
+   {NULL, NULL, 0, 0, NULL, NULL}
+ };
+ 

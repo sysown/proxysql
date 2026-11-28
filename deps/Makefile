@@ -5,6 +5,7 @@ PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; don
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
 
 DEPS_PATH := $(PROXYSQL_PATH)/deps
+include $(PROXYSQL_PATH)/common_mk/mariadb_connector.mk
 include $(PROXYSQL_PATH)/common_mk/tsan_dependencies.mk
 NPROCS ?= 1
 ifeq ($(UNAME_S),Linux)
@@ -289,7 +290,7 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: $(OPENSSL_BUILD_STAMP) mariadb-client-library/x509cache.patch mariadb-client-library/mariadb_rpl_rows.patch
-	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
+	cd mariadb-client-library && rm -rf mariadb-connector-c-3.3.8-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
 ifeq ($(UNAME_S),Darwin)
@@ -350,7 +351,11 @@ endif
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient VERBOSE=1
 #	cd mariadb-client-library/mariadb_client/include && make my_config.h
 
-mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a
+ifeq ($(PROXYSQL40),1)
+include $(PROXYSQL_PATH)/deps/mariadb-client-library/build-3.4.mk
+endif
+
+mariadb_client: $(MARIADB_VENDOR_DIR)/$(MARIADB_SOURCE)/libmariadb/libmariadbclient.a
 
 
 # NOTE: When running Valgrind on ProxySQL, remove -DSQLITE_ENABLE_MEMORY_MANAGEMENT

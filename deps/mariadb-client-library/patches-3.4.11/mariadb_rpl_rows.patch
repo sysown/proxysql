@@ -1,0 +1,282 @@
+--- include/mariadb_rpl.h
++++ include/mariadb_rpl.h
+@@ -594,9 +594,7 @@
+ (((uint32_t)(((const uchar*)(B))[1])) << 8) |\
+ (((uint32_t)(((const uchar*)(B))[0])) << 16)))
+ #define myisam_sint3korr(B)\
+-((int32_t)(((int32_t)(((const uchar*)(B))[2])) |\
+-(((int32_t)(((const uchar*)(B))[1])) << 8) |\
+-(((int32_t)(((const uchar*)(B))[0])) << 16)))
++((int32_t)(myisam_uint3korr(B) ^ 0x800000U) - 0x800000)
+ #define myisam_uint4korr(B)\
+ ((uint32_t)(((uint32_t)(((const uchar*)(B))[3])) |\
+ (((uint32_t)(((const uchar*)(B))[2])) << 8) |\
+--- libmariadb/mariadb_rpl.c
++++ libmariadb/mariadb_rpl.c
+@@ -472,7 +472,7 @@
+   uchar *start, *pos, *end;
+   MARIADB_RPL_ROW *f_row= NULL, *p_row= NULL, *c_row= NULL;
+   uint32_t column_count;
+-  uchar *metadata_end;
++  uchar empty_metadata, *metadata_start, *metadata_end;
+
+   if (!rpl || !tm_event || !row_event)
+     return NULL;
+@@ -504,7 +504,7 @@
+     return NULL;
+   }
+
+-  if (!tm_event->event.table_map.metadata.str || tm_event->event.table_map.metadata.length == 0)
++  if (!tm_event->event.table_map.metadata.str && tm_event->event.table_map.metadata.length != 0)
+   {
+     rpl_set_error(rpl, CR_BINLOG_ERROR, 0, RPL_ERR_POS(rpl), "Sanity check failed: Missing table map metadata");
+     return NULL;
+@@ -519,8 +519,11 @@
+     return NULL;
+   }
+
+-  /* Create a strict ceiling boundary for metadata array parsing */
+-  metadata_end = (uchar *)tm_event->event.table_map.metadata.str + tm_event->event.table_map.metadata.length;
++  /* Tables with fixed-width fields such as integers may have no metadata. */
++  metadata_start= (uchar *)tm_event->event.table_map.metadata.str;
++  if (!metadata_start)
++    metadata_start= &empty_metadata;
++  metadata_end= metadata_start + tm_event->event.table_map.metadata.length;
+
+   while (pos < end)
+   {
+@@ -528,7 +531,7 @@
+     uint32_t i;
+     size_t bitmap_size;
+
+-    uchar *metadata= (uchar *)tm_event->event.table_map.metadata.str;
++    uchar *metadata= metadata_start;
+
+     if (!(c_row = (MARIADB_RPL_ROW *)ma_calloc_root(&row_event->memroot, sizeof(MARIADB_RPL_ROW))) ||
+         !(c_row->columns= (MARIADB_RPL_VALUE *)ma_calloc_root(&row_event->memroot,
+@@ -572,8 +575,10 @@
+
+       if ((n_bitmap[i / 8] >> (i % 8)) & 1)
+       {
++        uint8_t metadata_size= rpl_metadata_size(column->field_type);
++        RPL_CHECK_POS(metadata, metadata_end, metadata_size);
+         column->is_null= 1;
+-        metadata+= rpl_metadata_size(column->field_type);
++        metadata+= metadata_size;
+         continue;
+       }
+
+@@ -613,7 +618,8 @@
+         case MYSQL_TYPE_YEAR:
+           if (pos + 1 > end)
+             goto malformed_packet;
+-          column->val.ull= uint1korr(pos++) + 1900;
++          column->val.ull= *pos ? uint1korr(pos) + 1900 : 0;
++          pos++;
+           break;
+
+         case MYSQL_TYPE_SHORT:
+@@ -651,8 +657,7 @@
+         case MYSQL_TYPE_DECIMAL:
+         {
+           uint16_t s_len;
+-          if (metadata + 2 > metadata_end)
+-            goto malformed_packet;
++          RPL_CHECK_POS(metadata, metadata_end, 2);
+           s_len = uint2korr(metadata);
+           metadata += 2;
+           if (pos + s_len > end)
+@@ -673,8 +678,7 @@
+           char buf[100];
+           int s_len= sizeof(str) - 1;
+
+-          if (metadata + 2 > metadata_end)
+-            goto malformed_packet;
++          RPL_CHECK_POS(metadata, metadata_end, 2);
+
+           precision= *metadata++;
+           scale= *metadata++;
+@@ -703,8 +707,7 @@
+         {
+           uint8_t flen;
+
+-          if (metadata + 1 > metadata_end)
+-            goto malformed_packet;
++          RPL_CHECK_POS(metadata, metadata_end, 1);
+
+           flen= *metadata++;
+
+@@ -731,8 +734,7 @@
+         {
+           uint8_t num_bits, b_len;
+
+-          if (metadata + 2 > metadata_end)
+-            goto malformed_packet;
++          RPL_CHECK_POS(metadata, metadata_end, 2);
+
+           num_bits= (metadata[0] & 0xFF) + metadata[1] * 8;
+           b_len= (num_bits + 7) / 8;
+@@ -833,29 +835,38 @@
+         case MYSQL_TYPE_TIME2:
+         {
+           MYSQL_TIME *tm= &column->val.tm;
+-          int64_t t_val;
+-          size_t sp_len;
++          int64_t t_val, fraction= 0;
++          uint8_t precision, bytes, j;
+
+-          if (pos + 3 > end)
++          if (metadata >= metadata_end)
++            goto malformed_packet;
++          precision= *metadata++;
++          if (precision > 6)
+             goto malformed_packet;
++          bytes= (precision + 1) / 2;
++          RPL_CHECK_POS(pos, end, 3 + bytes);
+
+           t_val= myisam_uint3korr(pos) - 0x800000LL;
++          pos+= 3;
++          for (j= 0; j < bytes; j++)
++            fraction= (fraction << 8) | *pos++;
+
+-          if ((tm->neg = t_val < 0))
++          /* Negative fractional TIME2 borrows one integral unit and stores
++             the complemented fraction. Recover both parts before taking magnitudes. */
++          if (t_val < 0 && fraction != 0)
++          {
++            t_val++;
++            fraction-= 1LL << (8 * bytes);
++          }
++          tm->neg= t_val < 0 || fraction < 0;
++          if (t_val < 0)
+             t_val= -t_val;
+-
+-          pos+= 3;
++          if (fraction < 0)
++            fraction= -fraction;
+           tm->hour= (t_val >> 12) % (1 << 10);
+           tm->minute= (t_val >> 6) % (1 << 6);
+           tm->second= t_val % (1 << 6);
+-
+-          if (metadata >= metadata_end)
+-             goto malformed_packet;
+-          sp_len = ma_rpl_get_second_part(tm, pos, metadata);
+-          if (pos + sp_len > end)
+-            goto malformed_packet;
+-          pos+= sp_len;
+-          metadata++;
++          tm->second_part= fraction * (bytes == 1 ? 10000 : bytes == 2 ? 100 : 1);
+           tm->time_type= MYSQL_TIMESTAMP_TIME;
+           column->field_type= MYSQL_TYPE_TIME;
+           break;
+@@ -922,8 +933,7 @@
+         {
+           uint8_t s_len;
+
+-          if (metadata + 3 > metadata_end)
+-            goto malformed_packet;
++          RPL_CHECK_POS(metadata, metadata_end, 3);
+
+           s_len= metadata[2];
+           metadata+= 2;
+@@ -942,8 +952,7 @@
+         {
+           uint8_t e_len;
+
+-          if (metadata + 3 > metadata_end)
+-            goto malformed_packet;
++          RPL_CHECK_POS(metadata, metadata_end, 3);
+           e_len= metadata[2];
+           metadata+= 2;
+
+@@ -964,8 +973,7 @@
+           uint8_t h_len;
+           uint64_t b_len;
+
+-          if (metadata + 1 > metadata_end)
+-            goto malformed_packet;
++          RPL_CHECK_POS(metadata, metadata_end, 1);
+
+           h_len= *metadata++;
+
+@@ -988,8 +996,7 @@
+           uint32_t s_len;
+           uint8_t byte_len;
+
+-          if (metadata + 2 > metadata_end)
+-            goto malformed_packet;
++          RPL_CHECK_POS(metadata, metadata_end, 2);
+
+           s_len= uint2korr(metadata);
+           byte_len= rpl_byte_size(s_len);
+@@ -1386,6 +1393,7 @@
+   unsigned char *ev_end= 0;
+   size_t len= 0;
+   ssize_t post_header_len;
++  int rotate_checksum= 0;
+   MARIADB_RPL_EVENT *rpl_event= 0;
+
+   if (!rpl || (!rpl->mysql && !rpl->fp))
+@@ -2147,34 +2155,22 @@
+
+     case ROTATE_EVENT:
+     {
+-      uchar *post_header_start= ev;
++      size_t header_len= MAX(post_header_len, 8);
+
+-      RPL_CHECK_POS(ev, ev_end, post_header_len);
+-      /* no post header data processed */
+-      ev= post_header_start + post_header_len;
+-
+-      /* 1. Position (8 Bytes) */
++      RPL_CHECK_POS(ev, ev_end, header_len);
+       rpl_event->event.rotate.position= uint8korr(ev);
+-      ev+= 8;
++      ev+= header_len;
+
+-      RPL_CALC_SAFE_LEN(ev, ev_end, rpl->use_checksum, len, malformed_packet);
++      /* The server variable determines the trailer for artificial ROTATE,
++         which may arrive before the new FORMAT_DESCRIPTION. */
++      rotate_checksum= (rpl_event->timestamp == 0 &&
++                        (rpl_event->flags & LOG_EVENT_ARTIFICIAL_F))
++                       ? rpl->artificial_checksum : rpl->use_checksum;
++      RPL_CALC_SAFE_LEN(ev, ev_end, rotate_checksum, len, malformed_packet);
+
+       if (len == 0)
+         goto malformed_packet;
+
+-      if (rpl_event->timestamp == 0 &&
+-          rpl_event->flags & LOG_EVENT_ARTIFICIAL_F)
+-      {
+-        if (rpl->artificial_checksum)
+-        {
+-          unsigned long crc= crc32(0L, Z_NULL, 0);
+-          rpl_event->checksum= (uint32_t) crc32(crc, checksum_start, (uint32_t)(ev_end - checksum_start));
+-          if (len < 4)
+-            goto malformed_packet;
+-          len-= 4;
+-        }
+-      }
+-
+       rpl_set_string_and_len(&rpl_event->event.rotate.filename, ev, len);
+       if (ma_set_rpl_filename(rpl, ev, len)) /* this crashes */
+         goto mem_error;
+@@ -2556,6 +2552,8 @@
+       ev+= bitmap_len;
+
+       if (rpl_event->event_type == UPDATE_ROWS_EVENT_V1 ||
++          rpl_event->event_type == UPDATE_ROWS_EVENT ||
++          rpl_event->event_type == UPDATE_ROWS_COMPRESSED_EVENT ||
+           rpl_event->event_type == UPDATE_ROWS_COMPRESSED_EVENT_V1)
+       {
+         RPL_CHECK_POS(ev, ev_end, bitmap_len);
+@@ -2643,7 +2641,8 @@
+       }
+     }
+
+-    if (rpl->use_checksum && !rpl_event->checksum)
++    if ((rpl_event->event_type == ROTATE_EVENT ? rotate_checksum : rpl->use_checksum) &&
++        !rpl_event->checksum)
+     {
+       rpl_event->checksum= uint4korr(ev_end - 4);
+

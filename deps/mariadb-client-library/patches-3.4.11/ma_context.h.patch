@@ -1,0 +1,11 @@
+--- include/ma_context.h
++++ include/ma_context.h
+@@ -26,6 +26,8 @@
+   (This particular implementation uses Posix ucontext swapcontext().)
+ */
+ 
++
++#define HAVE_VALGRIND
+ 
+ /*
+   When running with address sanitizer, the stack switching can cause confusion

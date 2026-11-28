@@ -13,9 +13,7 @@ DEPS_PATH := $(PROXYSQL_PATH)/deps
 include $(PROXYSQL_PATH)/common_mk/openssl_flags.mk
 
 
-MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
-MARIADB_IDIR := $(MARIADB_PATH)/include
-MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
+include $(PROXYSQL_PATH)/common_mk/mariadb_connector.mk
 
 LIBDAEMON_PATH := $(DEPS_PATH)/libdaemon/libdaemon
 LIBDAEMON_IDIR := $(LIBDAEMON_PATH)

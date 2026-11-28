@@ -4,6 +4,7 @@
 PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 
 include $(PROXYSQL_PATH)/include/makefiles_vars.mk
+include $(PROXYSQL_PATH)/test/tap/connector_tier.mk
 include $(PROXYSQL_PATH)/include/makefiles_paths.mk
 
 
@@ -15,8 +16,6 @@ IDIRS :=	-I$(PROXYSQL_IDIR) \
 			-I$(POSTGRESQL_IDIR) \
 			-I$(RE2_IDIR)
 
-
-LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
 AR ?= ar
 
@@ -52,6 +51,18 @@ debug: OPT := $(DEBUG_OPT)
 debug: libtap_mariadb.a libtap_mysql57.a libtap_mysql8.a libtap.a libtap$(SHLIB_EXT)
 
 ### helper targets
+
+.PHONY: force-connector-selection
+force-connector-selection:
+
+.mariadb-connector-selection: force-connector-selection
+	@printf '%s\n' '$(MARIADB_SOURCE)' | cmp -s - "$@" || \
+		printf '%s\n' '$(MARIADB_SOURCE)' > "$@"
+
+MARIADB_HEADER_OBJECTS := utils_mariadb.o noise_utils_mariadb.o \
+	cluster_simulator.o rds_bgd_simulator.o
+
+$(MARIADB_HEADER_OBJECTS): .mariadb-connector-selection
 
 command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a $(CURL_LDIR)/libcurl.a libcpp_dotenv$(SHLIB_EXT)
 	$(CXX) -fPIC -c command_line.cpp $(IDIRS) $(OPT)
@@ -142,6 +153,7 @@ clean_utils:
 .SILENT: clean
 .PHONY: clean
 clean:
+	rm -f .mariadb-connector-selection
 	# Clean build artifacts but exclude cpp-dotenv directories (preserve 213MB extracted source)
 	find . -path ./cpp-dotenv -prune -o \( -name '*.a' -o -name '*.o' -o -name '*.so' -o -name '*.so.*' -o -name '*.dylib' -o -name '*.dylib.*' \) -delete || true
 

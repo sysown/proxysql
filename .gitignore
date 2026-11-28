@@ -110,6 +110,7 @@ src/*log*
 ci_infra_logs/
 src/coverage_reports/
 test/tap/tap/*.mri
+test/tap/tap/.mariadb-connector-selection
 test/tap/tests/test_cluster_sync_config/test_cluster_sync_withmonitor/cluster_sync_node_stderr.txt
 
 proxysql-2.0.0/
@@ -150,6 +151,7 @@ deps/libssl/openssl-openssl-*/
 deps/libssl/openssl-*/
 deps/lz4/lz4-*/
 deps/mariadb-client-library/mariadb-connector-c-*/
+deps/mariadb-client-library/.connector-*-flags
 deps/pcre/pcre-*/
 deps/prometheus-cpp/prometheus-cpp-*/
 deps/abseil/abseil-cpp-*/

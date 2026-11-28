@@ -231,7 +231,7 @@ FORCE:
 $(ODIR)/%.o: %.cpp $(HEADERS) $(BUILD_FLAGS_STAMP)
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
-$(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR) $(CURL_AR) $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
+$(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR) $(MARIADB_LDIR)/libmariadbclient.a $(CURL_AR) $(LIB_SSL_PATH) $(LIB_CRYPTO_PATH)
 ifeq ($(UNAME_S),Darwin)
 	$(CXX) -o $@ $(OBJ) $(CLANGFIX) -force_load $(PROXYSQL_LDIR)/libproxysql.a $(filter-out $(PROXYSQL_LDIR)/libproxysql.a,$(LIBPROXYSQLAR)) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else

@@ -14,28 +14,34 @@ class MariaDBTLSPatch(unittest.TestCase):
     def test_mysql_header_patch_applies_without_fuzz(self):
         # The TLS option hunk used to have no leading context. Apple's patch
         # rejects that mid-file hunk even though GNU patch accepts it.
-        archive = CONNECTOR / 'mariadb-connector-c-3.3.8-src.tar.gz'
-        header = subprocess.check_output([
-            'tar', '-xOf', str(archive),
-            'mariadb-connector-c-3.3.8-src/include/mysql.h'])
-        source = (CONNECTOR / 'tls_server_name.patch').read_text()
-        patch = 'diff --git include/mysql.h include/mysql.h\n' + source.split(
-            'diff --git include/mysql.h include/mysql.h\n', 1)[1].split('diff --git ', 1)[0]
+        cases = (
+            ('3.3.8', CONNECTOR, 'MARIADB_OPT_SERVER_PLUGINS'),
+            ('3.4.11', CONNECTOR / 'patches-3.4.11', 'MARIADB_OPT_MAX_COLUMNS'),
+        )
         binaries = {shutil.which(name) for name in ('patch', 'gpatch')}
         if sys.platform == 'darwin':
             binaries.add('/usr/bin/patch')
         self.assertTrue(binaries - {None}, 'at least one patch executable is required')
-        for binary in sorted(binaries - {None}):
-            with self.subTest(binary=binary), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                (root / 'include').mkdir()
-                target = root / 'include/mysql.h'
-                target.write_bytes(header)
-                result = subprocess.run([binary, '-f', '-F0', '-p0'], cwd=root,
-                                        input=patch, text=True, capture_output=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn('MARIADB_OPT_TLS_SERVER_NAME = MARIADB_OPT_SERVER_PLUGINS + 2',
-                              target.read_text())
+        for version, patches, previous in cases:
+            source_root = f'mariadb-connector-c-{version}-src'
+            header = subprocess.check_output([
+                'tar', '-xOf', str(CONNECTOR / f'{source_root}.tar.gz'),
+                f'{source_root}/include/mysql.h'])
+            source = (patches / 'tls_server_name.patch').read_text()
+            start = source.index('--- include/mysql.h\n')
+            patch = source[start:].split('\n--- ', 1)[0].split('\ndiff --git ', 1)[0] + '\n'
+
+            for binary in sorted(binaries - {None}):
+                with self.subTest(version=version, binary=binary), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / 'include').mkdir()
+                    target = root / 'include/mysql.h'
+                    target.write_bytes(header)
+                    result = subprocess.run([binary, '-f', '-F0', '-p0'], cwd=root,
+                                            input=patch, text=True, capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn(f'MARIADB_OPT_TLS_SERVER_NAME = {previous} + 2',
+                                  target.read_text())
 
 
 if __name__ == '__main__':

@@ -1,0 +1,81 @@
+--- libmariadb/mariadb_lib.c
++++ libmariadb/mariadb_lib.c
+@@ -3178,10 +3178,22 @@
+ }
+ 
+ 
++static size_t mysql_encode_length(ulonglong len)
++{
++  if (len < 251)
++    return 1;
++  if (len < 65536)
++    return 3;
++  if (len < 16777216)
++    return 4;
++  return 9;
++}
++
+ int mthd_my_read_query_result(MYSQL *mysql)
+ {
+   uchar *pos;
+   ulong field_count;
++  ulonglong field_count_packet;
+   ulong length;
+   const uchar *end;
+   uchar has_metadata;
+@@ -3199,9 +3211,11 @@
+ get_info:
+   pos=(uchar*) mysql->net.read_pos;
+   end= pos + length;
+-  if ((field_count= net_field_length(&pos)) == 0)
++  if (read_lenenc(&pos, end, &field_count_packet))
++    goto malformed;
++  if (mysql->net.read_pos[0] == 0)
+     return ma_read_ok_packet(mysql, pos, length);
+-  if (field_count == NULL_LENGTH)		/* LOAD DATA LOCAL INFILE */
++  if (mysql->net.read_pos[0] == 251)		/* LOAD DATA LOCAL INFILE */
+   {
+     int error=mysql_handle_local_infile(mysql, (char *)pos, can_local_infile);
+ 
+@@ -3210,13 +3224,17 @@
+     goto get_info;				/* Get info packet */
+   }
+ 
+-  if (field_count > mysql->options.extension->max_columns)
+-  {
+-    my_set_error(mysql, CR_ERR_TOO_MUCH_COLUMNS, SQLSTATE_UNKNOWN, 0, field_count, mysql->options.extension->max_columns);
++  if ((size_t)(pos - mysql->net.read_pos) != mysql_encode_length(field_count_packet))
++    goto malformed;
++  if (field_count_packet > mysql->options.extension->max_columns)
++  {
++    my_set_error(mysql, CR_ERR_TOO_MUCH_COLUMNS, SQLSTATE_UNKNOWN, 0,
++                 (ulong)field_count_packet, mysql->options.extension->max_columns);
+     mysql->net.error= 2;
+     return(-1);
+   }
+ 
++  field_count= (ulong)field_count_packet;
+   has_metadata= 1;
+   if (ma_supports_cache_metadata(mysql))
+   {
+@@ -3227,6 +3245,9 @@
+       pos++;
+     }
+   }
++
++  if (pos != end || has_metadata > 1)
++    goto malformed;
+ 
+   if (!(mysql->server_status & SERVER_STATUS_AUTOCOMMIT))
+     mysql->server_status|= SERVER_STATUS_IN_TRANS;
+@@ -3261,6 +3282,10 @@
+   mysql->status=MYSQL_STATUS_GET_RESULT;
+   mysql->field_count=field_count;
+   return(0);
++
++malformed:
++  SET_CLIENT_ERROR(mysql, CR_MALFORMED_PACKET, SQLSTATE_UNKNOWN, 0);
++  return -1;
+ }
+ 
+ int STDCALL mysql_session_track_get_next(MYSQL *mysql, enum enum_session_state_type type,

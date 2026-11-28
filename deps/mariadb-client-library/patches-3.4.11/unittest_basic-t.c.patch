@@ -1,0 +1,11 @@
+--- unittest/libmariadb/basic-t.c
++++ unittest/libmariadb/basic-t.c
+@@ -52,7 +52,7 @@
+   rc= mysql_query(mysql, "CREATE TABLE a (a varchar(200))");
+   check_mysql_rc(rc, mysql);
+ 
+-  rc= mysql_set_character_set(mysql, "utf8");
++  rc= mysql_set_character_set(mysql, "utf8", 0);
+   check_mysql_rc(rc, mysql);
+ 
+   for (i=0; i < 10; i++)

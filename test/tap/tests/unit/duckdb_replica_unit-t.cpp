@@ -91,35 +91,34 @@ int main() {
 		mariadb_free_rpl_event(event);
 	}
 
-	// Bytes copied from MySQL's big-endian TIMESTAMP2 format, followed by
-	// an integer sentinel so an incorrect fractional byte count is visible.
+	// TIMESTAMP uses little-endian seconds and TIMESTAMP2 uses big-endian
+	// seconds. The trailing integer catches incorrect fractional byte counts.
 	const unsigned micros[] = {0, 100000, 120000, 123000, 123400, 123450, 123456};
 	for (unsigned precision = 0; precision <= 6; ++precision) {
 		MARIADB_RPL rpl {};
 		MARIADB_RPL_EVENT map {};
 		map.event_type = TABLE_MAP_EVENT;
 		map.event.table_map.table_id = 1;
-		map.event.table_map.column_count = 2;
-		char types[] = {MYSQL_TYPE_TIMESTAMP2, MYSQL_TYPE_LONG};
+		map.event.table_map.column_count = 3;
+		char types[] = {MYSQL_TYPE_TIMESTAMP, static_cast<char>(MYSQL_TYPE_TIMESTAMP2), MYSQL_TYPE_LONG};
 		char metadata[] = {static_cast<char>(precision)};
 		map.event.table_map.column_types = {types, sizeof(types)};
 		map.event.table_map.metadata = {metadata, sizeof(metadata)};
 		auto* event = static_cast<MARIADB_RPL_EVENT*>(std::calloc(1, sizeof(MARIADB_RPL_EVENT)));
 		event->event_type = WRITE_ROWS_EVENT;
 		event->event.rows.table_id = 1;
-		unsigned char bytes[32] = {0, 0x6a, 0xeb, 0xd5, 0x8b}; // 1793840523 seconds
+		unsigned char bytes[16] = {0, 0x8b, 0xd5, 0xeb, 0x6a, 0x6a, 0xeb, 0xd5, 0x8b};
 		const unsigned n = (precision + 1) / 2;
 		unsigned fraction = micros[precision] / (n == 1 ? 10000 : n == 2 ? 100 : 1);
-		for (unsigned j = 0; j < n; ++j) bytes[5 + j] = fraction >> (8 * (n - j - 1));
-		bytes[5 + n] = 42;
+		for (unsigned j = 0; j < n; ++j) bytes[9 + j] = fraction >> (8 * (n - j - 1));
+		bytes[9 + n] = 42;
 		event->event.rows.row_data = bytes;
-		event->event.rows.row_data_size = 9 + n;
+		event->event.rows.row_data_size = 13 + n;
 		MARIADB_RPL_ROW* row = mariadb_rpl_extract_rows(&rpl, &map, event);
-		char expected[32];
-		std::snprintf(expected, sizeof(expected), "1793840523.%06u", micros[precision]);
-		ok(row && row->next == nullptr && row->columns[1].val.ull == 42 &&
-		   std::string(row->columns[0].val.str.str, row->columns[0].val.str.length) == expected,
-		   "TIMESTAMP2(%u) decodes big-endian seconds, scaled microseconds and next column", precision);
+		ok(row && !row->next && row->columns[2].val.ull == 42 &&
+		   row->columns[0].val.ts.second == 1793840523 && row->columns[0].val.ts.second_part == 0 &&
+		   row->columns[1].val.ts.second == 1793840523 && row->columns[1].val.ts.second_part == micros[precision],
+		   "TIMESTAMP and TIMESTAMP2(%u) decode seconds, microseconds and the following column", precision);
 		mariadb_free_rpl_event(event);
 	}
 	for (unsigned precision = 0; precision <= 6; ++precision) {

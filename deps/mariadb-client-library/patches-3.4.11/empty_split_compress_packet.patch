@@ -1,0 +1,10 @@
+--- libmariadb/ma_net.c
++++ libmariadb/ma_net.c
+@@ -526,6 +526,7 @@
+         {
+           current+= 4; /* length + sequence_id,
+                           no more data will follow */
++          is_multi_packet = 0;
+           break;
+         }
+         if (packet_length + 4 <= buffer_length - current)

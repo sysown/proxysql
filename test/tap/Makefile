@@ -1,6 +1,8 @@
 #!/bin/make -f
 
 include $(dir $(lastword $(MAKEFILE_LIST)))ai_genai_unit_tests.mk
+PROXYSQL_PATH := $(abspath ../..)
+include $(PROXYSQL_PATH)/test/tap/connector_tier.mk
 AI_GENAI_STAGE_DIR := tap_tests_ai_unit
 
 AI_GENAI_HANDOFF_ENABLED := 0
