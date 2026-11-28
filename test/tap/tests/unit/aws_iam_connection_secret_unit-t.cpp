@@ -414,6 +414,29 @@ void test_terminal_error_is_redacted(MySQL_Thread& worker, MySrvC *server) {
 		"IAM terminal failure emits a fixed redacted diagnostic");
 }
 
+void test_timeout_then_async_free_result(MySQL_Thread& worker, MySrvC *server) {
+	reset_observations();
+	ConnectionFixture fixture(worker, server);
+	const std::string token = "timeout-free-result-token";
+	attach_iam(fixture, token);
+	fixture.connection->connect_start();
+	fixture.connection->async_state_machine = ASYNC_CONNECT_TIMEOUT;
+	fixture.connection->ret_mysql = nullptr;
+	fixture.backend_stream->wait_until = 1;
+	worker.curtime = 2;
+	fixture.connection->handler(0);
+	ok(fixture.connection->mysql == nullptr,
+		"connect-timeout cleanup releases the Connector/C handle of a pending IAM connect");
+
+	// The session ends the request with RequestEnd(), which calls async_free_result()
+	// on the connection before destroying it. 4.0.12 asserted on the released handle.
+	fixture.connection->async_free_result();
+	ok(fixture.connection->mysql == nullptr,
+		"async_free_result() returns without a handle after a connect timeout");
+	ok(fixture.connection->async_state_machine == ASYNC_CONNECT_TIMEOUT,
+		"async_free_result() keeps the connect-timeout terminal state");
+}
+
 void test_destructor_cleanup(MySQL_Thread& worker, MySrvC *server) {
 	reset_observations();
 	ConnectionFixture fixture(worker, server);
@@ -502,7 +525,7 @@ void __wrap_OPENSSL_cleanse(void *ptr, size_t size) {
 } // extern "C"
 
 int main() {
-	plan(47);
+	plan(50);
 	if (test_init_minimal() != 0 || test_init_query_processor() != 0 ||
 		test_init_hostgroups() != 0) {
 		BAIL_OUT("failed to initialize the unit-test component globals");
@@ -527,6 +550,7 @@ int main() {
 		test_terminal_cleanup(worker, server, ASYNC_CONNECT_END, false, "terminal error");
 		test_terminal_error_is_redacted(worker, server);
 		test_terminal_cleanup(worker, server, ASYNC_CONNECT_TIMEOUT, false, "timeout");
+		test_timeout_then_async_free_result(worker, server);
 		test_destructor_cleanup(worker, server);
 	}
 
