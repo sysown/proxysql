@@ -313,6 +313,14 @@ class MyHGC: public BaseHGC<MyHGC> {
 	public:
 	MyHGC(int _hid) : BaseHGC<MyHGC>(_hid) {}
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
+#ifdef PROXYSQL31
+	/**
+	 * @brief Tells if get_random_MySrvC() could select a server known to hold a GTID.
+	 * @details Applies its filters, including backup servers, except max_connections: a busy
+	 *   server that has the data is worth waiting for. Caller must hold MyHGM 'wrlock()'.
+	 */
+	bool has_selectable_server_with_gtid(char *gtid_uuid, uint64_t gtid_trxid, unsigned long long curtime);
+#endif
 };
 
 class Group_Replication_Info {
@@ -1329,6 +1337,14 @@ class MySQL_HostGroups_Manager : public Base_HostGroups_Manager<MyHGC> {
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();
 	bool gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
+#ifdef PROXYSQL31
+	/**
+	 * @brief Tells if a hostgroup has a selectable server known to hold a GTID.
+	 * @details See MyHGC::has_selectable_server_with_gtid(). Takes 'wrlock()'.
+	 */
+	bool hostgroup_has_gtid(unsigned int hid, char *gtid_uuid, uint64_t gtid_trxid,
+		unsigned long long curtime);
+#endif
 	bool update_gtid_from_ok(MySrvC* mysrvc, const char* gtid);
 
 	SQLite3_result *SQL3_Get_ConnPool_Stats();

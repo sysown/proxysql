@@ -104,6 +104,45 @@ void mysql_apply_backup_weight_threshold(
 }
 #endif
 
+#ifdef PROXYSQL31
+bool MyHGC::has_selectable_server_with_gtid(char *gtid_uuid, uint64_t gtid_trxid, unsigned long long curtime) {
+	if (num_online_servers.load(std::memory_order_relaxed) > attributes.max_num_online_servers) {
+		return false;
+	}
+	const bool backoff_enforced = mysql_thread___session_track_variables == session_track_variables::ENFORCED;
+	const unsigned int total = mysrvs->cnt();
+	std::vector<MySrvC *> candidates;
+	candidates.reserve(total);
+	uint64_t sum = 0;
+	uint64_t used = 0;
+	for (unsigned int i = 0; i < total; i++) {
+		MySrvC *server = mysrvs->idx(i);
+		const unsigned int max_latency_us = server->max_latency_us ?
+			server->max_latency_us : mysql_thread___default_max_latency_ms * 1000;
+		if (server->get_status() != MYSQL_SERVER_STATUS_ONLINE || server->weight <= 0 ||
+			server->current_latency_us >= max_latency_us) {
+			continue;
+		}
+		if (backoff_enforced &&
+			server->session_track_backoff_until.load(std::memory_order_relaxed) > curtime) {
+			continue;
+		}
+		if (MyHGM->gtid_exists(server, gtid_uuid, gtid_trxid)) {
+			candidates.push_back(server);
+			sum += static_cast<uint64_t>(server->weight);
+			used += server->ConnectionsUsed->conns_length();
+		}
+	}
+	unsigned int num = static_cast<unsigned int>(candidates.size());
+	if (num == 0) {
+		return false;
+	}
+	bool used_backup = false;
+	mysql_apply_backup_weight_threshold(this, candidates.data(), num, sum, used, used_backup);
+	return num > 0 && sum > 0;
+}
+#endif // PROXYSQL31
+
 MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;

@@ -2149,6 +2149,20 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 	return ret;
 }
 
+#ifdef PROXYSQL31
+bool MySQL_HostGroups_Manager::hostgroup_has_gtid(unsigned int hid, char *gtid_uuid, uint64_t gtid_trxid,
+	unsigned long long curtime) {
+	bool found = false;
+	wrlock();
+	MyHGC *myhgc = MyHGC_find(hid);
+	if (myhgc != nullptr) {
+		found = myhgc->has_selectable_server_with_gtid(gtid_uuid, gtid_trxid, curtime);
+	}
+	wrunlock();
+	return found;
+}
+#endif // PROXYSQL31
+
 bool MySQL_HostGroups_Manager::update_gtid_from_ok(MySrvC* mysrvc, const char* gtid) {
 	if (mysrvc == nullptr || gtid == nullptr) {
 		return false;

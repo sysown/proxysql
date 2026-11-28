@@ -220,6 +220,17 @@ class MySQL_Session: public Base_Session<MySQL_Session, MySQL_Data_Stream, MySQL
 	 * @return True if 'current_hostgroup' was redirected.
 	 */
 	bool route_unusable_tracked_gtid_to_writer();
+#ifdef PROXYSQL31
+	/**
+	 * @brief Routes a plain causal read to 'gtid_from_hostgroup' when no server in the destination
+	 *   holds the tracked GTID, a server in the source is known to hold it, and
+	 *   'mysql-causal_read_fallback_to_source' is enabled. Like the function above, it runs before
+	 *   a backend is selected and the query attached to it. The GTID constraint stays in force.
+	 * @param query_locks_hostgroup The current query is about to lock the session on a hostgroup.
+	 * @return True if 'current_hostgroup' was redirected.
+	 */
+	bool route_causal_read_without_candidate_to_source(bool query_locks_hostgroup);
+#endif // PROXYSQL31
 
 	//void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);

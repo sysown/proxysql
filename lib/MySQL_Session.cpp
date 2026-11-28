@@ -10112,6 +10112,11 @@ __exit_set_destination_hostgroup:
 		}
 	}
 	route_unusable_tracked_gtid_to_writer();
+#ifdef PROXYSQL31
+	if (prepare_stmt_type == ps_type_not_set) {
+		route_causal_read_without_candidate_to_source(lock_hostgroup != nullptr && *lock_hostgroup);
+	}
+#endif
 
 	if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
 		if (locked_on_hostgroup >= 0) {
@@ -10404,6 +10409,42 @@ bool MySQL_Session::route_unusable_tracked_gtid_to_writer() {
 	current_hostgroup = qpo->gtid_from_hostgroup;
 	return true;
 }
+
+#ifdef PROXYSQL31
+bool MySQL_Session::route_causal_read_without_candidate_to_source(bool query_locks_hostgroup) {
+	if (!mysql_thread___causal_read_fallback_to_source || query_locks_hostgroup) return false;
+	if (qpo == nullptr || qpo->min_gtid != nullptr || qpo->gtid_from_hostgroup < 0) return false;
+	if (session_fast_forward != SESSION_FORWARD_TYPE_NONE || qpo->create_new_conn ||
+		qpo->switch_to_fast_forward) return false;
+	if (transaction_persistent_hostgroup != -1 || locked_on_hostgroup >= 0) return false;
+	if (current_hostgroup == qpo->gtid_from_hostgroup) return false;
+	// A connection held by this session can carry state (user variables, temporary
+	// tables, locks) that the query must see.
+	MySQL_Backend* destination = find_backend(current_hostgroup);
+	if (destination != nullptr && destination->server_myds != nullptr &&
+		destination->server_myds->myconn != nullptr) return false;
+	if (NumActiveTransactions() > 0) return false;
+	MySQL_Backend* gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
+	if (gtid_from_backend == nullptr || gtid_from_backend->gtid_uuid[0] == '\0') return false;
+	char uuid[64];
+	uint64_t trxid = 0;
+	// An unusable value is handled by route_unusable_tracked_gtid_to_writer().
+	if (!parse_gtid_set_for_routing(gtid_from_backend->gtid_uuid, uuid, sizeof(uuid), &trxid)) return false;
+	// A connection held on the source is reused without selecting a server, so
+	// that specific server must hold the GTID.
+	if (gtid_from_backend->server_myds != nullptr && gtid_from_backend->server_myds->myconn != nullptr) {
+		MySrvC* held_server = gtid_from_backend->server_myds->myconn->parent;
+		if (held_server == nullptr || !MyHGM->gtid_exists(held_server, uuid, trxid)) return false;
+	}
+	if (MyHGM->hostgroup_has_gtid(current_hostgroup, uuid, trxid, thread->curtime)) return false;
+	// After a failover the source hostgroup may no longer hold the write: reroute
+	// only to a server known to have it. get_connection() keeps the GTID predicate.
+	if (!MyHGM->hostgroup_has_gtid(qpo->gtid_from_hostgroup, uuid, trxid, thread->curtime)) return false;
+	thread->status_variables.stvar[st_var_causal_reads_routed_to_source]++;
+	current_hostgroup = qpo->gtid_from_hostgroup;
+	return true;
+}
+#endif // PROXYSQL31
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 		// Get a MySQL Connection
