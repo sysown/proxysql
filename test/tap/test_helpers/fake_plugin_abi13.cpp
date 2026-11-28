@@ -170,7 +170,7 @@ const ProxySQL_PluginDescriptor descriptor {
 };
 
 const ProxySQL_PluginDescriptor unsupported_descriptor {
-	"fake_plugin_abi18", 18u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr,
+	"fake_plugin_abi19", 19u | frozen_debug_bit, &init, &start, &stop, &status_json, nullptr,
 	nullptr, nullptr, nullptr
 };
 
@@ -191,7 +191,7 @@ const ProxySQL_PluginDescriptor reserved_descriptors[] = {
 } // namespace frozen_abi13
 
 extern "C" const frozen_abi13::ProxySQL_PluginDescriptor *proxysql_plugin_descriptor_v1() {
-	if (std::getenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI18") != nullptr) {
+	if (std::getenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI19") != nullptr) {
 		return &frozen_abi13::unsupported_descriptor;
 	}
 	const char *legacy = std::getenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI");

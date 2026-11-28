@@ -528,6 +528,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"passthrough_auth_require_tls",
 #ifdef PROXYSQL40
 		mysql_thread_aws_locality_awareness_variable,
+		(char *)"monitor_backend_auth",
 #endif
 	(char *)"passthrough_default_hg",
 	(char *)"passthrough_default_schema",
@@ -1580,6 +1581,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.passthrough_auth_require_tls = true;
 #ifdef PROXYSQL40
 	variables.aws_locality_awareness = false;
+	variables.monitor_backend_auth = strdup((char *)"password");
 #endif
 	variables.passthrough_default_hg = 0;
 	variables.passthrough_default_schema = strdup((char *)"");
@@ -1923,6 +1925,9 @@ MySQLThreadsCommitResult MySQL_Threads_Handler::commit() {
 char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strncmp(name,"monitor_",8)) {
 		if (!strcmp(name,"monitor_username")) return strdup(variables.monitor_username);
+#ifdef PROXYSQL40
+		if (!strcmp(name,"monitor_backend_auth")) return strdup(variables.monitor_backend_auth);
+#endif // PROXYSQL40
 		if (!strcmp(name,"monitor_password")) return strdup(variables.monitor_password);
 		if (!strcmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
@@ -2278,6 +2283,9 @@ char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the pu
 	// monitor variables
 	if (!strncasecmp(name,"monitor_",8)) {
 		if (!strcasecmp(name,"monitor_username")) return strdup(variables.monitor_username);
+#ifdef PROXYSQL40
+		if (!strcasecmp(name,"monitor_backend_auth")) return strdup(variables.monitor_backend_auth);
+#endif // PROXYSQL40
 		if (!strcasecmp(name,"monitor_password")) return strdup(variables.monitor_password);
 		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
@@ -2343,6 +2351,9 @@ bool MySQL_Threads_Handler::validate_variable(const char* name, const char* valu
   re2::RE2 pattern("`?([a-z\\d_]+)`?\\.`?([a-z\\d_]+)`?", options);
   return re2::RE2::FullMatch(value, pattern);
  }
+#ifdef PROXYSQL40
+ if (key == "monitor_backend_auth") return !strcmp(value, "password") || !strcmp(value, "azure_entra");
+#endif // PROXYSQL40
  if (key == "monitor_username" || key == "default_schema" || key == "server_version" || key == "keep_multiplexing_variables") return value[0];
  if (key == "default_charset") return proxysql_find_charset_name(value) != nullptr;
  if (key == "default_collation_connection") return proxysql_find_charset_collate(value) != nullptr;
@@ -2455,6 +2466,14 @@ bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	
 
 	// monitor variables
 	if (!strncasecmp(name,"monitor_",8)) {
+#ifdef PROXYSQL40
+		if (!strcasecmp(name,"monitor_backend_auth")) {
+			if (strcmp(value, "password") != 0 && strcmp(value, "azure_entra") != 0) return false;
+			free(variables.monitor_backend_auth);
+			variables.monitor_backend_auth = strdup(value);
+			return true;
+		}
+#endif // PROXYSQL40
 		if (!strcasecmp(name,"monitor_username")) {
 			if (vallen) {
 				free(variables.monitor_username);
@@ -3683,6 +3702,9 @@ void MySQL_Threads_Handler::flush_client_host_cache() {
 
 MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.monitor_username) { free(variables.monitor_username); variables.monitor_username=NULL; }
+#ifdef PROXYSQL40
+	if (variables.monitor_backend_auth) { free(variables.monitor_backend_auth); variables.monitor_backend_auth=NULL; }
+#endif // PROXYSQL40
 	if (variables.monitor_password) { free(variables.monitor_password); variables.monitor_password=NULL; }
 	if (variables.monitor_replication_lag_use_percona_heartbeat) {
 		free(variables.monitor_replication_lag_use_percona_heartbeat);
@@ -3845,6 +3867,9 @@ MySQL_Thread::~MySQL_Thread() {
 
 	if (mysql_thread___resolution_family) { free(mysql_thread___resolution_family); mysql_thread___resolution_family=NULL; }
 	if (mysql_thread___monitor_username) { free(mysql_thread___monitor_username); mysql_thread___monitor_username=NULL; }
+#ifdef PROXYSQL40
+	if (mysql_thread___monitor_backend_auth) { free(mysql_thread___monitor_backend_auth); mysql_thread___monitor_backend_auth=NULL; }
+#endif // PROXYSQL40
 	if (mysql_thread___monitor_password) { free(mysql_thread___monitor_password); mysql_thread___monitor_password=NULL; }
 	if (mysql_thread___monitor_replication_lag_use_percona_heartbeat) {
 		free(mysql_thread___monitor_replication_lag_use_percona_heartbeat);
@@ -5474,6 +5499,9 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(connect_retries_delay);
 
 	REFRESH_VARIABLE_CHAR(monitor_username);
+#ifdef PROXYSQL40
+	REFRESH_VARIABLE_CHAR(monitor_backend_auth);
+#endif // PROXYSQL40
 	REFRESH_VARIABLE_CHAR(monitor_password);
 	REFRESH_VARIABLE_CHAR(monitor_replication_lag_use_percona_heartbeat);
 

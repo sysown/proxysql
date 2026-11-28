@@ -139,8 +139,27 @@ struct AwsIamNamedStat {
 using AwsIamNamedStats = std::array<AwsIamNamedStat, 12>;
 
 AwsIamNamedStats aws_iam_stats_mysql_global_rows(const AwsIamStatsSnapshot&);
+/**
+ * @brief stats_mysql_global rows for one provider (#6649).
+ * @param provider The token slot.
+ * @param stats The slot's counters.
+ * @return AwsIam_* or AzureEntra_* rows.
+ */
+AwsIamNamedStats backend_token_stats_mysql_global_rows(BackendTokenProvider, const AwsIamStatsSnapshot&);
 void initialize_aws_iam_prometheus_metrics(prometheus::Registry&);
 void update_aws_iam_prometheus_metrics(const AwsIamStatsSnapshot&);
+/**
+ * @brief Register one provider's Prometheus series once (#6649).
+ * @param provider The token slot: proxysql_mysql_aws_iam_* or proxysql_mysql_azure_entra_*.
+ * @param registry The registry to add the series to.
+ */
+void initialize_backend_token_prometheus_metrics(BackendTokenProvider, prometheus::Registry&);
+/**
+ * @brief Set one provider's Prometheus series from a stats snapshot (#6649).
+ * @param provider The token slot.
+ * @param stats The slot's counters.
+ */
+void update_backend_token_prometheus_metrics(BackendTokenProvider, const AwsIamStatsSnapshot&);
 
 class AwsIamTokenSource {
 public:
@@ -164,6 +183,8 @@ struct AwsIamRuntimeConfig {
 
 using AwsIamTokenSourceDestroyFn = void (*)(AwsIamTokenSource *);
 
+struct BackendTokenSlot;
+
 class AwsIamTokenSourceLease {
 public:
 	AwsIamTokenSourceLease() = default;
@@ -179,11 +200,13 @@ public:
 	AwsIamTokenSourceLease& operator=(const AwsIamTokenSourceLease&) = delete;
 
 private:
-	explicit AwsIamTokenSourceLease(AwsIamTokenSource *source) : source_(source) {}
+	AwsIamTokenSourceLease(AwsIamTokenSource *source, BackendTokenSlot *slot)
+		: source_(source), slot_(slot) {}
 	void release();
 	AwsIamTokenSource *source_ { nullptr };
+	BackendTokenSlot *slot_ { nullptr };
 
-	friend AwsIamTokenSourceLease acquire_global_aws_iam_token_source();
+	friend AwsIamTokenSourceLease acquire_backend_token_source(BackendTokenProvider);
 };
 
 std::unique_ptr<AwsIamTokenSource> create_aws_iam_token_source(
@@ -203,6 +226,43 @@ void shutdown_global_aws_iam_token_source();
 bool install_global_aws_iam_token_source(
 	AwsIamTokenSource *source, AwsIamTokenSourceDestroyFn destroy, AwsIamModuleHandle module_handle);
 bool uninstall_global_aws_iam_token_source(AwsIamTokenSource *expected_source);
+
+// The same operations for one provider's slot; the *_aws_iam_* functions above
+// act on the AWS_IAM slot. GloAwsIamTokenSource and the AWS Prometheus metrics
+// follow the AWS_IAM slot only.
+/**
+ * @brief Publish a source in a slot without ownership. Refused while the slot
+ *   retires, or when the slot holds a different plugin-owned source.
+ * @param provider The token slot.
+ * @param source The source, or nullptr to clear the slot.
+ */
+void publish_global_backend_token_source(BackendTokenProvider, AwsIamTokenSource *source);
+/**
+ * @brief Install a plugin-owned source in an empty slot.
+ * @param provider The token slot.
+ * @param source The source; the slot owns it from now on.
+ * @param destroy Destroys the source when the slot retires it, after the last lease ends.
+ * @param module_handle The plugin's dlopen handle, kept with the source.
+ * @return false if an argument is null, or the slot has a source or is retiring.
+ */
+bool install_global_backend_token_source(BackendTokenProvider, AwsIamTokenSource *source,
+	AwsIamTokenSourceDestroyFn destroy, AwsIamModuleHandle module_handle);
+/**
+ * @brief Retire the slot's source if it is expected_source; waits until every
+ *   lease ends, then destroys it.
+ * @param provider The token slot.
+ * @param expected_source The source the caller installed.
+ * @return false unless expected_source is the plugin-installed source of the slot.
+ */
+bool uninstall_global_backend_token_source(BackendTokenProvider, AwsIamTokenSource *expected_source);
+/**
+ * @brief Lease the slot's source; the source is not destroyed while the lease lives.
+ * @param provider The token slot.
+ * @return An empty lease if the slot is empty or retired.
+ */
+AwsIamTokenSourceLease acquire_backend_token_source(BackendTokenProvider);
+/** @brief Retire every slot; process shutdown calls it once. */
+void shutdown_global_backend_token_sources();
 
 extern AwsIamTokenSource* GloAwsIamTokenSource;
 

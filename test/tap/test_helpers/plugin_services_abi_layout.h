@@ -127,5 +127,11 @@ struct ManagedAbi16 {
 };
 static_assert(offsetof(ProxySQL_PluginServices, get_embedded_execution_service) ==
               sizeof(ManagedAbi16), "ABI-17 must follow the complete ABI-16 prefix");
+static_assert(offsetof(ProxySQL_PluginServices, install_azure_entra_token_source) ==
+	offsetof(ProxySQL_PluginServices, get_embedded_execution_service) + sizeof(void (*)()),
+	"ABI-18 install_azure_entra_token_source must follow get_embedded_execution_service");
+static_assert(sizeof(ProxySQL_PluginServices) ==
+	offsetof(ProxySQL_PluginServices, install_azure_entra_token_source) + sizeof(void (*)()),
+	"ABI-18 install_azure_entra_token_source must be the tail of ProxySQL_PluginServices");
 } // namespace plugin_services_abi_layout_test
 #endif

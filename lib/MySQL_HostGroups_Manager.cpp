@@ -3060,7 +3060,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 	if (c->healthy && mysrvc->get_status() == MYSQL_SERVER_STATUS_ONLINE && c->send_quit &&
 		queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length, 0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
-			if (c->backend_auth_type() != MySQLBackendAuthType::AWS_IAM) {
+			if (!mysql_backend_auth_uses_token(c->backend_auth_type())) {
 				// overall, the backend seems healthy and so it is the connection. Try to reset it
 				int myerr=mysql_errno(c->mysql);
 				if (c->is_expired(monotonic_time())) {
@@ -3092,7 +3092,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 						MySQL_Connection_userinfo *ui=c->userinfo;
 						KillArgs *ka = nullptr;
 #ifdef PROXYSQL40
-						if (c->backend_auth_type() == MySQLBackendAuthType::AWS_IAM) {
+						if (mysql_backend_auth_uses_token(c->backend_auth_type())) {
 							const std::string region_copy = c->aws_iam_region();
 							const char *region = region_copy.c_str();
 							ka = new KillArgs(
@@ -3100,7 +3100,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 								mysrvc->myhgc->hid, c->mysql->thread_id,
 								KILL_CONNECTION, mysrvc->use_ssl, nullptr,
 								c->connected_host_details.ip,
-								MySQLBackendAuthType::AWS_IAM, mysrvc->address,
+								c->backend_auth_type(), mysrvc->address,
 								region, ui->username,
 								std::chrono::steady_clock::now() + std::chrono::seconds(5));
 						} else

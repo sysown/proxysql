@@ -757,6 +757,11 @@ UNIT_TESTS += aws_iam_policy_unit-t aws_iam_connection_config_unit-t \
 	aws_iam_session_state_unit-t aws_iam_connection_secret_unit-t \
 	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t \
 	mysql_backend_auth_in_use_unit-t
+# Azure Entra backend authentication (#6649), also PROXYSQL40 only.
+UNIT_TESTS += azure_entra_policy_unit-t azure_entra_connection_config_unit-t \
+	azure_entra_pool_unit-t azure_entra_session_unit-t azure_entra_kill_helper_unit-t \
+	backend_token_slot_unit-t azure_entra_plugin_unit-t azure_entra_token_source_unit-t \
+	azure_entra_plugin_load_unit-t monitor_entra_auth_unit-t
 # mysqlx + plugin + test_mysqlx unit tests: always built under PROXYSQL40=1.
 UNIT_TESTS += \
 	managed_configuration_contract_unit-t \
@@ -990,6 +995,21 @@ plugin_router_chassis_contract_unit-t: plugin_router_chassis_contract_unit-t.cpp
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
 
+AZURE_ENTRA_PLUGIN_SO := $(PROXYSQL_PATH)/plugins/azure_entra/proxysql_azure_entra.so
+.PHONY: azure_entra_plugin_build
+azure_entra_plugin_build:
+	$(MAKE) -C $(PROXYSQL_PATH)/plugins/azure_entra all \
+		CC=$(CC) CXX=$(CXX) OPTZ="$(MYSQLX_PLUGIN_OPTZ)" \
+		WGCOV="$(WGCOV)" WASAN="$(WASAN)" \
+		PROXYSQL40=$(PROXYSQL40) \
+		PROXYSQL31=$(PROXYSQL31) PROXYSQLFFTO=$(PROXYSQLFFTO) \
+		PROXYSQLTSDB=$(PROXYSQLTSDB)
+azure_entra_plugin_load_unit-t: azure_entra_plugin_load_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) azure_entra_plugin_build $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-DPROXYSQL_AZURE_ENTRA_PLUGIN_PATH=\"$(AZURE_ENTRA_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
 mysql_router_plugin_load_unit-t: mysql_router_plugin_load_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysql_router_plugin_build $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_MYSQL_ROUTER_PLUGIN_PATH=\"$(MYSQL_ROUTER_PLUGIN_SO)\" \
@@ -999,6 +1019,26 @@ mysql_router_plugin_load_unit-t: mysql_router_plugin_load_unit-t.cpp $(ODIR)/tap
 mysql_router_admin_schema_unit-t: mysql_router_admin_schema_unit-t.cpp $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) mysql_router_plugin_build $(STAGED_LIBPROXYSQLSO)
 	$(CXX) $< $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
 		-DPROXYSQL_MYSQL_ROUTER_PLUGIN_PATH=\"$(MYSQL_ROUTER_PLUGIN_SO)\" \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+# Azure Entra provider plugin (#6649): plugin sources are compiled into the test.
+AZURE_ENTRA_PLUGIN_SRCS := $(PROXYSQL_PATH)/plugins/azure_entra/src/entra_config.cpp \
+	$(PROXYSQL_PATH)/plugins/azure_entra/src/entra_exchange.cpp
+azure_entra_plugin_unit-t: azure_entra_plugin_unit-t.cpp $(AZURE_ENTRA_PLUGIN_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(AZURE_ENTRA_PLUGIN_SRCS) \
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-I$(PROXYSQL_PATH)/plugins/azure_entra/include \
+		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
+		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
+
+AZURE_ENTRA_SOURCE_SRCS := $(AZURE_ENTRA_PLUGIN_SRCS) \
+	$(PROXYSQL_PATH)/plugins/azure_entra/src/entra_token_source.cpp \
+	$(PROXYSQL_PATH)/plugins/azure_entra/src/curl_transport.cpp
+azure_entra_token_source_unit-t: azure_entra_token_source_unit-t.cpp $(AZURE_ENTRA_SOURCE_SRCS) $(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o $(LIBPROXYSQLAR) $(STAGED_LIBPROXYSQLSO)
+	$(CXX) $< $(AZURE_ENTRA_SOURCE_SRCS) \
+		$(ODIR)/tap.o $(ODIR)/test_globals.o $(ODIR)/test_init.o \
+		-I$(PROXYSQL_PATH)/plugins/azure_entra/include -I$(CURL_IDIR) \
 		$(IDIRS) $(LDIRS) $(OPT) $(WHOLE_LIBPROXYSQL) $(STATIC_LIBS) \
 		$(MYLIBS) -ldl $(ALLOW_MULTI_DEF) -lpthread -o $@
 
@@ -1585,14 +1625,14 @@ aws_locality_stats_unit-t: aws_locality_stats_unit-t.cpp $(TEST_HELPERS_OBJ) $(L
 
 ifeq ($(UNAME_S),Linux)
 aws_iam_session_state_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=mysql_real_connect_start -pthread
-aws_iam_pool_unit-t: ALLOW_MULTI_DEF += \
+aws_iam_pool_unit-t azure_entra_pool_unit-t: ALLOW_MULTI_DEF += \
 	-Wl,--wrap=mysql_change_user_start \
 	-Wl,--wrap=mysql_real_connect_start \
 	-Wl,--wrap=pthread_create
-aws_iam_failure_unit-t: ALLOW_MULTI_DEF += \
+aws_iam_failure_unit-t azure_entra_session_unit-t: ALLOW_MULTI_DEF += \
 	-Wl,--wrap=mysql_real_connect_start \
 	-Wl,--wrap=_ZN14MySQL_Protocol16generate_pkt_ERREbPPvPjhtPKcS4_b
-aws_iam_kill_helper_unit-t: ALLOW_MULTI_DEF += \
+aws_iam_kill_helper_unit-t azure_entra_kill_helper_unit-t: ALLOW_MULTI_DEF += \
 	-Wl,--wrap=mysql_options \
 	-Wl,--wrap=mysql_real_connect \
 	-Wl,--wrap=mysql_query \
@@ -1615,7 +1655,8 @@ pgsql_result_flush_allocation_unit-t: ALLOW_MULTI_DEF += -Wl,--wrap=free -Wl,--w
 STATIC_LIBPROXYSQL_TESTS := genai_thread_unit-t pgsql_result_flush_allocation_unit-t caching_sha2_rsa_unit-t worker_waiter_unit-t server_runtime_load_unit-t \
 	gtid_local_cache_unit-t parsersql_v30_flow_unit-t \
 	aws_iam_connection_secret_unit-t aws_iam_session_state_unit-t \
-	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t
+	aws_iam_pool_unit-t aws_iam_failure_unit-t aws_iam_kill_helper_unit-t \
+	azure_entra_pool_unit-t azure_entra_session_unit-t azure_entra_kill_helper_unit-t
 STATIC_LIBPROXYSQL_TESTS += worker_scheduler_cost_unit-t restapi_tls_config_unit-t
 $(STATIC_LIBPROXYSQL_TESTS): WHOLE_LIBPROXYSQL := \
 	-Wl,--whole-archive $(LIBPROXYSQLAR_FULL) -Wl,--no-whole-archive

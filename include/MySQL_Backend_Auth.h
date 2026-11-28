@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "Aws_Iam_Provider.h"
 #include "Aws_Iam_Types.h"
 
 class MySQL_Authentication;
@@ -13,7 +14,23 @@ enum class MySQLBackendAuthType : uint8_t {
 	PASSWORD,
 	AWS_IAM,
 	INVALID,
+	AZURE_ENTRA, // after INVALID so existing values keep their numbers (#6649)
 };
+
+/** @brief Whether the type authenticates with a short-lived token instead of a password. */
+bool mysql_backend_auth_uses_token(MySQLBackendAuthType type);
+
+/** @brief "AWS IAM" or "Azure Entra" for log and error text; AWS text stays as before #6649. */
+const char* backend_token_log_label(MySQLBackendAuthType type);
+
+/** @brief The token-source slot of a token type; false for PASSWORD and INVALID. */
+bool backend_token_provider_for(MySQLBackendAuthType type, BackendTokenProvider& out);
+/**
+ * @brief Lease the token source of a token auth type.
+ * @param type The backend auth type.
+ * @return The slot's lease; an empty lease for PASSWORD, INVALID or an empty slot (fails closed).
+ */
+AwsIamTokenSourceLease acquire_backend_token_source_for(MySQLBackendAuthType type);
 
 struct MySQLBackendAuthPolicy {
 	MySQLBackendAuthType type{MySQLBackendAuthType::INVALID};
@@ -80,5 +97,17 @@ struct AwsIamConnectionConfigResult {
 
 AwsIamConnectionConfigResult validate_mysql_aws_iam_connection(
 	const AwsIamConnectionConfigInput& input);
+
+/**
+ * @brief Validate a backend connection for 'azure_entra' (#6649).
+ * @details Same rules as AWS IAM (TCP, TLS, CA trust) but no region; the endpoint
+ *   must be an Azure Database for MySQL host name. The key has an empty region.
+ */
+AwsIamConnectionConfigResult validate_mysql_azure_entra_connection(
+	const AwsIamConnectionConfigInput& input);
+
+/** @brief Validate for the given token type; a non-token type gets "not_token_auth". */
+AwsIamConnectionConfigResult validate_mysql_backend_token_connection(
+	MySQLBackendAuthType type, const AwsIamConnectionConfigInput& input);
 
 #endif // MYSQL_BACKEND_AUTH_H

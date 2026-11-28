@@ -16,4 +16,10 @@ struct AwsIamTokenKey {
 	}
 };
 
+/** @brief Token-source slot: one per provider, so AWS and Azure can be installed together (#6649). */
+enum class BackendTokenProvider : uint8_t {
+	AWS_IAM = 0,
+	AZURE_ENTRA = 1,
+};
+
 #endif // AWS_IAM_TYPES_H

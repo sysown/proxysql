@@ -74,6 +74,10 @@ static AwsIamStatsSnapshot global_aws_iam_stats_snapshot() {
 void ProxySQL_Admin::p_update_metrics() {
 #ifdef PROXYSQL40
 	update_aws_iam_prometheus_metrics(global_aws_iam_stats_snapshot());
+	{
+		AwsIamTokenSourceLease entra = acquire_backend_token_source(BackendTokenProvider::AZURE_ENTRA);
+		if (entra) update_backend_token_prometheus_metrics(BackendTokenProvider::AZURE_ENTRA, entra->snapshot());
+	}
 #endif // PROXYSQL40
 	// Update proxysql_uptime
 	auto t1 = monotonic_time();
@@ -698,6 +702,15 @@ void ProxySQL_Admin::stats___mysql_global() {
 	for (const AwsIamNamedStat& row :
 		aws_iam_stats_mysql_global_rows(global_aws_iam_stats_snapshot())) {
 		sqlite3_global_stats_row_step(statsdb, row_stmt, row.name, row.value);
+	}
+	{
+		AwsIamTokenSourceLease entra = acquire_backend_token_source(BackendTokenProvider::AZURE_ENTRA);
+		if (entra) {
+			for (const AwsIamNamedStat& row : backend_token_stats_mysql_global_rows(
+				BackendTokenProvider::AZURE_ENTRA, entra->snapshot())) {
+				sqlite3_global_stats_row_step(statsdb, row_stmt, row.name, row.value);
+			}
+		}
 	}
 #endif // PROXYSQL40
 

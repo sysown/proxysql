@@ -1,5 +1,6 @@
 #include "ProxySQL_Plugin.h"
 #include "plugin_services_abi_layout.h"
+#include "Aws_Iam_Provider.h"
 #include "ProxySQL_PluginManager.h"
 #include "ProxySQL_ServerDiscovery.h"
 #include "sqlite3db.h"
@@ -262,6 +263,22 @@ void destroy_nested_post_controller(ProxySQL_ServerDiscoveryController *controll
 	delete nested;
 }
 
+// #6649: ABI 18 lets a plugin install an Azure Entra token source.
+void test_abi18_entra_service_installs_azure_slot() {
+	setenv("PROXYSQL_FAKE_PLUGIN_INSTALL_ENTRA_SOURCE", "1", 1);
+	ProxySQL_PluginManager mgr;
+	std::string err;
+	const bool loaded = mgr.load(PROXYSQL_FAKE_PLUGIN_PATH, err) && mgr.init_all(err);
+	unsetenv("PROXYSQL_FAKE_PLUGIN_INSTALL_ENTRA_SOURCE");
+	ok(loaded && acquire_backend_token_source(BackendTokenProvider::AZURE_ENTRA) &&
+		!acquire_global_aws_iam_token_source(),
+		"an ABI-18 plugin installs into the Azure slot and leaves the AWS slot empty");
+	mgr.stop_all();
+	shutdown_global_backend_token_sources();
+	ok(!acquire_backend_token_source(BackendTokenProvider::AZURE_ENTRA),
+		"process shutdown retires the plugin-owned Azure source");
+}
+
 void test_abi13_fixture_and_invalid_registration() {
 	ProxySQL_PluginManager mgr;
 	std::string err;
@@ -273,16 +290,16 @@ void test_abi13_fixture_and_invalid_registration() {
 	ok(abi13_fixture != nullptr && abi13_tail_called != nullptr &&
 		mgr.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err) && mgr.init_all(err) && mgr.start_all(err) &&
 		abi13_tail_called(),
-		"a frozen ABI-13 DSO calls its ABI-13 tail through ABI-17 loader/init lifecycle");
+		"a frozen ABI-13 DSO calls its ABI-13 tail through ABI-18 loader/init lifecycle");
 	ok(mgr.stop_all(), "ABI-13 fixture stops cleanly");
 	dlclose(abi13_fixture);
-	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI18", "1", 1);
+	setenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI19", "1", 1);
 	ProxySQL_PluginManager newer_abi_manager;
 	ok(!newer_abi_manager.load(PROXYSQL_FAKE_PLUGIN_ABI13_PATH, err),
-		"ABI-18 descriptor is rejected by the ABI-17 core");
+		"ABI-19 descriptor is rejected by the ABI-18 core");
 	ok(err.find("ABI") != std::string::npos && newer_abi_manager.size() == 0,
-		"ABI-18 rejection does not retain a plugin handle");
-	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI18");
+		"ABI-19 rejection does not retain a plugin handle");
+	unsetenv("PROXYSQL_FAKE_PLUGIN_ABI13_FORCE_ABI19");
 	for (const char *version : {"10", "11", "12", "13"}) {
 		setenv("PROXYSQL_FAKE_PLUGIN_LEGACY_AWS_ABI", version, 1);
 		ProxySQL_PluginManager legacy_aws_manager;
@@ -643,7 +660,8 @@ void test_controller_callback_lease_barrier() {
 } // namespace
 
 int main() {
-	plan(60);
+	plan(62);
+	test_abi18_entra_service_installs_azure_slot();
 	test_abi13_fixture_and_invalid_registration();
 	test_service_phase_availability();
 	test_reserved_register_server_module();

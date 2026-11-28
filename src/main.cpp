@@ -2073,7 +2073,7 @@ GloAdmin->shutdown_threads();
 		MyHGM->aws_locality_manager()->shutdown();
 	}
 	shutdown_global_aws_metadata_provider();
-	shutdown_global_aws_iam_token_source();
+	shutdown_global_backend_token_sources();
 #endif
 
 	//write(GloAdmin->pipefd[1], &GloAdmin->pipefd[1], 1);	// write a random byte

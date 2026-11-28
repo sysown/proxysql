@@ -121,7 +121,7 @@ struct ProxySQL_PluginDescriptor {
 | Field              | Type          | Description                                               |
 |--------------------|---------------|-----------------------------------------------------------|
 | `name`             | `const char*` | Plugin identifier, used in logging.                        |
-| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. An ABI-16 core accepts generic plugin layouts 1–10, 13, and 16. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15 are rejected because their by-value discovery payload is incompatible with ABI 16. The plugin's DEBUG tag must also match the core. See the ABI reference for the per-version matrix. |
+| `abi_version`      | `uint32_t`    | Set from `PROXYSQL_PLUGIN_ABI_VERSION`. An ABI-18 core accepts generic plugin layouts 1–10, 13, 16, 17 and 18. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15 are rejected because their by-value discovery payload is incompatible with ABI 16. The plugin's DEBUG tag must also match the core. See the ABI reference for the per-version matrix. |
 | `init`             | callback      | Phase E — called with live services; register commands, hooks, and non-persistent tables here. Persistent `config_db` tables must have been declared through `register_schemas` in Phase B. |
 | `start`            | callback      | Phase F — start threads, open sockets, load config.        |
 | `stop`             | callback      | Called on shutdown.  Pairs with `init`, not `start`: if `init` returned true and `start` later failed, `stop` is still called so the plugin can release resources it allocated in `init`. |
@@ -151,8 +151,8 @@ therefore `16` in a release build and `0x40000010` in a DEBUG build.
 Plugins MUST assign `abi_version` from `PROXYSQL_PLUGIN_ABI_VERSION` rather
 than hard-coding either raw value. The loader first requires the DEBUG bit to
 match the running core exactly, because DEBUG-only fields change core object
-layouts. It then masks that bit. An ABI-16 core accepts generic plugin layouts
-1–10, 13, and 16. Layouts 11 and 12 are reserved and rejected. Layouts 14 and
+layouts. It then masks that bit. An ABI-18 core accepts generic plugin layouts
+1–10, 13, 16, 17 and 18. Layouts 11 and 12 are reserved and rejected. Layouts 14 and
 15 are rejected because their by-value discovery payload is incompatible with
 ABI 16. A release plugin cannot load into a DEBUG core, or
 vice versa, even when both use layout version 16.
@@ -412,6 +412,14 @@ Public core deliberately registers no locality table on its own.
 when a later initialization step fails. It rejects a null or different source,
 stops new leases, drains active leases, destroys the source, and releases the
 retained module handle before returning.
+
+#### Azure Entra token source (ABI 18)
+
+`install_azure_entra_token_source` has the same contract as
+`install_aws_iam_token_source` above, for a separate slot that serves
+`mysql_users` rows with `{"backend_auth":{"type":"azure_entra"}}` (issue #6649).
+AWS and Azure providers can be installed in the same process. Without an
+installed Azure provider, an `azure_entra` user fails closed.
 
 ### Service Callbacks
 
@@ -794,8 +802,8 @@ void register_stats_table(ProxySQL_PluginServices& services,
 - **No dependency resolution**: Plugins are loaded in the order listed in
   `proxysql.cnf`. If one plugin depends on another, the dependency must be
   listed first.
-- **ABI compatibility**: An ABI-16 core accepts generic plugin layouts 1–10,
-  13, and 16. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15
+- **ABI compatibility**: An ABI-18 core accepts generic plugin layouts 1–10,
+  13, 16, 17 and 18. Layouts 11 and 12 are reserved and rejected. Layouts 14 and 15
   are rejected because their by-value discovery payload is incompatible with
   ABI 16. The core also requires the `PROXYSQL_PLUGIN_ABI_DEBUG_BIT` setting to
   match exactly. Newly built plugins must set
