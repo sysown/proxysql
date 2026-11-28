@@ -20,20 +20,26 @@ cd ../../../
 
 ## 0.1. Building ProxySQL (Debug Mode)
 
-Some tests require ProxySQL to be compiled in debug mode (e.g., for `LOAD DEBUG FROM DISK` support). If you encounter errors like `near "LOAD": syntax error` when the test runner tries to execute `LOAD DEBUG FROM DISK`, you need to rebuild ProxySQL in debug mode:
+The isolated test harness requires a debug build for commands such as `LOAD DEBUG FROM DISK`.
+Select the tier required by the tests and use it consistently. This example builds Plugin Chassis
+and its plugins; use `PROXYSQL31=1` instead for Innovative tests. Before switching tiers, follow
+the dependency-cleaning guidance in [CLAUDE.md](../../CLAUDE.md#building-a-tier--pass-the-flag-on-every-make-and-clean-when-switching-important).
 
 ```bash
-export PROXYSQLGENAI=1
-make -j$(nproc) build_deps && make -j$(nproc) debug && make -j$(nproc) build_deps && make -j$(nproc) build_tap_test_debug
+export PROXYSQL40=1
+make -j$(nproc) debug
+make -j$(nproc) build_tap_test_debug
 ```
 
 This will:
-1. Build all dependencies
-2. Compile ProxySQL with debug symbols and the DEBUG module enabled
-3. Rebuild dependencies (if needed for debug mode)
-4. Build TAP test executables in debug mode
 
-**Note:** After rebuilding, restart your infrastructure with a fresh `INFRA_ID` to use the new binary.
+1. Build the required debug dependencies through the target prerequisites
+2. Compile ProxySQL with debug symbols and the DEBUG module enabled
+3. Build TAP test executables in debug mode with the same tier
+
+After rebuilding, use `start-proxysql-isolated.bash` to recreate the ProxySQL container in the
+existing isolated infrastructure so it runs the new workspace binary. The backends remain
+running. See [the TAP execution guidance](../../CLAUDE.md#running-tap-tests--do-not-manually-set-up-docker-containers).
 
 ---
 
