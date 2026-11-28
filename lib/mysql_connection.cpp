@@ -1,3 +1,4 @@
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -517,6 +518,9 @@ MySQL_Connection::MySQL_Connection() {
 };
 
 MySQL_Connection::~MySQL_Connection() {
+	if (!ephemeral_backend_password_.empty()) {
+		OPENSSL_cleanse(&ephemeral_backend_password_[0], ephemeral_backend_password_.size());
+	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Destroying MySQL_Connection %p\n", this);
 #ifdef PROXYSQL40
 	clear_aws_iam_handshake_secret();
@@ -1128,6 +1132,16 @@ void MySQL_Connection::connect_start_SetSslSettings() {
 }
 
 // non blocking API
+char *MySQL_Connection::backend_auth_password(char *password) {
+	if (!MySQL_Passthrough_Auth_Cache::is_ephemeral_backend_marker(password)) {
+		return password;
+	}
+	if (!MySQL_Passthrough_Auth_Cache::read_ephemeral_backend_credential(ephemeral_backend_password_)) {
+		return password;
+	}
+	return &ephemeral_backend_password_[0];
+}
+
 void MySQL_Connection::connect_start() {
 	PROXY_TRACE();
 	mysql=mysql_init(NULL);
@@ -1151,7 +1165,7 @@ void MySQL_Connection::connect_start() {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
 			auth_password=userinfo->sha1_pass;
 		} else {
-			auth_password=userinfo->password;
+			auth_password=backend_auth_password(userinfo->password);
 		}
 	}
 #ifdef PROXYSQLED25519
@@ -1272,7 +1286,7 @@ void MySQL_Connection::change_user_start() {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
 			auth_password=userinfo->sha1_pass;
 		} else {
-			auth_password=userinfo->password;
+			auth_password=backend_auth_password(userinfo->password);
 		}
 	}
 	// we first reset the charset to a default one.

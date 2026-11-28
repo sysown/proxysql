@@ -398,6 +398,7 @@ void* kill_query_thread(void *arg) {
 #endif // PROXYSQL40
 	const char *connect_user = ka->username;
 	const char *connect_password = ka->password;
+	std::string ephemeral_backend_password;
 	//! It initializes a new MySQL_Thread object to handle MySQL-related operations.
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
 	set_thread_name("KillQuery", GloVars.set_thread_name);
@@ -505,6 +506,14 @@ void* kill_query_thread(void *arg) {
 	}
 #endif // PROXYSQL40
 
+	// A session that authenticated with an ephemeral pass-through credential
+	// carries a marker instead of a password; connect with the standing
+	// backend credential.
+	if (MySQL_Passthrough_Auth_Cache::is_ephemeral_backend_marker(connect_password)
+		&& MySQL_Passthrough_Auth_Cache::read_ephemeral_backend_credential(ephemeral_backend_password)) {
+		connect_password = ephemeral_backend_password.c_str();
+	}
+
 	MYSQL *ret;
 
 	//! Depending on the type of operation (kill_type), constructs a KILL command string (buf) to terminate the specified query or connection.
@@ -539,6 +548,10 @@ void* kill_query_thread(void *arg) {
 				break;
 		}
 		ret=mysql_real_connect(mysql,"localhost",connect_user,connect_password,NULL,0,ka->hostname,0);
+	}
+	if (!ephemeral_backend_password.empty()) {
+		OPENSSL_cleanse(&ephemeral_backend_password[0], ephemeral_backend_password.size());
+		ephemeral_backend_password.clear();
 	}
 #ifdef PROXYSQL40
 	if (iam_mode) {
@@ -2501,12 +2514,33 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// Cache the verified credential. The cleartext (from
 		// passthrough_cleartext) was just used to auth the backend and is now
 		// proven valid.
-		GloMyPTAuthCache->insert(user_key, cleartext, audit_hg);
+#ifdef PROXYSQL31
+		// Ephemeral credentials (mysql-passthrough_auth_ephemeral_pattern) are
+		// short-lived and differ per client, so the one-cleartext-per-user
+		// cache cannot represent them: they are verified against the backend
+		// on every frontend connection (this probe) and never cached.
+		const bool ephemeral_credential = GloMyPTAuthCache->credential_is_ephemeral(
+			cleartext,
+			mysql_thread___passthrough_auth_ephemeral_pattern
+				? mysql_thread___passthrough_auth_ephemeral_pattern : "");
+		// The client's credential expires, so it must not be what later
+		// backend connections of this session authenticate with. When a
+		// standing backend credential is configured the session carries a
+		// marker instead, resolved at backend-connect time.
+		const bool ephemeral_backend_swap = ephemeral_credential
+			&& MySQL_Passthrough_Auth_Cache::ephemeral_backend_credential_configured();
+#else
+		const bool ephemeral_credential = false;
+		const bool ephemeral_backend_swap = false;
+#endif // PROXYSQL31
+		if (!ephemeral_credential) {
+			GloMyPTAuthCache->insert(user_key, cleartext, audit_hg);
+		}
 
 		// Mark the session: the credential on userinfo came from pass-through
 		// (now in the cache). Authorizes the §8.4 eviction hook to invalidate
 		// it on a future backend 1045 during real query traffic.
-		passthrough_credential = true;
+		passthrough_credential = !ephemeral_credential;
 
 		// Restore the verified cleartext onto the client userinfo->password.
 		// process_pkt_handshake_response's epilogue set this to "" (because the
@@ -2515,7 +2549,9 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		// cleartext and recompute the hash, so the rest of the session (query
 		// routing, multiplexing, change-user checks) authenticates consistently.
 		client_myds->myconn->userinfo->clear_password();
-		client_myds->myconn->userinfo->password = strdup(cleartext);
+		client_myds->myconn->userinfo->password = strdup(
+			ephemeral_backend_swap
+				? MySQL_Passthrough_Auth_Cache::ephemeral_backend_marker() : cleartext);
 		client_myds->myconn->userinfo->set(NULL, NULL, NULL, NULL);
 
 		// Ensure userinfo->schemaname is non-NULL, mirroring the normal
@@ -2550,6 +2586,14 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 			if (bui && bui->schemaname == NULL) {
 				bui->set_schemaname(
 					default_schema, default_schema ? strlen(default_schema) : 0);
+			}
+			if (ephemeral_backend_swap && bui) {
+				// The pooled connection was authenticated with the client's
+				// ephemeral credential; scrub it so only the marker stays on the
+				// connection's userinfo.
+				bui->clear_password();
+				bui->password = strdup(MySQL_Passthrough_Auth_Cache::ephemeral_backend_marker());
+				bui->set(NULL, NULL, NULL, NULL);
 			}
 			mybe->server_myds->return_MySQL_Connection_To_Pool();
 		}
@@ -2628,6 +2672,12 @@ int MySQL_Session::handler_again___status_AUTHENTICATING_BACKEND_FOR_CLIENT() {
 		|| cleartext == NULL || cleartext[0] == '\0'
 		|| GloMyPTAuthCache == NULL) {
 		return fail_session("missing username or cleartext");
+	}
+	// The marker stands in for the standing backend credential on the
+	// backend side. A client-supplied cleartext equal to it must never
+	// reach a backend connect.
+	if (MySQL_Passthrough_Auth_Cache::is_ephemeral_backend_marker(cleartext)) {
+		return fail_session("reserved credential value");
 	}
 
 	const std::string user_key(username);

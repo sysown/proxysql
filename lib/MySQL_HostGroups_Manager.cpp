@@ -1,3 +1,4 @@
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 #define PROXYJSON
@@ -267,7 +268,7 @@ void * HGCU_thread_run() {
 					if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
 						auth_password=userinfo->sha1_pass;
 					} else {
-						auth_password=userinfo->password;
+						auth_password=myconn->backend_auth_password(userinfo->password);
 					}
 				}
 				//async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);

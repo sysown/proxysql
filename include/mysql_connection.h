@@ -110,6 +110,13 @@ class MySQL_Connection {
 	void update_warning_count_from_connection();
 	void update_warning_count_from_statement();
 	unsigned long long inserted_into_pool;
+	/**
+	 * @brief Standing backend credential resolved for the pending connect /
+	 * change-user of an ephemeral pass-through session. Owned by the
+	 * connection because those operations are asynchronous and the client
+	 * library keeps the pointer until they complete.
+	 */
+	std::string ephemeral_backend_password_;
 	void connect_start_SetAttributes();
 	void connect_start_SetCharset();
 	void connect_start_SetClientFlag(unsigned long&);
@@ -243,6 +250,15 @@ class MySQL_Connection {
 
 	MySQL_Connection();
 	~MySQL_Connection();
+	/**
+	 * @brief Password to hand to the client library for @p password.
+	 * Returns @p password unless it is the ephemeral pass-through marker,
+	 * in which case the standing backend credential is read into a buffer
+	 * owned by this connection and that buffer is returned. If no standing
+	 * credential is available the marker is returned and the backend
+	 * rejects it.
+	 */
+	char *backend_auth_password(char *password);
 #ifdef PROXYSQL40
 	void set_backend_auth_type(MySQLBackendAuthType);
 	MySQLBackendAuthType backend_auth_type() const;

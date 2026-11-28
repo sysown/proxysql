@@ -19,6 +19,7 @@ using json = nlohmann::json;
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Thread.h"
+#include "MySQL_Passthrough_Auth_Cache.h"
 #include "proxysql_find_charset.h"
 #include <dirent.h>
 #include <libgen.h>
@@ -534,6 +535,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"passthrough_auth_cache_ttl_s",
 	(char *)"passthrough_auth_max_inflight_probes",
 	(char *)"passthrough_auth_username_pattern",
+	(char *)"passthrough_auth_ephemeral_pattern",
+	(char *)"passthrough_auth_ephemeral_backend_credential_file",
 	(char *)"passthrough_auth_max_failures_per_user",
 	(char *)"passthrough_auth_max_failures_per_ip",
 	(char *)"passthrough_auth_failure_window_s",
@@ -1586,6 +1589,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.passthrough_auth_cache_ttl_s = 0;
 	variables.passthrough_auth_max_inflight_probes = 100;
 	variables.passthrough_auth_username_pattern = strdup((char *)"");
+	variables.passthrough_auth_ephemeral_pattern = strdup((char *)"");
+	variables.passthrough_auth_ephemeral_backend_credential_file = strdup((char *)"");
 	variables.passthrough_auth_max_failures_per_user = 3;
 	variables.passthrough_auth_max_failures_per_ip = 10;
 	variables.passthrough_auth_failure_window_s = 60;
@@ -2042,6 +2047,8 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 #endif
 	if (!strcmp(name,"passthrough_default_schema")) return strdup(variables.passthrough_default_schema ? variables.passthrough_default_schema : "");
 	if (!strcmp(name,"passthrough_auth_username_pattern")) return strdup(variables.passthrough_auth_username_pattern ? variables.passthrough_auth_username_pattern : "");
+	if (!strcmp(name,"passthrough_auth_ephemeral_pattern")) return strdup(variables.passthrough_auth_ephemeral_pattern ? variables.passthrough_auth_ephemeral_pattern : "");
+	if (!strcmp(name,"passthrough_auth_ephemeral_backend_credential_file")) return strdup(variables.passthrough_auth_ephemeral_backend_credential_file ? variables.passthrough_auth_ephemeral_backend_credential_file : "");
 	if (!strcmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
 
 	// LCOV_EXCL_START
@@ -2213,6 +2220,8 @@ char * MySQL_Threads_Handler::get_variable(const char *name) {	// this is the pu
 	if (!strcasecmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	if (!strcasecmp(name,"passthrough_default_schema")) return strdup(variables.passthrough_default_schema ? variables.passthrough_default_schema : "");
 	if (!strcasecmp(name,"passthrough_auth_username_pattern")) return strdup(variables.passthrough_auth_username_pattern ? variables.passthrough_auth_username_pattern : "");
+	if (!strcasecmp(name,"passthrough_auth_ephemeral_pattern")) return strdup(variables.passthrough_auth_ephemeral_pattern ? variables.passthrough_auth_ephemeral_pattern : "");
+	if (!strcasecmp(name,"passthrough_auth_ephemeral_backend_credential_file")) return strdup(variables.passthrough_auth_ephemeral_backend_credential_file ? variables.passthrough_auth_ephemeral_backend_credential_file : "");
 	if (!strcasecmp(name,"proxy_protocol_networks")) return strdup(variables.proxy_protocol_networks);
 	if (!strcasecmp(name, "interfaces")) {
 		return strdup((strlen(variables.interfaces) == 0) ? "0.0.0.0:6033" : variables.interfaces);
@@ -2361,7 +2370,8 @@ bool MySQL_Threads_Handler::validate_variable(const char* name, const char* valu
  }
  if (key == "monitor_password" || key == "init_connect" || key == "firewall_whitelist_errormsg" ||
      key == "ldap_user_variable" || key == "add_ldap_user_comment" || key == "passthrough_default_schema" ||
-     key == "passthrough_auth_username_pattern" || key == "proxy_protocol_networks" || key == "ssl_p2s_ca" ||
+     key == "passthrough_auth_username_pattern" || key == "passthrough_auth_ephemeral_pattern" ||
+     key == "passthrough_auth_ephemeral_backend_credential_file" || key == "proxy_protocol_networks" || key == "ssl_p2s_ca" ||
      key == "ssl_p2s_capath" || key == "ssl_p2s_cert" || key == "ssl_p2s_key" || key == "ssl_p2s_cipher" ||
      key == "ssl_p2s_crl" || key == "ssl_p2s_crlpath") return true;
  if (key.compare(0,8,"default_") == 0) {
@@ -2756,6 +2766,30 @@ bool MySQL_Threads_Handler::set_variable(const char *name, const char *value) {	
 	if (!strcasecmp(name,"passthrough_auth_username_pattern")) {
 		if (variables.passthrough_auth_username_pattern) free(variables.passthrough_auth_username_pattern);
 		variables.passthrough_auth_username_pattern = strdup(vallen ? value : "");
+		return true;
+	}
+	if (!strcasecmp(name,"passthrough_auth_ephemeral_pattern")) {
+		if (vallen) {
+			// A pattern that does not compile would silently turn ephemeral
+			// credentials into cached ones: refuse it.
+			re2::RE2::Options re_opts(re2::RE2::Quiet);
+			re2::RE2 re_check(value, re_opts);
+			if (!re_check.ok()) {
+				proxy_error("Invalid regex for mysql-passthrough_auth_ephemeral_pattern: %s\n", re_check.error().c_str());
+				return false;
+			}
+		}
+		if (variables.passthrough_auth_ephemeral_pattern) free(variables.passthrough_auth_ephemeral_pattern);
+		variables.passthrough_auth_ephemeral_pattern = strdup(vallen ? value : "");
+		return true;
+	}
+	if (!strcasecmp(name,"passthrough_auth_ephemeral_backend_credential_file")) {
+		if (variables.passthrough_auth_ephemeral_backend_credential_file) free(variables.passthrough_auth_ephemeral_backend_credential_file);
+		variables.passthrough_auth_ephemeral_backend_credential_file = strdup(vallen ? value : "");
+		// Backend connects happen on threads that do not refresh the
+		// thread-local variables (kill helper, connection reset), so the
+		// path is handed to the cache module directly.
+		MySQL_Passthrough_Auth_Cache::set_ephemeral_backend_credential_file(variables.passthrough_auth_ephemeral_backend_credential_file);
 		return true;
 	}
 	if (!strcasecmp(name,"resolution_family")) {
@@ -3703,6 +3737,8 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 #endif
 	if (variables.passthrough_default_schema) free(variables.passthrough_default_schema);
 	if (variables.passthrough_auth_username_pattern) free(variables.passthrough_auth_username_pattern);
+	if (variables.passthrough_auth_ephemeral_pattern) free(variables.passthrough_auth_ephemeral_pattern);
+	if (variables.passthrough_auth_ephemeral_backend_credential_file) free(variables.passthrough_auth_ephemeral_backend_credential_file);
 	if (variables.proxy_protocol_networks) free(variables.proxy_protocol_networks);
 	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
 	if (variables.init_connect) free(variables.init_connect);
@@ -3856,6 +3892,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_authentication_plugin) { free(mysql_thread___default_authentication_plugin); mysql_thread___default_authentication_plugin=NULL; }
 	if (mysql_thread___passthrough_default_schema) { free(mysql_thread___passthrough_default_schema); mysql_thread___passthrough_default_schema=NULL; }
 	if (mysql_thread___passthrough_auth_username_pattern) { free(mysql_thread___passthrough_auth_username_pattern); mysql_thread___passthrough_auth_username_pattern=NULL; }
+	if (mysql_thread___passthrough_auth_ephemeral_pattern) { free(mysql_thread___passthrough_auth_ephemeral_pattern); mysql_thread___passthrough_auth_ephemeral_pattern=NULL; }
 	if (mysql_thread___proxy_protocol_networks) { free(mysql_thread___proxy_protocol_networks); mysql_thread___proxy_protocol_networks=NULL; }
 	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
@@ -5592,6 +5629,7 @@ void MySQL_Thread::refresh_variables() {
 	REFRESH_VARIABLE_INT(passthrough_auth_failure_map_cap);
 	REFRESH_VARIABLE_CHAR(passthrough_default_schema);
 	REFRESH_VARIABLE_CHAR(passthrough_auth_username_pattern);
+	REFRESH_VARIABLE_CHAR(passthrough_auth_ephemeral_pattern);
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint32((char *)"server_capabilities");
 	REFRESH_VARIABLE_INT(handle_unknown_charset);
 	REFRESH_VARIABLE_INT(poll_timeout);

@@ -3679,8 +3679,23 @@ bool MySQL_Protocol::PPHR_verify_password(MyProt_tmp_auth_vars& vars1, account_d
 				mysql_thread___passthrough_auth_cache_ttl_s > 0
 					? static_cast<uint32_t>(mysql_thread___passthrough_auth_cache_ttl_s)
 					: 0;
-			if (GloMyPTAuthCache->lookup(
-					std::string((const char*)vars1.user), cleartext, ttl_s)) {
+			bool pt_cache_hit = GloMyPTAuthCache->lookup(
+					std::string((const char*)vars1.user), cleartext, ttl_s);
+#ifdef PROXYSQL31
+			// An entry learned before mysql-passthrough_auth_ephemeral_pattern
+			// was set (or changed) may hold a credential that is ephemeral
+			// now. Drop it and take the backend-verification path.
+			if (pt_cache_hit && GloMyPTAuthCache->credential_is_ephemeral(
+					cleartext.c_str(),
+					mysql_thread___passthrough_auth_ephemeral_pattern
+						? mysql_thread___passthrough_auth_ephemeral_pattern : "")) {
+				GloMyPTAuthCache->evict(std::string((const char*)vars1.user));
+				OPENSSL_cleanse(cleartext.data(), cleartext.size());
+				cleartext.clear();
+				pt_cache_hit = false;
+			}
+#endif // PROXYSQL31
+			if (pt_cache_hit) {
 				GloMyPTAuthCache->bump_cache_hits();
 				/*
 				 * Mark the session: the credential being used to verify

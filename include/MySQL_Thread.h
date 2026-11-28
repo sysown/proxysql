@@ -745,6 +745,8 @@ class MySQL_Threads_Handler
 		int passthrough_auth_failure_map_cap;
 		char *passthrough_default_schema;
 		char *passthrough_auth_username_pattern;
+		char *passthrough_auth_ephemeral_pattern;
+		char *passthrough_auth_ephemeral_backend_credential_file;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;

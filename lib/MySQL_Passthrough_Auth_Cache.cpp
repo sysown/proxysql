@@ -5,7 +5,11 @@
 #include "re2/re2.h"
 
 #include <cstdio>
+#include <cstring>
 #include <openssl/crypto.h>
+#include <openssl/rand.h>
+#include <random>
+#include <sys/stat.h>
 
 namespace {
 
@@ -16,7 +20,59 @@ void cleanse_string(std::string& value) {
 	value.clear();
 }
 
+// Standing backend credential for ephemeral sessions. File-scope state (not
+// members) so the static accessors work from any thread and regardless of
+// the cache object's lifetime.
+pthread_mutex_t eph_file_lock = PTHREAD_MUTEX_INITIALIZER;
+// Serializes re-reads of the credential file, so a slower reader can never
+// publish older content over a newer one. Taken before eph_file_lock.
+pthread_mutex_t eph_reload_lock = PTHREAD_MUTEX_INITIALIZER;
+std::string eph_file_path;
+std::string eph_file_value;
+bool eph_file_loaded = false;
+struct timespec eph_file_mtime = {0, 0};
+struct timespec eph_file_ctime = {0, 0};
+off_t eph_file_size = -1;
+ino_t eph_file_ino = 0;
+
+// Whether the cached credential was read from the file state described by
+// @p st. Caller holds eph_file_lock.
+bool eph_cache_matches(const std::string& path, const struct stat& st) {
+	return eph_file_loaded && eph_file_path == path
+		&& st.st_mtim.tv_sec == eph_file_mtime.tv_sec
+		&& st.st_mtim.tv_nsec == eph_file_mtime.tv_nsec
+		&& st.st_ctim.tv_sec == eph_file_ctime.tv_sec
+		&& st.st_ctim.tv_nsec == eph_file_ctime.tv_nsec
+		&& st.st_size == eph_file_size && st.st_ino == eph_file_ino;
+}
+
+std::string make_ephemeral_backend_marker() {
+	unsigned char rnd[16];
+	if (RAND_bytes(rnd, sizeof(rnd)) != 1) {
+		std::random_device rd;
+		for (size_t i = 0; i < sizeof(rnd); i++) {
+			rnd[i] = static_cast<unsigned char>(rd());
+		}
+	}
+	static const char hex[] = "0123456789abcdef";
+	std::string m("\x01proxysql-ephemeral-backend-");
+	for (size_t i = 0; i < sizeof(rnd); i++) {
+		m.push_back(hex[rnd[i] >> 4]);
+		m.push_back(hex[rnd[i] & 0x0f]);
+	}
+	return m;
+}
+
 } // namespace
+
+const char *MySQL_Passthrough_Auth_Cache::ephemeral_backend_marker() {
+	static const std::string marker = make_ephemeral_backend_marker();
+	return marker.c_str();
+}
+
+bool MySQL_Passthrough_Auth_Cache::is_ephemeral_backend_marker(const char *password) {
+	return password != NULL && strcmp(password, ephemeral_backend_marker()) == 0;
+}
 
 MySQL_Passthrough_Auth_Cache::entry_t::~entry_t() {
 	cleanse_string(cleartext_password);
@@ -33,8 +89,10 @@ MySQL_Passthrough_Auth_Cache::MySQL_Passthrough_Auth_Cache()
 	  stat_inflight_cap_rejects(0),
 	  stat_cache_hits(0),
 	  stat_cache_invalidations(0),
-	  compiled_pattern(NULL) {
+	  compiled_pattern(NULL),
+	  ephemeral_compiled_pattern(NULL) {
 	pthread_rwlock_init(&lock, NULL);
+	pthread_rwlock_init(&ephemeral_pattern_lock, NULL);
 	pthread_mutex_init(&failure_lock, NULL);
 	pthread_rwlock_init(&pattern_lock, NULL);
 }
@@ -57,6 +115,14 @@ MySQL_Passthrough_Auth_Cache::~MySQL_Passthrough_Auth_Cache() {
 	compiled_pattern_str.clear();
 	pthread_rwlock_unlock(&pattern_lock);
 	pthread_rwlock_destroy(&pattern_lock);
+	pthread_rwlock_wrlock(&ephemeral_pattern_lock);
+	if (ephemeral_compiled_pattern) {
+		delete ephemeral_compiled_pattern;
+		ephemeral_compiled_pattern = NULL;
+	}
+	ephemeral_compiled_pattern_str.clear();
+	pthread_rwlock_unlock(&ephemeral_pattern_lock);
+	pthread_rwlock_destroy(&ephemeral_pattern_lock);
 }
 
 bool MySQL_Passthrough_Auth_Cache::lookup(
@@ -456,6 +522,143 @@ bool MySQL_Passthrough_Auth_Cache::username_allowed(
 
 	pthread_rwlock_unlock(&pattern_lock);
 	return ok;
+}
+
+bool MySQL_Passthrough_Auth_Cache::credential_is_ephemeral(
+	const char *cleartext, const std::string& pattern
+) {
+	if (cleartext == NULL || pattern.empty()) return false;
+
+	{
+		pthread_rwlock_rdlock(&ephemeral_pattern_lock);
+		if (ephemeral_compiled_pattern != NULL
+			&& pattern == ephemeral_compiled_pattern_str) {
+			const bool ok = ephemeral_compiled_pattern->ok()
+				&& re2::RE2::FullMatch(cleartext, *ephemeral_compiled_pattern);
+			pthread_rwlock_unlock(&ephemeral_pattern_lock);
+			return ok;
+		}
+		pthread_rwlock_unlock(&ephemeral_pattern_lock);
+	}
+
+	pthread_rwlock_wrlock(&ephemeral_pattern_lock);
+	if (ephemeral_compiled_pattern == NULL
+		|| pattern != ephemeral_compiled_pattern_str) {
+		if (ephemeral_compiled_pattern) {
+			delete ephemeral_compiled_pattern;
+			ephemeral_compiled_pattern = NULL;
+		}
+		re2::RE2::Options opts(re2::RE2::Quiet);
+		opts.set_case_sensitive(true);
+		ephemeral_compiled_pattern = new re2::RE2(pattern, opts);
+		ephemeral_compiled_pattern_str = pattern;
+	}
+	const bool ok = ephemeral_compiled_pattern->ok()
+		&& re2::RE2::FullMatch(cleartext, *ephemeral_compiled_pattern);
+	pthread_rwlock_unlock(&ephemeral_pattern_lock);
+	return ok;
+}
+
+void MySQL_Passthrough_Auth_Cache::set_ephemeral_backend_credential_file(const char *path) {
+	const std::string np(path ? path : "");
+	pthread_mutex_lock(&eph_file_lock);
+	if (np != eph_file_path) {
+		eph_file_path = np;
+		cleanse_string(eph_file_value);
+		eph_file_loaded = false;
+	}
+	pthread_mutex_unlock(&eph_file_lock);
+}
+
+bool MySQL_Passthrough_Auth_Cache::ephemeral_backend_credential_configured() {
+	pthread_mutex_lock(&eph_file_lock);
+	const bool ret = !eph_file_path.empty();
+	pthread_mutex_unlock(&eph_file_lock);
+	return ret;
+}
+
+bool MySQL_Passthrough_Auth_Cache::read_ephemeral_backend_credential(std::string& out) {
+	cleanse_string(out);
+
+	std::string path;
+	pthread_mutex_lock(&eph_file_lock);
+	path = eph_file_path;
+	pthread_mutex_unlock(&eph_file_lock);
+	if (path.empty()) return false;
+
+	// Fast path: the file is unchanged. The cached value is returned only if
+	// it was read from exactly the file state this stat() describes.
+	struct stat st;
+	if (stat(path.c_str(), &st) == 0) {
+		bool hit = false;
+		pthread_mutex_lock(&eph_file_lock);
+		if (eph_cache_matches(path, st)) {
+			out = eph_file_value;
+			hit = true;
+		}
+		pthread_mutex_unlock(&eph_file_lock);
+		if (hit) return !out.empty();
+	}
+
+	// Slow path: (re)read the file. Re-reads are serialized; the file I/O
+	// happens outside eph_file_lock, so unrelated fast-path readers and
+	// set_ephemeral_backend_credential_file() are not blocked by it.
+	pthread_mutex_lock(&eph_reload_lock);
+
+	std::string value;
+	bool read_ok = false;
+	bool reuse = false;
+	struct stat fst;
+	FILE *f = fopen(path.c_str(), "r");
+	if (f && fstat(fileno(f), &fst) == 0) {
+		// Another reader may have just loaded this very file state.
+		pthread_mutex_lock(&eph_file_lock);
+		if (eph_cache_matches(path, fst)) {
+			out = eph_file_value;
+			reuse = true;
+		}
+		pthread_mutex_unlock(&eph_file_lock);
+		if (!reuse) {
+			char *line = NULL;
+			size_t cap = 0;
+			const ssize_t n = getline(&line, &cap, f);
+			if (n > 0) {
+				value.assign(line, static_cast<size_t>(n));
+				while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
+					value.pop_back();
+				}
+			}
+			if (line) {
+				OPENSSL_cleanse(line, cap);
+				free(line);
+			}
+			read_ok = true;
+		}
+	}
+	if (f) fclose(f);
+
+	if (!reuse) {
+		// Publish what was read together with the metadata of the file it was
+		// read from (fstat on the open descriptor, not a separate stat()).
+		pthread_mutex_lock(&eph_file_lock);
+		if (eph_file_path == path) {
+			cleanse_string(eph_file_value);
+			eph_file_loaded = read_ok;
+			if (read_ok) {
+				eph_file_value = value;
+				eph_file_mtime = fst.st_mtim;
+				eph_file_ctime = fst.st_ctim;
+				eph_file_size = fst.st_size;
+				eph_file_ino = fst.st_ino;
+			}
+		}
+		pthread_mutex_unlock(&eph_file_lock);
+		if (read_ok) out = value;
+		cleanse_string(value);
+	}
+
+	pthread_mutex_unlock(&eph_reload_lock);
+	return !out.empty();
 }
 
 void MySQL_Passthrough_Auth_Cache::bump_probes_attempted() {

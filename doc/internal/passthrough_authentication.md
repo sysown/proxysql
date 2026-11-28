@@ -57,6 +57,9 @@ mysql-passthrough_auth_max_failures_per_user    int    default 3
 mysql-passthrough_auth_max_failures_per_ip      int    default 10
 mysql-passthrough_auth_failure_window_s         int    default 60
 mysql-passthrough_auth_failure_map_cap          int    default 100000  (max distinct keys retained in failure deques)
+mysql-passthrough_auth_ephemeral_pattern        str    default ''      (regex on the credential; '' = off, see §8.7)
+mysql-passthrough_auth_ephemeral_backend_credential_file
+                                                str    default ''      (file holding the standing backend credential; '' = off, see §8.7)
 ```
 
 `mysql-passthrough_auth_empty_password` and `mysql-passthrough_auth_unknown_users` are only honored when `mysql-passthrough_auth_enabled=true`.
@@ -424,6 +427,40 @@ cache_entries                 uint64   current cache size (gauge)
 ```
 
 All counter values are monotonic since process start; reset only by restart. The two gauges read live state. None of the counters expose passwords or any cleartext credential material. Operator tooling that watches `probes_ok / probes_attempted` ratio gets a good "is pass-through healthy?" signal; `lockouts_user + lockouts_ip` spiking signals attack pressure; `cache_invalidations` spiking signals backend password rotation activity.
+
+### 8.7 Ephemeral credentials
+
+The cache holds one cleartext per username. That models a password, but not an account authenticated with short-lived credentials that differ per client — for example a backend auth plugin that validates signed, expiring tokens and declares `caching_sha2_password` as its client plugin, so the token arrives as the full-auth cleartext. With the cache in the way, a second valid token for the same user is verified against the first one and rejected, and a cached token outlives its validity.
+
+Two variables address this. Both default to empty, which leaves pass-through exactly as described above.
+
+**`mysql-passthrough_auth_ephemeral_pattern`** — an RE2 pattern (FullMatch, like the username pattern) applied to the cleartext captured during full auth. A credential that matches is *ephemeral*:
+
+- it is always verified against the backend (the cache-miss path), and
+- on success it is **not** inserted into the cache and the session is not flagged `passthrough_credential`.
+
+Nothing is ever inserted for such a user, so the lookup path in §8.2 is unchanged: it simply never hits. Credentials that do not match are cached as before.
+
+**`mysql-passthrough_auth_ephemeral_backend_credential_file`** — a file whose first line is a *standing* backend credential. When it is set, a session that authenticated with an ephemeral credential does not keep the client's credential as its backend password. `userinfo->password` holds a marker instead (`MySQL_Passthrough_Auth_Cache::ephemeral_backend_marker()`), and every place that hands a password to the client library replaces the marker with the standing credential first:
+
+- `MySQL_Connection::connect_start()` and `change_user_start()`, through `MySQL_Connection::backend_auth_password()`,
+- the connection-reset `mysql_change_user_start()` in `MySQL_HostGroups_Manager.cpp`, through the same method,
+- the KILL helper in `MySQL_Session.cpp`.
+
+Backend connects are asynchronous and the client library keeps the password pointer until they complete, so the resolved credential is copied into a buffer owned by the `MySQL_Connection` (the KILL helper is synchronous and uses a local).
+
+The file is `stat()`ed at backend-connect time and re-read only when it changed (mtime, ctime, size or inode). Re-reads are serialized and a cached value is returned only for the file state it was read from, so the credential can be rotated — write a new file and rename it over the old one — without touching existing frontend sessions. If the file is unset, unreadable or empty, the marker itself is sent and the backend rejects it: fail closed. The backend is expected to accept the standing credential for the accounts that use ephemeral credentials.
+
+When the pattern is set but the file is not, the session keeps the client's credential, as with any pass-through session. Later backend connections for that session then fail once the credential expires.
+
+The marker is generated once per process from random bytes. A client therefore cannot know it, and pass-through additionally rejects a client cleartext equal to it before any backend connect: otherwise a client could present the marker and have ProxySQL authenticate to the backend with the standing credential on its behalf. Because all ephemeral sessions of a user carry the same marker they share backend connections like any other sessions of that user.
+
+Notes and limitations:
+
+- Classification is per credential, not per user. A cached (non-ephemeral) credential is checked first, from the fast-auth scramble, before any cleartext is available to classify. An entry whose cached credential matches the pattern (learned before the pattern was set) is evicted on the next lookup.
+- `mysql-passthrough_auth_ephemeral_pattern` is validated when it is set; a pattern that does not compile is refused, so no pattern is ever stored in an uncompilable state.
+- `COM_CHANGE_USER` to a user whose session carries the marker is not special-cased.
+- The standing credential is process-wide, not per user or per hostgroup.
 
 ## 9. Code layout
 

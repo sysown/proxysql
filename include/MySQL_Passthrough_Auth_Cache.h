@@ -106,6 +106,15 @@ class MySQL_Passthrough_Auth_Cache {
 		mutable std::string compiled_pattern_str;
 		mutable re2::RE2 *compiled_pattern;
 
+		/**
+		 * @brief Compiled mysql-passthrough_auth_ephemeral_pattern, cached the
+		 * same way as @c compiled_pattern (its own lock: the two patterns
+		 * change independently).
+		 */
+		mutable pthread_rwlock_t ephemeral_pattern_lock;
+		mutable std::string ephemeral_compiled_pattern_str;
+		mutable re2::RE2 *ephemeral_compiled_pattern;
+
 	public:
 		MySQL_Passthrough_Auth_Cache();
 		~MySQL_Passthrough_Auth_Cache();
@@ -211,6 +220,71 @@ class MySQL_Passthrough_Auth_Cache {
 		 * fail-safe direction for a security gate.
 		 */
 		bool username_allowed(const std::string& username, const std::string& pattern);
+
+		/**
+		 * @brief Whether @p cleartext is an ephemeral credential
+		 * (mysql-passthrough_auth_ephemeral_pattern).
+		 *
+		 * An ephemeral credential is short-lived and differs per client (for
+		 * example a signed, expiring token validated by a backend auth
+		 * plugin). It is verified against the backend on every frontend
+		 * connection and is never inserted into this cache.
+		 *
+		 * @param cleartext Cleartext captured during full authentication.
+		 * @param pattern   Regex string from the global variable. Empty means
+		 *                  the feature is off.
+		 * @return @c true only when the pattern is non-empty, compiles, and
+		 *         FullMatches @p cleartext. A pattern that fails to compile
+		 *         matches nothing.
+		 */
+		bool credential_is_ephemeral(const char *cleartext, const std::string& pattern);
+
+		/**
+		 * @brief Value stored in @c userinfo->password for a session that
+		 * authenticated with an ephemeral credential while a standing backend
+		 * credential is configured. It is never sent to a backend as is: every
+		 * place that hands a password to the client library replaces it with
+		 * the standing credential first.
+		 *
+		 * The value is generated once per process from random bytes, so a
+		 * client cannot know it and cannot present it as its own credential
+		 * (pass-through additionally rejects a cleartext equal to it).
+		 */
+		static const char *ephemeral_backend_marker();
+
+		/** @brief Whether @p password is the marker (NULL-safe). */
+		static bool is_ephemeral_backend_marker(const char *password);
+
+		/**
+		 * @brief Set the file that holds the standing backend credential
+		 * (mysql-passthrough_auth_ephemeral_backend_credential_file). Empty or
+		 * NULL disables it.
+		 */
+		static void set_ephemeral_backend_credential_file(const char *path);
+
+		/** @brief Whether a standing backend credential file is configured. */
+		static bool ephemeral_backend_credential_configured();
+
+		/**
+		 * @brief Copy the standing backend credential into @p out.
+		 *
+		 * The credential is the first line of the configured file. The file
+		 * is stat()ed on every call and re-read only when it changed, so the
+		 * credential can be rotated without touching existing frontend
+		 * sessions. Re-reads are serialized, and a cached value is returned
+		 * only for the file state it was read from, so a reader never gets
+		 * a value older than the file it checked.
+		 *
+		 * The caller owns @p out and must keep it alive until the backend
+		 * operation that uses it has completed (connects are asynchronous).
+		 *
+		 * @return @c false, with @p out empty, when no file is configured or
+		 *         it is unreadable or empty. Callers then send the marker and
+		 *         the backend rejects it (fail closed).
+		 *
+		 * Callable from any thread.
+		 */
+		static bool read_ephemeral_backend_credential(std::string& out);
 
 		void print_version();
 };
